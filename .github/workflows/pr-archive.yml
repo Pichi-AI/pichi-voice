@@ -24,7 +24,7 @@ concurrency:
 jobs:
   archive:
     name: "Archive FluidVoice PR #${{ github.event.pull_request.number }}"
-    if: github.event.pull_request.draft == false
+    if: github.repository == 'altic-dev/FluidVoice' && github.event.pull_request.draft == false
     runs-on: macos-latest
     timeout-minutes: 45
     env:

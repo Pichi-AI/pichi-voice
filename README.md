@@ -1,3 +1,9 @@
+# Pichi Voice
+
+Private development downstream of [FluidVoice](https://github.com/altic-dev/FluidVoice). The initial application code is unchanged. See [development setup](docs/development/codex.md), [upstream strategy](docs/development/upstream.md), and [agent instructions](AGENTS.md).
+
+The upstream README follows for reference. Its install commands, release links, branding, and contribution rules describe FluidVoice.
+
 # FluidVoice
 
 <p align="center">

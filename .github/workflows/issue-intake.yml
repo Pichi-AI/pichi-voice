@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   issue-intake:
+    if: github.repository == 'altic-dev/FluidVoice'
     name: Issue Intake
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,22 @@
+version = 1
+name = "Pichi Voice"
+
+[setup]
+script = "bash scripts/dev/setup.sh"
+
+[[actions]]
+name = "Repository checks"
+icon = "test"
+command = "bash scripts/dev/check.sh"
+
+[[actions]]
+name = "Build macOS"
+icon = "run"
+platform = "darwin"
+command = "bash scripts/dev/macos.sh build"
+
+[[actions]]
+name = "Test macOS"
+icon = "test"
+platform = "darwin"
+command = "bash scripts/dev/macos.sh test"

@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   pr-policy:
+    if: github.repository == 'altic-dev/FluidVoice'
     name: PR Policy
     runs-on: ubuntu-latest
     steps:

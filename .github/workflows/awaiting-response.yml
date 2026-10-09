@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   awaiting-response:
+    if: github.repository == 'altic-dev/FluidVoice'
     name: Close issues awaiting response
     runs-on: ubuntu-latest
     steps:

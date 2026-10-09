@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   changes:
+    if: github.repository == 'altic-dev/FluidVoice'
     name: Detect build changes
     runs-on: ubuntu-latest
     timeout-minutes: 5

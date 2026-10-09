@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   stale:
+    if: github.repository == 'altic-dev/FluidVoice'
     name: Mark and close stale issues and PRs
     runs-on: ubuntu-latest
     steps:

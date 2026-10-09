@@ -1,0 +1,10 @@
+# Keep personal models, providers, credentials, and permissions in user settings.
+# Project hooks are loaded only when this repository is trusted.
+
+[[hooks.SessionStart]]
+matcher = "startup|resume|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'python3 "$(git rev-parse --show-toplevel)/.codex/hooks/session-start.py"'
+timeout = 10

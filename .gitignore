@@ -232,3 +232,32 @@ builds/
 !README.md
 !CONTRIBUTING.md
 !.github/pull_request_template.md
+
+# Pichi Voice shared development configuration
+!AGENTS.md
+!/.codex/
+/.codex/*
+!/.codex/config.toml
+!/.codex/environments/
+/.codex/environments/*
+!/.codex/environments/environment.toml
+!/.codex/hooks/
+/.codex/hooks/*
+!/.codex/hooks/session-start.py
+!/docs/
+/docs/*
+!/docs/development/
+/docs/development/*
+!/docs/development/codex.md
+!/docs/development/upstream.md
+!/scripts/
+/scripts/*
+!/scripts/dev/
+/scripts/dev/*
+!/scripts/dev/*.sh
+
+# Keep future public history free of personal data and local model artifacts
+/private_assets/
+/models/
+/recordings/
+/.worktrees/
