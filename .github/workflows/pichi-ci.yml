@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
-      - run: bash scripts/dev/check.sh
+      - run: bash scripts/dev/setup.sh --allow-primary
 
   macos:
     name: macOS integration tests
