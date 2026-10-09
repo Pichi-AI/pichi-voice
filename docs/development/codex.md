@@ -72,6 +72,14 @@ Each cloud task receives its own isolated filesystem. A linked worktree inside t
 
 A green portable check does not replace macOS validation. The initial setup does not compile or launch the unchanged upstream app. Before installing a Pichi-branded build, separate its bundle identity, settings, Keychain entries, and updater from the installed FluidVoice app.
 
+## Initial verification on October 9, 2026
+
+- Unsigned macOS build passed on Apple Silicon with Xcode 27.0.
+- Configuration parsing, script syntax, documentation links, worktree creation, worktree-only build guard, and setup in a fresh worktree passed.
+- The upstream sync helper confirmed that our main contains the current FluidVoice main.
+- The upstream build emits compiler warnings and a CTranscribe framework symlink warning. Compilation success does not establish runtime or signed-build behavior.
+- The full integration test suite, interactive audio checks, branded app identity, and a published Codex Cloud environment still need separate verification.
+
 ## CI and cleanup
 
 [Pichi Voice CI](../../.github/workflows/pichi-ci.yml) runs portable checks. macOS testing is available through manual workflow dispatch. To enable macOS testing on every code change, set the repository variable `PICHI_VOICE_MACOS_CI` to `true` after reviewing runner usage and the baseline results.
