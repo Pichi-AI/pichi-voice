@@ -4,6 +4,8 @@
 
 The primary checkout is a normal clone of [Pichi-AI/pichi-voice](https://github.com/Pichi-AI/pichi-voice). The code descends from [FluidVoice](https://github.com/altic-dev/FluidVoice), with its main history retained.
 
+The shared setup script configures a read-only `upstream` on fresh local and cloud clones. It stops for review if an existing upstream points somewhere else.
+
 | Remote | Role |
 | --- | --- |
 | `origin` | Pichi Voice branches, PRs, and releases |
