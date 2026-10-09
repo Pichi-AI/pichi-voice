@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_macos:
+        description: Run the full macOS integration suite
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -27,7 +33,7 @@ jobs:
 
   macos:
     name: macOS integration tests
-    if: github.event_name == 'workflow_dispatch' || vars.PICHI_VOICE_MACOS_CI == 'true'
+    if: (github.event_name == 'workflow_dispatch' && inputs.run_macos) || vars.PICHI_VOICE_MACOS_CI == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:

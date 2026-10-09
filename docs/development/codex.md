@@ -82,7 +82,7 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## CI and cleanup
 
-[Pichi Voice CI](../../.github/workflows/pichi-ci.yml) runs portable checks. macOS testing is available through manual workflow dispatch. To enable macOS testing on every code change, set the repository variable `PICHI_VOICE_MACOS_CI` to `true` after reviewing runner usage and the baseline results.
+[Pichi Voice CI](../../.github/workflows/pichi-ci.yml) runs portable checks. For macOS testing, manually dispatch the workflow with `run_macos` selected. To enable macOS testing on every code change, set the repository variable `PICHI_VOICE_MACOS_CI` to `true` after reviewing runner usage and the baseline results.
 
 Upstream community moderation and archive workflows are retained but guarded to run only in `altic-dev/FluidVoice`. Our repository does not inherit their scheduled issue closing or comment policies.
 
