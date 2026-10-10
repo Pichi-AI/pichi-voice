@@ -40,7 +40,7 @@ struct FluidApp: App {
         .commands {
             // Own these labels in SwiftUI, so native role validation cannot restore bundle names.
             CommandGroup(replacing: .appInfo) {
-                Button(PichiLocalization.format("About %@", AppBrand.appName)) {
+                Button(PichiLocalization.format("application.about", AppBrand.appName)) {
                     NSApplication.shared.orderFrontStandardAboutPanel(options:
                         BrandAppearanceController.aboutPanelOptions(appName: AppBrand.appName, icon: PichiBrandMark.appIcon))
                 }

@@ -12,7 +12,10 @@ import Foundation
 
 @main
 struct BrandOwnedNativeMenuTests {
-    @MainActor static func main() {
+    @MainActor static func main() throws {
+        let fixtureURL = try self.localizationFixture()
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+        guard let bundle = Bundle(url: fixtureURL) else { fatalError("Localization fixture bundle did not load") }
         let main = NSMenu(title: "Main")
         let applicationItem = NSMenuItem(title: "Old Brand", action: nil, keyEquivalent: "")
         let application = NSMenu(title: "Old Brand")
@@ -44,7 +47,7 @@ struct BrandOwnedNativeMenuTests {
         application.addItem(nestedApplicationItem)
 
         for name in ["File", "Settings", "%@", "%lld", "100%@ Voice", "Сбер Голос"] {
-            BrandAppearanceController.refreshApplicationMenu(main, appName: name, language: .english)
+            BrandAppearanceController.refreshApplicationMenu(main, appName: name, language: .english, bundle: bundle)
             precondition(applicationItem.title == name && application.title == name)
             let icon = NSImage(size: NSSize(width: 16, height: 16))
             let options = BrandAppearanceController.aboutPanelOptions(appName: name, icon: icon)
@@ -58,8 +61,39 @@ struct BrandOwnedNativeMenuTests {
             precondition(document.title == "File Settings Old Brand %lld draft.txt")
             precondition(nestedAbout.title == "About File Template")
             precondition(nestedApplicationItem.title == "File Settings reference" && nestedDocument.title == "Settings File user note")
+            BrandAppearanceController.refreshApplicationMenu(main, appName: name, language: .russian, bundle: bundle)
+            precondition(about.title == "О приложении " + name, "Application About must not use model-tooltip copy")
+            precondition(hide.title == "Скрыть " + name && quit.title == "Завершить " + name)
+            precondition(applicationItem.title == name && application.title == name)
+            precondition(nestedAbout.title == "About File Template" && document.title == "File Settings Old Brand %lld draft.txt")
+            precondition(PichiLocalization.format("About %@", language: .russian, bundle: bundle, arguments: [name]) == "О модели " + name,
+                         "The model showcase About context must remain unchanged")
         }
         BrandAppearanceController.refreshApplicationMenu(nil, appName: "No Menu", language: .english)
-        print("Owned native application actions update; standard menus and user labels stay unchanged")
+        print("Application/model About contexts remain separate; owned commands update in EN/RU and user labels stay unchanged")
+    }
+
+    /// Compile-free fixture resources come from the actual catalog, never duplicate translations in test code.
+    private static func localizationFixture() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BrandAboutContext-\(UUID().uuidString).bundle")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let catalogURL = URL(fileURLWithPath: "Sources/Fluid/Localization/Localizable.xcstrings")
+        let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: catalogURL)) as! [String: Any]
+        let entries = catalog["strings"] as! [String: [String: Any]]
+        for language in ["en", "ru"] {
+            let resourceDirectory = directory.appendingPathComponent("\(language).lproj", isDirectory: true)
+            try FileManager.default.createDirectory(at: resourceDirectory, withIntermediateDirectories: true)
+            var strings: [String: String] = [:]
+            for key in ["application.about", "About %@", "Hide %@", "Quit %@"] {
+                let localizations = entries[key]!["localizations"] as! [String: [String: Any]]
+                let unit = localizations[language]!["stringUnit"] as! [String: String]
+                strings[key] = unit["value"]!
+            }
+            let data = try PropertyListSerialization.data(fromPropertyList: strings, format: .xml, options: 0)
+            try data.write(to: resourceDirectory.appendingPathComponent("Localizable.strings"))
+        }
+        let info = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "ai.pichi.about.fixture", "CFBundleDevelopmentRegion": "en"], format: .xml, options: 0)
+        try info.write(to: directory.appendingPathComponent("Info.plist"))
+        return directory
     }
 }

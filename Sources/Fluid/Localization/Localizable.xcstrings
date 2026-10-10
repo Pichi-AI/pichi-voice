@@ -41132,6 +41132,24 @@
         }
       }
     },
+    "application.about": {
+      "comment": "Application About command. About %@ is reserved for model tooltips. App names are format arguments and remain verbatim.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "О приложении %@"
+          }
+        }
+      }
+    },
     "audio visualizer sound input more less threshold": {
       "extractionState": "manual",
       "localizations": {

@@ -26,7 +26,7 @@ enum BrandAppearanceController {
             let template: String
             switch item.action {
             case #selector(NSApplication.orderFrontStandardAboutPanel(_:)):
-                template = "About %@"
+                template = "application.about"
             case #selector(NSApplication.hide(_:)):
                 template = "Hide %@"
             case #selector(NSApplication.terminate(_:)):
