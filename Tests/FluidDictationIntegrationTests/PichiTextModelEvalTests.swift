@@ -60,7 +60,8 @@ final class PichiTextModelEvalTests: XCTestCase {
                             }
                             let document = try await generator.generate(session: session, configuration: .init(
                                 providerID: "local-evaluation", modelID: model.id,
-                                baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru"))
+                                baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru",
+                                execution: try model.summaryExecution()))
                             _ = try document.validated(against: PichiMeetingSummaryInput.turns(for: session))
                             guard fingerprint == PichiMeetingSummaryInput.fingerprint(session) else {
                                 throw EvaluationInputError.changedSource
@@ -165,6 +166,31 @@ final class PichiTextModelEvalTests: XCTestCase {
             .evaluate(text: answer).passed)
     }
 
+    func testSummaryEvalExecutionIsExplicitAndRejectsInvalidProfiles() throws {
+        let base: [String: Any] = ["id": "fixture-alias", "digest": "fixture-digest", "baseModelID": "fixture-base",
+                                   "baseDigest": "base-digest", "usesLibraryAlias": true,
+                                   "quantization": "synthetic", "parameterSize": "synthetic", "modelBytes": 1]
+        func decode(_ fields: [String: Any]) throws -> EvaluationModel {
+            try JSONDecoder().decode(EvaluationModel.self, from: JSONSerialization.data(withJSONObject: fields))
+        }
+        XCTAssertEqual(try decode(base).summaryExecution(), .standard)
+        var extended = base
+        extended["summaryProfile"] = "extended"
+        extended["summaryReasoningParameter"] = "enable_thinking"
+        extended["summaryReasoningValue"] = "true"
+        let execution = try decode(extended).summaryExecution()
+        XCTAssertEqual(execution.contextTokens, 16384)
+        XCTAssertEqual(execution.outputTokens, 8192)
+        XCTAssertEqual(execution.reasoningValue, "true")
+        let encoded = try JSONEncoder().encode(try decode(extended))
+        XCTAssertEqual(try JSONDecoder().decode(EvaluationModel.self, from: encoded).summaryExecution(), execution)
+        extended["summaryProfile"] = "unbounded"
+        XCTAssertThrowsError(try decode(extended).summaryExecution())
+        extended["summaryProfile"] = "extended"
+        extended.removeValue(forKey: "summaryReasoningValue")
+        XCTAssertThrowsError(try decode(extended).summaryExecution())
+    }
+
     private func enhancementAnswer(_ content: String) throws -> String {
         let answer = LLMClient.shared.stripThinkingTags(content).content
         guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LLMError.invalidResponse }
@@ -188,9 +214,11 @@ final class PichiTextModelEvalTests: XCTestCase {
         guard digest(data) == plan.serverProfileSHA256 else { throw EvaluationInputError.invalidPlan }
         let manifest = try JSONDecoder().decode(Manifest.self, from: data)
         for model in plan.models {
+            let execution = try model.summaryExecution()
             guard manifest.aliases.contains(where: {
                 $0.id == model.id && $0.digest == model.digest && $0.baseModelID == model.baseModelID &&
-                    $0.baseDigest == model.baseDigest && $0.numCtx == 8192 && $0.numPredict == 3000 && $0.usesLibraryAlias
+                    $0.baseDigest == model.baseDigest && $0.numCtx == execution.contextTokens &&
+                    $0.numPredict == execution.outputTokens && $0.usesLibraryAlias
             }) else { throw EvaluationInputError.invalidPlan }
         }
     }
@@ -296,6 +324,7 @@ private struct EvaluationPlan: Decodable {
               (1...3).contains(repetitions ?? 1), outputDirectory.hasPrefix("/"),
               URL(fileURLWithPath: outputDirectory).standardizedFileURL.path.contains("/.build/")
         else { throw EvaluationInputError.invalidPlan }
+        for model in self.models { _ = try model.summaryExecution() }
     }
 }
 
@@ -308,6 +337,19 @@ private struct EvaluationModel: Codable, Sendable {
     let quantization: String
     let parameterSize: String
     let modelBytes: Int64
+    let summaryProfile: String?
+    let summaryReasoningParameter: String?
+    let summaryReasoningValue: String?
+
+    func summaryExecution() throws -> PichiMeetingSummaryExecution {
+        let profile = self.summaryProfile ?? "standard"
+        guard ["standard", "extended"].contains(profile) else { throw EvaluationInputError.invalidPlan }
+        var execution: PichiMeetingSummaryExecution = profile == "extended" ? .extended : .standard
+        execution.reasoningParameter = self.summaryReasoningParameter
+        execution.reasoningValue = self.summaryReasoningValue
+        try execution.validate()
+        return execution
+    }
 }
 
 private struct EvaluationCorpus: Decodable {
@@ -470,6 +512,8 @@ private struct EvaluationRequestRecord: Codable {
     let baseURL: String
     var responseSHA256: String? = nil
     var content: String? = nil
+    // Private opt-in output only. Headers and credentials are never recorded.
+    var requestJSON: String? = nil
 }
 
 private actor EvaluationRequestAudit {
@@ -484,7 +528,8 @@ private actor EvaluationRequestAudit {
             body = (try? JSONSerialization.data(withJSONObject: LLMClient.shared.buildChatCompletionsBody(config), options: [.sortedKeys])) ?? Data()
         }
         records.append(.init(requestSHA256: digest(body), promptSHA256: digest(data),
-                             temperature: config.temperature, maxTokens: config.maxTokens, baseURL: config.baseURL))
+                             temperature: config.temperature, maxTokens: config.maxTokens, baseURL: config.baseURL,
+                             requestJSON: String(data: body, encoding: .utf8)))
     }
 
     func finish(_ content: String) {
