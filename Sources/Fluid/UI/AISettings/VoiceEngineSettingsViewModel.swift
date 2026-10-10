@@ -195,6 +195,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
                 let operation = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "speech", modelID: SettingsStore.SpeechModel.gigaam.id)
                 defer { MeetingModelResidencyCoordinator.shared.endOperation(operation) }
                 try await PichiGigaAMModelStore.shared.importModel(from: directory)
+                if self.settings.selectedSpeechModel == .gigaam { self.asr.resetTranscriptionProvider() }
                 self.installations.refresh()
             } catch {
                 self.asr.errorTitle = "GigaAM Import Failed"
