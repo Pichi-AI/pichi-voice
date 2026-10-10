@@ -140,6 +140,7 @@ extension VoiceEngineSettingsView {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 20) {
+                self.speechModelLogoView(for: model, size: 36)
                 VStack(alignment: .leading, spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -249,6 +250,8 @@ extension VoiceEngineSettingsView {
                     .frame(width: 140, alignment: .center)
                     .help("Relative ratings for comparing models, not measured transcription accuracy.")
                     .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
+                } else {
+                    self.unratedModelLabel.frame(width: 140, alignment: .center)
                 }
             }
         }
@@ -299,6 +302,8 @@ extension VoiceEngineSettingsView {
                                 .font(self.theme.typography.bodyStrong)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                         }
+                    } else {
+                        self.unratedModelLabel
                     }
 
                     if isSelected && !isActive {
@@ -815,64 +820,17 @@ extension VoiceEngineSettingsView {
 
     // MARK: - Speech Model Logo View
 
-    private func speechModelLogoView(for model: SettingsStore.SpeechModel) -> some View {
-        let bgColor = self.speechModelBackgroundColor(for: model)
-        let imageName = self.speechModelImageName(for: model)
-        let isNvidia = model.brandName.lowercased().contains("nvidia")
-
-        return ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(bgColor)
-
-            if model.brandName == "FluidVoice" {
-                FluidVoiceBrandIcon(size: 28)
-            } else if model.usesAppleLogo {
-                Image(systemName: "apple.logo")
-                    .font(.fluidSystem(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
-            } else if let imageName {
-                Image(imageName)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    // NVIDIA logo larger to fill more of the container
-                    .frame(width: isNvidia ? 24 : 18, height: isNvidia ? 24 : 18)
-            } else {
-                Text(String(model.brandName.prefix(2)).uppercased())
-                    .font(.fluidSystem(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(self.theme.palette.primaryText)
-            }
-        }
-        .frame(width: 28, height: 28)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    private func speechModelLogoView(for model: SettingsStore.SpeechModel, size: CGFloat = 28) -> some View {
+        SpeechModelProviderMark(presentation: model.provider.presentation,
+            providerColor: Color(hex: model.brandColorHex), size: size)
     }
 
-    private func speechModelBackgroundColor(for model: SettingsStore.SpeechModel) -> Color {
-        let brand = model.brandName.lowercased()
-
-        // Both NVIDIA and OpenAI use white/light gray bg (transparent logos)
-        if brand.contains("nvidia") || brand.contains("openai") || brand.contains("whisper") {
-            return Color(red: 0.97, green: 0.97, blue: 0.97)
-        }
-        if brand.contains("apple") || model.usesAppleLogo {
-            return self.theme.palette.cardBackground.opacity(0.9)
-        }
-        return Color(hex: model.brandColorHex)?.opacity(0.2) ?? self.theme.palette.cardBackground
+    private var unratedModelLabel: some View {
+        Label(PichiLocalization.text("Ratings unavailable"), systemImage: "chart.bar")
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.voiceEngineSecondaryText)
     }
 
-    private func speechModelImageName(for model: SettingsStore.SpeechModel) -> String? {
-        let brand = model.brandName.lowercased()
-
-        if brand.contains("nvidia") {
-            return "Provider_NVIDIA"
-        }
-        if brand.contains("cohere") {
-            return "Provider_Cohere"
-        }
-        if brand.contains("openai") || brand.contains("whisper") {
-            return "Provider_OpenAI"
-        }
-        return nil
-    }
 }
 
 extension Notification.Name {
