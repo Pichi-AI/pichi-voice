@@ -45358,6 +45358,176 @@
           }
         }
       }
+    },
+    "Authorization key": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authorization key"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключ авторизации"
+          }
+        }
+      }
+    },
+    "API scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API scope"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Область доступа API"
+          }
+        }
+      }
+    },
+    "Folder ID": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder ID"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Идентификатор каталога"
+          }
+        }
+      }
+    },
+    "Check the provider's connection parameters and credentials.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the provider's connection parameters and credentials."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте параметры подключения и данные авторизации провайдера."
+          }
+        }
+      }
+    },
+    "Use the full model URI returned by the provider, with the same folder ID.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the full model URI returned by the provider, with the same folder ID."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Используйте полный URI модели, полученный от провайдера, с тем же идентификатором каталога."
+          }
+        }
+      }
+    },
+    "The provider returned an invalid or expired access token.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider returned an invalid or expired access token."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Провайдер вернул некорректный или просроченный токен доступа."
+          }
+        }
+      }
+    },
+    "Cloud provider request failed (HTTP %lld). Check your credentials and connection settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud provider request failed (HTTP %lld). Check your credentials and connection settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка запроса к облачному провайдеру (HTTP %lld). Проверьте данные авторизации и настройки подключения."
+          }
+        }
+      }
+    },
+    "This provider supports text enhancement and summaries. Use a provider with tool support for command mode.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This provider supports text enhancement and summaries. Use a provider with tool support for command mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот провайдер поддерживает обработку текста и саммари. Для режима команд выберите провайдера с поддержкой инструментов."
+          }
+        }
+      }
+    },
+    "The cloud provider returned an invalid response.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The cloud provider returned an invalid response."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Облачный провайдер вернул некорректный ответ."
+          }
+        }
+      }
+    },
+    "Cloud provider request failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud provider request failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка запроса к облачному провайдеру."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

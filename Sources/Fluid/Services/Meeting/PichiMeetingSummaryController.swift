@@ -56,7 +56,7 @@ final class PichiMeetingSummarySettings: ObservableObject {
         let model = preferred ?? ModelRepository.shared.defaultModels(for: id).first ?? ""
         let apiKey = settings.getAPIKey(for: id) ?? ""
         let config = PichiMeetingSummaryConfiguration(providerID: id, modelID: model, baseURL: endpoint,
-                                                     apiKey: apiKey, language: outputLanguage)
+                                                     apiKey: apiKey, language: outputLanguage, connectionOptions: settings.providerConnectionOptions[id] ?? [:])
         try config.validate()
         guard config.isOnDevice || !apiKey.isEmpty else { throw PichiMeetingSummaryError.notConfigured }
         return config

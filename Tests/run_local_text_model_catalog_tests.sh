@@ -15,6 +15,8 @@ echo '}' >> "$text_catalog_test_dir/ModelRepository.swift"
 xcrun swiftc -parse-as-library \
     "$text_catalog_test_dir/ModelRepository.swift" \
     Sources/Fluid/Services/LocalTextModelCatalog.swift \
+    Sources/Fluid/Services/CloudTextProvider.swift \
+    Tests/CloudTextProviderTestLocalization.swift \
     Tests/LocalTextModelCatalogTests.swift \
     -o "$text_catalog_test_dir/catalog-tests"
 "$text_catalog_test_dir/catalog-tests"

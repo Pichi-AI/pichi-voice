@@ -145,6 +145,9 @@ struct SettingsBackupPayload: Codable, Equatable {
     // A present empty map clears prompt overrides; an absent map preserves them.
     // swiftlint:disable:next discouraged_optional_collection
     var dictationPromptConfigurations: [String: SettingsStore.DictationPromptConfiguration]? = nil
+    // Nonsecret folder/scope metadata only. Old backups preserve current values.
+    // swiftlint:disable:next discouraged_optional_collection
+    var providerConnectionOptions: [String: [String: String]]? = nil
 }
 
 struct AppBackupDocument: Codable, Equatable {

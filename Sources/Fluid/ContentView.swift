@@ -2912,6 +2912,7 @@ struct ContentView: View {
             extraParameters: extraParams,
             benchmarkID: benchmarkID
         )
+        config.providerOptions = SettingsStore.shared.providerConnectionOptions[currentSelectedProviderID] ?? [:]
         if enableStreaming {
             config.onContentChunk = { chunk in
                 streamHandler?(chunk)
@@ -2934,7 +2935,7 @@ struct ContentView: View {
                     "Streaming dictation post-processing failed; retrying without streaming: \(error.localizedDescription)",
                     source: "ContentView"
                 )
-                let fallbackConfig = LLMClient.Config(
+                var fallbackConfig = LLMClient.Config(
                     messages: messages,
                     model: derivedSelectedModel,
                     baseURL: derivedBaseURL,
@@ -2945,6 +2946,7 @@ struct ContentView: View {
                     extraParameters: extraParams,
                     benchmarkID: benchmarkID
                 )
+                fallbackConfig.providerOptions = config.providerOptions
                 response = try await LLMClient.shared.call(fallbackConfig)
             }
         } else {

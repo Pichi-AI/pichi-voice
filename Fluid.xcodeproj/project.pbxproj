@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA200000000000000000001 /* CloudTextProviderTests.swift */; };
 		793D196E690048D89D679409 /* PichiLocalizationPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */; };
 		EC546646745D49A49C8EDC02 /* PichiLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */; };
 		C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */; };
@@ -182,6 +183,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		EAA200000000000000000001 /* CloudTextProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTextProviderTests.swift; sourceTree = "<group>"; };
 		3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiLocalizationPresentationTests.swift; sourceTree = "<group>"; };
 		3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiLocalizationTests.swift; sourceTree = "<group>"; };
 		C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiGigaAMIntegrationTests.swift; sourceTree = "<group>"; };
@@ -457,6 +459,7 @@
 				AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */,
 				AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */,
 				F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */,
+				EAA200000000000000000001 /* CloudTextProviderTests.swift */,
 				F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */,
 				EAA100000000000000000001 /* PichiTextModelEvalTests.swift */,
 				3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */,
@@ -839,6 +842,7 @@
 				C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */,
 				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
 				F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */,
+				EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */,
 				5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */,
 				EAA100000000000000000002 /* PichiTextModelEvalTests.swift in Sources */,
 				793D196E690048D89D679409 /* PichiLocalizationPresentationTests.swift in Sources */,

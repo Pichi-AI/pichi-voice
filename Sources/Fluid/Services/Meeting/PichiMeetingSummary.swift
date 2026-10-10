@@ -217,9 +217,14 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     let baseURL: String
     let apiKey: String
     let language: String
+    var connectionOptions: [String: String] = [:]
 
     var isOnDevice: Bool { Self.isLoopback(self.baseURL) }
-    var cacheIdentity: String { "v5|\(self.providerID)|\(self.modelID)|\(self.baseURL)|\(self.language)" }
+    var cacheIdentity: String {
+        let options = self.connectionOptions.keys.sorted().flatMap { [$0, self.connectionOptions[$0] ?? ""] }
+        let identity = "v5|\(self.providerID)|\(self.modelID)|\(self.baseURL)|\(self.language)"
+        return options.isEmpty ? identity : identity + "|" + options.joined(separator: "|")
+    }
 
     static func isLoopback(_ value: String) -> Bool {
         guard let host = URL(string: value)?.host?.lowercased() else { return false }
@@ -380,6 +385,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         var config = LLMClient.Config(messages: [["role": "system", "content": prompt], ["role": "user", "content": input]],
                                       model: configuration.modelID, baseURL: configuration.baseURL,
                                       apiKey: configuration.apiKey, streaming: false, maxTokens: 6000)
+        config.providerOptions = configuration.connectionOptions
         // Ollama documents "none" for disabling boolean thinking models. Keep this
         // endpoint-specific setting away from other compatible APIs.
         if configuration.isOnDevice, URL(string: configuration.baseURL)?.port == 11434 {

@@ -1152,7 +1152,7 @@ extension AIEnhancementSettingsView {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("API Key")
+                    Text(PichiLocalization.text(CloudTextProvider.descriptor(for: item.id)?.credentialTitle ?? "API Key"))
                         .font(.fluidSystem(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                     HStack(alignment: .center, spacing: 8) {
@@ -1196,6 +1196,13 @@ extension AIEnhancementSettingsView {
                             }
                         }
                     }
+                }
+
+                if let provider = CloudTextProvider.descriptor(for: item.id) {
+                    ProviderConnectionFields(provider: provider, options: Binding(
+                        get: { self.viewModel.settings.providerConnectionOptions[item.id] ?? [:] },
+                        set: { self.viewModel.updateConnectionOptions($0, for: item.id) }
+                    ))
                 }
 
                 (managementLayout ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))) {

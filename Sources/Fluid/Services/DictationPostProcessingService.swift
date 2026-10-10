@@ -298,6 +298,7 @@ final class DictationPostProcessingService {
             temperature: settings.isTemperatureUnsupported(resolved.model) ? nil : 0.2,
             extraParameters: extraParams
         )
+        config.providerOptions = settings.providerConnectionOptions[resolved.providerID] ?? [:]
         config.timeoutSeconds = 120
 
         let response = try await LLMClient.shared.call(config)

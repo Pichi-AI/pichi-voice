@@ -1458,6 +1458,12 @@ final class SettingsStore: ObservableObject {
         static let disabled = ModelReasoningConfig(parameterName: "", parameterValue: "", isEnabled: false)
     }
 
+    /// Nonsecret protocol parameters only. API credentials remain in Keychain.
+    var providerConnectionOptions: [String: [String: String]] {
+        get { CloudTextProvider.sanitizedOptions(self.defaults.dictionary(forKey: "ProviderConnectionOptionsV1") as? [String: [String: String]] ?? [:]) }
+        set { self.objectWillChange.send(); self.defaults.set(CloudTextProvider.sanitizedOptions(newValue), forKey: "ProviderConnectionOptionsV1") }
+    }
+
     struct SavedProvider: Codable, Identifiable, Hashable {
         let id: String
         let name: String
@@ -3700,7 +3706,8 @@ final class SettingsStore: ObservableObject {
             fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount,
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
-            dictationPromptConfigurations: self.dictationPromptConfigurations
+            dictationPromptConfigurations: self.dictationPromptConfigurations,
+            providerConnectionOptions: self.providerConnectionOptions
         )
     }
 
@@ -3714,6 +3721,7 @@ final class SettingsStore: ObservableObject {
         appPromptBindings: [AppPromptBinding]
     ) {
         self.savedProviders = payload.savedProviders
+        if let options = payload.providerConnectionOptions { self.providerConnectionOptions = options }
         self.selectedProviderID = payload.selectedProviderID
         self.selectedModelByProvider = payload.selectedModelByProvider
         self.modelReasoningConfigs = payload.modelReasoningConfigs
@@ -4338,7 +4346,7 @@ final class SettingsStore: ObservableObject {
         let apiKey = (self.getAPIKey(for: trimmed) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard ModelRepository.shared.isLocalEndpoint(baseURL) || !apiKey.isEmpty else { return false }
 
-        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey) == stored
+        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey, connectionOptions: self.providerConnectionOptions[trimmed] ?? [:]) == stored
     }
 
     private func providerBaseURLForVerification(for providerID: String) -> String {
@@ -4353,14 +4361,8 @@ final class SettingsStore: ObservableObject {
         return ""
     }
 
-    private func providerFingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBaseURL.isEmpty else { return nil }
-
-        let input = "\(trimmedBaseURL)|\(trimmedAPIKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    private func providerFingerprint(baseURL: String, apiKey: String, connectionOptions: [String: String] = [:]) -> String? {
+        CloudTextProvider.connectionFingerprint(baseURL: baseURL, apiKey: apiKey, options: connectionOptions)
     }
 
     private func syncLinkedProviderSelections(to providerID: String) {

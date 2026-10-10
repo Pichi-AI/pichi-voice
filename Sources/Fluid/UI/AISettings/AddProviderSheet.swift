@@ -117,8 +117,11 @@ struct AddProviderSheet<Logo: View>: View {
                             self.field("Name") { TextField("Custom Provider", text: self.$draft.name) }
                             self.field("Server URL") { TextField("https://your-server.com/v1", text: self.$draft.baseURL) }
                         }
-                        self.field(self.draft.requiresAPIKey ? "API key" : "API key · Optional") {
+                        self.field(CloudTextProvider.descriptor(for: self.draft.providerID)?.credentialTitle ?? (self.draft.requiresAPIKey ? "API key" : "API key · Optional")) {
                             SecureField("Enter API key", text: self.$draft.apiKey)
+                        }
+                        if let provider = CloudTextProvider.descriptor(for: self.draft.providerID) {
+                            ProviderConnectionFields(provider: provider, options: self.$draft.connectionOptions)
                         }
                         if let website = ModelRepository.shared.providerWebsiteURL(for: self.draft.providerID), let url = URL(string: website.url) {
                             Link(destination: url) { Label(PichiLocalization.text(website.label), systemImage: "arrow.up.right").font(self.theme.typography.caption) }
@@ -217,7 +220,8 @@ struct AddProviderSheet<Logo: View>: View {
                 let models = try await ModelRepository.shared.fetchModels(
                     for: snapshot.providerID,
                     baseURL: snapshot.trimmedBaseURL,
-                    apiKey: snapshot.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                    apiKey: snapshot.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+                    connectionOptions: snapshot.connectionOptions
                 )
                 guard !Task.isCancelled, self.modelFetchID == requestID,
                       self.draft.connectionIdentity == snapshot.connectionIdentity else { return }

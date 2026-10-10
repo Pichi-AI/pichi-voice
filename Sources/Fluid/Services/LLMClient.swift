@@ -68,17 +68,23 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     /// URLSession configured with appropriate timeouts
     private let session: URLSession
+    private let cloudSession: URLSession
+    private let cloudAuthorization: CloudTextProviderAuthorization
 
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = Self.defaultTimeoutSeconds
         config.timeoutIntervalForResource = Self.defaultTimeoutSeconds * 2 // Allow extra time for resource loading
         self.session = URLSession(configuration: config)
+        self.cloudSession = CloudTextProviderTransport.session
+        self.cloudAuthorization = .shared
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
     init(session: URLSession) {
         self.session = session
+        self.cloudSession = session
+        self.cloudAuthorization = CloudTextProviderAuthorization(session: session)
     }
 
     // MARK: - Response Types
@@ -130,8 +136,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
         /// Optional token limit (max_tokens or max_completion_tokens depending on model)
         var maxTokens: Int?
 
-        /// Extra parameters to add to the request body (e.g., reasoning_effort, enable_thinking)
-        /// These are model-specific and come from user settings
+        /// Immutable, nonsecret connection metadata captured by the calling mode.
+        var providerOptions: [String: String] = [:]
+
+        /// Extra request-body parameters from the existing model/user settings.
         var extraParameters: [String: Any]
 
         /// Optional dictation pipeline correlation for bounded latency diagnostics.
@@ -183,7 +191,13 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Handles thinking token extraction, tool call parsing, and retries.
     @concurrent func call(_ config: Config) async throws -> Response {
         self.benchmark(config, "call_enter")
+        try Task.checkCancellation()
         var request = try buildRequest(config)
+        if let provider = CloudTextProvider.descriptor(forEndpoint: config.baseURL) {
+            let headers = try await self.cloudAuthorization.headers(for: provider, credential: config.apiKey, options: config.providerOptions)
+            for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        }
+        try Task.checkCancellation()
         self.benchmark(config, "request_built bodyBytes=\(request.httpBody?.count ?? 0)")
 
         // Apply timeout to the request itself
@@ -207,6 +221,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Execute request with retry logic (extracted for timeout wrapper)
     private func executeWithRetry(request: URLRequest, config: Config) async throws -> Response {
         var lastError: Error?
+        var request = request
         for attempt in 1...config.maxRetries {
             do {
                 self.benchmark(config, "attempt_start attempt=\(attempt)")
@@ -218,6 +233,17 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 } else {
                     return try await self.processNonStreaming(request: request, config: config)
                 }
+            } catch LLMError.httpError(401, _) where CloudTextProvider.descriptor(forEndpoint: config.baseURL) != nil {
+                guard let provider = CloudTextProvider.descriptor(forEndpoint: config.baseURL), case .oauth = provider.authorization else {
+                    throw CloudTextProviderError.http(401)
+                }
+                let headers = try await self.cloudAuthorization.headers(for: provider, credential: config.apiKey, options: config.providerOptions,
+                                                                       rejecting: request.value(forHTTPHeaderField: "Authorization"))
+                for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+                try Task.checkCancellation()
+                // One authentication retry is independent of transient transport retries.
+                if config.streaming { return try await self.processStreaming(request: request, config: config) }
+                return try await self.processNonStreaming(request: request, config: config)
             } catch let error as URLError where self.isRetryableError(error) {
                 lastError = LLMError.networkError(error)
                 DebugLogger.shared.warning("LLMClient: Retry \(attempt)/\(config.maxRetries) due to \(error.code.rawValue)", source: "LLMClient")
@@ -269,7 +295,18 @@ final nonisolated class LLMClient: @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         // Send Authorization whenever a key exists; some localhost endpoints still require auth.
-        if !config.apiKey.isEmpty {
+        if let provider = CloudTextProvider.descriptor(forEndpoint: baseURL) {
+            try CloudTextProvider.validateCredential(config.apiKey)
+            let options = try provider.normalizedOptions(config.providerOptions)
+            try provider.validateModel(config.model, options: options)
+            if !provider.supportsTools, !config.tools.isEmpty {
+                throw LLMError.invalidRequest(PichiLocalization.text("This provider supports text enhancement and summaries. Use a provider with tool support for command mode."))
+            }
+            if let header = provider.projectHeader { request.setValue(options["project"], forHTTPHeaderField: header) }
+            if case let .apiKey(scheme) = provider.authorization, !config.apiKey.isEmpty {
+                request.setValue("\(scheme) \(config.apiKey)", forHTTPHeaderField: "Authorization")
+            }
+        } else if !config.apiKey.isEmpty {
             request.addValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         }
 
@@ -494,16 +531,25 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return input
     }
 
+    private func transportSession(for request: URLRequest) -> URLSession {
+        CloudTextProvider.descriptor(forEndpoint: request.url?.absoluteString ?? "") == nil ? self.session : self.cloudSession
+    }
+
+    private func safeHTTPErrorBody(_ data: Data, request: URLRequest) -> String {
+        if CloudTextProvider.descriptor(forEndpoint: request.url?.absoluteString ?? "") != nil { return PichiLocalization.text("Cloud provider request failed.") }
+        return String(data: data, encoding: .utf8) ?? "Unknown error"
+    }
+
     // MARK: - Non-Streaming Response
 
     private func processNonStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await self.transportSession(for: request).data(for: request)
         self.benchmark(config, "response_data bytes=\(data.count)")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
+            let errText = self.safeHTTPErrorBody(data, request: request)
             DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode): \(errText.prefix(200))", source: "LLMClient")
             throw LLMError.httpError(http.statusCode, errText)
         }
@@ -531,7 +577,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private func processResponsesStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        let (bytes, response) = try await self.transportSession(for: request).bytes(for: request)
         self.benchmark(config, "response_headers")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
@@ -539,7 +585,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             for try await byte in bytes {
                 errorData.append(byte)
             }
-            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            let errText = self.safeHTTPErrorBody(errorData, request: request)
             throw LLMError.httpError(http.statusCode, errText)
         }
 
@@ -642,7 +688,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private func processStreaming(request: URLRequest, config: Config) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        let (bytes, response) = try await self.transportSession(for: request).bytes(for: request)
         self.benchmark(config, "response_headers")
 
         // Check for HTTP errors
@@ -651,7 +697,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             for try await byte in bytes {
                 errorData.append(byte)
             }
-            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            let errText = self.safeHTTPErrorBody(errorData, request: request)
             throw LLMError.httpError(http.statusCode, errText)
         }
 
@@ -694,7 +740,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
 
             // Preserve bounded raw diagnostics without re-serializing every token.
-            if thinkingBuffer.count + contentBuffer.count < 8 || delta["tool_calls"] != nil {
+            if CloudTextProvider.descriptor(forEndpoint: config.baseURL) == nil,
+               thinkingBuffer.count + contentBuffer.count < 8 || delta["tool_calls"] != nil {
                 let rawDelta = jsonString
                 DebugLogger.shared.logLazy(level: .debug, source: "LLMClient") {
                     "LLMClient: Full Delta: \(rawDelta)"

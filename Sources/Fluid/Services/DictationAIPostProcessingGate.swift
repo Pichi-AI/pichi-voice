@@ -65,7 +65,7 @@ enum DictationAIPostProcessingGate {
         let apiKey = route.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.isLocalEndpoint(baseURL) || !apiKey.isEmpty else { return false }
 
-        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey) == storedFingerprint
+        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey, connectionOptions: settings.providerConnectionOptions[providerID] ?? [:]) == storedFingerprint
     }
 
     static func baseURL(for providerID: String, settings: SettingsStore) -> String {
@@ -88,14 +88,8 @@ enum DictationAIPostProcessingGate {
         return "custom:\(trimmed)"
     }
 
-    static func providerFingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBase.isEmpty else { return nil }
-
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    static func providerFingerprint(baseURL: String, apiKey: String, connectionOptions: [String: String] = [:]) -> String? {
+        CloudTextProvider.connectionFingerprint(baseURL: baseURL, apiKey: apiKey, options: connectionOptions)
     }
 
     private static func isPrivateProviderConfigured(settings: SettingsStore) -> Bool {

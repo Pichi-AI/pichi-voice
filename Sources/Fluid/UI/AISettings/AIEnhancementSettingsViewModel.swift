@@ -285,6 +285,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func providerDisplayName(for providerID: String) -> String {
+        if let provider = CloudTextProvider.descriptor(for: providerID) { return provider.name }
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return ModelRepository.shared.displayName(for: providerID)
         }
@@ -856,12 +857,37 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         )
 
         let verificationIdentity = ProviderModelVerificationStore.identity(
-            providerID: providerID, baseURL: baseURL, apiKey: apiKey, model: trimmedModel
+            providerID: providerID, baseURL: baseURL, apiKey: apiKey, model: trimmedModel,
+            connectionOptions: self.settings.providerConnectionOptions[providerID] ?? [:]
         )
         self.isTestingConnection = true
         self.updateConnectionStatus(.testing, for: providerID)
         // Every validation/network exit must stop the spinner.
         defer { self.isTestingConnection = false }
+
+        // Registered protocol policies use the same transport as enhancement and
+        // summaries. Verification sends only this public synthetic prompt.
+        if CloudTextProvider.descriptor(forEndpoint: baseURL) != nil {
+            var config = LLMClient.Config(messages: [["role": "user", "content": "test"]], model: trimmedModel,
+                                          baseURL: baseURL, apiKey: apiKey, streaming: false, maxTokens: 50)
+            config.providerOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
+            config.timeoutSeconds = 15
+            config.maxRetries = 1
+            do {
+                _ = try await LLMClient.shared.call(config)
+                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                self.modelVerifications.recordSuccess(verificationIdentity)
+                self.updateConnectionStatus(.success, for: providerID)
+                self.setEditingAPIKey(false, for: providerID)
+                self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
+            } catch {
+                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                self.modelVerifications.remove(verificationIdentity)
+                self.updateConnectionStatus(.failed, for: providerID)
+                self.setConnectionError(error.localizedDescription, for: providerID)
+            }
+            return
+        }
 
         // Build the endpoint URL
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1037,7 +1063,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             providerID: providerID,
             baseURL: self.providerBaseURL(for: providerID),
             apiKey: self.providerAPIKey(for: providerID),
-            model: self.selectedModel(for: providerID)
+            model: self.selectedModel(for: providerID),
+            connectionOptions: self.settings.providerConnectionOptions[providerID] ?? [:]
         )
     }
 
@@ -1183,6 +1210,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.providerAPIKeys = previousKeys
             return false
         }
+        self.settings.providerConnectionOptions.removeValue(forKey: deletedProviderID)
         self.clearProviderAssignments(for: deletedProviderID)
         let remainingAddedIDs = (UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? []).filter { $0 != deletedProviderID }
         UserDefaults.standard.set(remainingAddedIDs, forKey: Self.addedProviderIDsKey)
@@ -1277,18 +1305,20 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return
         }
         let apiKey = self.providerAPIKey(for: providerID)
+        let connectionOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
 
         do {
             let models = try await ModelRepository.shared.fetchModels(
                 for: providerID,
                 baseURL: baseURL,
-                apiKey: apiKey
+                apiKey: apiKey, connectionOptions: connectionOptions
             )
 
             // Update state on main thread
             await MainActor.run {
                 guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
-                      self.providerAPIKey(for: providerID) == apiKey else { return }
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
                 if models.isEmpty {
                     // Keep existing models if fetch returned empty
@@ -1323,7 +1353,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         } catch {
             await MainActor.run {
                 guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
-                      self.providerAPIKey(for: providerID) == apiKey else { return }
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.modelDiscoveryByProvider.removeValue(forKey: key)
                 self.fetchModelsError = error.localizedDescription
             }
@@ -1409,17 +1440,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         let apiKey = self.providerAPIKey(for: providerID)
+        let connectionOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
 
         do {
             let models = try await ModelRepository.shared.fetchModels(
                 for: providerID,
                 baseURL: baseURL,
-                apiKey: apiKey
+                apiKey: apiKey, connectionOptions: connectionOptions
             )
 
             await MainActor.run {
                 guard self.providerBaseURL(for: providerID) == baseURL,
-                      self.providerAPIKey(for: providerID) == apiKey else { return }
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
                 guard !models.isEmpty else {
                     self.fetchModelsError = "No models returned from API"
@@ -1460,11 +1493,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         } catch {
             await MainActor.run {
                 guard self.providerBaseURL(for: providerID) == baseURL,
-                      self.providerAPIKey(for: providerID) == apiKey else { return }
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
                 self.modelDiscoveryByProvider.removeValue(forKey: key)
                 self.fetchModelsError = error.localizedDescription
             }
         }
+    }
+
+    func updateConnectionOptions(_ options: [String: String], for providerID: String) {
+        self.settings.providerConnectionOptions[providerID] = options
+        self.invalidateVerification(for: providerID)
+        self.modelDiscoveryByProvider.removeValue(forKey: self.providerKey(for: providerID))
+        self.refreshProviderItems()
     }
 
     private func providerBaseURL(for providerID: String) -> String {
@@ -1492,13 +1533,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func fingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only require baseURL - API key can be empty for local providers (Ollama, LM Studio, etc.)
-        guard !trimmedBase.isEmpty else { return nil }
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        let providerID = CloudTextProvider.descriptor(forEndpoint: baseURL)?.id ?? ""
+        return CloudTextProvider.connectionFingerprint(baseURL: baseURL, apiKey: apiKey,
+                                                       options: self.settings.providerConnectionOptions[providerID] ?? [:])
     }
 
     private func privateAIFingerprint(for modelID: String) -> String {

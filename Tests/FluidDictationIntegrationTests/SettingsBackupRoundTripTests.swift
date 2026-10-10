@@ -4,6 +4,29 @@ import XCTest
 
 @MainActor
 final class SettingsBackupRoundTripTests: XCTestCase {
+    func testProviderConnectionMetadataRoundTripsWithoutSecretsAndLegacyPreservesValues() throws {
+        try self.withSavedDefaults {
+            let settings = SettingsStore.shared
+            let metadata = ["yandex": ["project": "synthetic-folder"], "gigachat": ["scope": "GIGACHAT_API_B2B"]]
+            settings.providerConnectionOptions = metadata.merging(["unknown": ["apiKey": "must-not-export"]]) { old, _ in old }
+            XCTAssertEqual(settings.providerConnectionOptions, metadata)
+            let encoded = try JSONEncoder().encode(settings.makeBackupPayload())
+            XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("must-not-export"))
+            let decoded = try JSONDecoder().decode(SettingsBackupPayload.self, from: encoded)
+            XCTAssertEqual(decoded.providerConnectionOptions, metadata)
+            settings.providerConnectionOptions = [:]
+            settings.restore(from: decoded)
+            XCTAssertEqual(settings.providerConnectionOptions, metadata)
+            let legacy = try self.payload(removing: ["providerConnectionOptions"])
+            settings.restore(from: legacy)
+            XCTAssertEqual(settings.providerConnectionOptions, metadata)
+            var cleared = decoded
+            cleared.providerConnectionOptions = [:]
+            settings.restore(from: cleared)
+            XCTAssertTrue(settings.providerConnectionOptions.isEmpty)
+        }
+    }
+
     func testDetailedAnalyticsDefaultsOffWithoutWritingConsent() throws {
         let suite = "AnalyticsConsentTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

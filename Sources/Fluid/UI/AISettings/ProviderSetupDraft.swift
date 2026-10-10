@@ -24,6 +24,10 @@ struct ProviderSetupDraft {
         didSet { self.modelWasFetched = false }
     }
 
+    var connectionOptions: [String: String] = [:] {
+        didSet { if self.connectionOptions != oldValue { self.invalidateFetchedModels() } }
+    }
+
     var fetchedModels: [String] = []
     private var modelWasFetched = false
 
@@ -58,7 +62,7 @@ struct ProviderSetupDraft {
         if self.modelWasFetched { self.model = "" }
     }
 
-    var connectionIdentity: [String] { [self.providerID, self.trimmedBaseURL, self.apiKey] }
+    var connectionIdentity: [String] { [self.providerID, self.trimmedBaseURL, self.apiKey] + self.connectionOptions.keys.sorted().flatMap { [$0, self.connectionOptions[$0] ?? ""] } }
 
     func modelsToSave(defaults: [String]) -> [String] {
         let models = self.fetchedModels.isEmpty ? defaults : self.fetchedModels
@@ -71,6 +75,8 @@ struct ProviderSetupDraft {
     var trimmedBaseURL: String { self.baseURL.trimmingCharacters(in: .whitespacesAndNewlines) }
     var requiresAPIKey: Bool { !self.providerID.isEmpty && !["ollama", "lmstudio"].contains(self.providerID) }
     var isValid: Bool {
+        if let provider = CloudTextProvider.descriptor(for: self.providerID),
+           (try? provider.normalizedOptions(self.connectionOptions)) == nil { return false }
         guard !self.requiresAPIKey || !self.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         guard !self.trimmedName.isEmpty, let url = URL(string: self.trimmedBaseURL),
               let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
