@@ -329,7 +329,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         return MeetingCaptureConfiguration(
             mode: mode,
             title: title,
-            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode ?? "en",
+            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode ?? "ru",
             application: application,
             microphone: microphone,
             timestampDefaultTitle: true

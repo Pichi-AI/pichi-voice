@@ -10,6 +10,7 @@
 		C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */; };
 		C41C41000000000000000003 /* PichiGigaAM in Frameworks */ = {isa = PBXBuildFile; productRef = C41C41000000000000000002 /* PichiGigaAM */; };
 		C41C41000000000000000004 /* PichiGigaAM in Frameworks */ = {isa = PBXBuildFile; productRef = C41C41000000000000000002 /* PichiGigaAM */; };
+		F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */; };
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
 		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
 		B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */; };
@@ -178,6 +179,7 @@
 
 /* Begin PBXFileReference section */
 		C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiGigaAMIntegrationTests.swift; sourceTree = "<group>"; };
+		F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryTests.swift; sourceTree = "<group>"; };
 		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
 		7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechModelInstallationSnapshotTests.swift; sourceTree = "<group>"; };
 		70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveFileDownloaderTests.swift; sourceTree = "<group>"; };
@@ -445,6 +447,7 @@
 				FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */,
 				AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */,
 				AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */,
+				F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */,
 				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
 				D9B100000000000000000001 /* VoiceModelDeletionTests.swift */,
 				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
@@ -821,6 +824,7 @@
 				AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */,
 				C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */,
 				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
+				F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */,
 				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
 				D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */,
 				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,

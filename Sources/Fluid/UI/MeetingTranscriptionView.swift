@@ -40,7 +40,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         let defaults = settings.meetingRecordingDefaults
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
-        self.languageCode = defaults.languageCode ?? "en"
+        self.languageCode = defaults.languageCode ?? "ru"
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
