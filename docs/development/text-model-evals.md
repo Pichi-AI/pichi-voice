@@ -1,0 +1,90 @@
+# Russian summary and AI enhancement evaluations
+
+The opt-in [native runner](../../Tests/FluidDictationIntegrationTests/PichiTextModelEvalTests.swift) compares local text models through the application's existing contracts. It changes no selected model, provider, prompt, preference, original model tag or global server parameter. Normal CI skips inference. The checked-in [corpus](../../Tests/Fixtures/TextModelEvals/russian-v1.json) contains eight authored summary cases and eight authored dictation cases. It includes no user recording or transcript.
+
+## Request profiles
+
+| Task | Actual exercised path | Configured evaluation profile |
+| --- | --- | --- |
+| Summary | `PichiMeetingSummaryGenerator`, canonical validation, reconciliation and `PichiMeetingSummaryTransport` | Native Ollama, context 8192, output 3000, temperature 0, thinking off, `keep_alive=0` after every request |
+| AI enhancement | `SettingsStore` built-in cleanup prompt, `DictationPromptRequest` JSON transcript envelope, `LLMClient`, thinking separation and existing output formatting | OpenAI-compatible Ollama endpoint; explicit bounded alias server context 8192/output 3000; existing `maxTokens=3000`, temperature 0.2 and existing reasoning configuration `reasoning_effort=none` |
+
+The enhancement profile represents an explicitly configured existing provider. It is not a claim that arbitrary original model tags have the same context cap. The production enhancement service normally sets temperature 0.2 and no output/context cap. Summary and enhancement temperatures differ as they do in the application. Do not replace either task's prompt per candidate or compare a reasoning-only candidate with the nonthinking profile without recording a separate experiment. Unsupported API options, output truncation and rejected evidence are failures, not zero-quality accepted responses.
+
+The parent creates unique local aliases with the official Ollama Modelfile `FROM <installed-base-id>`, `PARAMETER num_ctx 8192` and `PARAMETER num_predict 3000`. Alias creation reuses installed weight blobs. It must preserve every original tag and digest. The runner verifies the alias manifest hash, context/output fields, and installed original plus alias digests before inference. Do not repoint an alias while an evaluation is running. Only the parent owns server inference and runtime sampling; other agents must not run model requests concurrently.
+
+After every attempted fixture for either task, including errors and cancellation, the test explicitly awaits an official loopback `/api/generate` unload request for that alias with `keep_alive=0`. Cleanup failure aborts the matrix and marks isolation as failed. Cancellation cleanup uses a bounded task whose completion is joined before the runner exits. It never unloads unrelated model identifiers. A summary's native transport already requests unload after each request, and the extra joined barrier also covers client timeouts and cancellation. Models requiring reasoning cannot be declared working under a profile that disables it.
+
+## Running a bounded slice, then the matrix
+
+Build the current integrated Debug test target using its own worktree and package/build directories. Prepare an ignored local JSON plan with this shape:
+
+```json
+{
+  "sourceCommit": "<40-character reviewed source commit>",
+  "sourceRoot": "<absolute current task worktree>",
+  "fixturePath": "<worktree>/Tests/Fixtures/TextModelEvals/russian-v1.json",
+  "outputDirectory": "<worktree>/.build/text-model-evals/results",
+  "aliasManifestPath": "<worktree>/.build/text-model-evals/alias-manifest.json",
+  "serverProfileSHA256": "<SHA256 of exact alias manifest bytes>",
+  "models": [{
+    "id": "<unique local eval alias>",
+    "digest": "<installed alias digest>",
+    "baseModelID": "<installed original identifier>",
+    "baseDigest": "<unchanged original digest>",
+    "usesLibraryAlias": true,
+    "quantization": "<verified quantization>",
+    "parameterSize": "<verified parameter count label>",
+    "modelBytes": 1
+  }],
+  "caseIDs": ["summary-assignment-decision", "enhancement-clean-punctuation"],
+  "repetitions": 1,
+  "enhancementStreaming": false,
+  "finalists": []
+}
+```
+
+The hash-checked alias manifest has an `aliases` array with each model's `id`, `digest`, `baseModelID`, `baseDigest`, `usesLibraryAlias`, `numCtx=8192` and `numPredict=3000`. The plan must use actual verified `modelBytes`; the example value is a placeholder. First run one model and a small case selection. Check the ignored response files and runtime samples before scaling. Remove `caseIDs` to run the complete 16-case corpus. For finalist identifiers in `finalists`, the runner repeats critical cases at least twice with the same profile, source and prompt. Repetition is a reliability probe, not a confidence interval from a large dataset.
+
+The main matrix uses the existing nonstreaming postprocessing request path. After choosing finalists, an explicitly separate plan with `enhancementStreaming=true` exercises the existing `LLMClient` SSE path on a small enhancement slice. Keep its report separate; it is a transport compatibility smoke check rather than a new full quality score.
+
+Set `PICHI_TEXT_MODEL_EVAL_PLAN` on the **test bundle environment** inside the current `.xctestrun`, then run:
+
+```bash
+xcodebuild test-without-building \
+  -xctestrun <current-worktree-test-run-file> \
+  -only-testing:FluidDictationIntegrationTests/PichiTextModelEvalTests/testRussianTextModelEvaluationWhenExplicitlyEnabled
+```
+
+For format-2 `.xctestrun`, locate the test bundle dictionary recursively and change its `EnvironmentVariables`; a shell environment alone may not reach the host. Keep `.xctestrun` in its build products directory so `__TESTROOT__` continues to resolve. Never replace or sign the frozen user-facing app to run this quality matrix.
+
+The runner writes incremental `evaluation.json` only inside an ignored `.build` directory. Each row records case, model, repetition, start/finish UTC, elapsed time, completion call count, request-body and message hashes, content, canonical summary or raw enhancement answer and separately formatted enhancement output, rejection category, deterministic gate results and the independent review rubric. It records exact source-file, corpus, default cleanup prompt and alias-manifest hashes. The two existing GAAV output-formatting flags are recorded at start; a change aborts the matrix after joined cleanup rather than mixing mutable formatting profiles. `response.thinking` is discarded and never used for judgment. Answer content remains local, including rejected structured responses; recognized embedded thinking tags are stripped by the existing client parser before audit persistence. Completion call counts include generator regeneration and reconciliation, but the existing LLM client may internally retry HTTP requests; these counts are not an exact HTTP request total. These are test artifacts, not analytics payloads or committed reports.
+
+Collect server allocation separately through official `/api/ps` sampling during the run, associate samples with model and attempt timestamps, and label `size`/`size_vram` as server-reported allocation. Operating-system process RSS is a different measurement. File size, model allocation, physical RSS and elapsed time must not be substituted for one another. Inference latency includes loading and all extraction/reconciliation requests; document any unrelated running workloads. A test-only cleanup gate does not establish behavior on a physical 8 GB device.
+
+## Scoring and independent judgment
+
+Structural acceptance means the production generator completed its bounded request sequence and accepted literal sources, owner/deadline wording and the final canonical document. This does not prove that a summary claim follows from its source. The deterministic rules separately check explicit task ownership/deadlines, unresolved questions, later cancellation and reinstatement, exact names/identifiers/numbers, negation and dictated commands remaining data.
+
+Enhancement model-quality gates and independent judgments use raw answer content before optional GAAV formatting; do not attribute formatter changes to the model. The separately stored formatted result verifies the configured output boundary. Automatic text checks intentionally allow several anchors rather than requiring one exact paraphrase. They still have false positives and false negatives. Review every output independently against the fixture and its rubric. Missing important information is a coverage failure even when every included quote is valid. Turning a question into a fact, falsely resolving it, inventing an actor/date/number, contradicting a negation, losing a later cancellation or executing dictated instructions is a critical faithfulness failure. A requested task with no assigned owner or date may be valid; its presence alone is not an invented commitment.
+
+Score each attempt from 0 to 4 on four dimensions:
+
+| Dimension | 0 | 2 | 4 |
+| --- | --- | --- | --- |
+| Faithfulness | Material contradiction or invention | Ambiguous or unsupported minor paraphrase | Every claim follows from the source; questions and chronology retain their status |
+| Coverage | Main request or outcome missing | Some relevant content omitted | All salient fixture facts or intended dictation content retained |
+| Russian language | Unusable or wrong language | Understandable with noticeable errors | Natural Russian with supported spelling and grammar |
+| Formatting | Unusable/wrapper instead of requested text | Readable but directives partly missed | Clear punctuation/structure; requested list and line formatting respected |
+
+Record review objects as `{modelID, caseID, repetition, criticalFailure, scores:{faithfulness,coverage,language,formatting}, notes}` in ignored local storage. The weighted semantic score is 50% faithfulness, 30% coverage, 10% language and 10% formatting, scaled to 100. It remains separate from structural and automatic-gate counts. Reviewer identity/method, lexical false positives, gaps, and the limitations of this small corpus belong in the final report.
+
+```bash
+python3 -S scripts/dev/text-model-eval-report.py \
+  <ignored-evaluation.json> \
+  --judgments <ignored-independent-judgments.json> \
+  --output <ignored-report.md>
+python3 -S Tests/test_text_model_eval_protocol.py
+```
+
+A recommendation requires a completed clean run, the complete 16-case model corpus, all task rows independently reviewed, no critical semantic failure and repeated critical cases for finalists. A tiny smoke slice cannot qualify. Do not change the application default based on one positive fixture, nonempty response, citation acceptance or publisher benchmark. Evaluate an explicitly authorized private held-out recording locally after screening synthetic cases; keep its content, outputs and paths out of Git. The existing saved-session opt-in test can provide structural held-out evidence, but its nonempty result alone is not a semantic quality score.
