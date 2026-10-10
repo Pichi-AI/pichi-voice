@@ -103,7 +103,7 @@ struct OnboardingAIEnhancementStepView: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 660)
                     if hasConfiguredCleanup {
-                        Text("Your configured text provider is ready. This step does not change it or contact another service.")
+                        Text("A text provider is already configured. This step keeps your settings and does not contact another service.")
                             .font(.fluidSystem(size: 14))
                             .foregroundStyle(.white.opacity(0.64))
                             .multilineTextAlignment(.center)

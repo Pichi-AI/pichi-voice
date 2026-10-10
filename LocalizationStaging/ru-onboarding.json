@@ -278,7 +278,6 @@
   "AI text cleanup with Fluid Intelligence": "Обработка текста с Fluid Intelligence",
   "AI cleanup is optional. Dictation already works with your selected speech model.": "Обработка текста ИИ необязательна. Диктовка уже работает с выбранной моделью распознавания.",
   "Connect Ollama or LM Studio in AI Providers to process text locally. Meeting summaries have their own local AI settings.": "Подключите Ollama или LM Studio в разделе «Провайдеры ИИ», чтобы обрабатывать текст локально. Для итогов встреч есть отдельные настройки локального ИИ.",
-  "Your configured text provider is ready. This step does not change it or contact another service.": "Выбранный провайдер текста настроен. Этот шаг не меняет его и не обращается к другим сервисам.",
   "Use configured provider": "Использовать выбранный провайдер",
   "Set up later": "Настроить позже",
   "Finish setup": "Завершить настройку",
@@ -292,5 +291,6 @@
   "Stop dictation, then enable Smart mode again.": "Остановите диктовку и снова включите режим Smart.",
   "Microphone unavailable": "Микрофон недоступен",
   "Choose microphone": "Выберите микрофон",
-  "Cancelling…": "Отменяем…"
+  "Cancelling…": "Отменяем…",
+  "A text provider is already configured. This step keeps your settings and does not contact another service.": "Провайдер текста уже настроен. Этот шаг сохраняет ваши настройки и не обращается к другим сервисам."
 }
