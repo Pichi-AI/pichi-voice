@@ -630,6 +630,10 @@ final class ASRService: ObservableObject {
     private var meetingAudioHandbackLease: ASRActivityLease?
     private var meetingAudioHandbackTask: Task<Void, Never>?
     private var meetingAudioHandbackTaskID: UUID?
+    private var meetingCaptureModelLease: ASRActivityLease?
+    private var meetingCaptureResidentModel: MeetingResidentModel?
+    private var meetingCaptureModelSuspension: Task<Void, Error>?
+    private var meetingCaptureModelFinish: Task<Void, Never>?
     // Keep the existing descriptive state or persisted evidence field name.
     // swiftlint:disable:next identifier_name
     private var meetingHandoffShouldRestorePreparedCapture = false
@@ -653,6 +657,7 @@ final class ASRService: ObservableObject {
     #if DEBUG
     /// Test seam replacing the lazily wired production owner so scope tests use fake providers.
     var meetingASRPreparationOwnerForTesting: MeetingASRPreparationOwner?
+    var meetingCaptureResidencyParticipantForTesting: MeetingModelParticipant?
     #endif
     var isRunningOrStarting: Bool {
         self.isRunning || self.isStarting
@@ -744,6 +749,8 @@ final class ASRService: ObservableObject {
         await self.directAudioLifecycleController.invalidate(reason: "meeting_audio_handoff")
         self.activeAudioCaptureBackend = .none
         await self.retireAudioEngineAndWait(reason: "meeting_audio_handoff")
+        // Captions are created only after the arbiter returns this fully drained handoff.
+        try await self.suspendDictationModelsForMeetingCapture(lease)
 
         guard self.activeActivityLease == lease,
               self.meetingAudioHandoffGeneration == generation,
@@ -816,6 +823,7 @@ final class ASRService: ObservableObject {
             self.deferredMeetingRouteRecoveryReason = nil
             self.deferredMeetingRouteRecoveryRequiresPrewarm = false
             self.deferredMeetingRouteRecoveryReconcilesInput = false
+            await self.finishDictationModelsAfterMeetingCapture(lease)
             self.releaseExclusiveActivity(lease)
             return
         }
@@ -850,6 +858,7 @@ final class ASRService: ObservableObject {
         self.deferredMeetingRouteRecoveryReason = nil
         self.deferredMeetingRouteRecoveryRequiresPrewarm = false
         self.deferredMeetingRouteRecoveryReconcilesInput = false
+        await self.finishDictationModelsAfterMeetingCapture(lease)
         self.releaseExclusiveActivity(lease)
 
         if shouldPrewarm || deferredReason != nil {
@@ -1135,6 +1144,9 @@ final class ASRService: ObservableObject {
         await self.meetingTranscriptionExecutor.cancelAndAwaitPending()
         self.flushDeferredMeetingLeaseReleaseIfReady()
         await self.transcriptionExecutor.cancelAndAwaitPending()
+        if let lease = self.meetingCaptureModelLease {
+            await self.finishDictationModelsAfterMeetingCapture(lease)
+        }
 
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
@@ -1361,6 +1373,7 @@ final class ASRService: ObservableObject {
         guard self.activeExclusiveActivity != .settingsRestore else {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
+        guard !self.isOrdinaryASRBlockedByMeetingCapture else { throw MeetingModelResidencyError.busy }
         let admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
         defer { self.meetingModelResidency.endOperation(admission) }
         if self.isMeetingASRPreparationClaimed {
@@ -4071,8 +4084,96 @@ final class ASRService: ObservableObject {
     #if DEBUG
     var meetingModelParticipantsForTesting: [MeetingModelParticipant]?
     #endif
+    private var isOrdinaryASRBlockedByMeetingCapture: Bool {
+        self.meetingCaptureModelLease != nil && MeetingModelContext.grant?.owner != "speech"
+    }
+
+    /// Owns only immutable identity while recording. No dictation model weights cross this barrier.
+    func suspendDictationModelsForMeetingCapture(_ lease: ASRActivityLease) async throws {
+        guard self.activeActivityLease == lease, lease.activity == .meeting, !self.isTerminating else {
+            throw CancellationError()
+        }
+        if self.meetingCaptureModelLease == lease, let task = self.meetingCaptureModelSuspension {
+            try await withTaskCancellationHandler {
+                try await task.value
+                try Task.checkCancellation()
+            } onCancel: { task.cancel() }
+            return
+        }
+        guard self.meetingCaptureModelLease == nil else {
+            if self.meetingCaptureModelLease == lease { return }
+            throw MeetingModelResidencyError.busy
+        }
+        self.meetingCaptureModelLease = lease
+        let participant = self.meetingResidencyParticipant()
+        let task = Task { @MainActor in
+            self.meetingCaptureResidentModel = try await participant.snapshot()
+            try Task.checkCancellation()
+            try await participant.suspend()
+            try Task.checkCancellation()
+        }
+        self.meetingCaptureModelSuspension = task
+        try await withTaskCancellationHandler {
+            try await task.value
+            try Task.checkCancellation()
+        } onCancel: { task.cancel() }
+    }
+
+    /// Capture stop/failure calls this only after both live engines and their shared model unload.
+    /// Final processing normally consumes the snapshot via its existing residency scope first.
+    func finishDictationModelsAfterMeetingCapture(_ lease: ASRActivityLease) async {
+        if self.meetingCaptureModelLease == lease, let task = self.meetingCaptureModelFinish {
+            await task.value
+            return
+        }
+        guard self.meetingCaptureModelLease == lease else { return }
+        let task = Task { @MainActor in
+            self.meetingCaptureModelSuspension?.cancel()
+            _ = await self.meetingCaptureModelSuspension?.result
+            guard self.meetingCaptureModelLease == lease else { return }
+            if self.meetingCaptureResidentModel != nil, !self.isTerminating, !self.providerResetPending {
+                do {
+                    try await self.meetingModelResidency.withExclusive(
+                        attemptID: UUID(), participants: [self.meetingResidencyParticipant()]
+                    ) {}
+                } catch {
+                    DebugLogger.shared.warning("Dictation model remains unloaded after recording: \(error.localizedDescription)", source: "MeetingModelResidency")
+                }
+            }
+            self.meetingCaptureResidentModel = nil
+            self.meetingCaptureModelLease = nil
+            self.meetingCaptureModelSuspension = nil
+        }
+        self.meetingCaptureModelFinish = task
+        await task.value
+        self.meetingCaptureModelFinish = nil
+    }
 
     func meetingResidencyParticipant() -> MeetingModelParticipant {
+        let participant: MeetingModelParticipant
+        #if DEBUG
+        participant = self.meetingCaptureResidencyParticipantForTesting ?? self.makeMeetingResidencyParticipant()
+        #else
+        participant = self.makeMeetingResidencyParticipant()
+        #endif
+        return MeetingModelParticipant(
+            owner: participant.owner,
+            snapshot: { [weak self] in
+                guard let self else { throw CancellationError() }
+                if let suspended = self.meetingCaptureResidentModel { return suspended }
+                return try await participant.snapshot()
+            },
+            suspend: participant.suspend,
+            restore: { [weak self] model in
+                guard let self else { return }
+                if self.meetingCaptureResidentModel == model { self.meetingCaptureResidentModel = nil }
+                try await participant.restore(model)
+            },
+            finish: participant.finish
+        )
+    }
+
+    private func makeMeetingResidencyParticipant() -> MeetingModelParticipant {
         MeetingModelParticipant(
             owner: "speech",
             snapshot: { [weak self] in
@@ -4190,6 +4291,7 @@ final class ASRService: ObservableObject {
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
         self.nemotronProviders.removeAll()
+        await self.gigaamProvider?.unloadModel()
         self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
@@ -6394,6 +6496,7 @@ final class ASRService: ObservableObject {
         guard self.activeExclusiveActivity != .settingsRestore else {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
+        guard !self.isOrdinaryASRBlockedByMeetingCapture else { throw MeetingModelResidencyError.busy }
         let admission = try self.meetingModelResidency.beginOperation(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )
