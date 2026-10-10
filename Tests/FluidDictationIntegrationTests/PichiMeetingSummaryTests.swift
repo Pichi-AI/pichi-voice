@@ -107,6 +107,31 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
+    func testNativeOllamaBoundsContextAndUsesStructuredNonThinkingOutput() throws {
+        let config = LLMClient.Config(messages: [["role": "system", "content": "Summarize a meeting"]], model: "fixture-model",
+                                      baseURL: "http://127.0.0.1:11434/v1", apiKey: "", streaming: false)
+        let request = try PichiMeetingSummaryTransport.ollamaRequest(config)
+        XCTAssertEqual(request.url?.path, "/api/chat")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(request.httpBody)) as? [String: Any])
+        let options = try XCTUnwrap(body["options"] as? [String: Any])
+        XCTAssertEqual(options["num_ctx"] as? Int, 8192, "Do not reserve the model's maximum context on an 8 GB Mac")
+        XCTAssertEqual(options["num_predict"] as? Int, 3000)
+        XCTAssertEqual(options["temperature"] as? Int, 0)
+        XCTAssertEqual(body["think"] as? Bool, false)
+        XCTAssertEqual(body["stream"] as? Bool, false)
+        XCTAssertEqual(body["keep_alive"] as? Int, 0, "Release this model before ASR resumes")
+        let schema = try XCTUnwrap(body["format"] as? [String: Any])
+        XCTAssertTrue((schema["required"] as? [String] ?? []).contains("actions"))
+        XCTAssertTrue((schema["required"] as? [String] ?? []).contains("decisions"))
+    }
+
+    func testNativeOllamaAdapterLeavesOtherEndpointsOnExistingTransport() {
+        for endpoint in ["http://localhost:1234/v1", "http://localhost:11434/proxy/v1", "https://api.example.com/v1"] {
+            let config = LLMClient.Config(messages: [], model: "fixture", baseURL: endpoint, apiKey: "", streaming: false)
+            XCTAssertFalse(PichiMeetingSummaryTransport.usesNativeOllama(config))
+        }
+    }
+
     @MainActor
     func testRussianLocalDefaultsAndSavedSelectionArePreserved() throws {
         let suite = "PichiMeetingSummaryTests.\(UUID().uuidString)"
@@ -250,6 +275,9 @@ final class PichiMeetingSummaryTests: XCTestCase {
                       "The collective pricing decision must not invent an individual decision maker")
         XCTAssertFalse(result.actions.isEmpty, "An explicitly assigned report should be retained")
         XCTAssertTrue(result.actions.contains { $0.owner == "Иван" })
+        XCTAssertTrue(result.actions.contains { $0.deadline == "к пятнице" }, "Dates must retain their exact source wording")
+        XCTAssertFalse(result.summary.contains { $0.text.contains("Иван согласовал") || $0.text.contains("Иван решил") || $0.text.contains("Иван поддержал") },
+                       "The recap must not infer individual approval from an assigned task")
         XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
     }
 

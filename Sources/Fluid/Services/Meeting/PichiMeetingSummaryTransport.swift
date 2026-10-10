@@ -11,6 +11,8 @@ final nonisolated class PichiMeetingSummaryRedirectPolicy: NSObject, URLSessionT
 }
 
 nonisolated enum PichiMeetingSummaryTransport {
+    static let ollamaContextTokens = 8192
+    static let ollamaOutputTokens = 3000
     static let redirectPolicy = PichiMeetingSummaryRedirectPolicy()
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -19,4 +21,82 @@ nonisolated enum PichiMeetingSummaryTransport {
         return URLSession(configuration: configuration, delegate: redirectPolicy, delegateQueue: nil)
     }()
     static let client = LLMClient(session: session)
+
+    static func usesNativeOllama(_ config: LLMClient.Config) -> Bool {
+        guard PichiMeetingSummaryConfiguration.isLoopback(config.baseURL),
+              let url = URL(string: config.baseURL), url.port == 11434,
+              ["http", "https"].contains(url.scheme), url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil,
+              url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "v1"
+        else { return false }
+        return true
+    }
+
+    static func complete(_ config: LLMClient.Config) async throws -> String {
+        guard self.usesNativeOllama(config) else { return try await self.client.call(config).content }
+        let request = try self.ollamaRequest(config)
+        let (data, response) = try await self.session.data(for: request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse }
+        guard http.statusCode == 200 else { throw LLMError.httpError(http.statusCode, "Local summary request failed.") }
+        struct Response: Decodable {
+            struct Message: Decodable { let content: String }
+            let message: Message
+            let done: Bool
+            let done_reason: String?
+        }
+        let result = try JSONDecoder().decode(Response.self, from: data)
+        guard result.done, result.done_reason != "length", !result.message.content.isEmpty else {
+            throw LLMError.invalidRequest("The local model could not complete its structured result within the output limit. The transcript is safe.")
+        }
+        return result.message.content
+    }
+
+    // OpenAI compatibility does not expose num_ctx. The native API bounds each
+    // inference request without changing global settings or duplicating weights.
+    static func ollamaRequest(_ config: LLMClient.Config) throws -> URLRequest {
+        guard self.usesNativeOllama(config), var components = URLComponents(string: config.baseURL) else { throw LLMError.invalidURL }
+        components.path = "/api/chat"
+        guard let url = components.url else { throw LLMError.invalidURL }
+        let ledger = (config.messages.first?["content"] as? String ?? "").contains("Reconcile meeting")
+        let body: [String: Any] = [
+            "model": config.model, "messages": config.messages, "stream": false,
+            "think": false, "keep_alive": 0, "format": self.schema(ledger: ledger),
+            "options": ["num_ctx": self.ollamaContextTokens, "num_predict": self.ollamaOutputTokens, "temperature": 0],
+        ]
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = config.timeoutSeconds ?? 180
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !config.apiKey.isEmpty { request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization") }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        return request
+    }
+
+    private static func schema(ledger: Bool) -> [String: Any] {
+        let evidence: [String: Any] = [
+            "type": "object", "additionalProperties": false, "required": ["segmentID", "quote"],
+            "properties": ["segmentID": ["type": "string"], "quote": ["type": "string", "minLength": 1, "maxLength": 500]],
+        ]
+        let citations: [String: Any] = ["type": "array", "items": evidence, "minItems": 1, "maxItems": 8]
+        if ledger {
+            return ["type": "object", "additionalProperties": false, "required": ["updates"], "properties": [
+                "updates": ["type": "array", "items": ["type": "object", "additionalProperties": false,
+                            "required": ["index", "evidence"], "properties": ["index": ["type": "integer", "minimum": 0], "evidence": citations]]],
+            ]]
+        }
+        let properties: [String: Any] = ["text": ["type": "string", "minLength": 1, "maxLength": 2000], "evidence": citations]
+        let item: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["text", "evidence"], "properties": properties]
+        var actionProperties = properties
+        actionProperties["owner"] = ["type": ["string", "null"], "description": "Exact original speaker name, or null when unspecified."]
+        actionProperties["deadline"] = ["type": ["string", "null"], "description": "Exact substring of source speech including prepositions and grammatical case. Never normalize; use null if unspecified."]
+        let action: [String: Any] = ["type": "object", "additionalProperties": false,
+                                     "required": ["text", "evidence", "owner", "deadline"], "properties": actionProperties]
+        var fields: [String: Any] = [:]
+        for name in ["summary", "decisions", "actions", "openQuestions", "changes", "answers"] {
+            fields[name] = ["type": "array", "items": name == "actions" ? action : item,
+                            "minItems": name == "summary" ? 1 : 0, "maxItems": name == "summary" ? 5 : 30]
+        }
+        return ["type": "object", "additionalProperties": false, "required": Array(fields.keys).sorted(), "properties": fields]
+    }
 }
