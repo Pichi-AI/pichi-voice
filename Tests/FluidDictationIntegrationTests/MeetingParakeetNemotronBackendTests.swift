@@ -293,6 +293,103 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(selectedDefault.descriptor.id, .parakeetNemotron)
     }
 
+    func testGigaAMTranscriptOnlyUsesRealWordTimesAndCoverageWithoutInventedSpeakers() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        var session = fixture.session
+        session.languageCode = "ru"
+        let runtime = FakeRuntime()
+        let backend = PichiGigaAMMeetingBackend(
+            runtimeFactory: { _ in runtime },
+            modelLocator: StubModelLocator(),
+            materializer: FakeMaterializer()
+        )
+        let configuration = MeetingFinalProcessingConfiguration(
+            asrModel: "gigaam-v3-eou", languageCode: "ru",
+            diarizationFingerprint: PichiMeetingProviderFactory.transcriptOnlyDiarizationFingerprint
+        )
+        let plan = try backend.plan(self.makeRequest(
+            session: session, directory: self.makeTempSessionDirectory(), configuration: configuration
+        ))
+        let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+        runtime.asrSession.responses = ["Привет", "Договорились", "Пятница"].map {
+            .init(text: $0, words: [.init(text: $0, start: 0.2, end: 0.6)])
+        }
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(bundle.evidence.backendID, .gigaam)
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["Привет", "Договорились", "Пятница"])
+        XCTAssertTrue(bundle.evidence.units.allSatisfy { $0.precision == .word && $0.speaker == .unassigned })
+        XCTAssertEqual(bundle.evidence.units.first?.analysisStart, 0.2)
+        XCTAssertEqual(bundle.evidence.units.first?.analysisEnd, 0.6)
+        XCTAssertTrue(bundle.evidence.speakerActivity.isEmpty)
+        XCTAssertEqual(runtime.diarizationScopeCount, 0)
+        XCTAssertEqual(runtime.asrConfigurations, [configuration])
+        XCTAssertEqual(bundle.coverageReceipts.count, 3)
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+    }
+
+    func testGigaAMMissingSpeakerModelDoesNotPreventTranscriptionAndUntimedTextStaysUtterance() async throws {
+        let fixture = self.makeTwoEpochFixture(mode: .inRoom)
+        var session = fixture.session
+        session.languageCode = "ru"
+        let locator = StubModelLocator()
+        locator.error = MeetingNemotronModelReadinessError.modelNotInstalled(path: "/fixture/missing")
+        let runtime = FakeRuntime()
+        let backend = PichiGigaAMMeetingBackend(runtimeFactory: { _ in runtime }, modelLocator: locator, materializer: FakeMaterializer())
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru")
+        let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory(), configuration: configuration))
+        let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+        runtime.asrSession.responses = [.init(text: "Обсудим проект", words: []), .init(text: "Следующий шаг", words: []), .init(text: "Итоги", words: [])]
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertFalse(bundle.evidence.units.isEmpty)
+        XCTAssertTrue(bundle.evidence.units.allSatisfy { $0.precision == .utterance && $0.speaker == .unassigned })
+        XCTAssertEqual(runtime.diarizationScopeCount, 0)
+        XCTAssertEqual(runtime.asrConfigurations, [configuration])
+    }
+
+    func testGigaAMRefusesAnotherASRModelOrLanguageInsteadOfRelabelingIt() throws {
+        let fixture = self.makeTwoEpochFixture()
+        let backend = PichiGigaAMMeetingBackend(runtimeFactory: { _ in FakeRuntime() })
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: fixture.session, directory: self.makeTempSessionDirectory()))) { error in
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel("parakeet-tdt-v2"))
+        }
+        let englishConfiguration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "en")
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: fixture.session, directory: self.makeTempSessionDirectory(), configuration: englishConfiguration))) { error in
+            XCTAssertEqual(error as? MeetingBackendError, .unsupportedLanguage(backend: .gigaam, languageCode: "en"))
+        }
+    }
+
+    func testGigaAMPipelinePinsRussianModelAndPersistsBackendProvenance() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        var session = fixture.session
+        session.languageCode = "ru"
+        let runtime = FakeRuntime()
+        runtime.asrSession.responses = ["Запишем", "Решение", "Задачу"].map {
+            .init(text: $0, words: [.init(text: $0, start: 0.2, end: 0.6)])
+        }
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .gigaam)
+        registry.register(.gigaam) { context in
+            PichiGigaAMMeetingBackend(runtimeFactory: context.gigaamRuntimeFactory, modelLocator: StubModelLocator(), materializer: FakeMaterializer())
+        }
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Fake runtime must not prepare a real ASR service"); return ASRService() },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            chunkObserver: FixtureObserver(results: fixture.observations),
+            gigaamRuntimeFactory: { _ in runtime }
+        )
+        let result = try await pipeline.process(session: session, sessionDirectory: self.makeTempSessionDirectory(), progress: { _ in })
+        XCTAssertEqual(result.attempt.backendID, MeetingBackendID.gigaam.rawValue)
+        XCTAssertEqual(result.attempt.asrModel, "gigaam-v3-eou")
+        XCTAssertEqual(result.attempt.languageCode, "ru")
+        XCTAssertEqual(runtime.asrConfigurations.first?.asrModel, "gigaam-v3-eou")
+        XCTAssertEqual(runtime.asrConfigurations.first?.languageCode, "ru")
+        XCTAssertNotNil(result.resultSidecarReference)
+        XCTAssertTrue(result.isComplete)
+    }
+
     // MARK: - Canonical turn merge (chronological fold)
 
     private func canonicalSegment(

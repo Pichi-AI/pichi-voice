@@ -138,6 +138,7 @@ struct MeetingTranscriptionView: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var asrService: ASRService
     @ObservedObject private var appServices = AppServices.shared
+    @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
     let onOpenVoiceEngine: () -> Void
 
@@ -159,6 +160,7 @@ struct MeetingTranscriptionView: View {
     @State private var cachedMicrophoneStatus: AVAuthorizationStatus = .notDetermined
     @State private var cachedScreenCaptureAccess = false
     @State private var cachedModelReady = false
+    @State private var cachedSpeakerModelReady = false
     @State private var modelReadinessRevision = 0
     @State private var cachedStorageStatus = "Checking…"
     @State private var cachedStorageReady = false
@@ -294,12 +296,20 @@ struct MeetingTranscriptionView: View {
         }
         .clipped()
         .task {
-            MeetingDiarizationModelStore.shared.prepareInBackground()
+            if CPUArchitecture.isAppleSilicon && !self.isGigaAMSelected {
+                MeetingDiarizationModelStore.shared.prepareInBackground()
+            }
             async let sources: Void = self.refreshSources(requestPermissions: false)
             if self.isMeetingHistoryVisible {
                 await self.loadMeetingHistory()
             }
             await sources
+        }
+        .onChange(of: self.settings.selectedSpeechModel) { _, _ in
+            if self.settings.meetingRecordingDefaults.languageCode == nil, self.coordinator.isQuiescent {
+                self.setupDraft.languageCode = self.isGigaAMSelected ? "ru" : "en"
+            }
+            Task { await self.refreshModelReadiness() }
         }
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
@@ -524,8 +534,8 @@ struct MeetingTranscriptionView: View {
         } else if !self.cachedStorageReady {
             let trackCount = MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode)
             blockingMessage = "Free at least \(MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount)) of storage before recording."
-        } else if !CPUArchitecture.isAppleSilicon {
-            blockingMessage = "FluidMeet requires an Apple silicon Mac."
+        } else if !CPUArchitecture.isAppleSilicon && !self.isGigaAMSelected {
+            blockingMessage = "Meeting transcription on Intel requires selecting GigaAM."
         } else {
             blockingMessage = nil
         }
@@ -536,7 +546,11 @@ struct MeetingTranscriptionView: View {
             meetingAudioReady: meetingAudioReady,
             microphoneStatus: microphoneStatusText,
             microphoneReady: microphoneReady && !self.microphones.isEmpty,
-            modelStatus: modelReady ? "Speaker model installed · transcription prepares after Stop" : "Speaker model downloads before transcription",
+            modelStatus: self.isGigaAMSelected
+                ? (modelReady
+                    ? (self.cachedSpeakerModelReady ? "GigaAM and speaker model installed" : "GigaAM installed · automatic speaker separation unavailable")
+                    : "Import GigaAM in Voice Engine before transcription")
+                : (modelReady ? "Speaker model installed · transcription prepares after Stop" : "Speaker model downloads before transcription"),
             modelReady: modelReady,
             storageStatus: self.cachedStorageStatus,
             storageReady: self.cachedStorageReady,
@@ -548,6 +562,10 @@ struct MeetingTranscriptionView: View {
         )
     }
 
+    private var isGigaAMSelected: Bool {
+        self.settings.selectedSpeechModel.rawValue == PichiMeetingProviderFactory.gigaamModelID
+    }
+
     private func refreshSourcesFromUserAction() {
         Task { await self.refreshSources(requestPermissions: true) }
     }
@@ -556,12 +574,15 @@ struct MeetingTranscriptionView: View {
     private func refreshModelReadiness() async {
         self.modelReadinessRevision += 1
         let revision = self.modelReadinessRevision
-        let ready = await Task.detached(priority: .utility) {
-            CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
+        let gigaamSelected = self.isGigaAMSelected
+        let (ready, speakerReady) = await Task.detached(priority: .utility) {
+            let speakerReady = CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
+            return (gigaamSelected ? PichiGigaAMModelStore.shared.modelsExistOnDisk() : speakerReady, speakerReady)
         }.value
         // An older check must not overwrite an import completion's newer result.
         guard self.modelReadinessRevision == revision else { return }
         self.cachedModelReady = ready
+        self.cachedSpeakerModelReady = speakerReady
     }
 
     @MainActor
@@ -1439,6 +1460,14 @@ struct MeetingTranscriptionCanvas: View {
                             .frame(maxWidth: 760, alignment: .leading)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .accessibilityIdentifier("meeting-result-action-error")
+                    }
+                    if session.processingAttempts.last?.diarizationModel
+                        == PichiMeetingProviderFactory.transcriptOnlyDiarizationFingerprint {
+                        Label("Automatic speaker separation was unavailable. Source tracks and transcript timing are preserved.", systemImage: "person.crop.circle.badge.questionmark")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("meeting-speaker-separation-unavailable")
                     }
                     MeetingResultCanvas(
                         session: session,

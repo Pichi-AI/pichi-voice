@@ -29,8 +29,8 @@ struct MeetingModelSettingsSection: View {
                             Text("Nemotron 3 Diarization · \(ByteCountFormatter.string(fromByteCount: installed.totalByteCount, countStyle: .file))")
                         }
                         Text(CPUArchitecture.isAppleSilicon
-                            ? "Downloads once (about 200 MB) and stays on this Mac. Recording works while it downloads; transcription waits for it."
-                            : "FluidMeet recording currently requires an Apple silicon Mac.")
+                            ? "Downloads once (about 200 MB) and stays on this Mac. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities."
+                            : "Automatic speaker separation requires Apple Silicon. GigaAM can transcribe recordings on Intel with unknown speaker identities.")
                     }
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)

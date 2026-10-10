@@ -809,6 +809,7 @@ nonisolated struct MeetingProcessingAttempt: Codable, Identifiable, Equatable, S
     var asrProvider: String?
     var asrModel: String?
     var languageCode: String? = nil
+    var asrArtifactFingerprint: String? = nil
     var diarizationModel: String?
     var lastCompletedTrackID: MeetingAudioTrackID?
     var errorCode: String?
@@ -897,6 +898,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// completeness semantics remain unchanged.
     var transcriptIsComplete: Bool? = nil
     var postProcessing: MeetingPostProcessingArtifact? = nil
+    /// Backend selected at capture start, used by the first processing attempt. Older sessions have no pin.
+    var recordingBackendID: String? = nil
+    var recordingASRArtifactFingerprint: String? = nil
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil

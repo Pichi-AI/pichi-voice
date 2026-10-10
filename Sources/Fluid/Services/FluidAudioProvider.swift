@@ -114,14 +114,26 @@ nonisolated enum CompactSpeechModelRuntimeCheck {
 }
 
 /// Rejection of a meeting ASR configuration outside the fixed supported policy.
-nonisolated enum MeetingProviderOptionsError: Error, Equatable {
+nonisolated enum MeetingProviderOptionsError: LocalizedError, Equatable {
     case unsupportedASRModel(String)
     case unsupportedLanguageCode(String)
     case unsupportedFeature(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .unsupportedASRModel(model):
+            return "The meeting backend cannot use the requested speech model (\(model))."
+        case let .unsupportedLanguageCode(language):
+            return "The selected speech model does not support meeting language \(language). Choose a compatible model or change the meeting language."
+        case let .unsupportedFeature(feature):
+            return "Meeting transcription does not support \(feature)."
+        }
+    }
 }
 
 /// Immutable provider options for the opt-in meeting post-processing path. Only the fixed
 /// Parakeet TDT v2 handles English; v3 handles its supported multilingual languages.
+/// The Pichi factory additionally selects GigaAM for Russian, without coercing FluidAudio.
 /// Unsupported model/language combinations and enhancement features are rejected.
 nonisolated struct MeetingProviderOptions: Equatable, Sendable {
     let model: SettingsStore.SpeechModel
@@ -134,12 +146,15 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         _ configuration: MeetingFinalProcessingConfiguration
     ) throws -> MeetingProviderOptions {
         guard let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel),
-              model == .parakeetTDTv2 || model == .parakeetTDT
+              model == .parakeetTDTv2 || model == .parakeetTDT || configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID
         else {
             throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
         }
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode),
-              model != .parakeetTDTv2 || configuration.languageCode == "en"
+        let languageSupported = configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID
+            ? configuration.languageCode == "ru"
+            : VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode)
+                && (model != .parakeetTDTv2 || configuration.languageCode == "en")
+        guard languageSupported
         else {
             throw MeetingProviderOptionsError.unsupportedLanguageCode(configuration.languageCode)
         }
@@ -313,6 +328,9 @@ final class FluidAudioProvider: TranscriptionProvider {
     /// live settings. Unsupported configurations are rejected, never silently coerced.
     init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
         let options = try MeetingProviderOptions.resolve(configuration)
+        guard options.model == .parakeetTDTv2 || options.model == .parakeetTDT else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
+        }
         self.modelOverride = options.model
         self.configureWordBoosting = false
         self.updateCompactWeights = false
@@ -1819,7 +1837,10 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
         // Intel stub - validates the meeting policy but never loads FluidAudio models
-        _ = try MeetingProviderOptions.resolve(configuration)
+        let options = try MeetingProviderOptions.resolve(configuration)
+        guard options.model == .parakeetTDTv2 || options.model == .parakeetTDT else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
+        }
     }
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {

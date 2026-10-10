@@ -40,6 +40,13 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private let originBox = MeetingLiveOriginBox()
     private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
 
+    private var bufferedMicrophoneEngine: PichiMeetingBufferedTrackEngine?
+    private var bufferedApplicationEngine: PichiMeetingBufferedTrackEngine?
+    private var bufferedRecognizer: (any PichiMeetingCaptionRecognizing)?
+    private var captionMemoryMonitor: PichiMeetingCaptionMemoryMonitor?
+    private var isStopped = false
+    private var bufferedStopTask: Task<Void, Never>?
+
     #if arch(arm64)
     private var microphoneEngine: MeetingLiveTrackEngine?
     private var applicationEngine: MeetingLiveTrackEngine?
@@ -51,6 +58,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
 
     /// Clears any in-progress microphone partial at a capture-side splice, so it can't straddle eras.
     func resetMicrophoneUtterance() {
+        let buffered = self.stateLock.withLock { self.bufferedMicrophoneEngine }
+        buffered?.requestReset()
         self.publish { $0.settingPartial(nil, for: .you) }
     }
 
@@ -61,9 +70,22 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         )
     }
 
-    func start(mode: MeetingCaptureMode, languageCode: String = "en") {
-        guard languageCode == "en" else {
-            self.publish { $0.settingAvailability(.unavailable(reason: "Live captions support English only. Your transcript will be generated after recording.")) }
+    func start(mode: MeetingCaptureMode, languageCode: String = "en", modelID: String? = nil, artifactFingerprint: String? = nil) {
+        guard !self.stateLock.withLock({ self.isStopped }) else { return }
+        if modelID == PichiMeetingProviderFactory.gigaamModelID {
+            guard languageCode == "ru" else {
+                self.publish { $0.settingAvailability(.unavailable(reason: "GigaAM captions require Russian as the meeting language.")) }
+                return
+            }
+            self.startBuffered(mode: mode, languageCode: languageCode, modelID: PichiMeetingProviderFactory.gigaamModelID, artifactFingerprint: artifactFingerprint)
+            return
+        }
+        if languageCode != "en" {
+            #if arch(arm64)
+            self.startBuffered(mode: mode, languageCode: languageCode, modelID: "parakeet-tdt")
+            #else
+            self.publish { $0.settingAvailability(.unavailable(reason: "Russian live captions on Intel require selecting GigaAM. Your recording is preserved.")) }
+            #endif
             return
         }
         #if arch(arm64)
@@ -96,11 +118,18 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     /// The capture-tee entry point. Copies PCM only for an active engine, then hands it to the
     /// track's bounded queue — never retains the `CMSampleBuffer` beyond this call.
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
-        #if arch(arm64)
         let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         guard pts.isNumeric else { return }
         // Keep the shared capture clock even when this track has no caption engine.
         self.originBox.establish(pts)
+        let buffered = self.stateLock.withLock {
+            kind == .microphone ? self.bufferedMicrophoneEngine : self.bufferedApplicationEngine
+        }
+        if let buffered {
+            if let sample = MeetingLiveSampleCopy.copy(sampleBuffer) { buffered.offer(sample) }
+            return
+        }
+        #if arch(arm64)
         guard self.stateLock.withLock({ kind == .microphone ? self.microphoneEngine != nil : self.applicationEngine != nil }) else { return }
         guard let sample = MeetingLiveSampleCopy.copy(sampleBuffer) else {
             self.diag("[live/tee] sample copy FAILED kind=\(kind)")
@@ -127,6 +156,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     /// Must complete before the batch pipeline calls `ensureAsrReady()`, so both engines' CoreML
     /// models are released before the offline model loads.
     func stop() async {
+        self.stateLock.withLock { self.isStopped = true }
+        await self.stopBuffered()
         #if arch(arm64)
         let (microphone, application) = self.stateLock.withLock { () -> (MeetingLiveTrackEngine?, MeetingLiveTrackEngine?) in
             defer {
@@ -142,6 +173,86 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         await application?.stop()
         self.diag("[live] engines stopped, models released")
         #endif
+    }
+
+    private func startBuffered(mode: MeetingCaptureMode, languageCode: String, modelID: String, artifactFingerprint: String? = nil) {
+        guard Self.isMemorySufficient(physicalMemory: ProcessInfo.processInfo.physicalMemory) else {
+            self.publish { $0.settingAvailability(.unavailable(reason: "Not enough memory available for live captions.")) }
+            return
+        }
+        self.publish { $0.settingAvailability(.unavailable(reason: "Buffered captions are loading…")) }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let recognizer = try await MainActor.run {
+                    try PichiMeetingCaptionRecognizer(modelID: modelID, languageCode: languageCode, artifactFingerprint: artifactFingerprint)
+                }
+                let microphone = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+                let application = mode == .onlineCall
+                    ? PichiMeetingBufferedTrackEngine(kind: .applicationAudio, recognizer: recognizer) : nil
+                let installed = self.stateLock.withLock {
+                    guard !self.isStopped else { return false }
+                    self.bufferedRecognizer = recognizer
+                    self.bufferedMicrophoneEngine = microphone
+                    self.bufferedApplicationEngine = application
+                    self.captionMemoryMonitor = PichiMeetingCaptionMemoryMonitor { [weak self] in
+                        guard let self else { return }
+                        self.publish { $0.settingAvailability(.degraded(reason: "Live captions paused under memory pressure. The recording continues.")) }
+                        Task { await self.stopBuffered() }
+                    }
+                    return true
+                }
+                guard installed else { await recognizer.unload(); return }
+                self.launchBuffered(microphone)
+                if let application { self.launchBuffered(application) }
+            } catch {
+                guard !self.stateLock.withLock({ self.isStopped }) else { return }
+                self.publish { $0.settingAvailability(.degraded(reason: "Buffered captions could not start: \(error.localizedDescription)")) }
+            }
+        }
+    }
+
+    private func launchBuffered(_ engine: PichiMeetingBufferedTrackEngine) {
+        Task { [weak self] in
+            guard let self else { return }
+            await engine.configure(
+                onPartial: { [weak self] kind, id, text, start, end in
+                    self?.handlePartial(kind: kind, id: id, text: text, start: start, end: end)
+                },
+                onUtterance: { [weak self] kind, id, text, start, end in
+                    self?.handleUtterance(kind: kind, id: id, text: text, start: start, end: end)
+                },
+                onDegraded: { [weak self] kind, reason in
+                    self?.handleDegraded(kind: kind, reason: reason)
+                },
+                onReady: { [weak self] kind in self?.handleReady(kind: kind) }
+            )
+            await engine.start()
+        }
+    }
+
+    private func stopBuffered() async {
+        let task = self.stateLock.withLock {
+            if let existing = self.bufferedStopTask { return existing }
+            let microphone = self.bufferedMicrophoneEngine
+            let application = self.bufferedApplicationEngine
+            let recognizer = self.bufferedRecognizer
+            let monitor = self.captionMemoryMonitor
+            self.bufferedMicrophoneEngine = nil
+            self.bufferedApplicationEngine = nil
+            self.bufferedRecognizer = nil
+            self.captionMemoryMonitor = nil
+            let task = Task {
+                monitor?.stop()
+                async let microphoneStop: Void? = microphone?.stop()
+                async let applicationStop: Void? = application?.stop()
+                _ = await (microphoneStop, applicationStop)
+                await recognizer?.unload()
+            }
+            self.bufferedStopTask = task
+            return task
+        }
+        await task.value
     }
 
     #if arch(arm64)
@@ -165,6 +276,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
             await engine.start()
         }
     }
+    #endif
 
     private func handlePartial(kind: MeetingAudioTrackKind, id: UUID, text: String, start: CMTime, end: CMTime) {
         guard let origin = self.originBox.current else { return }
@@ -222,7 +334,6 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private static func speaker(for kind: MeetingAudioTrackKind) -> MeetingLiveSpeaker {
         kind == .microphone ? .you : .them
     }
-    #endif
 
     private func publish(_ transform: (MeetingLiveTranscriptSnapshot) -> MeetingLiveTranscriptSnapshot) {
         let updated: MeetingLiveTranscriptSnapshot = self.stateLock.withLock {

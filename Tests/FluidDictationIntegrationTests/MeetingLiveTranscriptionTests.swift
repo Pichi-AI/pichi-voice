@@ -522,3 +522,119 @@ final class MeetingLiveStartupCancellationTests: XCTestCase {
     }
 }
 #endif
+
+
+@MainActor
+final class PichiMeetingBufferedCaptionsTests: XCTestCase {
+    private actor Recognizer: PichiMeetingCaptionRecognizing {
+        var inputs: [[Float]] = []
+        var prepareCount = 0
+        func prepare() { self.prepareCount += 1 }
+        func recognize(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+            self.inputs.append(samples)
+            return PichiMeetingCaptionRecognition(text: "Русская встреча", endOfUtteranceProbability: nil)
+        }
+        func unload() {}
+    }
+
+    private final nonisolated class Events: @unchecked Sendable {
+        private let lock = NSLock()
+        private var partialValues: [(UUID, String)] = []
+        private var utteranceValues: [(MeetingAudioTrackKind, UUID, String, Double, Double)] = []
+        private var degradedValues: [String] = []
+        func partial(_ id: UUID, _ text: String) { self.lock.withLock { self.partialValues.append((id, text)) } }
+        func utterance(_ kind: MeetingAudioTrackKind, _ id: UUID, _ text: String, _ start: CMTime, _ end: CMTime) {
+            self.lock.withLock { self.utteranceValues.append((kind, id, text, start.seconds, end.seconds)) }
+        }
+        func degraded(_ text: String) { self.lock.withLock { self.degradedValues.append(text) } }
+        var partials: [(UUID, String)] { self.lock.withLock { self.partialValues } }
+        var utterances: [(MeetingAudioTrackKind, UUID, String, Double, Double)] { self.lock.withLock { self.utteranceValues } }
+        var degraded: [String] { self.lock.withLock { self.degradedValues } }
+    }
+
+    private func sample(start: Double, seconds: Double, value: Float) throws -> MeetingLiveSampleCopy.Sample {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
+        let count = AVAudioFrameCount((seconds * 16_000).rounded())
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count))
+        buffer.frameLength = count
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        channel.update(repeating: value, count: Int(count))
+        return MeetingLiveSampleCopy.Sample(buffer: buffer, pts: CMTime(seconds: start, preferredTimescale: 16_000), duration: CMTime(seconds: seconds, preferredTimescale: 16_000))
+    }
+
+    private func configure(_ engine: PichiMeetingBufferedTrackEngine, events: Events) async {
+        await engine.configure(
+            onPartial: { _, id, text, _, _ in events.partial(id, text) },
+            onUtterance: { kind, id, text, start, end in events.utterance(kind, id, text, start, end) },
+            onDegraded: { _, text in events.degraded(text) },
+            onReady: { _ in }
+        )
+    }
+
+    func testPeriodicRussianCaptionAndPauseFinalizationKeepCaptureTimesAndTurnIdentity() async throws {
+        let recognizer = Recognizer()
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        await self.configure(engine, events: events)
+        await engine.consumeForTesting(self.sample(start: 4, seconds: 1.6, value: 0.1))
+        await engine.consumeForTesting(self.sample(start: 5.6, seconds: 0.8, value: 0))
+        let partial = try XCTUnwrap(events.partials.first { !$0.1.isEmpty })
+        let utterance = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(utterance.1, partial.0)
+        XCTAssertEqual(utterance.2, "Русская встреча")
+        XCTAssertEqual(utterance.3, 4, accuracy: 0.0001)
+        XCTAssertEqual(utterance.4, 6.3, accuracy: 0.0001)
+        XCTAssertTrue(events.degraded.isEmpty)
+        await engine.stop()
+    }
+
+    func testSharedRecognizerNeverMixesOnlineCallTrackBuffers() async throws {
+        let recognizer = Recognizer()
+        let microphone = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let application = PichiMeetingBufferedTrackEngine(kind: .applicationAudio, recognizer: recognizer)
+        let events = Events()
+        await self.configure(microphone, events: events)
+        await self.configure(application, events: events)
+        await microphone.consumeForTesting(self.sample(start: 10, seconds: 1.6, value: 0.1))
+        await application.consumeForTesting(self.sample(start: 10, seconds: 1.6, value: 0.2))
+        await microphone.consumeForTesting(self.sample(start: 11.6, seconds: 0.8, value: 0))
+        await application.consumeForTesting(self.sample(start: 11.6, seconds: 0.8, value: 0))
+        XCTAssertEqual(Set(events.utterances.map { $0.0 }), [.microphone, .applicationAudio])
+        let inputs = await recognizer.inputs
+        XCTAssertTrue(inputs.allSatisfy { samples in !(samples.contains(0.1) && samples.contains(0.2)) })
+        await microphone.stop()
+        await application.stop()
+    }
+
+    func testContinuousSpeechRotatesBoundedUtterancesAndSilenceIsNotDecoded() async throws {
+        let recognizer = Recognizer()
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        await self.configure(engine, events: events)
+        await engine.consumeForTesting(self.sample(start: 1, seconds: 3, value: 0))
+        var inputs = await recognizer.inputs
+        XCTAssertTrue(inputs.isEmpty)
+        await engine.consumeForTesting(self.sample(start: 4, seconds: 30, value: 0.1))
+        let bufferedCount = await engine.bufferedSampleCountForTesting()
+        inputs = await recognizer.inputs
+        XCTAssertLessThanOrEqual(bufferedCount, 320_000)
+        XCTAssertTrue(inputs.allSatisfy { $0.count <= 320_000 })
+        XCTAssertEqual(events.utterances.count, 1)
+        await engine.stop()
+    }
+
+    func testCaptureClockGapClearsUtteranceInsteadOfJoiningSeparateEras() async throws {
+        let recognizer = Recognizer()
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        await self.configure(engine, events: events)
+        await engine.consumeForTesting(self.sample(start: 1, seconds: 1.6, value: 0.1))
+        await engine.consumeForTesting(self.sample(start: 10, seconds: 1.6, value: 0.2))
+        await engine.consumeForTesting(self.sample(start: 11.6, seconds: 0.8, value: 0))
+        let utterance = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(utterance.3, 10, accuracy: 0.0001)
+        let inputs = await recognizer.inputs
+        XCTAssertTrue(inputs.allSatisfy { !($0.contains(0.1) && $0.contains(0.2)) })
+        await engine.stop()
+    }
+}

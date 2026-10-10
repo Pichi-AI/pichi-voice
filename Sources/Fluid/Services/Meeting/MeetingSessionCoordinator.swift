@@ -373,6 +373,12 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws -> MeetingSession {
         try Task.checkCancellation()
         try configuration.validate()
+        if SettingsStore.shared.selectedSpeechModel.rawValue == PichiMeetingProviderFactory.gigaamModelID {
+            _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
+                asrModel: PichiMeetingProviderFactory.gigaamModelID,
+                languageCode: configuration.languageCode
+            ))
+        }
         guard self.startReservation == reservation,
               self.activeSession?.id == passiveOffer?.id,
               !self.hasBlockingActivityTaskExceptStart,
@@ -428,6 +434,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         let timebase = Self.makeTimebase()
         var session = MeetingSession(configuration: configuration, timebase: timebase)
+        let recordingModelID = SettingsStore.shared.selectedSpeechModel.rawValue
+        let recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode)
+        session.recordingBackendID = recordingBackendID.rawValue
+        session.recordingASRArtifactFingerprint = PichiMeetingProviderFactory.configuration(
+            backendID: recordingBackendID,
+            languageCode: configuration.languageCode
+        ).asrArtifactFingerprint
         session.retention.retainAudioUntil = SettingsStore.shared.meetingAudioRetentionPolicy
             .retainUntil(startedAt: session.startedAt)
         self.activeSession = session
@@ -454,7 +467,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
-        liveTranscriptionCoordinator.start(mode: configuration.mode, languageCode: configuration.languageCode)
+        liveTranscriptionCoordinator.start(
+            mode: configuration.mode,
+            languageCode: configuration.languageCode,
+            modelID: recordingModelID,
+            artifactFingerprint: session.recordingASRArtifactFingerprint
+        )
 
         do {
             try await self.store.create(session)

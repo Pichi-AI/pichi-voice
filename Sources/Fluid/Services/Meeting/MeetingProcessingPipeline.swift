@@ -1329,6 +1329,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
+    private let usesRecordingBackendPin: Bool
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
@@ -1339,6 +1340,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
     private let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    private let gigaamRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
@@ -1357,10 +1359,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         chunkObserver: (any MeetingChunkAudioObserving)? = nil,
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
+        gigaamRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
+        self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
@@ -1370,6 +1374,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 asrServiceProvider: asrServiceProvider,
                 modelLocator: MeetingNemotronModelLocator()
             )
+        }
+        self.gigaamRuntimeFactory = gigaamRuntimeFactory ?? { [asrServiceProvider] _ in
+            PichiGigaAMMeetingRuntime(asrServiceProvider: asrServiceProvider)
         }
         self.prepareDiarizationModel = prepareDiarizationModel
         self.canonicalSidecarVerifiedProbe = canonicalSidecarVerifiedProbe ?? { _ in }
@@ -1388,9 +1395,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             self.backendIDProvider = { _ in registryDefault }
         } else {
             self.backendIDProvider = { languageCode in
-                let saved = SettingsStore.shared.meetingTranscriptionBackendID
-                // Preserve English rollback settings; non-English recordings need the current backend.
-                return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+                PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode)
             }
         }
     }
@@ -1410,7 +1415,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // The selection is read exactly once, here, and every later decision in this attempt uses
         // the local copy. Re-reading the preference after an await could split one attempt across
         // two backends — planning under one, failing the legacy callback against another.
-        let backendID = self.backendIDProvider(session.languageCode)
+        let backendID: MeetingBackendID
+        let usesRecordingPin = self.usesRecordingBackendPin && session.processingAttempts.count <= 1
+            && session.processingAttempts.allSatisfy({ $0.completedAt == nil })
+        if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
+            backendID = MeetingBackendID(rawValue: recordingBackendID)
+        } else {
+            backendID = self.backendIDProvider(session.languageCode)
+        }
         DebugLogger.shared.info(
             "Meeting final processing selected backend=\(backendID.rawValue)",
             source: "MeetingProcessingPipeline"
@@ -1426,7 +1438,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
             sessionDirectory: sessionDirectory,
-            configuration: MeetingFinalProcessingConfiguration(languageCode: session.languageCode)
+            configuration: PichiMeetingProviderFactory.configuration(
+                backendID: backendID,
+                languageCode: session.languageCode,
+                artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil
+            )
         )
         let backend = try self.backendRegistry.makeBackend(
             id: backendID,
@@ -1454,6 +1470,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         throw MeetingBackendError.hostCapabilityRequestMismatch(backend: backendID)
                     }
                     return try self.meetingRuntimeFactory(callbackRequest)
+                },
+                gigaamRuntimeFactory: { [self] callbackRequest in
+                    guard callbackRequest == request else {
+                        throw MeetingBackendError.hostCapabilityRequestMismatch(backend: backendID)
+                    }
+                    return try self.gigaamRuntimeFactory(callbackRequest)
                 }
             )
         )
@@ -1568,7 +1590,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
 
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
-            ?? (plan.backendID == .parakeetNemotron
+            ?? (plan.backendID == .parakeetNemotron || plan.backendID == .gigaam
                 ? MeetingTextOverlapEchoVerdictProvider()
                 : MeetingFailClosedEchoVerdictProvider())
         let echoVerdicts = try await echoProvider.echoVerdicts(
@@ -1649,6 +1671,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         attempt.asrProvider = plan.backendID.rawValue
         attempt.asrModel = request.configuration.asrModel
         attempt.languageCode = request.configuration.languageCode
+        attempt.asrArtifactFingerprint = request.configuration.asrArtifactFingerprint
         attempt.diarizationModel = request.configuration.diarizationFingerprint
         attempt.backendID = plan.backendID.rawValue
         attempt.backendVersion = plan.backendVersion
