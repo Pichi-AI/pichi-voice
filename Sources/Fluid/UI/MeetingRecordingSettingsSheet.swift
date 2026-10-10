@@ -280,7 +280,7 @@ struct MeetingRecordingSettingsSheet: View {
             FluidManagementGroup(title: "Transcript language") {
                 MeetingAdaptiveSetupRow(
                     title: "Language",
-                    detail: "Final transcripts support 25 languages. Live captions are English-only."
+                    detail: "Live captions use English streaming or buffered transcription for supported languages. Russian captions support GigaAM and Parakeet v3."
                 ) {
                     Menu {
                         Picker("Meeting language", selection: self.$draft.languageCode) {
