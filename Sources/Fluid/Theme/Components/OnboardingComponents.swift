@@ -392,9 +392,9 @@ struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
 }
 
 private final class LandingPrimaryNSButton: NSButton {
-    private static let normalColor = NSColor(srgbRed: 0.16, green: 0.49, blue: 1.0, alpha: 1.0)
-    private static let highlightedColor = NSColor(srgbRed: 0.10, green: 0.40, blue: 0.92, alpha: 1.0)
-    private static let hoverColor = NSColor(srgbRed: 0.20, green: 0.54, blue: 1.0, alpha: 1.0)
+    private static var normalColor: NSColor { NSColor(FluidOnboardingLandingColors.blue) }
+    private static var highlightedColor: NSColor { self.normalColor.blended(withFraction: 0.12, of: .black) ?? self.normalColor }
+    private static var hoverColor: NSColor { self.normalColor.blended(withFraction: 0.10, of: .white) ?? self.normalColor }
     private var trackingArea: NSTrackingArea?
     private var isHovering = false
 
@@ -532,7 +532,7 @@ private struct FluidOnboardingPortalGlow: View {
 }
 
 enum FluidOnboardingLandingColors {
-    static var blue: Color { FluidBrandColors.blue }
+    static var blue: Color { Color(hex: AppBrand.profile.accentDark) ?? FluidBrandColors.blue }
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {
