@@ -45,6 +45,7 @@ struct AdaptiveAppTheme<Content: View>: View {
             .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
             .tint(activeAccent)
             .preferredColorScheme(preferredScheme)
+            .toolbarColorScheme(activeScheme, for: .windowToolbar)
     }
 }
 
