@@ -260,7 +260,10 @@ final class MicrophoneChangeOverlayController {
     static let shared = MicrophoneChangeOverlayController()
 
     private static let displayDurationNanoseconds: UInt64 = 5_000_000_000
-    private static let supportedBundleIdentifiers = [AppBrand.bundleIdentifier]
+    private nonisolated static let supportedBundleIdentifiers = [
+        AppBrand.releaseBundleIdentifier,
+        AppBrand.releaseBundleIdentifier + ".debug",
+    ]
     private var panel: NSPanel?
     private var hostingView: NSHostingView<MicrophoneChangeOverlayView>?
     private var dismissTask: Task<Void, Never>?

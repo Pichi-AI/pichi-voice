@@ -2237,8 +2237,10 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     func testMicrophoneChangeAlertsSupportProductionAndDebugAppsOnly() {
-        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app"))
-        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app.debug"))
+        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: AppBrand.releaseBundleIdentifier))
+        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: AppBrand.releaseBundleIdentifier + ".debug"))
+        XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app"))
+        XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app.debug"))
         XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.example.tests"))
         XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: nil))
     }

@@ -98,7 +98,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         XCTAssertEqual(installActions, 1)
         XCTAssertFalse(offer.isVisible)
         XCTAssertFalse(self.isVisible("Update Check Failed"))
-        let status = try self.visibleWindow("Installing FluidVoice \(version)")
+        let status = try self.visibleWindow("Installing \(AppBrand.appName) \(version)")
         let progress = try XCTUnwrap(status.contentView?.subviews.compactMap { $0 as? NSProgressIndicator }.first)
         XCTAssertTrue(progress.isIndeterminate)
         XCTAssertFalse(progress.isHidden)
@@ -153,7 +153,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
         ])
         let version = "direct-test-\(UUID().uuidString)"
         updater.showUpdateInstallStatus(version: version)
-        let status = try self.visibleWindow("Installing FluidVoice \(version)")
+        let status = try self.visibleWindow("Installing \(AppBrand.appName) \(version)")
         XCTAssertFalse(offer.isVisible)
         XCTAssertFalse(self.isVisible("Update Check Failed"))
         staleInstall.performClick(nil)

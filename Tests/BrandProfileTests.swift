@@ -16,6 +16,10 @@ struct BrandProfileTests {
             do { _ = try BrandProfile.decode(data); fatalError("Accepted invalid \(key)") } catch {}
         }
         do { _ = try BrandProfile.decode(Data(repeating: 32, count: 32_769)); fatalError("Accepted oversized profile") } catch {}
+        precondition(AppBrand.releaseBundleIdentifier(from: "ai.pichi.voice.debug") == "ai.pichi.voice")
+        precondition(AppBrand.releaseBundleIdentifier(from: "ai.pichi.voice") == "ai.pichi.voice")
+        precondition(AppBrand.releaseBundleIdentifier(from: "com.partner.debug.voice") == "com.partner.debug.voice")
+        precondition(AppBrand.releaseBundleIdentifier(from: "com.partner.voice.debug") == "com.partner.voice")
         precondition(AppBrand.bundleIdentifier != "com.FluidApp.app")
         precondition(AppBrand.keychainService.hasPrefix(AppBrand.bundleIdentifier))
         precondition(AppBrand.modelsDirectory.path.contains(AppBrand.bundleIdentifier))

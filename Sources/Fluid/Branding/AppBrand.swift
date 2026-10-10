@@ -53,6 +53,10 @@ nonisolated enum AppBrand {
     static let appearanceChanged = Notification.Name("PichiBrandAppearanceChanged")
     static let profileDefaultsKey = "PichiBrandProfile"
     static var bundleIdentifier: String { Bundle.main.bundleIdentifier ?? "ai.pichi.voice" }
+    static var releaseBundleIdentifier: String { self.releaseBundleIdentifier(from: self.bundleIdentifier) }
+    static func releaseBundleIdentifier(from identifier: String) -> String {
+        identifier.hasSuffix(".debug") ? String(identifier.dropLast(".debug".count)) : identifier
+    }
     static var storageNamespace: String { self.bundleIdentifier }
     static var applicationSupportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
