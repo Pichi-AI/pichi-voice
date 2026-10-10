@@ -4,6 +4,61 @@ import XCTest
 
 final class PichiGigaAMIntegrationTests: XCTestCase {
     @MainActor
+    func testRealLocalAudioThroughProviderFilesAndAPIWhenEnabled() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let modelPath = environment["PICHI_GIGAAM_APP_TEST_MODEL_DIR"],
+              let audioPath = environment["PICHI_GIGAAM_APP_TEST_AUDIO"] else {
+            throw XCTSkip("Set local model and approved audio paths to run real inference.")
+        }
+        let file = URL(fileURLWithPath: audioPath)
+        let provider = PichiGigaAMProvider(modelStore: .init(directory: URL(fileURLWithPath: modelPath)))
+        try await provider.prepare()
+        let reader = try LocalAPIAudioDecoder.ChunkReader(fileURL: file)
+        let samples = try await reader.nextSamples()
+        XCTAssertFalse(samples.isEmpty)
+        let live = try await provider.transcribeStreaming(samples)
+        let final = try await provider.transcribeFinal(samples)
+        let training = try await provider.transcribeDictionaryTraining(samples)
+        let timed = try await provider.transcribeWithWordTimings(samples)
+        XCTAssertFalse(final.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertEqual(live.text, final.text)
+        XCTAssertEqual(training.text, final.text)
+        XCTAssertEqual(timed.result.text, final.text)
+        XCTAssertFalse(timed.words.isEmpty)
+        XCTAssertTrue(timed.words.allSatisfy { $0.start >= 0 && $0.end >= $0.start && $0.end <= Double(samples.count) / 16_000 })
+
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        let originalSpeakerLabels = settings.fileTranscriptionSpeakerLabelsEnabled
+        settings.selectedSpeechModel = .gigaam
+        settings.fileTranscriptionSpeakerLabelsEnabled = false
+        defer {
+            settings.selectedSpeechModel = originalModel
+            settings.fileTranscriptionSpeakerLabelsEnabled = originalSpeakerLabels
+        }
+        let asr = ASRService()
+        asr.modelProvidersForTesting[.gigaam] = provider
+        let controller = InferenceAPIController { url in
+            let result = try await asr.transcribeFileForAPI(url)
+            return .init(text: result.result.text, confidence: result.result.confidence,
+                         sampleCount: result.sampleCount, provider: SettingsStore.SpeechModel.gigaam.displayName)
+        }
+        let payload = try JSONSerialization.data(withJSONObject: ["path": audioPath])
+        let response = await controller.handle(.init(method: "POST", path: "/v1/transcribe", query: [:],
+                                                    headers: ["content-type": "application/json"], body: payload))
+        XCTAssertEqual(response.status, 200)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
+        XCTAssertFalse((body["text"] as? String ?? "").isEmpty)
+        XCTAssertEqual(body["sampleCount"] as? Int, samples.count)
+        XCTAssertEqual(body["provider"] as? String, SettingsStore.SpeechModel.gigaam.displayName)
+        let imported = try await FileTranscriptionService(asrService: asr).transcribeFile(file)
+        XCTAssertFalse(imported.text.isEmpty)
+        await provider.unloadModel()
+        await asr.shutdownForTermination()
+        XCTAssertFalse(provider.isReady)
+    }
+
+    @MainActor
     func testGigaAMIsRussianUniversalAndUsesItsOwnProvider() throws {
         let model = SettingsStore.SpeechModel.gigaam
         XCTAssertFalse(model.isWhisperModel)
