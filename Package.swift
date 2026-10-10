@@ -41,6 +41,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/speech-model-check.pcm"),
+                .copy("Resources/Notices"),
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
