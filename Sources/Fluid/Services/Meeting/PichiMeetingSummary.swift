@@ -446,7 +446,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         if configuration.isOnDevice, URL(string: configuration.baseURL)?.port == 11434 {
             config.extraParameters["reasoning_effort"] = "none"
         }
-        if let sources, PichiMeetingSummaryTransport.usesNativeOllama(config) {
+        if let sources, PichiMeetingSummaryTransport.usesNativeOllama(config)
+            || CloudTextProvider.descriptor(forEndpoint: config.baseURL) != nil {
             guard sources.count <= 128 else { throw PichiMeetingSummaryError.tooManyChunks }
             let schema = PichiMeetingSummaryTransport.schema(ledger: prompt.contains("Reconcile meeting"), sourceIndexes: sources.map(\.sourceIndex))
             guard try JSONSerialization.data(withJSONObject: schema).count <= 64_000 else { throw PichiMeetingSummaryError.tooManyChunks }

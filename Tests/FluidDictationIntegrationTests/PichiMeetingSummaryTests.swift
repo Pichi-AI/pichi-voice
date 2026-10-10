@@ -355,6 +355,40 @@ final class PichiMeetingSummaryTests: XCTestCase {
         ]), as: UTF8.self)
     }
 
+    func testRegisteredCloudSummaryCarriesSchemaSourcesAndFrozenConnectionOptions() async throws {
+        for providerID in ["gigachat", "yandex"] {
+            let options = providerID == "yandex" ? ["project": "synthetic-folder"] : ["scope": "GIGACHAT_API_PERS"]
+            let transport = RepairTransport(responses: [try self.referenceResponse(0)])
+            let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            let configuration = PichiMeetingSummaryConfiguration(
+                providerID: providerID, modelID: providerID == "yandex" ? "gpt://synthetic-folder/synthetic-model" : "synthetic-model",
+                baseURL: ModelRepository.shared.defaultBaseURL(for: providerID), apiKey: "synthetic-key", language: "ru",
+                connectionOptions: options)
+            let document = try await generator.generate(session: self.session(), configuration: configuration)
+            XCTAssertEqual(document.summary[0].evidence, [.init(segmentID: self.id, quote: self.turns[0].text)])
+            let requests = await transport.requests
+            XCTAssertEqual(requests.count, 1)
+            XCTAssertEqual(requests[0].providerOptions, options)
+            let body = LLMClient.shared.buildChatCompletionsBody(requests[0])
+            let format = try XCTUnwrap(body["response_format"] as? [String: Any])
+            let schema: [String: Any]
+            if providerID == "gigachat" {
+                schema = try XCTUnwrap(format["schema"] as? [String: Any])
+                XCTAssertNil(format["json_schema"])
+                XCTAssertEqual(format["strict"] as? Bool, true)
+            } else {
+                let named = try XCTUnwrap(format["json_schema"] as? [String: Any])
+                schema = try XCTUnwrap(named["schema"] as? [String: Any])
+                XCTAssertEqual(named["strict"] as? Bool, true)
+            }
+            let definitions = try XCTUnwrap(schema["$defs"] as? [String: Any])
+            let evidence = try XCTUnwrap(definitions["evidence"] as? [String: Any])
+            let properties = try XCTUnwrap(evidence["properties"] as? [String: Any])
+            let sourceIndex = try XCTUnwrap(properties["sourceIndex"] as? [String: Any])
+            XCTAssertEqual(sourceIndex["enum"] as? [Int], [0])
+        }
+    }
+
     func testGeneratorProcessesAllChunksAndReducesRecap() async throws {
         let transport = FixtureTransport()
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
