@@ -4,6 +4,10 @@ import Foundation
 import SwiftUI
 import XCTest
 
+#if DEBUG && arch(arm64)
+import FluidAudio
+#endif
+
 @MainActor
 private final class DeletionFixtureProvider: TranscriptionProvider {
     let name = "Deletion fixture"
@@ -34,6 +38,118 @@ private final class DeletionFixtureProvider: TranscriptionProvider {
         self.isReady = false
     }
 }
+
+#if DEBUG && arch(arm64)
+@MainActor
+final class NemotronProviderResidencyTests: XCTestCase {
+    private func makeCache() throws -> (directory: URL, marker: URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NemotronResidencyTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = directory.appendingPathComponent("synthetic-artifact.txt")
+        try Data("owned cache fixture".utf8).write(to: marker)
+        self.addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return (directory, marker)
+    }
+
+    func testReleaseDestroysNativeManagerWhileRetainingProviderAndDiskCache() async throws {
+        for mode: NemotronProvider.Mode in [.offline, .streaming, .streaming320] {
+            let cache = try self.makeCache()
+            let provider = NemotronProvider(mode: mode)
+            weak var manager: NemotronStreamingAsrManager?
+            do {
+                let resident = NemotronStreamingAsrManager()
+                manager = resident
+                provider.installManagerForTesting(resident, cacheDirectory: cache.directory)
+            }
+            XCTAssertTrue(provider.isReady)
+            XCTAssertNotNil(manager)
+
+            await provider.releaseResidency()
+
+            XCTAssertNil(manager, "A cached provider must not retain its native model owner after retirement")
+            XCTAssertFalse(provider.isReady)
+            XCTAssertEqual(try String(contentsOf: cache.marker, encoding: .utf8), "owned cache fixture")
+            do {
+                _ = try await provider.transcribeFinal([])
+                XCTFail("A retired provider must require preparation again")
+            } catch {
+                XCTAssertEqual((error as NSError).domain, "NemotronProvider")
+            }
+            await provider.releaseResidency()
+            XCTAssertFalse(provider.isReady, "Repeated retirement is harmless")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: cache.marker.path))
+        }
+    }
+
+    func testCancelledCleanupJoinsProfilingAndCacheDeletion() async throws {
+        let cache = try self.makeCache()
+        let provider = NemotronProvider(mode: .streaming)
+        weak var manager: NemotronStreamingAsrManager?
+        do {
+            let resident = NemotronStreamingAsrManager()
+            manager = resident
+            provider.installManagerForTesting(resident, cacheDirectory: cache.directory)
+        }
+        let key = "ASRComponentProfilingEnabled"
+        let oldValue = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let oldValue { UserDefaults.standard.set(oldValue, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.set(true, forKey: key)
+        // Empty streaming input starts the real profiling lifecycle but never predicts or loads models.
+        let preview = try await provider.transcribeStreaming([])
+        XCTAssertTrue(preview.text.isEmpty)
+        XCTAssertNotNil(manager)
+
+        let cleanup = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await provider.clearCache()
+        }
+        try await cleanup.value
+
+        XCTAssertNil(manager, "Cancellation must not abandon awaited actor cleanup")
+        XCTAssertFalse(provider.isReady)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cache.directory.path))
+    }
+
+    func testOrdinaryModelSwitchRetiresManagerInRetainedNemotronProvider() async throws {
+        let settings = SettingsStore.shared
+        let selected = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = selected }
+        settings.selectedSpeechModel = .nemotronOffline
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let provider = try XCTUnwrap(asr.fileTranscriptionProvider as? NemotronProvider)
+        let cache = try self.makeCache()
+        weak var manager: NemotronStreamingAsrManager?
+        do {
+            let resident = NemotronStreamingAsrManager()
+            manager = resident
+            provider.installManagerForTesting(resident, cacheDirectory: cache.directory)
+        }
+        asr.isAsrReady = true
+        let successor = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[.gigaam] = successor
+        settings.selectedSpeechModel = .gigaam
+        asr.resetTranscriptionProvider()
+        let deadline = ContinuousClock.now + .seconds(3)
+        while asr.activeExclusiveActivity != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+
+        XCTAssertNil(asr.activeExclusiveActivity, "The existing reset must join residency release")
+        XCTAssertNil(manager)
+        XCTAssertFalse(provider.isReady)
+        XCTAssertFalse(asr.isAsrReady)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cache.marker.path))
+        XCTAssertEqual(successor.prepareCalls + successor.clearCalls, 0)
+        settings.selectedSpeechModel = .nemotronOffline
+        XCTAssertTrue((asr.fileTranscriptionProvider as? NemotronProvider) === provider,
+                      "ASR retains the lightweight provider, so retirement must release its manager")
+    }
+}
+#endif
 
 @MainActor
 final class VoiceModelDeletionTests: XCTestCase {

@@ -69,8 +69,23 @@ final class NemotronProvider: TranscriptionProvider {
         self.mode = mode
     }
 
+    #if DEBUG
+    private var cacheDirectoryForTesting: URL?
+
+    /// Install an unprepared native actor for ownership tests without loading model weights.
+    func installManagerForTesting(_ manager: NemotronStreamingAsrManager, cacheDirectory: URL) {
+        self.manager = manager
+        self.isReady = true
+        self.activeLanguageCode = SettingsStore.shared.selectedNemotronLanguage.rawValue
+        self.cacheDirectoryForTesting = cacheDirectory
+    }
+    #endif
+
     private var cacheDirectory: URL? {
-        AppBrand.cachesDirectory
+        #if DEBUG
+        if let directory = self.cacheDirectoryForTesting { return directory }
+        #endif
+        return AppBrand.cachesDirectory
             .appendingPathComponent(self.folderHint, isDirectory: true)
     }
 
@@ -327,14 +342,20 @@ final class NemotronProvider: TranscriptionProvider {
         return ASRTranscriptionResult(text: text, confidence: text.isEmpty ? 0 : 1)
     }
 
-    func clearCache() async throws {
+    func releaseResidency() async {
         if let manager = self.manager {
             await self.stopComponentProfilingIfNeeded(on: manager)
+            await manager.reset()
         }
         self.manager = nil
         self.isReady = false
         self.streamedSampleCount = 0
         self.activeLanguageCode = nil
+        self.componentProfilingSessionActive = false
+    }
+
+    func clearCache() async throws {
+        await self.releaseResidency()
         if let directory = self.cacheDirectory {
             try await Task.detached(priority: .userInitiated) {
                 if FileManager.default.fileExists(atPath: directory.path) {
