@@ -1442,6 +1442,7 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelActionButtonTitle(isPreparing: Bool, isDownloaded: Bool, isReady: Bool) -> String {
         if isPreparing {
+            if self.settings.selectedSpeechModel == .gigaam, !self.asr.isLoadingModel { return "Importing..." }
             return self.asr.isLoadingModel ? "Loading..." : "Downloading..."
         }
         if isReady {
@@ -1456,6 +1457,18 @@ struct OnboardingFlowView: View {
     private func prepareOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
         guard self.installations.canUseModelActions, !self.asr.isRunning, !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
 
+        var gigaAMImportDirectory: URL?
+        if route.model == .gigaam, !PichiGigaAMModelStore.shared.modelsExistOnDisk() {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.message = "Choose the folder containing your optimized GigaAM ONNX model and vocabulary."
+            panel.prompt = "Import"
+            guard panel.runModal() == .OK, let directory = panel.url else { return }
+            gigaAMImportDirectory = directory
+        }
+
         self.modelPreparationTask?.cancel()
         self.preparingModelRouteID = route.id
         self.selectOnboardingRoute(route)
@@ -1467,6 +1480,14 @@ struct OnboardingFlowView: View {
             }
 
             do {
+                if let directory = gigaAMImportDirectory {
+                    let lease = try self.asr.acquireExclusiveActivity(.modelMaintenance)
+                    defer { self.asr.releaseExclusiveActivity(lease) }
+                    let operation = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "speech", modelID: route.model.id)
+                    defer { MeetingModelResidencyCoordinator.shared.endOperation(operation) }
+                    try await PichiGigaAMModelStore.shared.importModel(from: directory)
+                    self.installations.refresh()
+                }
                 try await self.asr.ensureAsrReady(source: .onboarding)
             } catch is CancellationError {
                 DebugLogger.shared.info("Cancelled onboarding voice model setup for \(route.model.displayName)", source: "OnboardingFlowView")
@@ -1675,8 +1696,8 @@ struct OnboardingFlowView: View {
             } else {
                 self.onboardingModelActionButton(
                     id: "\(route.id)-download-activate",
-                    title: self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: false, isReady: false),
-                    systemImage: "arrow.down.circle.fill",
+                    title: model == .gigaam ? "Import & Activate" : self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: false, isReady: false),
+                    systemImage: model == .gigaam ? "folder.badge.plus" : "arrow.down.circle.fill",
                     tone: .primary,
                     width: nil,
                     isDisabled: areModelActionsBlocked
