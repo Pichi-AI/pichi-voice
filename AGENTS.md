@@ -15,6 +15,15 @@ Read [development setup](docs/development/codex.md) and [upstream strategy](docs
 - A Codex-managed worktree may begin with detached HEAD. Create a unique `codex/<task-slug>` branch before committing or publishing work. Never check out a branch that another worktree owns.
 - Do not edit `main` directly. Do not delete other sessions' worktrees, discard their changes, or force-push published branches.
 
+## Parallel agents and integration
+
+**IMPORTANT:** Use parallel agents for independent implementation, research and review when that speeds up the task. Each coding agent **MUST** use a separate Git worktree and a unique `codex/<task>` branch; never let concurrent agents edit the same checkout.
+
+- Give each agent a bounded scope, the relevant existing contracts, the starting commit and the checks it owns. Every agent must read these instructions, including the architecture requirements below.
+- The parent agent owns integration. Review each completed branch's diff, integrate its commits into the parent task worktree, resolve conflicts there and run checks against the combined result. Do not treat passing isolated checks as proof that the integrated app works.
+- Keep native build directories, package checkouts and private test artifacts isolated per worktree. One parent agent owns interactive app and device testing so agents do not compete for the user's UI or microphone.
+- Run an independent code review against the integrated commit. Record the reviewed revision, fix material findings and repeat the affected checks before publishing. Stop completed child agents after collecting their results.
+
 ## Verification
 
 - `bash scripts/dev/check.sh`: portable repository and setup checks.
