@@ -23,6 +23,7 @@ Read [development setup](docs/development/codex.md) and [upstream strategy](docs
 - `bash scripts/dev/macos.sh test`: upstream macOS integration suite, with the same known flaky Whisper fixture excluded as upstream CI.
 - macOS builds require full Xcode. A successful cloud check is not evidence that the app compiled or that microphone, Accessibility, CoreML, or UI behavior works.
 - Keep DerivedData and source package checkouts inside the current worktree. Never share a mutable build directory between concurrent sessions.
+- Run an independent automated code review after integrating feature branches and before publishing a PR. Fix material findings, rerun affected checks, and report the reviewed commit and remaining limitations.
 
 ## Changes and upstream
 
