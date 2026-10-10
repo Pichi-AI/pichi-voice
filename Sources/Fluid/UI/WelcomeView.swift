@@ -599,7 +599,7 @@ struct OnboardingFlowView: View {
                                 .padding(.bottom, 22)
 
                             Text("What language will\nyou speak most?")
-                                .font(.fluidSystem(size: 28, weight: .semibold))
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
                                 .foregroundStyle(self.theme.palette.primaryText)
                                 .multilineTextAlignment(.center)
                                 .lineSpacing(4)
@@ -1052,7 +1052,7 @@ struct OnboardingFlowView: View {
                                 .padding(.bottom, 22)
 
                             Text("Choose your\nvoice engine")
-                                .font(.fluidSystem(size: 28, weight: .semibold))
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
                                 .foregroundStyle(self.theme.palette.primaryText)
                                 .multilineTextAlignment(.center)
                                 .lineSpacing(4)
@@ -1189,7 +1189,7 @@ struct OnboardingFlowView: View {
                                 .padding(.bottom, 22)
 
                             Text(AppBrand.text("Let FluidVoice\nlisten and type"))
-                                .font(.fluidSystem(size: 28, weight: .semibold))
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
                                 .foregroundStyle(self.theme.palette.primaryText)
                                 .multilineTextAlignment(.center)
                                 .lineSpacing(4)
@@ -1288,7 +1288,7 @@ struct OnboardingFlowView: View {
                                 .padding(.bottom, 22)
 
                             Text(AppBrand.text("FluidVoice is ready."))
-                                .font(.fluidSystem(size: 28, weight: .semibold))
+                                .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
                                 .foregroundStyle(self.theme.palette.primaryText)
                                 .multilineTextAlignment(.center)
                                 .lineLimit(2)

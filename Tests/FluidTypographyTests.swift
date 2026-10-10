@@ -96,6 +96,7 @@ struct FluidTypographyTests {
                 precondition(FluidTypography.systemDesign(for: .default, role: .title, style: style) == native(title))
                 precondition(FluidTypography.systemDesign(for: .serif, style: style) == native(title))
                 precondition(Font.fluidSystem(.title3, style: style) == .system(.title3, design: native(title)))
+                precondition(Font.fluidSystem(size: 28, weight: .semibold, role: .title, style: style) == .system(size: 28, weight: .semibold, design: native(title)))
                 precondition(Font.fluidSystem(.caption, style: style) == .system(.caption, design: native(body)))
                 for design: Font.Design in [.rounded, .monospaced] {
                     precondition(FluidTypography.systemDesign(for: design, role: .title, style: style) == design)

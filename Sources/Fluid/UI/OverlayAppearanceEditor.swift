@@ -16,7 +16,7 @@ struct OverlayAppearanceEditor: View {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Make it yours")
-                        .font(.fluidSystem(size: 26, weight: .bold))
+                        .font(.fluidSystem(size: 26, weight: .bold, role: .title))
                     Text("A little personality for every thought.")
                         .font(.fluidSystem(size: 13))
                         .foregroundStyle(self.theme.palette.secondaryText)
