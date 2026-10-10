@@ -374,6 +374,18 @@ struct MeetingResultCanvas: View {
     @State private var copied = false
     @State private var copyRevision = 0
     @State private var documentSection: MeetingDocumentSection = .transcript
+    @ObservedObject private var appServices = AppServices.shared
+
+    static func visibleDocumentSection(selected: MeetingDocumentSection, sessionID: MeetingSessionID,
+                                       activeSummarySessionID: MeetingSessionID?) -> MeetingDocumentSection {
+        activeSummarySessionID == sessionID ? .summary : selected
+    }
+
+    private var visibleDocumentSection: MeetingDocumentSection {
+        Self.visibleDocumentSection(selected: self.documentSection, sessionID: self.session.id,
+                                    activeSummarySessionID: self.appServices.activeMeetingSummarySession?.id)
+    }
+
     @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
 
     /// Naming is reached by clicking a speaker's name, so the sheet opens on the one clicked.
@@ -436,10 +448,10 @@ struct MeetingResultCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
-                    MeetingDocumentTabs(selection: self.$documentSection, isEnabled: self.summaryActivity.selectionLock == nil)
+                    MeetingDocumentTabs(selection: Binding(get: { self.visibleDocumentSection }, set: { self.documentSection = $0 }), isEnabled: self.summaryActivity.selectionLock == nil)
                 }
 
-                if self.documentSection == .summary {
+                if self.visibleDocumentSection == .summary {
                     MeetingSummaryView(session: self.session, asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
                         .id("\(self.session.id)-\(self.session.updatedAt)")
                 } else {
@@ -523,6 +535,12 @@ struct MeetingResultCanvas: View {
                 onCancel: { self.pendingEditedSegment = nil }
             )
         }
+        .onAppear {
+            self.documentSection = self.visibleDocumentSection
+        }
+        .onChange(of: self.appServices.activeMeetingSummarySession?.id) { _, _ in
+            self.documentSection = self.visibleDocumentSection
+        }
         .onDisappear { self.playback.stop() }
         .onChange(of: self.session.id) { _, _ in self.playback.stop() }
         .onChange(of: self.session.retention.audioDeletedAt) { _, _ in self.playback.stop() }
@@ -579,7 +597,8 @@ struct MeetingResultCanvas: View {
         }
         // Prevents an echo toggle left on for one meeting from leaking into the next.
         .onChange(of: self.session.id) { _, _ in
-            self.documentSection = .transcript
+            self.documentSection = Self.visibleDocumentSection(selected: .transcript, sessionID: self.session.id,
+                activeSummarySessionID: self.appServices.activeMeetingSummarySession?.id)
             self.copied = false
             self.showsProbableEchoes = false
             self.isShowingAssignSpeakers = false

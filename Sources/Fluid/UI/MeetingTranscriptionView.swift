@@ -168,6 +168,7 @@ struct MeetingTranscriptionView: View {
     @State private var cachedStorageReady = false
     @ObservedObject var historySnapshot: MeetingHistorySnapshot
     @State private var selectedHistorySessionID: MeetingSessionID?
+    @State private var resumedSummarySession: MeetingSession?
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -297,6 +298,8 @@ struct MeetingTranscriptionView: View {
             )
         }
         .clipped()
+        .onAppear { self.reattachActiveSummary() }
+        .onChange(of: self.appServices.activeMeetingSummarySession?.id) { _, _ in self.reattachActiveSummary() }
         .task {
             if CPUArchitecture.isAppleSilicon && !self.isRegisteredMeetingProviderSelected {
                 MeetingDiarizationModelStore.shared.prepareInBackground()
@@ -399,6 +402,9 @@ struct MeetingTranscriptionView: View {
     }
 
     private var canvasState: MeetingTranscriptionCanvasState {
+        // A live summary owns a frozen session even when history has not loaded yet.
+        // Reopening Meet must expose its progress and cancellation despite the lock.
+        if let active = self.appServices.activeMeetingSummarySession { return .result(active) }
         if let selectedHistorySession, self.canBrowseMeetingHistory {
             switch selectedHistorySession.state {
             case .failed:
@@ -456,9 +462,25 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    static func summarySessionSelection(active: MeetingSession?, selectedID: MeetingSessionID?,
+                                        history: [MeetingSession], resumed: MeetingSession?) -> MeetingSession? {
+        if let active { return active }
+        guard let selectedID else { return nil }
+        return history.first(where: { $0.id == selectedID })
+            ?? (resumed?.id == selectedID ? resumed : nil)
+    }
+
     private var selectedHistorySession: MeetingSession? {
-        guard let selectedHistorySessionID else { return nil }
-        return self.historySnapshot.sessions.first(where: { $0.id == selectedHistorySessionID })
+        Self.summarySessionSelection(active: self.appServices.activeMeetingSummarySession,
+            selectedID: self.selectedHistorySessionID, history: self.historySnapshot.sessions,
+            resumed: self.resumedSummarySession)
+    }
+
+    private func reattachActiveSummary() {
+        guard let session = self.appServices.activeMeetingSummarySession else { return }
+        self.resumedSummarySession = session
+        self.selectedHistorySessionID = session.id
+        self.isMeetingHistoryVisible = false
     }
 
     /// Closing a history selection returns to whatever is underneath; closing the just-finished
@@ -524,7 +546,7 @@ struct MeetingTranscriptionView: View {
         if self.isRefreshingSources {
             blockingMessage = PichiLocalization.text("Checking recording access and sources.")
         } else if let conflictingActivity {
-            blockingMessage = PichiLocalization.format("Wait for the active %@ to finish.", conflictingActivity.displayName)
+            blockingMessage = PichiLocalization.format("Wait for the active %@ to finish.", PichiLocalization.text(conflictingActivity.displayName))
         } else if microphoneStatus == .restricted {
             blockingMessage = PichiLocalization.text("Microphone access is restricted by system policy.")
         } else if !microphoneReady {
@@ -559,7 +581,7 @@ struct MeetingTranscriptionView: View {
             modelReady: modelReady,
             storageStatus: self.cachedStorageStatus.text(language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian),
             storageReady: self.cachedStorageReady,
-            activityStatus: conflictingActivity.map { PichiLocalization.format("Wait for %@", $0.displayName) } ?? PichiLocalization.text("Ready"),
+            activityStatus: conflictingActivity.map { PichiLocalization.format("Wait for %@", PichiLocalization.text($0.displayName)) } ?? PichiLocalization.text("Ready"),
             activityReady: activityReady,
             showMicrophoneSettingsAction: microphoneStatus == .denied,
             showScreenRecordingSettingsAction: self.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess,
@@ -1142,7 +1164,8 @@ struct MeetingTranscriptionView: View {
         await self.historySnapshot.refresh()
         guard self.historySnapshot.errorMessage == nil else { return }
         if let selectedHistorySessionID,
-           !self.historySnapshot.sessions.contains(where: { $0.id == selectedHistorySessionID })
+           !self.historySnapshot.sessions.contains(where: { $0.id == selectedHistorySessionID }),
+           self.resumedSummarySession?.id != selectedHistorySessionID
         {
             self.selectedHistorySessionID = nil
         }

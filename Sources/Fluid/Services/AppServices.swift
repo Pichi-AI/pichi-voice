@@ -90,6 +90,7 @@ final class AppServices: ObservableObject {
     }
     private var summaryControllers: [UUID?: SummaryControllerReference] = [:]
     private var activeSummaryControllers: [UUID?: PichiMeetingSummaryController] = [:]
+    @Published private(set) var activeMeetingSummarySession: MeetingSession?
 
     func meetingSummaryController(for sessionID: UUID?) -> PichiMeetingSummaryController {
         self.summaryControllers = self.summaryControllers.filter { $0.value.value != nil }
@@ -99,6 +100,7 @@ final class AppServices: ObservableObject {
             // Selection/activity admission already permits only one active attempt.
             // Release ownership only after inference and resource restoration joined.
             self?.activeSummaryControllers[sessionID] = controller.generating ? controller : nil
+            self?.activeMeetingSummarySession = controller.generating ? controller.sourceSession : nil
         }
         self.summaryControllers[sessionID] = SummaryControllerReference(value: controller)
         return controller

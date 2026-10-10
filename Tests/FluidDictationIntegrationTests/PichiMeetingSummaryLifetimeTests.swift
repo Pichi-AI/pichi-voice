@@ -32,6 +32,21 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
         XCTAssertNotNil(retained, "The admitted job must survive destruction of its view")
         for _ in 0..<20 { _ = services.meetingSummaryController(for: UUID()) }
         XCTAssertTrue(retained === services.meetingSummaryController(for: session.id))
+        // Reproduce navigation rebuilding the outer Meet view: its history selection
+        // and document tab are gone, while global selection admission stays locked.
+        XCTAssertNotNil(MeetingSummaryActivityCoordinator.shared.selectionLock)
+        let activeSnapshot = services.activeMeetingSummarySession
+        let restored = MeetingTranscriptionView.summarySessionSelection(active: activeSnapshot,
+            selectedID: nil, history: [], resumed: nil)
+        XCTAssertEqual(restored, session, "The active snapshot must render even before history loads or for an unsaved session")
+        XCTAssertEqual(MeetingResultCanvas.visibleDocumentSection(selected: .transcript, sessionID: session.id,
+            activeSummarySessionID: activeSnapshot?.id), .summary, "A disabled tab bar must not strand Cancel behind Transcript")
+        let unrelated = self.session()
+        XCTAssertEqual(MeetingTranscriptionView.summarySessionSelection(active: activeSnapshot,
+            selectedID: unrelated.id, history: [unrelated], resumed: nil)?.id, session.id,
+            "The active meeting takes precedence over stale selection of another meeting")
+        XCTAssertEqual(MeetingResultCanvas.visibleDocumentSection(selected: .transcript, sessionID: unrelated.id,
+            activeSummarySessionID: activeSnapshot?.id), .transcript)
         retained?.cancel()
         XCTAssertNotNil(MeetingSummaryActivityCoordinator.shared.selectionLock,
                         "Cancel requests cancellation; it must not prematurely release admission")
@@ -42,6 +57,11 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
         XCTAssertNil(retained, "The app releases its strong reference after the task drains")
         XCTAssertNil(MeetingSummaryActivityCoordinator.shared.selectionLock)
         XCTAssertFalse(owner.isExclusive)
+        XCTAssertNil(services.activeMeetingSummarySession)
+        XCTAssertEqual(MeetingTranscriptionView.summarySessionSelection(active: nil, selectedID: session.id,
+            history: [], resumed: activeSnapshot), session, "A restored unsaved meeting must not disappear when its job settles")
+        XCTAssertNil(MeetingTranscriptionView.summarySessionSelection(active: nil, selectedID: unrelated.id,
+            history: [], resumed: activeSnapshot), "A retained snapshot must never appear under another meeting's selection")
     }
 
     @MainActor
