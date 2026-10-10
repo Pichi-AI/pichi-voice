@@ -526,6 +526,51 @@ final class MeetingLiveStartupCancellationTests: XCTestCase {
 
 @MainActor
 final class PichiMeetingBufferedCaptionsTests: XCTestCase {
+    @MainActor private final class CaptionProvider: TranscriptionProvider {
+        let name = "Unknown caption provider fixture"
+        let isAvailable = true
+        var isReady = false
+        let endOfUtteranceProbability: Float?
+        var streamingInputs: [[Float]] = []
+        var ordinaryTranscriptionCalls = 0
+        var prepareCalls = 0
+        var releaseCalls = 0
+        var clearCacheCalls = 0
+
+        init(endOfUtteranceProbability: Float? = nil) {
+            self.endOfUtteranceProbability = endOfUtteranceProbability
+        }
+
+        func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
+            self.prepareCalls += 1
+            self.isReady = true
+        }
+
+        func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            self.ordinaryTranscriptionCalls += 1
+            return ASRTranscriptionResult(text: "Ordinary transcription must not be selected")
+        }
+
+        func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            self.streamingInputs.append(samples)
+            if let endOfUtteranceProbability {
+                return ASRTranscriptionResult(
+                    text: "Unknown provider caption",
+                    endOfUtteranceProbability: endOfUtteranceProbability
+                )
+            }
+            // Exercise the compatibility default used by providers without endpoint metadata.
+            return ASRTranscriptionResult(text: "Unknown provider caption")
+        }
+
+        func releaseResidency() async {
+            self.releaseCalls += 1
+            self.isReady = false
+        }
+
+        func clearCache() async throws { self.clearCacheCalls += 1 }
+    }
+
     private actor Recognizer: PichiMeetingCaptionRecognizing {
         var inputs: [[Float]] = []
         var prepareCount = 0
@@ -569,6 +614,88 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
             onDegraded: { _, text in events.degraded(text) },
             onReady: { _ in }
         )
+    }
+
+    func testUnknownProviderEndpointMetadataFinalizesAfterShortAcousticPause() async throws {
+        let provider = CaptionProvider(endOfUtteranceProbability: 0.9)
+        let recognizer = PichiMeetingCaptionRecognizer(provider: provider)
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        self.addTeardownBlock { @MainActor in
+            await engine.stop()
+            await recognizer.unload()
+        }
+        let events = Events()
+        await self.configure(engine, events: events)
+        try await recognizer.prepare()
+        try await engine.consumeForTesting(self.sample(start: 4, seconds: 1.1, value: 0.1))
+        try await engine.consumeForTesting(self.sample(start: 5.1, seconds: 0.1, value: 0))
+        XCTAssertTrue(events.utterances.isEmpty)
+        try await engine.consumeForTesting(self.sample(start: 5.2, seconds: 0.1, value: 0))
+
+        let partial = try XCTUnwrap(events.partials.first { !$0.1.isEmpty })
+        let utterance = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(events.utterances.count, 1)
+        XCTAssertEqual(utterance.0, .microphone)
+        XCTAssertEqual(utterance.1, partial.0)
+        XCTAssertEqual(utterance.2, "Unknown provider caption")
+        XCTAssertEqual(utterance.3, 4, accuracy: 0.0001)
+        XCTAssertEqual(utterance.4, 5.3, accuracy: 0.0001)
+        XCTAssertEqual(provider.streamingInputs.count, 1, "Endpoint finalization reuses the current streaming hypothesis")
+        XCTAssertEqual(provider.streamingInputs.first?.count, 20_800)
+        XCTAssertEqual(provider.ordinaryTranscriptionCalls, 0)
+        XCTAssertTrue(events.degraded.isEmpty)
+    }
+
+    func testProviderWithoutEndpointMetadataKeepsRegularPauseFinalization() async throws {
+        let provider = CaptionProvider()
+        let recognizer = PichiMeetingCaptionRecognizer(provider: provider)
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        self.addTeardownBlock { @MainActor in
+            await engine.stop()
+            await recognizer.unload()
+        }
+        let events = Events()
+        await self.configure(engine, events: events)
+        try await recognizer.prepare()
+        try await engine.consumeForTesting(self.sample(start: 4, seconds: 1.1, value: 0.1))
+        try await engine.consumeForTesting(self.sample(start: 5.1, seconds: 0.2, value: 0))
+
+        let partial = try XCTUnwrap(events.partials.first { !$0.1.isEmpty })
+        XCTAssertEqual(partial.1, "Unknown provider caption")
+        XCTAssertTrue(events.utterances.isEmpty, "Absent endpoint metadata must not shorten the acoustic pause")
+        XCTAssertEqual(provider.streamingInputs.count, 1)
+        try await engine.consumeForTesting(self.sample(start: 5.3, seconds: 0.5, value: 0))
+
+        let utterance = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(events.utterances.count, 1)
+        XCTAssertEqual(utterance.1, partial.0)
+        XCTAssertEqual(utterance.2, "Unknown provider caption")
+        XCTAssertEqual(utterance.3, 4, accuracy: 0.0001)
+        XCTAssertEqual(utterance.4, 5.8, accuracy: 0.0001)
+        XCTAssertEqual(provider.streamingInputs.map(\.count), [20_800, 28_800])
+        XCTAssertEqual(provider.ordinaryTranscriptionCalls, 0)
+        XCTAssertTrue(events.degraded.isEmpty)
+    }
+
+    func testCaptionAdapterReleasesUnknownProviderOnceWithoutClearingArtifacts() async throws {
+        let provider = CaptionProvider()
+        let recognizer = PichiMeetingCaptionRecognizer(provider: provider)
+        self.addTeardownBlock { @MainActor in await recognizer.unload() }
+        try await recognizer.prepare()
+        let result = try await recognizer.recognize([0.1, 0.2])
+        XCTAssertEqual(result.text, "Unknown provider caption")
+        XCTAssertNil(result.endOfUtteranceProbability)
+        XCTAssertEqual(provider.prepareCalls, 1)
+        XCTAssertEqual(provider.releaseCalls, 0)
+
+        await recognizer.unload()
+        await recognizer.unload()
+
+        XCTAssertEqual(provider.releaseCalls, 1)
+        XCTAssertEqual(provider.clearCacheCalls, 0)
+        XCTAssertFalse(provider.isReady)
+        XCTAssertEqual(provider.streamingInputs, [[0.1, 0.2]])
+        XCTAssertEqual(provider.ordinaryTranscriptionCalls, 0)
     }
 
     func testPeriodicRussianCaptionAndPauseFinalizationKeepCaptureTimesAndTurnIdentity() async throws {

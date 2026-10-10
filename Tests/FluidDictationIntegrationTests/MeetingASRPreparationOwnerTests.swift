@@ -125,6 +125,11 @@ private final class FakeMeetingTranscriptionProvider: TranscriptionProvider, @un
     private var error: Error?
     private var enteredHook: (@Sendable () -> Void)?
     private var progressHandler: ((ModelPreparationProgress) -> Void)?
+    private var residencyReleaseGate: ContinuationGate?
+    private var residencyRecorder: OrchestrationRecorder?
+    private var residencyReleaseCallCount = 0
+    private var cacheClearCallCount = 0
+    private var residencyReleaseWasCancelled = false
 
     var isAvailable: Bool { true }
 
@@ -134,6 +139,18 @@ private final class FakeMeetingTranscriptionProvider: TranscriptionProvider, @un
 
     var prepareCalls: Int {
         self.lock.withLock { self.prepareCallCount }
+    }
+
+    var residencyReleaseCalls: Int {
+        self.lock.withLock { self.residencyReleaseCallCount }
+    }
+
+    var clearCacheCalls: Int {
+        self.lock.withLock { self.cacheClearCallCount }
+    }
+
+    var releaseWasCancelled: Bool {
+        self.lock.withLock { self.residencyReleaseWasCancelled }
     }
 
     var lastProgressHandler: ((ModelPreparationProgress) -> Void)? {
@@ -156,6 +173,17 @@ private final class FakeMeetingTranscriptionProvider: TranscriptionProvider, @un
         self.lock.withLock { self.gate }?.open()
     }
 
+    func observeResidencyRelease(on gate: ContinuationGate, recorder: OrchestrationRecorder) {
+        self.lock.withLock {
+            self.residencyReleaseGate = gate
+            self.residencyRecorder = recorder
+        }
+    }
+
+    func openResidencyReleaseGate() {
+        self.lock.withLock { self.residencyReleaseGate }?.open()
+    }
+
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
         let entered = self.lock.withLock { () -> (@Sendable () -> Void)? in
             self.prepareCallCount += 1
@@ -171,6 +199,29 @@ private final class FakeMeetingTranscriptionProvider: TranscriptionProvider, @un
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         ASRTranscriptionResult(text: "")
+    }
+
+    func releaseResidency() async {
+        let (gate, recorder) = self.lock.withLock {
+            self.residencyReleaseCallCount += 1
+            self.residencyReleaseWasCancelled = self.residencyReleaseWasCancelled || Task.isCancelled
+            return (self.residencyReleaseGate, self.residencyRecorder)
+        }
+        recorder?.record("releaseResidency:entered")
+        if let gate { await gate.wait() }
+        self.lock.withLock {
+            self.residencyReleaseWasCancelled = self.residencyReleaseWasCancelled || Task.isCancelled
+            self.ready = false
+        }
+        recorder?.record("releaseResidency:finished")
+    }
+
+    func clearCache() async throws {
+        let recorder = self.lock.withLock {
+            self.cacheClearCallCount += 1
+            return self.residencyRecorder
+        }
+        recorder?.record("clearCache")
     }
 }
 
@@ -265,6 +316,7 @@ final class MeetingASRPreparationOwnerTests: XCTestCase {
         func openAllGates() {
             self.retireGate.open()
             self.provider.openPrepareGate()
+            self.provider.openResidencyReleaseGate()
             self.drainGate.open()
         }
     }
@@ -1069,6 +1121,83 @@ final class MeetingASRPreparationOwnerTests: XCTestCase {
         XCTAssertEqual(harness.recorder.count(of: "drain"), 1)
     }
 
+    func testReleaseJoinsResidencyHookAfterExecutorDrainEvenWhenCallerIsCancelled() async throws {
+        for cancelCaller in [false, true] {
+            let harness = self.makeHarness()
+            let lease = self.makeLease()
+            harness.registry.activate(lease)
+            let attempt = UUID()
+            let configuration = MeetingFinalProcessingConfiguration()
+            let finishResidencyRelease = ContinuationGate()
+            harness.provider.observeResidencyRelease(on: finishResidencyRelease, recorder: harness.recorder)
+            _ = try await harness.owner.prepare(lease: lease, attemptID: attempt, configuration: configuration)
+            let token = try XCTUnwrap(harness.owner.currentClaimToken)
+            harness.drainGate.reset()
+            let firstFinished = TestFlag()
+            let firstRelease = Task { @MainActor in
+                await harness.owner.release(token)
+                firstFinished.set(true)
+            }
+            let drainObserved = await waitUntilCondition { harness.recorder.count(of: "drain") == 1 }
+            XCTAssertTrue(drainObserved)
+            XCTAssertEqual(harness.provider.residencyReleaseCalls, 0, "Provider retirement must wait for the executor drain")
+            XCTAssertTrue(harness.owner.isClaimed)
+            XCTAssertEqual(harness.owner.currentClaimToken, token)
+
+            harness.drainGate.open()
+            let releaseObserved = await waitUntilCondition { harness.provider.residencyReleaseCalls == 1 }
+            XCTAssertTrue(releaseObserved)
+            let secondStarted = TestFlag()
+            let secondFinished = TestFlag()
+            let secondRelease = Task { @MainActor in
+                secondStarted.set(true)
+                await harness.owner.release(token)
+                secondFinished.set(true)
+            }
+            let secondObserved = await waitUntilCondition { secondStarted.value }
+            XCTAssertTrue(secondObserved)
+            if cancelCaller { firstRelease.cancel() }
+            // Both callers get an actor turn while the non-cooperative hook is still parked.
+            try? await Task.sleep(nanoseconds: 20_000_000)
+
+            XCTAssertFalse(firstFinished.value)
+            XCTAssertFalse(secondFinished.value)
+            XCTAssertTrue(harness.owner.isClaimed)
+            XCTAssertTrue(harness.owner.isDraining)
+            XCTAssertEqual(harness.owner.currentClaimToken, token)
+            XCTAssertEqual(harness.owner.currentClaimToken?.lease, lease)
+            XCTAssertTrue(harness.registry.isActive(lease))
+            XCTAssertTrue(harness.provider.isReady, "The fixture retains its residency until the hook finishes")
+            XCTAssertEqual(harness.provider.residencyReleaseCalls, 1)
+            XCTAssertEqual(harness.provider.clearCacheCalls, 0)
+            do {
+                _ = try await harness.owner.prepare(lease: lease, attemptID: attempt, configuration: configuration)
+                XCTFail("A ready slot must not be returned while residency retirement is pending")
+            } catch let error as MeetingASRPreparationError {
+                XCTAssertEqual(error, .preparationInProgress)
+            } catch {
+                XCTFail("Expected the residency drain admission gate, got \(error)")
+            }
+
+            finishResidencyRelease.open()
+            await firstRelease.value
+            await secondRelease.value
+            XCTAssertTrue(firstFinished.value)
+            XCTAssertTrue(secondFinished.value)
+            XCTAssertFalse(harness.provider.releaseWasCancelled)
+            XCTAssertFalse(harness.provider.isReady)
+            XCTAssertFalse(harness.owner.isClaimed)
+            XCTAssertFalse(harness.owner.isDraining)
+            XCTAssertNil(harness.owner.currentClaimToken)
+            XCTAssertEqual(harness.provider.clearCacheCalls, 0, "Retiring residency must preserve the disk cache")
+            XCTAssertEqual(harness.recorder.events, [
+                "retire", "factory", "prepare", "drain", "releaseResidency:entered", "releaseResidency:finished",
+            ])
+            await harness.owner.release(token)
+            XCTAssertEqual(harness.provider.residencyReleaseCalls, 1, "Repeated handback must not retire the same claim twice")
+        }
+    }
+
     func testReleaseWithoutMatchingClaimIsNoOp() async throws {
         let harness = self.makeHarness()
 
@@ -1231,6 +1360,7 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         func openAllGates() {
             self.retireGate.open()
             self.provider.openPrepareGate()
+            self.provider.openResidencyReleaseGate()
             self.drainGate.open()
         }
 
@@ -1552,6 +1682,63 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         let dictationLease = try harness.service.acquireExclusiveActivity(.dictation)
         harness.service.releaseExclusiveActivity(dictationLease)
         XCTAssertFalse(harness.owner.isClaimed)
+    }
+
+    func testCancelledScopeRetainsDeferredActivityLeaseUntilResidencyReleaseCompletes() async throws {
+        let harness = self.makeHarness()
+        let lease = try harness.acquireMeetingLease()
+        let finishResidencyRelease = ContinuationGate()
+        harness.provider.observeResidencyRelease(on: finishResidencyRelease, recorder: harness.recorder)
+        let finished = TestFlag()
+        let scope = Task { @MainActor in
+            defer { finished.set(true) }
+            return try await harness.service.withPreparedMeetingASR(
+                attemptID: UUID(), configuration: MeetingFinalProcessingConfiguration()
+            ) { _ in "done" }
+        }
+        self.addTeardownBlock { @MainActor in
+            finishResidencyRelease.open()
+            _ = await scope.result
+            harness.service.releaseExclusiveActivity(lease)
+        }
+        let releaseObserved = await waitUntilCondition { harness.provider.residencyReleaseCalls == 1 }
+        XCTAssertTrue(releaseObserved)
+        let token = try XCTUnwrap(harness.owner.currentClaimToken)
+        harness.service.releaseExclusiveActivity(lease)
+        scope.cancel()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertFalse(finished.value)
+        XCTAssertTrue(harness.owner.isClaimed)
+        XCTAssertTrue(harness.owner.isDraining)
+        XCTAssertEqual(harness.owner.currentClaimToken, token)
+        XCTAssertTrue(harness.provider.isReady)
+        XCTAssertEqual(harness.provider.clearCacheCalls, 0)
+        XCTAssertThrowsError(try harness.service.acquireExclusiveActivity(.dictation)) { error in
+            guard let activityError = error as? ASRActivityError,
+                  case .activityInProgress(.meeting) = activityError
+            else { return XCTFail("The meeting must retain its activity lease until residency release finishes, got \(error)") }
+        }
+
+        finishResidencyRelease.open()
+        do {
+            let result = try await scope.value
+            XCTAssertEqual(result, "done")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Expected a completed body or caller cancellation after joined cleanup, got \(error)")
+        }
+        XCTAssertTrue(finished.value)
+        XCTAssertFalse(harness.provider.releaseWasCancelled)
+        XCTAssertFalse(harness.provider.isReady)
+        XCTAssertFalse(harness.owner.isClaimed)
+        XCTAssertFalse(harness.owner.isDraining)
+        XCTAssertNil(harness.owner.currentClaimToken)
+        XCTAssertEqual(harness.provider.residencyReleaseCalls, 1)
+        XCTAssertEqual(harness.provider.clearCacheCalls, 0)
+        XCTAssertEqual(harness.recorder.count(of: "drain"), 1)
+        let dictationLease = try harness.service.acquireExclusiveActivity(.dictation)
+        harness.service.releaseExclusiveActivity(dictationLease)
     }
 
     func testMeetingTranscriptionEntryPointsRunWithinScopeAndUnclaimedLegacyPath() async throws {
