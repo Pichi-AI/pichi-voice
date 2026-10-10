@@ -32593,6 +32593,24 @@
         }
       }
     },
+    "Skip": {
+      "comment": "Onboarding navigation action. This is fixed interface copy, never a user/model label.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пропустить"
+          }
+        }
+      }
+    },
     "Skip Silent Recordings": {
       "extractionState": "manual",
       "localizations": {

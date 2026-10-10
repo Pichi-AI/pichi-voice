@@ -14,6 +14,17 @@ FORMAT = re.compile(r'%(?:(\d+)\$)?[-+#0]*(?:\d+)?(?:\.\d+)?(ll|l|h|z)?([diuoxXf
 LANGUAGE = re.compile(r'^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$')
 EXPLICIT = re.compile(r'\b(?:PichiLocalization\.(?:text|format)|AppBrand\.(?:text|format)|Text|Button|Label|Toggle|Picker|Menu|TextField|SecureField|GroupBox|Section|ProgressView|Link)\(\s*("(?:[^"\\]|\\.)*")')
 
+# These named arguments are declared trusted onboarding UI copy. Restrict the audit
+# to these presentation sources; generic title/model/user-data fields elsewhere are not UI keys.
+ONBOARDING_NAMED_COPY = re.compile(r'\b(?:skipTitle|continueTitle|title)\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+def onboarding_copy_source(path):
+    return path.name in {
+        'WelcomeView.swift', 'OnboardingTryoutStepView.swift', 'OnboardingAIEnhancementStepView.swift',
+        'OnboardingCleanupExampleCarousel.swift', 'OnboardingComponents.swift',
+    }
+
 
 def unique_object(pairs):
     result = {}
@@ -95,11 +106,15 @@ def validate_catalog(path):
     return strings, plurals
 
 
-def missing_literal_keys(strings):
+def missing_literal_keys(strings, source_root=None):
     missing = collections.defaultdict(list)
-    for path in sorted((ROOT / 'Sources/Fluid').rglob('*.swift')):
+    source_root = source_root or ROOT / 'Sources/Fluid'
+    for path in sorted(source_root.rglob('*.swift')):
         source = path.read_text()
-        for match in EXPLICIT.finditer(source):
+        patterns = [EXPLICIT]
+        if onboarding_copy_source(path):
+            patterns.append(ONBOARDING_NAMED_COPY)
+        for match in (match for pattern in patterns for match in pattern.finditer(source)):
             try:
                 # Swift interpolation and multiline/raw literals require Xcode's compiler extraction.
                 key = json.loads(match.group(1))
@@ -107,7 +122,8 @@ def missing_literal_keys(strings):
                 continue
             if key.strip() and key not in strings:
                 line = source.count('\n', 0, match.start()) + 1
-                missing[key].append(f'{path.relative_to(ROOT)}:{line}')
+                relative = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path.relative_to(source_root)
+                missing[key].append(f'{relative}:{line}')
     return missing
 
 

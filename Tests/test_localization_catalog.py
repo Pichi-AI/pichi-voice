@@ -41,6 +41,16 @@ class LocalizationCatalogValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Duplicate JSON key'):
             json.loads('{"strings": {}, "strings": {}}', object_pairs_hook=check.unique_object)
 
+    def testMissingNamedOnboardingNavigationCopyIsCaughtButDataFieldsRemainData(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'WelcomeView.swift').write_text('cinematicFooter(continueTitle: "Continue", skipTitle: "Skip")\nOnboardingPillButtonConfiguration(title: "Back")\n')
+            (root / 'OnboardingModelData.swift').write_text('ModelDescriptor(title: "My private model")\nlet modelID = "Skip"\n')
+            missing = check.missing_literal_keys({'Continue': {}, 'Back': {}}, source_root=root)
+            self.assertEqual(set(missing), {'Skip'})
+            self.assertEqual(missing['Skip'], ['WelcomeView.swift:1'])
+            self.assertEqual(check.missing_literal_keys({'Continue': {}, 'Back': {}, 'Skip': {}}, source_root=root), {})
+
     def testPositionalReorderingKeepsArgumentTypesAndLiteralPercentCopyIsNotAFormat(self):
         self.assertEqual(check.signature('%lld entries for %@'), check.signature('%2$@ has %1$lld entries'))
         self.assertEqual(check.signature('15% faster'), {})
