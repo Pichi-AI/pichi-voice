@@ -22,7 +22,7 @@ struct PrivateAIProviderFeature {
     static func main() throws {
         let url = URL(fileURLWithPath: "Sources/Fluid/Models/local-text-models.json")
         let catalog = LocalTextModelCatalog.load(from: url)
-        self.check(catalog.models.count == 8, "Expected the reviewed candidate catalog")
+        self.check(catalog.models.count == 10, "Expected the reviewed candidate catalog")
         self.check(catalog.models(for: "unrelated-server").isEmpty, "Tags cannot be applied to a different provider")
         self.check(LocalTextModelCatalog.load(from: nil).models.isEmpty, "A missing resource must not invent defaults")
         let compact = catalog.models.first { $0.id == "qwen3.5-2b" }!
@@ -30,6 +30,17 @@ struct PrivateAIProviderFeature {
         self.check(compact.installedID(in: ["qwen3.5:2b-q4_K_M"]) == "qwen3.5:2b-q4_K_M", "Preserve the exact discovered quantization ID")
         self.check(catalog.displayName(for: "my-local-model:latest", providerID: "ollama") == "my-local-model:latest", "Unknown discovered models remain data")
         self.check(catalog.displayName(for: "qwen3.5:4b", providerID: "unrelated-server") == "qwen3.5:4b", "Friendly names must respect the provider")
+        let russianProfiles = ["gigachat3.1-lightning", "yandexgpt5-lite", "t-lite-it-2.1"]
+        for id in russianProfiles {
+            let model = catalog.models.first { $0.id == id }!
+            self.check(model.installedID(in: Array(model.aliases.reversed())) == model.aliases.first,
+                       "Prefer the stable bounded serving profile when both aliases are discovered")
+            self.check(model.installedID(in: [model.aliases.last!]) == model.aliases.last,
+                       "Keep an existing compatible dated installation available")
+        }
+        let yandex = catalog.models.first { $0.id == "yandexgpt5-lite" }!
+        self.check(yandex.installedID(in: ["pichi-rf/yandexgpt5-lite-instruct-q4km:20261010"]) == nil,
+                   "A raw template that drops system instructions is not a compatible catalog profile")
 
         let models = ["huge-model:latest", "small-model:latest"]
         self.check(ModelRepository.selectionAfterRefresh(preferred: "", models: models, isLocal: true).isEmpty, "Discovery must not select the first large local model")

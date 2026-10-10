@@ -253,6 +253,7 @@ builds/
 !/docs/development/branding.md
 !/docs/development/localization.md
 !/docs/development/analytics.md
+!/docs/development/local-russian-text-models.md
 !/scripts/
 /scripts/*
 !/scripts/dev/
