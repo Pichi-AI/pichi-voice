@@ -40105,6 +40105,42 @@
         }
       }
     },
+    "[Answered] ": {
+      "comment": "Summary export status marker; retain trailing space.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Answered] "
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Ответ получен] "
+          }
+        }
+      }
+    },
+    "[Superseded] ": {
+      "comment": "Summary export status marker; retain trailing space.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Superseded] "
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Отменено/заменено] "
+          }
+        }
+      }
+    },
     "action.edit": {
       "comment": "Action button to edit content, not the dictation mode.",
       "extractionState": "manual",
@@ -41147,6 +41183,24 @@
         }
       }
     },
+    "macOS did not enable FluidVoice in Login Items. Check System Settings > General > Login Items.": {
+      "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice marker unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS did not enable FluidVoice in Login Items. Check System Settings > General > Login Items."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS не включила FluidVoice в объектах входа. Проверьте «Системные настройки > Основные > Объекты входа»."
+          }
+        }
+      }
+    },
     "macOS needs approval before FluidVoice can disable launch at startup. Check System Settings > General > Login Items.": {
       "extractionState": "manual",
       "localizations": {
@@ -41200,6 +41254,24 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "macOS still shows FluidVoice in Login Items. Check System Settings > General > Login Items.": {
+      "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice marker unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS still shows FluidVoice in Login Items. Check System Settings > General > Login Items."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS по-прежнему показывает FluidVoice в объектах входа. Проверьте «Системные настройки > Основные > Объекты входа»."
+          }
+        }
+      }
     },
     "medium": {
       "extractionState": "manual",

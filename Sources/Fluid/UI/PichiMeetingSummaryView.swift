@@ -179,10 +179,6 @@ struct PichiMeetingSummaryView: View {
         }
     }
 
-    private func title(ru: String, en: String) -> String {
-        self.configuration?.language == "ru" ? ru : en
-    }
-
     private func summarySection(_ title: String, items: [PichiMeetingSummaryItem], questions: Bool = false) -> some View {
         FluidManagementGroup(title: title) {
             if items.isEmpty {
@@ -241,21 +237,26 @@ struct PichiMeetingSummaryView: View {
     }
 
     private func copy(_ document: PichiMeetingSummaryDocument) {
+        let language = self.configuration.flatMap { PichiInterfaceLanguage(rawValue: $0.language) } ?? self.interfaceLanguage
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(document.copyText(language: language), forType: .string)
+    }
+}
+
+extension PichiMeetingSummaryDocument {
+    /// Localize export chrome for the requested output language; all model/source data stays verbatim.
+    nonisolated func copyText(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
         let sections: [(String, [PichiMeetingSummaryItem])] = [
-            (self.title(ru: "Резюме", en: "Recap"), document.summary),
-            (self.title(ru: "Решения", en: "Decisions"), document.decisions),
-            (self.title(ru: "Задачи", en: "Action items"), document.actions),
-            (self.title(ru: "Вопросы и ответы", en: "Questions and answers"), document.openQuestions),
+            ("Recap", self.summary), ("Decisions", self.decisions),
+            ("Action items", self.actions), ("Questions and answers", self.openQuestions),
         ]
-        let text = sections.map { title, items in
-            title + "\n" + items.map { item in
-                "- " + (item.superseded == true ? self.title(ru: "[Отменено/заменено] ", en: "[Superseded] ") : "")
-                    + (item.resolved == true ? self.title(ru: "[Ответ получен] ", en: "[Answered] ") : "")
+        return sections.map { key, items in
+            PichiLocalization.text(key, language: language, bundle: bundle) + "\n" + items.map { item in
+                "- " + (item.superseded == true ? PichiLocalization.text("[Superseded] ", language: language, bundle: bundle) : "")
+                    + (item.resolved == true ? PichiLocalization.text("[Answered] ", language: language, bundle: bundle) : "")
                     + item.text + (item.owner.map { " (\($0))" } ?? "") + (item.deadline.map { " [\($0)]" } ?? "")
                     + "\n" + item.evidence.map { "  > \($0.quote)" }.joined(separator: "\n")
             }.joined(separator: "\n")
         }.joined(separator: "\n\n")
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 }

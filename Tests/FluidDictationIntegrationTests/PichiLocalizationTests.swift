@@ -125,6 +125,41 @@ final class PichiLocalizationTests: XCTestCase {
         XCTAssertNil(DictationPromptSelectorPresentation.iconName(for: .profile("Базовый"), isAppOverrideActive: false))
     }
 
+    func testPartiallyTranslatedInstalledLanguageFallsBackThroughNativeEnglishPluralResources() throws {
+        try self.withLocalizedBundle { bundle in
+            let french = try XCTUnwrap(PichiInterfaceLanguage(rawValue: "fr"))
+            XCTAssertTrue(PichiInterfaceLanguage.availableLanguages(in: bundle).contains(french))
+            XCTAssertEqual(PichiLocalization.text("Settings", language: french, bundle: bundle), "Paramètres")
+            for (count, expected) in [0: "0 words", 1: "1 word", 2: "2 words"] {
+                XCTAssertEqual(PichiLocalization.format("%lld words", language: french, bundle: bundle, arguments: [count]), expected)
+            }
+        }
+    }
+
+    func testSummaryCopyUsesOutputCatalogLanguageWhilePreservingAllUserAndModelData() throws {
+        try self.withLocalizedBundle { bundle in
+            let french = try XCTUnwrap(PichiInterfaceLanguage(rawValue: "fr"))
+            let evidence = PichiMeetingSummaryEvidence(segmentID: UUID(), quote: "Settings [Answered] Москва")
+            let item = PichiMeetingSummaryItem(text: "User task Settings", evidence: [evidence], owner: "Recap",
+                                              deadline: "к пятнице", superseded: true)
+            let question = PichiMeetingSummaryItem(text: "User question Settings", evidence: [evidence], resolved: true)
+            let document = PichiMeetingSummaryDocument(summary: [.init(text: "User recap Settings", evidence: [evidence])],
+                                                       decisions: [], actions: [item], openQuestions: [question])
+            let frenchText = document.copyText(language: french, bundle: bundle)
+            XCTAssertTrue(frenchText.hasPrefix("Récapitulatif\n- User recap Settings\n  > Settings [Answered] Москва"))
+            XCTAssertTrue(frenchText.contains("Actions\n- [Remplacé] User task Settings (Recap) [к пятнице]"))
+            XCTAssertTrue(frenchText.contains("Questions et réponses\n- [Répondu] User question Settings"))
+            XCTAssertTrue(frenchText.contains("Décisions\n"))
+            XCTAssertTrue(frenchText.contains("Actions\n"))
+            XCTAssertTrue(frenchText.contains("Questions et réponses\n"))
+            let englishText = document.copyText(language: .english, bundle: bundle)
+            XCTAssertTrue(englishText.hasPrefix("Recap\n- User recap Settings"))
+            XCTAssertTrue(englishText.contains("Action items\n- [Superseded] User task Settings (Recap) [к пятнице]"))
+            XCTAssertEqual(item.owner, "Recap")
+            XCTAssertEqual(item.evidence[0].quote, "Settings [Answered] Москва")
+        }
+    }
+
     private func withLocalizedBundle(_ body: (Bundle) throws -> Void) throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PichiLocalization-\(UUID().uuidString).bundle")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -133,8 +168,20 @@ final class PichiLocalizationTests: XCTestCase {
         let french = directory.appendingPathComponent("fr.lproj", isDirectory: true)
         try FileManager.default.createDirectory(at: french, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("Base.lproj"), withIntermediateDirectories: true)
-        let frenchStrings = try PropertyListSerialization.data(fromPropertyList: ["Settings": "Paramètres"], format: .xml, options: 0)
+        let frenchStrings = try PropertyListSerialization.data(fromPropertyList: [
+            "Settings": "Paramètres", "Recap": "Récapitulatif", "Decisions": "Décisions", "Action items": "Actions",
+            "Questions and answers": "Questions et réponses", "[Superseded] ": "[Remplacé] ", "[Answered] ": "[Répondu] ",
+        ], format: .xml, options: 0)
         try frenchStrings.write(to: french.appendingPathComponent("Localizable.strings"))
+        let english = directory.appendingPathComponent("en.lproj", isDirectory: true)
+        try FileManager.default.createDirectory(at: english, withIntermediateDirectories: true)
+        let plural: [String: Any] = ["%lld words": [
+            "NSStringLocalizedFormatKey": "%#@words@",
+            "words": ["NSStringFormatSpecTypeKey": "NSStringPluralRuleType", "NSStringFormatValueTypeKey": "lld",
+                      "one": "%lld word", "other": "%lld words"],
+        ]]
+        let dictionary = try PropertyListSerialization.data(fromPropertyList: plural, format: .xml, options: 0)
+        try dictionary.write(to: english.appendingPathComponent("Localizable.stringsdict"))
         let properties = ["CFBundleIdentifier": "ai.pichi.localization.fixture", "CFBundleDevelopmentRegion": "en"]
         let info = try PropertyListSerialization.data(fromPropertyList: properties, format: .xml, options: 0)
         try info.write(to: directory.appendingPathComponent("Info.plist"))

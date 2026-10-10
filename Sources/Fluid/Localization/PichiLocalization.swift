@@ -88,13 +88,28 @@ nonisolated enum PichiLocalization {
     }
 
     static func text(_ source: String, language: PichiInterfaceLanguage, bundle: Bundle, defaultValue: String? = nil) -> String {
+        self.resolvedText(source, language: language, bundle: bundle, defaultValue: defaultValue).value
+    }
+
+    private static let missingTranslation = UUID().uuidString
+
+    /// A partially translated installed language falls back per key through the source resource.
+    /// Preserve its locale as well so fallback plural rules match the fallback language.
+    private static func resolvedText(_ key: String, language: PichiInterfaceLanguage, bundle: Bundle,
+                                     defaultValue: String? = nil) -> (value: String, locale: Locale) {
+        let sourceLanguage = PichiInterfaceLanguage(rawValue: bundle.developmentLocalization ?? "en") ?? .english
         let available = bundle.localizations.filter { $0 != "Base" }
-        guard let identifier = Bundle.preferredLocalizations(from: available, forPreferences: [language.rawValue, "en"]).first,
-              let resolved = PichiInterfaceLanguage(rawValue: identifier),
-              resolved.languageCode == language.languageCode || resolved == .english,
-              let path = bundle.path(forResource: identifier, ofType: "lproj"),
-              let localizedBundle = Bundle(path: path) else { return defaultValue ?? source }
-        return localizedBundle.localizedString(forKey: source, value: defaultValue ?? source, table: "Localizable")
+        var identifiers = Bundle.preferredLocalizations(from: available, forPreferences: [language.rawValue, sourceLanguage.rawValue])
+        if !identifiers.contains(sourceLanguage.rawValue) { identifiers.append(sourceLanguage.rawValue) }
+        for identifier in identifiers {
+            guard let resolved = PichiInterfaceLanguage(rawValue: identifier),
+                  resolved.languageCode == language.languageCode || resolved.languageCode == sourceLanguage.languageCode,
+                  let path = bundle.path(forResource: identifier, ofType: "lproj"),
+                  let localizedBundle = Bundle(path: path) else { continue }
+            let value = localizedBundle.localizedString(forKey: key, value: self.missingTranslation, table: "Localizable")
+            if value != self.missingTranslation { return (value, resolved.locale) }
+        }
+        return (defaultValue ?? key, sourceLanguage.locale)
     }
 
     static func format(_ source: String, _ arguments: CVarArg...) -> String {
@@ -102,7 +117,8 @@ nonisolated enum PichiLocalization {
     }
 
     static func format(_ source: String, language: PichiInterfaceLanguage, bundle: Bundle, arguments: [CVarArg]) -> String {
-        String(format: self.text(source, language: language, bundle: bundle), locale: language.locale, arguments: arguments)
+        let resource = self.resolvedText(source, language: language, bundle: bundle)
+        return String(format: resource.value, locale: resource.locale, arguments: arguments)
     }
 
     static func configureApplicationLanguage() {
