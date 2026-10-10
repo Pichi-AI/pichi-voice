@@ -5504,8 +5504,8 @@ final class SettingsStore: ObservableObject {
         var badgeText: String? {
             switch self {
             case .gigaam: return "Pichi"
-            case .parakeetTDT: return "FluidVoice Pick"
-            case .parakeetTDTv2: return "FluidVoice Pick"
+            case .parakeetTDT: return AppBrand.text("FluidVoice Pick")
+            case .parakeetTDTv2: return AppBrand.text("FluidVoice Pick")
             case .fluidParakeetMini, .fluidParakeetPico: return "New"
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
@@ -5736,7 +5736,7 @@ final class SettingsStore: ObservableObject {
         /// Brand color for the provider badge
         var brandColorHex: String {
             switch self {
-            case .gigaam: return "#7659FF"
+            case .gigaam: return AppBrand.profile.accentLight
             case .fluidParakeetMini, .fluidParakeetPico:
                 return "#1A75FF" // FluidBrandColors.blue
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:

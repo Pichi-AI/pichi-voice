@@ -6908,7 +6908,7 @@ final class ASRService: ObservableObject {
         }
         guard !model.usesAppleLogo, model != .qwen3Asr else {
             throw NSError(domain: "ASRService", code: -2003, userInfo: [
-                NSLocalizedDescriptionKey: "This model cannot be deleted from FluidVoice.",
+                NSLocalizedDescriptionKey: AppBrand.text("This model cannot be deleted from FluidVoice."),
             ])
         }
         let activityLease = try self.acquireExclusiveActivity(.modelMaintenance)
@@ -7737,7 +7737,7 @@ private extension ASRService {
 
     static var streamingRecoveryMessage: String {
         "Speech recognition took too long to finish. This recording could not be transcribed. " +
-            "Wait for the model to recover, or restart FluidVoice before recording again."
+            AppBrand.text("Wait for the model to recover, or restart FluidVoice before recording again.")
     }
 
     func presentStreamingRecoveryError() {

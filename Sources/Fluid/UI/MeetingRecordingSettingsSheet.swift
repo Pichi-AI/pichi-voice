@@ -136,7 +136,7 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-            Text("FluidMeet settings")
+            Text(AppBrand.text("FluidMeet settings"))
                 .font(self.theme.typography.sectionTitle)
                 .foregroundStyle(self.theme.palette.primaryText)
             Text("Audio and transcripts stay on this Mac.")
@@ -419,7 +419,7 @@ struct MeetingRecordingSettingsSheet: View {
             {
                 MeetingAdaptiveSetupRow(
                     title: "Zoom window access needs repair",
-                    detail: "Screen Recording or Accessibility access is preventing FluidVoice from reading Zoom meeting windows. Recording has not started."
+                    detail: AppBrand.text("Screen Recording or Accessibility access is preventing FluidVoice from reading Zoom meeting windows. Recording has not started.")
                 ) {
                     Button("Open Screen Recording Settings") {
                         self.onOpenScreenRecordingSettings()
@@ -450,7 +450,7 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
 
-            Text("Expired audio is removed while FluidVoice is running.")
+            Text(AppBrand.text("Expired audio is removed while FluidVoice is running."))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }
