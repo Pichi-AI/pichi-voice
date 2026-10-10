@@ -142,7 +142,8 @@ final class SettingsNavigationStateTests: XCTestCase {
         let original = AppTheme.Typography.standard(style: nil)
         let style = BrandStyle(bodyFontDesign: .rounded, titleFontDesign: .serif)
         let changed = AppTheme.Typography.standard(style: style)
-        XCTAssertEqual(original.body, .system(size: 14, weight: .regular))
+        // SwiftUI distinguishes an omitted design from an explicit native default.
+        XCTAssertEqual(original.body, .system(size: 14, weight: .regular, design: .default))
         XCTAssertEqual(changed.body, .system(size: 14, weight: .regular, design: .rounded))
         XCTAssertEqual(changed.title, .system(size: 22, weight: .bold, design: .serif))
         XCTAssertEqual(changed.sectionTitle, .system(size: 15, weight: .semibold, design: .serif))
