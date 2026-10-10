@@ -158,7 +158,7 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
         cleanup.release()
         await fulfillment(of: [settled], timeout: 5)
         XCTAssertNil(controller.document)
-        XCTAssertEqual(controller.error, underlying.localizedDescription)
+        XCTAssertEqual(controller.error, PichiMeetingSummaryCleanupError(underlying: underlying).localizedDescription)
     }
 
     @MainActor
