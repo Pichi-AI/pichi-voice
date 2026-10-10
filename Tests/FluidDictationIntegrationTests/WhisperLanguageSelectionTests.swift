@@ -1,7 +1,69 @@
 @testable import FluidVoice_Debug
 import XCTest
+import Foundation
 
 final class WhisperLanguageSelectionTests: XCTestCase {
+    @MainActor
+    func testFreshPackagedOnboardingDefaultIsRussianAndPrimaryGridRemainsBounded() {
+        let packaged = AppBrand.packagedPackage.style?.defaultOnboardingLanguageID
+        XCTAssertEqual(packaged, "ru")
+        let all = VoiceEngineLanguageCatalog.whisperLanguages
+        let popular = VoiceEngineLanguageCatalog.primaryLanguages(in: all, configuredLanguageID: nil, packagedLanguageID: packaged)
+        XCTAssertEqual(popular.first?.id, "ru")
+        XCTAssertLessThanOrEqual(popular.count, 11)
+        XCTAssertEqual(Set(popular.map(\.id)).count, popular.count)
+        XCTAssertTrue(all.contains { $0.id == "zh" }, "Overflow languages remain available in the full catalog")
+        XCTAssertFalse(popular.contains { $0.id == "zh" }, "Promoting the default retains the original four-row capacity")
+        XCTAssertEqual(VoiceEngineLanguageCatalog.defaultOnboardingLanguage(availableModels: [.gigaam])?.id, "ru")
+        XCTAssertNil(VoiceEngineLanguageCatalog.defaultOnboardingLanguage(availableModels: []))
+        let available = VoiceEngineLanguageCatalog.allLanguages(availableModels: [.gigaam, .whisperSmall])
+        let primary = VoiceEngineLanguageCatalog.popularLanguages(availableModels: [.gigaam, .whisperSmall])
+        XCTAssertEqual(Set(available.filter(\.isPopular).map(\.id)), Set(primary.map(\.id)))
+        XCTAssertTrue(available.contains { $0.id == "zh" })
+    }
+
+    @MainActor
+    func testUnavailableConfiguredLanguageFallsBackToPackagedAvailableChoice() {
+        let russian = VoiceEngineLanguage(id: "ru", displayName: "Russian", aliases: [], isPopular: true)
+        let english = VoiceEngineLanguage(id: "en", displayName: "English", aliases: [], isPopular: true)
+        let french = VoiceEngineLanguage(id: "fr", displayName: "French", aliases: [], isPopular: true)
+        XCTAssertEqual(VoiceEngineLanguageCatalog.resolveDefaultLanguage(in: [english, russian], configuredLanguageID: "zz", packagedLanguageID: "ru")?.id, "ru")
+        XCTAssertEqual(VoiceEngineLanguageCatalog.resolveDefaultLanguage(in: [english, french], configuredLanguageID: "fr-CA", packagedLanguageID: "ru")?.id, "fr")
+        XCTAssertEqual(VoiceEngineLanguageCatalog.resolveDefaultLanguage(in: [english], configuredLanguageID: "ru", packagedLanguageID: "ru")?.id, "en")
+        XCTAssertNil(VoiceEngineLanguageCatalog.resolveDefaultLanguage(in: [], configuredLanguageID: "ru", packagedLanguageID: "ru"))
+    }
+
+    @MainActor
+    func testOnboardingBootstrapReplayAndCompletionPreserveExplicitLanguageChoice() throws {
+        let suite = "OnboardingLanguagePolicyTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(SettingsStore.onboardingLanguagePreference(in: defaults, defaultLanguageID: "ru"), "ru")
+        SettingsStore.bootstrapOnboardingState(in: defaults, isTrueFirstOpen: true, hasLegacyUsageSignals: false, defaultLanguageID: "ru")
+        XCTAssertEqual(SettingsStore.onboardingLanguagePreference(in: defaults, defaultLanguageID: "en"), "ru")
+        defaults.set("de", forKey: "OnboardingSelectedLanguageID")
+        SettingsStore.resetOnboardingProgress(in: defaults)
+        XCTAssertEqual(SettingsStore.onboardingLanguagePreference(in: defaults, defaultLanguageID: "ru"), "de")
+        defaults.removeObject(forKey: "OnboardingCompleted")
+        SettingsStore.bootstrapOnboardingState(in: defaults, isTrueFirstOpen: false, hasLegacyUsageSignals: true, defaultLanguageID: "ru")
+        XCTAssertEqual(SettingsStore.onboardingLanguagePreference(in: defaults, defaultLanguageID: "ru"), "de")
+        defaults.set(true, forKey: "OnboardingCompleted")
+        XCTAssertEqual(SettingsStore.onboardingLanguagePreference(in: defaults, defaultLanguageID: "ru"), "de")
+    }
+
+    @MainActor
+    func testLanguageNamesAndSearchUseSelectedLocaleWithoutTranslatingIDs() throws {
+        let locale = Locale(identifier: "ru")
+        let russian = try XCTUnwrap(VoiceEngineLanguageCatalog.language(id: "ru", availableModels: [.gigaam, .parakeetTDT]))
+        let german = try XCTUnwrap(VoiceEngineLanguageCatalog.language(id: "de", availableModels: [.parakeetTDT]))
+        XCTAssertEqual(russian.localizedDisplayName(locale: locale), "Русский")
+        XCTAssertEqual(german.localizedDisplayName(locale: locale), "Немецкий")
+        XCTAssertEqual(german.id, "de")
+        XCTAssertEqual(german.displayName, "German")
+        XCTAssertTrue(VoiceEngineLanguageCatalog.searchableLanguages(query: "немец", availableModels: [.parakeetTDT], locale: locale).contains { $0.id == "de" })
+        XCTAssertTrue(VoiceEngineLanguageCatalog.searchableLanguages(query: "German", availableModels: [.parakeetTDT], locale: locale).contains { $0.id == "de" })
+    }
+
     func testHungarianLanguageCodeIsAvailable() {
         XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguageCode(for: "hu"), "hu")
         XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguage(forCode: "hu")?.displayName, "Hungarian")

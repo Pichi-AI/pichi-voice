@@ -69,8 +69,14 @@ nonisolated struct BrandStyle: Codable, Equatable, Sendable {
     var defaultAppearance: Appearance = .system
     var cornerRadiusScale: Double = 1
     var spacingScale: Double = 1
+    /// Preferred first-run speech language. Missing fields preserve legacy appearance packages.
+    var defaultOnboardingLanguageID: String? = nil
 
     func validate() throws {
+        if let languageID = self.defaultOnboardingLanguageID,
+           PichiInterfaceLanguage(rawValue: languageID) == nil {
+            throw BrandProfile.ValidationError.invalid("Choose a valid language identifier for the onboarding default.")
+        }
         guard self.cornerRadiusScale.isFinite, (0.75...1.5).contains(self.cornerRadiusScale),
               self.spacingScale.isFinite, (0.8...1.3).contains(self.spacingScale) else {
             throw BrandProfile.ValidationError.invalid("Brand spacing or corner radius is outside the supported range.")

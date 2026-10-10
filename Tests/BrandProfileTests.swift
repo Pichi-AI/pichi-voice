@@ -19,6 +19,11 @@ struct BrandProfileTests {
         let packaged = try BrandPackage.decode(packageData)
         precondition(packaged.profile.appName == "Pichi Voice")
         precondition(packaged.logos != nil && packaged.theme != nil)
+        precondition(packaged.style?.defaultOnboardingLanguageID == "ru")
+        let legacyStyle = try JSONDecoder().decode(BrandStyle.self, from: Data("{\"defaultAppearance\":\"system\",\"cornerRadiusScale\":1,\"spacingScale\":1}".utf8))
+        precondition(legacyStyle.defaultOnboardingLanguageID == nil, "Old appearance files must remain decodable")
+        try BrandStyle(defaultOnboardingLanguageID: "fr-CA").validate()
+        self.reject { try BrandStyle(defaultOnboardingLanguageID: "invalid language!").validate() }
         for example in ["sber-demo", "alfa-demo"] {
             let data = try Data(contentsOf: URL(fileURLWithPath: "Configuration/BrandExamples/\(example).json"))
             let demo = try BrandPackage.decode(data)

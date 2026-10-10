@@ -2932,19 +2932,19 @@ final class SettingsStore: ObservableObject {
     }
 
     var onboardingSelectedLanguageID: String {
-        get {
-            let stored = self.defaults.string(forKey: Keys.onboardingSelectedLanguageID)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let stored, !stored.isEmpty {
-                return stored
-            }
-            return "en"
-        }
+        get { Self.onboardingLanguagePreference(in: self.defaults, defaultLanguageID: VoiceEngineLanguageCatalog.defaultOnboardingLanguageID) }
         set {
             objectWillChange.send()
             let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.defaults.set(normalized.isEmpty ? "en" : normalized, forKey: Keys.onboardingSelectedLanguageID)
+            if normalized.isEmpty { self.defaults.removeObject(forKey: Keys.onboardingSelectedLanguageID) }
+            else { self.defaults.set(normalized, forKey: Keys.onboardingSelectedLanguageID) }
         }
+    }
+
+    /// Read an explicit choice before applying the distribution's first-run default.
+    static func onboardingLanguagePreference(in defaults: UserDefaults, defaultLanguageID: String) -> String {
+        let stored = defaults.string(forKey: Keys.onboardingSelectedLanguageID)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return stored.flatMap { $0.isEmpty ? nil : $0 } ?? defaultLanguageID
     }
 
     var selectedAppleSpeechLocaleIdentifier: String {
@@ -2983,40 +2983,41 @@ final class SettingsStore: ObservableObject {
 
     func bootstrapOnboardingState(isTrueFirstOpen: Bool) {
         guard self.defaults.object(forKey: Keys.onboardingCompleted) == nil else { return }
-
         objectWillChange.send()
+        Self.bootstrapOnboardingState(in: self.defaults, isTrueFirstOpen: isTrueFirstOpen,
+                                      hasLegacyUsageSignals: self.hasLegacyUsageSignals(),
+                                      defaultLanguageID: VoiceEngineLanguageCatalog.defaultOnboardingLanguageID)
+    }
 
-        let hasLegacyUsageSignals = self.hasLegacyUsageSignals()
+    /// Isolated preference transition shared by production bootstrap and regression tests.
+    static func bootstrapOnboardingState(in defaults: UserDefaults, isTrueFirstOpen: Bool,
+                                         hasLegacyUsageSignals: Bool, defaultLanguageID: String) {
+        guard defaults.object(forKey: Keys.onboardingCompleted) == nil else { return }
         let shouldShowForThisInstall = isTrueFirstOpen && !hasLegacyUsageSignals
-
-        if shouldShowForThisInstall {
-            self.defaults.set(false, forKey: Keys.onboardingCompleted)
-            self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-            self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-            self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
-        } else {
-            self.defaults.set(true, forKey: Keys.onboardingCompleted)
-            self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-            self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-            self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
-        }
+        defaults.set(!shouldShowForThisInstall, forKey: Keys.onboardingCompleted)
+        defaults.set(0, forKey: Keys.onboardingCurrentStep)
+        defaults.set(false, forKey: Keys.onboardingAISkipped)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+        let choice = Self.onboardingLanguagePreference(in: defaults, defaultLanguageID: defaultLanguageID)
+        defaults.set(choice, forKey: Keys.onboardingSelectedLanguageID)
     }
 
     func resetOnboardingProgress() {
         objectWillChange.send()
-        self.defaults.set(false, forKey: Keys.onboardingCompleted)
-        self.defaults.set(true, forKey: Keys.manualOnboardingResetRequested)
-        self.defaults.set(Date(), forKey: Keys.manualOnboardingResetRequestedAt)
-        self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-        self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-        self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
-        self.defaults.set(false, forKey: Keys.playgroundUsed)
+        Self.resetOnboardingProgress(in: self.defaults)
+    }
+
+    /// Replay clears wizard progress while retaining the user's explicit speech-language choice.
+    static func resetOnboardingProgress(in defaults: UserDefaults) {
+        defaults.set(false, forKey: Keys.onboardingCompleted)
+        defaults.set(true, forKey: Keys.manualOnboardingResetRequested)
+        defaults.set(Date(), forKey: Keys.manualOnboardingResetRequestedAt)
+        defaults.set(0, forKey: Keys.onboardingCurrentStep)
+        defaults.set(false, forKey: Keys.onboardingAISkipped)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+        defaults.set(false, forKey: Keys.playgroundUsed)
     }
 
     private func repairForcedOnboardingResetIfNeeded() {

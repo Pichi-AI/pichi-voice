@@ -51,7 +51,8 @@
   "style": {
     "defaultAppearance": "system",
     "cornerRadiusScale": 1,
-    "spacingScale": 1
+    "spacingScale": 1,
+    "defaultOnboardingLanguageID": "ru"
   },
   "logos": {
     "primary": {

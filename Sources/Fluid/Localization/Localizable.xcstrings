@@ -8133,6 +8133,24 @@
         }
       }
     },
+    "Choose a valid language identifier for the onboarding default.": {
+      "comment": "Trusted first-run UI/configuration copy. Speech/API identifiers and explicit language choices remain data.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a valid language identifier for the onboarding default."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Укажите корректный идентификатор языка по умолчанию для первоначальной настройки."
+          }
+        }
+      }
+    },
     "Choose an OpenAI-compatible provider in AI Enhancement settings, such as Ollama, LM Studio or OpenRouter.": {
       "extractionState": "manual",
       "localizations": {
@@ -18157,6 +18175,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Уровень сигнала"
+          }
+        }
+      }
+    },
+    "Input microphone": {
+      "comment": "Trusted first-run UI/configuration copy. Speech/API identifiers and explicit language choices remain data.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Input microphone"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Входной микрофон"
           }
         }
       }
@@ -42158,6 +42194,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS по-прежнему показывает FluidVoice в объектах входа. Проверьте «Системные настройки > Основные > Объекты входа»."
+          }
+        }
+      }
+    },
+    "macOS will ask once. Click Allow to start dictating.": {
+      "comment": "Trusted first-run UI/configuration copy. Speech/API identifiers and explicit language choices remain data.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS will ask once. Click Allow to start dictating."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS запросит доступ один раз. Нажмите «Разрешить», чтобы начать диктовку."
           }
         }
       }
