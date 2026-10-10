@@ -1475,6 +1475,81 @@ final class ASRService: ObservableObject {
         }
     }
 
+    /// Installs folder-based engines through the existing model operation, activity and resource
+    /// mechanisms. The provider owns artifact validation; this service owns admission and teardown.
+    func importModel(_ model: SettingsStore.SpeechModel, from directory: URL) async throws {
+        try Task.checkCancellation()
+        guard model.supportsFolderImport else {
+            throw NSError(domain: "TranscriptionProvider", code: -2, userInfo: [
+                NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support importing a model folder."),
+            ])
+        }
+        guard !self.isTerminating, !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
+              !self.recordingBufferHandoffGate.isActive, !self.recordingBufferHandoffGate.isRecovering,
+              !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive, !self.isDictionaryTrainingCaptureActive,
+              self.providerResetDrain == nil, self.deletingModelID == nil,
+              !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
+              !self.isCancellingModelPreparation, !self.isCancellingModelDownload,
+              !self.meetingModelResidency.isExclusive
+        else { throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .modelMaintenance) }
+        let lease = try self.acquireExclusiveActivity(.modelMaintenance)
+        let admission: UUID
+        do {
+            admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
+        } catch {
+            self.releaseExclusiveActivity(lease)
+            throw error
+        }
+        let operationID = UUID()
+        let provider = self.getProvider(for: model)
+        self.modelDownloadOperationID = operationID
+        self.downloadingModelId = model.id
+        self.modelPreparationPhase = .preparingDownload
+        self.isCancellingModelDownload = false
+        let task = Task { @MainActor in
+            let outcome: Result<Void, Error>
+            do {
+                try await provider.importModel(from: directory)
+                outcome = .success(())
+            } catch {
+                outcome = .failure(error)
+            }
+            // The existing owned operation includes native cleanup, so shutdown/cancel joins it.
+            await Task { @MainActor in await provider.releaseResidency() }.value
+            try outcome.get()
+        }
+        self.modelDownloadTask = task
+        let outcome: Result<Void, Error>
+        do {
+            try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
+            // A successful provider return means its atomic publication completed. Do not report
+            // cancellation after that commit while leaving a selected runtime on old artifacts.
+            outcome = .success(())
+        } catch {
+            outcome = .failure(error)
+        }
+        // The joined operation has finished every import and release hook before admission opens.
+        if self.modelDownloadOperationID == operationID {
+            self.modelDownloadTask = nil
+            self.modelDownloadOperationID = nil
+            self.downloadingModelId = nil
+            self.downloadProgress = nil
+            self.modelPreparationPhase = nil
+            self.isCancellingModelDownload = false
+        }
+        if case .success = outcome, !self.isTerminating, SettingsStore.shared.selectedSpeechModel == model {
+            self.providerResetPending = true
+        }
+        self.meetingModelResidency.endOperation(admission)
+        // Releasing the import lease precedes reset admission, so modelMaintenance is not nested.
+        self.releaseExclusiveActivity(lease)
+        while let drain = self.providerResetDrain { await drain.task.value }
+        SpeechModelInstallationSnapshot.shared.refresh()
+        try outcome.get()
+    }
+
     /// Call this when the transcription provider setting changes to reset state
     func resetTranscriptionProvider() {
         self.meetingModelResidency.vetoRestoration(owner: "speech")
@@ -1518,12 +1593,18 @@ final class ASRService: ObservableObject {
         }
         let resetDrainID = UUID()
         let executor = self.transcriptionExecutor
+        let retiringProviders = self.cachedTranscriptionProviders
         let resetDrainTask = Task { @MainActor [weak self] in
             await executor.cancelAndAwaitPending()
-            // A completed handle must not leave future imports permanently busy.
-            if self?.providerResetDrain?.id == resetDrainID {
-                self?.providerResetDrain = nil
+            _ = await retiringTask?.result
+            for provider in retiringProviders { await provider.releaseResidency() }
+            guard let self else { return }
+            if SettingsStore.shared.selectedSpeechModel == newModel {
+                await self.checkIfModelsExistAsync()
+                self.refreshWordBoostStatus()
             }
+            if self.providerResetDrain?.id == resetDrainID { self.providerResetDrain = nil }
+            self.releaseExclusiveActivity(resetLease)
         }
         self.providerResetDrain = (resetDrainID, resetDrainTask)
         // ensureAsrReady joins this executor drain. The retiring preparation task
@@ -1542,20 +1623,8 @@ final class ASRService: ObservableObject {
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
 
-        // CRITICAL FIX: Check if the NEW model's files exist on disk
-        // This prevents UI from showing "Download" when model is already downloaded
-        // Use Task for async check to support providers like AppleSpeechAnalyzerProvider
-        Task { [weak self] in
-            guard let self = self else { return }
-            defer { self.releaseExclusiveActivity(resetLease) }
-            _ = await retiringTask?.result
-            guard SettingsStore.shared.selectedSpeechModel == newModel else { return }
-            await self.checkIfModelsExistAsync()
-            await MainActor.run {
-                self.refreshWordBoostStatus()
-            }
-            DebugLogger.shared.info("ASRService: Provider reset complete, will initialize '\(newModel.displayName)' on next use", source: "ASRService")
-        }
+        // The reset drain checks the new artifacts and releases its lease only after all owned
+        // preparation and resource-release hooks complete. ensureAsrReady and imports join it.
     }
 
     // CRITICAL FIX (launch-time crash mitigation):
@@ -2524,6 +2593,16 @@ final class ASRService: ObservableObject {
         let checkID = UUID()
         self.modelExistenceCheckID = checkID
         let exists: Bool
+
+        #if DEBUG
+        if let injected = self.modelProvidersForTesting[model] {
+            let exists = injected.modelsExistOnDisk()
+            if self.modelExistenceCheckID == checkID, SettingsStore.shared.selectedSpeechModel == model {
+                self.modelsExistOnDisk = exists
+            }
+            return
+        }
+        #endif
 
         // For Apple Speech Analyzer, use the async refresh method
         if model == .appleSpeechAnalyzer {
@@ -4269,6 +4348,18 @@ final class ASRService: ObservableObject {
         return owner
     }
 
+    /// Existing engine caches expose one resource contract to orchestration. Empty legacy hooks
+    /// are followed by dropping their references; pooled providers must join native cleanup.
+    private var cachedTranscriptionProviders: [any TranscriptionProvider] {
+        let optionalProviders: [(any TranscriptionProvider)?] = [
+            self.fluidAudioProvider, self.parakeetRealtimeProvider, self.externalCoreMLProvider,
+            self.gigaamProvider, self.whisperProvider, self.appleSpeechProvider,
+            self._appleSpeechAnalyzerProvider as? any TranscriptionProvider,
+        ]
+        return optionalProviders.compactMap { $0 }
+            + self.nemotronProviders.values.map { $0 as any TranscriptionProvider }
+    }
+
     /// Drops cached dictation providers and drains the legacy executor for a claimed meeting
     /// preparation. On-disk model caches are never deleted.
     func retireDictationASRResourcesForMeeting(lease: ASRActivityLease) async throws {
@@ -4287,11 +4378,12 @@ final class ASRService: ObservableObject {
         await self.transcriptionExecutor.cancelAndAwaitPending()
 
         guard self.activeActivityLease == lease else { throw CancellationError() }
+        for provider in self.cachedTranscriptionProviders { await provider.releaseResidency() }
+        guard self.activeActivityLease == lease else { throw CancellationError() }
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
         self.nemotronProviders.removeAll()
-        await self.gigaamProvider?.unloadModel()
         self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil

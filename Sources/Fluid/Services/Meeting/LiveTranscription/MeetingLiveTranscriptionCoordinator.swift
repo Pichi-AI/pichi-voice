@@ -72,19 +72,19 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
 
     func start(mode: MeetingCaptureMode, languageCode: String = "en", modelID: String? = nil, artifactFingerprint: String? = nil) {
         guard !self.stateLock.withLock({ self.isStopped }) else { return }
-        if modelID == PichiMeetingProviderFactory.gigaamModelID {
-            guard languageCode == "ru" else {
-                self.publish { $0.settingAvailability(.unavailable(reason: "GigaAM captions require Russian as the meeting language.")) }
+        if let modelID, let supportedLanguages = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) {
+            guard supportedLanguages.contains(languageCode) else {
+                self.publish { $0.settingAvailability(.unavailable(reason: "The selected model does not support live captions in this meeting language.")) }
                 return
             }
-            self.startBuffered(mode: mode, languageCode: languageCode, modelID: PichiMeetingProviderFactory.gigaamModelID, artifactFingerprint: artifactFingerprint)
+            self.startBuffered(mode: mode, languageCode: languageCode, modelID: modelID, artifactFingerprint: artifactFingerprint)
             return
         }
         if languageCode != "en" {
             #if arch(arm64)
             self.startBuffered(mode: mode, languageCode: languageCode, modelID: "parakeet-tdt")
             #else
-            self.publish { $0.settingAvailability(.unavailable(reason: "Russian live captions on Intel require selecting GigaAM. Your recording is preserved.")) }
+            self.publish { $0.settingAvailability(.unavailable(reason: "Live captions for this language on Intel require a compatible local model. Your recording is preserved.")) }
             #endif
             return
         }

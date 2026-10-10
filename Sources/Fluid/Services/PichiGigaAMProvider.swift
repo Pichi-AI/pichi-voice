@@ -184,7 +184,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
         let result = try await self.transcribeDetailed(samples)
-        return ASRTranscriptionResult(text: result.text, confidence: result.confidence)
+        return ASRTranscriptionResult(text: result.text, confidence: result.confidence, endOfUtteranceProbability: result.endOfUtteranceProbability)
     }
 
     func transcribeStreaming(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -198,7 +198,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
         let result = try await self.transcribeDetailed(samples)
         return (
-            ASRTranscriptionResult(text: result.text, confidence: result.confidence),
+            ASRTranscriptionResult(text: result.text, confidence: result.confidence, endOfUtteranceProbability: result.endOfUtteranceProbability),
             result.words.map { ASRWordTiming(text: $0.text, start: $0.start, end: $0.end) }
         )
     }
@@ -218,6 +218,12 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         preparationTask?.cancel()
         if let task = preparationTask { _ = try? await task.value }
         await runtime?.unload()
+    }
+
+    func releaseResidency() async { await self.unloadModel() }
+
+    func importModel(from directory: URL) async throws {
+        try await self.modelStore.importModel(from: directory)
     }
 
     func clearCache() async throws {

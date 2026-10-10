@@ -329,7 +329,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         return MeetingCaptureConfiguration(
             mode: mode,
             title: title,
-            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode ?? "ru",
+            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode
+                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: SettingsStore.shared.selectedSpeechModel.rawValue) ?? "ru",
             application: application,
             microphone: microphone,
             timestampDefaultTitle: true
@@ -373,9 +374,10 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws -> MeetingSession {
         try Task.checkCancellation()
         try configuration.validate()
-        if SettingsStore.shared.selectedSpeechModel.rawValue == PichiMeetingProviderFactory.gigaamModelID {
+        let selectedModelID = SettingsStore.shared.selectedSpeechModel.rawValue
+        if PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
             _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
-                asrModel: PichiMeetingProviderFactory.gigaamModelID,
+                asrModel: selectedModelID,
                 languageCode: configuration.languageCode
             ))
         }
@@ -2146,8 +2148,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 kind: .captureStoppedUnexpectedly,
                 trackID: nil,
                 detail: previousState == .processing
-                    ? "FluidVoice restarted before transcription completed."
-                    : "FluidVoice restarted before capture finalized."
+                    ? AppBrand.text("FluidVoice restarted before transcription completed.")
+                    : AppBrand.text("FluidVoice restarted before capture finalized.")
             ))
         }
         if Self.shouldQueuePendingAttempt(for: session) {
@@ -2207,7 +2209,7 @@ enum MeetingCoordinatorError: LocalizedError {
         case .noCorrectionToUndo:
             return "There is nothing to undo."
         case .maintenanceInProgress:
-            return "FluidVoice is tidying up meeting storage. Try again in a moment."
+            return AppBrand.text("FluidVoice is tidying up meeting storage. Try again in a moment.")
         }
     }
 }

@@ -1334,13 +1334,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
     /// Canonical path only: an explicitly injected per-unit echo provider. Without an injection,
-    /// only the Parakeet+Nemotron backend gets its Stage E text/time provider; every other
-    /// canonical backend remains fail-closed until it wires its own evidence source.
+    /// the selected backend may provide its evidence source through the contract; other
+    /// canonical backends remain fail-closed.
     private let echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)?
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
     private let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
-    private let gigaamRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
@@ -1359,7 +1358,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         chunkObserver: (any MeetingChunkAudioObserving)? = nil,
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
-        gigaamRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
@@ -1374,9 +1372,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 asrServiceProvider: asrServiceProvider,
                 modelLocator: MeetingNemotronModelLocator()
             )
-        }
-        self.gigaamRuntimeFactory = gigaamRuntimeFactory ?? { [asrServiceProvider] _ in
-            PichiGigaAMMeetingRuntime(asrServiceProvider: asrServiceProvider)
         }
         self.prepareDiarizationModel = prepareDiarizationModel
         self.canonicalSidecarVerifiedProbe = canonicalSidecarVerifiedProbe ?? { _ in }
@@ -1405,9 +1400,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(session.languageCode) else {
-            throw MeetingProcessingError.unsupportedLanguage
-        }
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
             throw MeetingProcessingError.noRecoverableAudio
         }
@@ -1470,15 +1462,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         throw MeetingBackendError.hostCapabilityRequestMismatch(backend: backendID)
                     }
                     return try self.meetingRuntimeFactory(callbackRequest)
-                },
-                gigaamRuntimeFactory: { [self] callbackRequest in
-                    guard callbackRequest == request else {
-                        throw MeetingBackendError.hostCapabilityRequestMismatch(backend: backendID)
-                    }
-                    return try self.gigaamRuntimeFactory(callbackRequest)
                 }
             )
         )
+        guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
+            throw MeetingProcessingError.unsupportedLanguage
+        }
         if backendID == .parakeetNemotron {
             try await self.prepareDiarizationModel()
         }
@@ -1590,9 +1579,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
 
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
-            ?? (plan.backendID == .parakeetNemotron || plan.backendID == .gigaam
-                ? MeetingTextOverlapEchoVerdictProvider()
-                : MeetingFailClosedEchoVerdictProvider())
+            ?? backend.echoVerdictProvider
+            ?? MeetingFailClosedEchoVerdictProvider()
         let echoVerdicts = try await echoProvider.echoVerdicts(
             for: bundle.evidence,
             manifest: manifest,

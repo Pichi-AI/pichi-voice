@@ -284,7 +284,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         let result = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            "FluidVoice meeting recording" as CFString,
+            AppBrand.text("FluidVoice meeting recording") as CFString,
             &assertionID
         )
         return result == kIOReturnSuccess ? assertionID : nil

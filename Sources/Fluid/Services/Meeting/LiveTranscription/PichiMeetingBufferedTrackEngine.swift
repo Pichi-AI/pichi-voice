@@ -2,7 +2,6 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import os
-import PichiGigaAM
 
 nonisolated struct PichiMeetingCaptionRecognition: Sendable {
     let text: String
@@ -26,11 +25,17 @@ final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
     private var inference: Task<PichiMeetingCaptionRecognition, Error>?
 
     init(modelID: String, languageCode: String, artifactFingerprint: String? = nil) throws {
-        let configuration = modelID == PichiMeetingProviderFactory.gigaamModelID
-            ? PichiMeetingProviderFactory.configuration(backendID: .gigaam, languageCode: languageCode, artifactFingerprintOverride: artifactFingerprint)
-            : MeetingFinalProcessingConfiguration(asrModel: modelID, languageCode: languageCode)
+        let configuration = PichiMeetingProviderFactory.configuration(
+            asrModel: modelID,
+            languageCode: languageCode,
+            artifactFingerprintOverride: artifactFingerprint
+        )
         self.provider = try PichiMeetingProviderFactory.make(configuration)
     }
+
+    /// A fixed provider can be supplied by an existing composition boundary or deterministic test.
+    /// This recognizer owns its preparation and joined release; it must not borrow another owner's runtime.
+    init(provider: any TranscriptionProvider) { self.provider = provider }
 
     @MainActor func prepare() async throws {
         guard !self.isStopped, let provider else { throw CancellationError() }
@@ -61,15 +66,8 @@ final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
         let work = Task { @MainActor in
             _ = await previous?.result
             try Task.checkCancellation()
-            if let gigaam = provider as? PichiGigaAMProvider {
-                let result = try await gigaam.transcribeDetailed(samples)
-                return PichiMeetingCaptionRecognition(
-                    text: result.text,
-                    endOfUtteranceProbability: result.endOfUtteranceProbability
-                )
-            }
             let result = try await provider.transcribeStreaming(samples)
-            return PichiMeetingCaptionRecognition(text: result.text, endOfUtteranceProbability: nil)
+            return PichiMeetingCaptionRecognition(text: result.text, endOfUtteranceProbability: result.endOfUtteranceProbability)
         }
         self.inference = work
         return try await withTaskCancellationHandler {
@@ -88,9 +86,7 @@ final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
         self.inference?.cancel()
         _ = await self.inference?.result
         self.inference = nil
-        if let gigaam = self.provider as? PichiGigaAMProvider {
-            await gigaam.unloadModel()
-        }
+        await self.provider?.releaseResidency()
         self.provider = nil
     }
 }
@@ -333,8 +329,7 @@ actor PichiMeetingBufferedTrackEngine {
             self.onPartial?(self.kind, turnID, result.text, startPTS, endPTS)
             // The model head sees only this current utterance. Require a small acoustic pause,
             // and retain a silence/duration fallback for artifacts without an EOU head.
-            if input.count <= 128_000,
-               (result.endOfUtteranceProbability ?? 0) >= Self.eouThreshold, self.quietSamples >= 2400 {
+            if (result.endOfUtteranceProbability ?? 0) >= Self.eouThreshold, self.quietSamples >= 2400 {
                 await self.finishTurn()
             }
         } catch {

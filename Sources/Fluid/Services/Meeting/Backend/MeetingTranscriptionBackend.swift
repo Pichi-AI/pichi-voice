@@ -19,9 +19,6 @@ nonisolated struct MeetingBackendID: RawRepresentable, Hashable, Codable, Sendab
     /// Local Parakeet TDT v2 ASR + Nemotron-3 diarization composite.
     static let parakeetNemotron = MeetingBackendID(rawValue: "local-parakeet-tdt-v2-nemotron-3-v1")
 
-    /// Pichi Russian GigaAM ASR with optional local speaker separation.
-    static let gigaam = MeetingBackendID(rawValue: "local-gigaam-v3-eou-v1")
-
     /// Single source of truth for new meeting-processing attempts. Keep explicit stored selections
     /// untouched; this value applies only when no preference has been recorded.
     static let productionDefault: MeetingBackendID = .parakeetNemotron
@@ -235,26 +232,24 @@ typealias MeetingParakeetNemotronRuntimeFactory = @MainActor (
 struct MeetingBackendHostContext {
     let legacyExecutor: MeetingLegacyBackendExecutor
     let parakeetNemotronRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
-    let gigaamRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
 
     init(
         legacyExecutor: @escaping MeetingLegacyBackendExecutor,
         parakeetNemotronRuntimeFactory: @escaping MeetingParakeetNemotronRuntimeFactory = { _ in
             throw MeetingBackendError.runtimeUnavailable(backend: .parakeetNemotron)
-        },
-        gigaamRuntimeFactory: @escaping MeetingParakeetNemotronRuntimeFactory = { _ in
-            throw MeetingBackendError.runtimeUnavailable(backend: .gigaam)
         }
     ) {
         self.legacyExecutor = legacyExecutor
         self.parakeetNemotronRuntimeFactory = parakeetNemotronRuntimeFactory
-        self.gigaamRuntimeFactory = gigaamRuntimeFactory
     }
 }
 
 @MainActor
 protocol MeetingTranscriptionBackend: AnyObject {
     var descriptor: MeetingBackendDescriptor { get }
+    /// A canonical backend explicitly opts into an echo-evidence source; unknown backends remain
+    /// fail-closed. This avoids inferring signal capabilities from a model identifier.
+    var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { get }
 
     /// Validates compatibility and freezes an immutable plan. Runs before any model load.
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan
@@ -267,6 +262,10 @@ protocol MeetingTranscriptionBackend: AnyObject {
         manifest: MeetingAnalysisManifest?,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingBackendOutcome
+}
+
+extension MeetingTranscriptionBackend {
+    var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { nil }
 }
 
 nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {

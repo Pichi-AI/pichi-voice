@@ -298,7 +298,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         var session = fixture.session
         session.languageCode = "ru"
         let runtime = FakeRuntime()
-        let backend = PichiGigaAMMeetingBackend(
+        let backend = MeetingProviderBackedBackend(
+            descriptor: try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou")),
+            providerModelID: "gigaam-v3-eou",
             runtimeFactory: { _ in runtime },
             modelLocator: StubModelLocator(),
             materializer: FakeMaterializer()
@@ -335,7 +337,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let locator = StubModelLocator()
         locator.error = MeetingNemotronModelReadinessError.modelNotInstalled(path: "/fixture/missing")
         let runtime = FakeRuntime()
-        let backend = PichiGigaAMMeetingBackend(runtimeFactory: { _ in runtime }, modelLocator: locator, materializer: FakeMaterializer())
+        let backend = MeetingProviderBackedBackend(
+            descriptor: try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou")),
+            providerModelID: "gigaam-v3-eou",runtimeFactory: { _ in runtime }, modelLocator: locator, materializer: FakeMaterializer())
         let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru")
         let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory(), configuration: configuration))
         let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
@@ -350,7 +354,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
 
     func testGigaAMRefusesAnotherASRModelOrLanguageInsteadOfRelabelingIt() throws {
         let fixture = self.makeTwoEpochFixture()
-        let backend = PichiGigaAMMeetingBackend(runtimeFactory: { _ in FakeRuntime() })
+        let backend = MeetingProviderBackedBackend(
+            descriptor: try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou")),
+            providerModelID: "gigaam-v3-eou",runtimeFactory: { _ in FakeRuntime() })
         XCTAssertThrowsError(try backend.plan(self.makeRequest(session: fixture.session, directory: self.makeTempSessionDirectory()))) { error in
             XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel("parakeet-tdt-v2"))
         }
@@ -369,8 +375,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             .init(text: $0, words: [.init(text: $0, start: 0.2, end: 0.6)])
         }
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .gigaam)
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou"))
         registry.register(.gigaam) { context in
-            PichiGigaAMMeetingBackend(runtimeFactory: context.gigaamRuntimeFactory, modelLocator: StubModelLocator(), materializer: FakeMaterializer())
+            MeetingProviderBackedBackend(descriptor: descriptor, providerModelID: "gigaam-v3-eou", runtimeFactory: context.parakeetNemotronRuntimeFactory, modelLocator: StubModelLocator(), materializer: FakeMaterializer())
         }
         let pipeline = MeetingProcessingPipeline(
             asrServiceProvider: { XCTFail("Fake runtime must not prepare a real ASR service"); return ASRService() },
@@ -378,7 +385,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             serializationGate: MeetingProcessingSerializationGate(),
             backendRegistry: registry,
             chunkObserver: FixtureObserver(results: fixture.observations),
-            gigaamRuntimeFactory: { _ in runtime }
+            meetingRuntimeFactory: { _ in runtime }
         )
         let result = try await pipeline.process(session: session, sessionDirectory: self.makeTempSessionDirectory(), progress: { _ in })
         XCTAssertEqual(result.attempt.backendID, MeetingBackendID.gigaam.rawValue)

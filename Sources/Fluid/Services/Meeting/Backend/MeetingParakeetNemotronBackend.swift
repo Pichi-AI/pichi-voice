@@ -30,6 +30,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     )
 
     let descriptor: MeetingBackendDescriptor
+    var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { MeetingTextOverlapEchoVerdictProvider() }
 
     private let runtimeFactory: MeetingParakeetNemotronRuntimeFactory
     private let modelLocator: any MeetingNemotronModelLocating

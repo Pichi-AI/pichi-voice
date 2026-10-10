@@ -303,6 +303,7 @@ final class MeetingASRPreparationOwner {
             // This production hook must only drain executor state; it must not call back into
             // this owner, since that would attempt to await the drain task from itself.
             await self.drainExecutor(token.lease)
+            await self.slot?.provider?.releaseResidency()
             self.clearSlot(operationID: token.operationID)
             self.drainTask = nil
         }

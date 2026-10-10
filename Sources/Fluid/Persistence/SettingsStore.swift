@@ -5122,6 +5122,12 @@ final class SettingsStore: ObservableObject {
             rawValue
         }
 
+        /// Installation transport is engine metadata; common screens call the same service API.
+        var supportsFolderImport: Bool { self == .gigaam }
+
+        /// Trusted localization template. The picker inserts the model name exactly once.
+        var importFolderPrompt: String { "Choose the folder containing the %@ model files." }
+
         // MARK: - Display Properties
 
         var displayName: String {

@@ -40,7 +40,8 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         let defaults = settings.meetingRecordingDefaults
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
-        self.languageCode = defaults.languageCode ?? "ru"
+        self.languageCode = defaults.languageCode
+            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "ru"
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
@@ -297,7 +298,7 @@ struct MeetingTranscriptionView: View {
         }
         .clipped()
         .task {
-            if CPUArchitecture.isAppleSilicon && !self.isGigaAMSelected {
+            if CPUArchitecture.isAppleSilicon && !self.isRegisteredMeetingProviderSelected {
                 MeetingDiarizationModelStore.shared.prepareInBackground()
             }
             async let sources: Void = self.refreshSources(requestPermissions: false)
@@ -308,7 +309,7 @@ struct MeetingTranscriptionView: View {
         }
         .onChange(of: self.settings.selectedSpeechModel) { _, _ in
             if self.settings.meetingRecordingDefaults.languageCode == nil, self.coordinator.isQuiescent {
-                self.setupDraft.languageCode = self.isGigaAMSelected ? "ru" : "en"
+                self.setupDraft.languageCode = PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
             }
             Task { await self.refreshModelReadiness() }
         }
@@ -535,8 +536,9 @@ struct MeetingTranscriptionView: View {
         } else if !self.cachedStorageReady {
             let trackCount = MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode)
             blockingMessage = PichiLocalization.format("Free at least %@ of storage before recording.", MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount))
-        } else if !CPUArchitecture.isAppleSilicon && !self.isGigaAMSelected {
-            blockingMessage = PichiLocalization.text("Meeting transcription on Intel requires selecting GigaAM.")
+        } else if !CPUArchitecture.isAppleSilicon
+            && (!self.isRegisteredMeetingProviderSelected || self.settings.selectedSpeechModel.requiresAppleSilicon) {
+            blockingMessage = PichiLocalization.text("Select a compatible meeting model for Intel.")
         } else {
             blockingMessage = nil
         }
@@ -547,10 +549,12 @@ struct MeetingTranscriptionView: View {
             meetingAudioReady: meetingAudioReady,
             microphoneStatus: microphoneStatusText,
             microphoneReady: microphoneReady && !self.microphones.isEmpty,
-            modelStatus: self.isGigaAMSelected
+            modelStatus: self.isRegisteredMeetingProviderSelected
                 ? (modelReady
-                    ? (self.cachedSpeakerModelReady ? PichiLocalization.text("GigaAM and speaker model installed") : PichiLocalization.text("GigaAM installed · automatic speaker separation unavailable"))
-                    : PichiLocalization.text("Import GigaAM in Voice Engine before transcription"))
+                    ? (self.cachedSpeakerModelReady
+                        ? PichiLocalization.format("%@ and speaker model installed", self.settings.selectedSpeechModel.displayName)
+                        : PichiLocalization.format("%@ installed · automatic speaker separation unavailable", self.settings.selectedSpeechModel.displayName))
+                    : PichiLocalization.format("Import %@ in Voice Engine before transcription", self.settings.selectedSpeechModel.displayName))
                 : (modelReady ? PichiLocalization.text("Speaker model installed · transcription prepares after Stop") : PichiLocalization.text("Speaker model downloads before transcription")),
             modelReady: modelReady,
             storageStatus: self.cachedStorageStatus.text(language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian),
@@ -563,8 +567,8 @@ struct MeetingTranscriptionView: View {
         )
     }
 
-    private var isGigaAMSelected: Bool {
-        self.settings.selectedSpeechModel.rawValue == PichiMeetingProviderFactory.gigaamModelID
+    private var isRegisteredMeetingProviderSelected: Bool {
+        PichiMeetingProviderFactory.registeredLanguageCodes(for: self.settings.selectedSpeechModel.rawValue) != nil
     }
 
     private func refreshSourcesFromUserAction() {
@@ -575,13 +579,17 @@ struct MeetingTranscriptionView: View {
     private func refreshModelReadiness() async {
         self.modelReadinessRevision += 1
         let revision = self.modelReadinessRevision
-        let gigaamSelected = self.isGigaAMSelected
+        let selectedModelID = self.settings.selectedSpeechModel.rawValue
+        let registered = PichiMeetingProviderFactory.registeredBackendDescriptor(for: selectedModelID) != nil
+        let requiresAppleSilicon = self.settings.selectedSpeechModel.requiresAppleSilicon
         let (ready, speakerReady) = await Task.detached(priority: .utility) {
             let speakerReady = CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
-            return (gigaamSelected ? PichiGigaAMModelStore.shared.modelsExistOnDisk() : speakerReady, speakerReady)
+            let providerReady = registered ? (PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) ?? false) : speakerReady
+            return (providerReady && (!requiresAppleSilicon || CPUArchitecture.isAppleSilicon), speakerReady)
         }.value
         // An older check must not overwrite an import completion's newer result.
-        guard self.modelReadinessRevision == revision else { return }
+        guard self.modelReadinessRevision == revision,
+              self.settings.selectedSpeechModel.rawValue == selectedModelID else { return }
         self.cachedModelReady = ready
         self.cachedSpeakerModelReady = speakerReady
     }
@@ -1476,8 +1484,7 @@ struct MeetingTranscriptionCanvas: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                             .accessibilityIdentifier("meeting-result-action-error")
                     }
-                    if session.processingAttempts.last?.diarizationModel
-                        == PichiMeetingProviderFactory.transcriptOnlyDiarizationFingerprint {
+                    if PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(session.processingAttempts.last?.diarizationModel) {
                         Label("Automatic speaker separation was unavailable. Source tracks and transcript timing are preserved.", systemImage: "person.crop.circle.badge.questionmark")
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.theme.palette.secondaryText)

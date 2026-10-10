@@ -146,14 +146,15 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
         _ configuration: MeetingFinalProcessingConfiguration
     ) throws -> MeetingProviderOptions {
         guard let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel),
-              model == .parakeetTDTv2 || model == .parakeetTDT || configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID
+              model == .parakeetTDTv2 || model == .parakeetTDT
+                || PichiMeetingProviderFactory.registeredLanguageCodes(for: configuration.asrModel) != nil
         else {
             throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
         }
-        let languageSupported = configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID
-            ? configuration.languageCode == "ru"
-            : VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode)
-                && (model != .parakeetTDTv2 || configuration.languageCode == "en")
+        let languageSupported = PichiMeetingProviderFactory.registeredLanguageCodes(for: configuration.asrModel)
+            .map { $0.contains(configuration.languageCode) }
+            ?? (VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode)
+                && (model != .parakeetTDTv2 || configuration.languageCode == "en"))
         guard languageSupported
         else {
             throw MeetingProviderOptionsError.unsupportedLanguageCode(configuration.languageCode)
