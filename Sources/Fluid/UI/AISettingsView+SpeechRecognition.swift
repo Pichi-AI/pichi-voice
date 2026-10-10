@@ -153,8 +153,8 @@ extension VoiceEngineSettingsView {
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(Capsule().fill(badge == AppBrand.text("FluidVoice Pick") ? .cyan.opacity(0.2) : .orange.opacity(0.2)))
-                                    .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? .cyan : .orange)
+                                    .background(Capsule().fill(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent.opacity(0.2) : .orange.opacity(0.2)))
+                                    .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent : .orange)
                             }
 
                             Spacer()
