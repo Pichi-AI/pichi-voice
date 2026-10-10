@@ -4142,8 +4142,8 @@ final class ASRService: ObservableObject {
                 try await self.retireDictationASRResourcesForMeeting(lease: lease)
             },
             makeProvider: { configuration in
-                // Language selects the pinned Parakeet v2/v3 model; never reads selectedSpeechModel.
-                try FluidAudioProvider(meetingConfiguration: configuration)
+                // The frozen meeting configuration selects the provider and exact model artifacts.
+                try PichiMeetingProviderFactory.make(configuration)
             },
             prepareProvider: { provider, _, progress in
                 try await provider.prepare(progressHandler: progress)
