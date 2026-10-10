@@ -78,7 +78,22 @@ A green portable check does not replace macOS validation. The initial setup does
 - Configuration parsing, script syntax, documentation links, worktree creation, worktree-only build guard, and setup in a fresh worktree passed.
 - The upstream sync helper confirmed that our main contains the current FluidVoice main.
 - The upstream build emits compiler warnings and a CTranscribe framework symlink warning. Compilation success does not establish runtime or signed-build behavior.
-- The full integration test suite, interactive audio checks, branded app identity, and a published Codex Cloud environment still need separate verification.
+- These checks established the initial upstream baseline. Pichi feature verification is recorded below; publishing a Codex Cloud environment still requires a fresh cloud task.
+
+## Pichi feature verification on October 9, 2026
+
+The feature branch builds on FluidVoice `1.6.10-beta.8`. Verification used macOS 26.6.2, Xcode 27.0 and an Apple Silicon Mac with 128 GB RAM. All build directories and approved private fixtures remained inside ignored local storage.
+
+- Final unsigned Release builds passed for both `arm64` and `x86_64`. Both bundles report `Pichi Voice`, `ai.pichi.voice` and version `1.6.10-beta.8`. Cross-compiling and Rosetta inference do not establish performance on a physical Intel Mac.
+- Full macOS regression passed: 2253 tests, 60 skipped, zero failures. The existing upstream Whisper tiny fixture exclusion was retained. Test-host microphone startup was disabled with `FLUIDVOICE_MIC_PHASE1=disabled`; this run does not validate live audio permissions or capture hardware.
+- A separate run passed 139 focused integration tests with two skips. Opt-in checks used the actual optimized GigaAM export and an approved Russian recording through the provider, file service, local API controller and pinned meeting ASR. The local API check exercised request handling with real inference, without opening a production listener.
+- Real Ollama inference with `qwen3.5:4b` passed the synthetic Russian summary fixture, including the decision, task owner and literal deadline. The native bounded-context adapter used approximately 3.15 GiB of model memory with an 8192-token context and released the model after the request. An 8 GB Mac still needs its own memory and latency measurements.
+- Existing Pichi assets and the actual optimized GigaAM model were verified. Interactive onboarding imported and activated the local model successfully. Profile validation, light/dark color handling and bundle identity policy checks passed.
+- Independent automated code review found lifecycle, model residency and chronological summary issues during development; fixes were reviewed again. The final code/test revision `02347a5b` had no remaining material findings. A final tracked-path and credential-pattern audit found no private recordings, model weights, databases or signing keys in the changes.
+
+Repeat the full suite with `bash scripts/dev/macos.sh test`. Real inference remains opt-in; see [GigaAM verification](../../Vendor/PichiGigaAM/README.md) and [Russian summary verification](russian-meetings.md#verification). Keep private fixture paths out of committed configuration.
+
+Remaining interactive validation covers a real microphone/system-audio meeting, Accessibility typing, permission prompts and physical Intel/8 GB devices. Signing, notarization, a Pichi update feed and a distributable optimized-model destination are separate release work. The installed FluidVoice application and its recordings were not modified.
 
 ## CI and cleanup
 
