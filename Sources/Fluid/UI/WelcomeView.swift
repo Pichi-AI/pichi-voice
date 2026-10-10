@@ -97,6 +97,8 @@ struct OnboardingFlowView: View {
     @State private var otherModelsPage = 0
     @State private var isShowingOtherModelRoutes = false
     @State private var preparingModelRouteID: String?
+    @State private var isImportingModel = false
+    @State private var isCancellingModelImport = false
     @State private var uninstallingModelRouteID: String?
     @State private var modelPreparationTask: Task<Void, Never>?
     @State private var languageSearchText = ""
@@ -1442,8 +1444,7 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelActionButtonTitle(isPreparing: Bool, isDownloaded: Bool, isReady: Bool) -> String {
         if isPreparing {
-            if self.preparingModelRouteID?.contains(SettingsStore.SpeechModel.gigaam.id) == true,
-               !self.asr.isLoadingModel { return "Importing..." }
+            if self.isImportingModel { return self.isCancellingModelImport ? "Cancelling…" : "Importing..." }
             return self.asr.isLoadingModel ? "Loading..." : "Downloading..."
         }
         if isReady {
@@ -1456,38 +1457,41 @@ struct OnboardingFlowView: View {
     }
 
     private func prepareOnboardingRoute(_ route: VoiceEngineLanguageRoute) {
-        guard self.installations.canUseModelActions, !self.asr.isRunning, !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
+        guard self.installations.canUseModelActions, !self.asr.isRunning, self.asr.activeExclusiveActivity == nil,
+              !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
 
-        var gigaAMImportDirectory: URL?
-        if route.model == .gigaam, !PichiGigaAMModelStore.shared.modelsExistOnDisk() {
-            let panel = NSOpenPanel()
-            panel.canChooseFiles = false
-            panel.canChooseDirectories = true
-            panel.allowsMultipleSelection = false
-            panel.message = PichiLocalization.text("Choose the folder containing your optimized GigaAM ONNX model and vocabulary.")
-            panel.prompt = PichiLocalization.text("Import")
-            guard panel.runModal() == .OK, let directory = panel.url else { return }
-            gigaAMImportDirectory = directory
+        let importDirectory: URL?
+        if route.model.supportsFolderImport, !self.isOnboardingModelDownloaded(route.model) {
+            guard let directory = SpeechModelImportFolderPicker.chooseFolder(for: route.model) else { return }
+            importDirectory = directory
+        } else {
+            importDirectory = nil
         }
+        // A modal picker pumps the run loop; recheck before starting the common import operation.
+        guard self.installations.canUseModelActions, !self.asr.isRunning,
+              self.asr.activeExclusiveActivity == nil, !self.isModelPreparationInProgress,
+              self.uninstallingModelRouteID == nil else { return }
 
         self.modelPreparationTask?.cancel()
         self.preparingModelRouteID = route.id
+        self.isImportingModel = importDirectory != nil
+        self.isCancellingModelImport = false
 
         self.modelPreparationTask = Task { @MainActor in
             defer {
                 self.preparingModelRouteID = nil
+                self.isImportingModel = false
+                self.isCancellingModelImport = false
                 self.modelPreparationTask = nil
             }
 
             do {
-                if let directory = gigaAMImportDirectory {
-                    let lease = try self.asr.acquireExclusiveActivity(.modelMaintenance)
-                    defer { self.asr.releaseExclusiveActivity(lease) }
-                    let operation = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "speech", modelID: route.model.id)
-                    defer { MeetingModelResidencyCoordinator.shared.endOperation(operation) }
-                    try await PichiGigaAMModelStore.shared.importModel(from: directory)
-                    self.installations.refresh()
+                try Task.checkCancellation()
+                if let directory = importDirectory {
+                    try await self.asr.importModel(route.model, from: directory)
+                    self.isImportingModel = false
                 }
+                try Task.checkCancellation()
                 self.selectOnboardingRoute(route)
                 try await self.asr.ensureAsrReady(source: .onboarding)
             } catch is CancellationError {
@@ -1497,17 +1501,22 @@ struct OnboardingFlowView: View {
                 // Surface the failure in the UI instead of only logging it, so the user
                 // isn't stuck at a disabled button. The shared ContentView alert (bound to
                 // asr.showError) presents this during onboarding. See #355.
-                self.asr.errorTitle = "Voice Model Setup Failed"
+                guard !Task.isCancelled else { return }
+                self.asr.errorTitle = PichiLocalization.text(self.isImportingModel ? "Model Import Failed" : "Voice Model Setup Failed")
                 self.asr.errorMessage = error.localizedDescription
                 self.asr.showError = true
             }
             guard !Task.isCancelled else { return }
-            await self.asr.checkIfModelsExistAsync()
+            if importDirectory == nil { await self.asr.checkIfModelsExistAsync() }
         }
     }
 
     private func cancelOnboardingModelPreparation() {
         self.modelPreparationTask?.cancel()
+        if self.isImportingModel {
+            self.isCancellingModelImport = true
+            return
+        }
         if self.asr.hasActiveModelDownload {
             self.asr.cancelModelDownload()
         } else {
@@ -1626,11 +1635,11 @@ struct OnboardingFlowView: View {
                     if isPreparing {
                         self.onboardingModelActionButton(
                             id: "\(route.id)-cancel",
-                            title: self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload ? "Cancelling…" : "Cancel",
+                            title: self.isCancellingModelImport || self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload ? "Cancelling…" : "Cancel",
                             systemImage: "xmark",
                             tone: .secondary,
                             width: 104,
-                            isDisabled: self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload
+                            isDisabled: self.isCancellingModelImport || self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload
                         ) {
                             self.cancelOnboardingModelPreparation()
                         }
@@ -1697,8 +1706,8 @@ struct OnboardingFlowView: View {
             } else {
                 self.onboardingModelActionButton(
                     id: "\(route.id)-download-activate",
-                    title: model == .gigaam ? "Import & Activate" : self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: false, isReady: false),
-                    systemImage: model == .gigaam ? "folder.badge.plus" : "arrow.down.circle.fill",
+                    title: model.supportsFolderImport ? "Import & Activate" : self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: false, isReady: false),
+                    systemImage: model.supportsFolderImport ? "folder.badge.plus" : "arrow.down.circle.fill",
                     tone: .primary,
                     width: nil,
                     isDisabled: areModelActionsBlocked
@@ -1766,7 +1775,7 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelPreparationStatus(isUninstalling: Bool) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            if self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload {
+            if self.isCancellingModelImport || self.asr.isCancellingModelPreparation || self.asr.isCancellingModelDownload {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
@@ -1799,7 +1808,7 @@ struct OnboardingFlowView: View {
                     Text(PichiLocalization.text(
                         isUninstalling
                             ? "Deleting..."
-                            : self.asr.modelPreparationStatusText
+                            : (self.isImportingModel ? "Importing..." : self.asr.modelPreparationStatusText)
                     ))
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))

@@ -2,6 +2,21 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Shared UI input collection. Artifact validation, residency and installation stay in ASRService.
+@MainActor
+enum SpeechModelImportFolderPicker {
+    static func chooseFolder(for model: SettingsStore.SpeechModel) -> URL? {
+        guard model.supportsFolderImport else { return nil }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = PichiLocalization.format(model.importFolderPrompt, model.displayName)
+        panel.prompt = PichiLocalization.text("Import")
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+}
+
 @MainActor
 final class VoiceEngineSettingsViewModel: ObservableObject {
     let settings: SettingsStore
@@ -19,7 +34,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             || self.downloadingModel != nil
             || self.asr.hasActiveModelDownload
             || self.asr.hasActiveModelPreparation
-            || self.isImportingGigaAM
+            || self.isImportingModel
             || self.asr.isCancellingModelPreparation
             || (!self.asr.isAsrReady && (self.asr.isDownloadingModel || self.asr.isLoadingModel))
     }
@@ -29,7 +44,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var englishOnlyFilter: Bool = false
     @Published var installedOnlyFilter: Bool = false
     @Published var showSpeechFilters: Bool = false
-    @Published private(set) var isImportingGigaAM = false
+    @Published private(set) var importingModel: SettingsStore.SpeechModel?
+    @Published private(set) var isCancellingModelImport = false
+    private var modelImportTask: Task<Void, Never>?
+    var isImportingModel: Bool { self.importingModel != nil }
 
     @Published var selectedSpeechProvider: SettingsStore.SpeechModel.Provider
     @Published var previewSpeechModel: SettingsStore.SpeechModel
@@ -151,8 +169,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     func downloadSpeechModel(_ model: SettingsStore.SpeechModel, updateWeights: Bool = false) {
         guard !self.areSpeechModelActionsBlocked else { return }
-        if model == .gigaam {
-            self.importGigaAMModel()
+        if model.supportsFolderImport {
+            self.importSpeechModel(model)
             return
         }
         Task { [weak self] in
@@ -175,34 +193,38 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         }
     }
 
-    func importGigaAMModel() {
-        guard !self.areSpeechModelActionsBlocked else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose the folder containing your optimized GigaAM ONNX model and vocabulary."
-        panel.prompt = "Import"
-        guard panel.runModal() == .OK, let directory = panel.url else { return }
-        guard !self.areSpeechModelActionsBlocked else { return }
-        self.isImportingGigaAM = true
-        Task { [weak self] in
+    func importSpeechModel(_ model: SettingsStore.SpeechModel) {
+        guard !self.areSpeechModelActionsBlocked, model.supportsFolderImport,
+              let directory = SpeechModelImportFolderPicker.chooseFolder(for: model),
+              !self.areSpeechModelActionsBlocked else { return }
+        self.importingModel = model
+        self.isCancellingModelImport = false
+        self.modelImportTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.isImportingGigaAM = false }
+            defer {
+                self.importingModel = nil
+                self.isCancellingModelImport = false
+                self.modelImportTask = nil
+            }
             do {
-                let lease = try self.asr.acquireExclusiveActivity(.modelMaintenance)
-                defer { self.asr.releaseExclusiveActivity(lease) }
-                let operation = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "speech", modelID: SettingsStore.SpeechModel.gigaam.id)
-                defer { MeetingModelResidencyCoordinator.shared.endOperation(operation) }
-                try await PichiGigaAMModelStore.shared.importModel(from: directory)
-                if self.settings.selectedSpeechModel == .gigaam { self.asr.resetTranscriptionProvider() }
-                self.installations.refresh()
+                try Task.checkCancellation()
+                try await self.asr.importModel(model, from: directory)
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                DebugLogger.shared.info("Model import cancelled: \(model.displayName)", source: "VoiceEngineVM")
             } catch {
-                self.asr.errorTitle = "GigaAM Import Failed"
+                guard !Task.isCancelled else { return }
+                self.asr.errorTitle = PichiLocalization.text("Model Import Failed")
                 self.asr.errorMessage = error.localizedDescription
                 self.asr.showError = true
             }
         }
+    }
+
+    func cancelModelImport() {
+        guard self.isImportingModel, !self.isCancellingModelImport else { return }
+        self.isCancellingModelImport = true
+        self.modelImportTask?.cancel()
     }
 
     func cancelSpeechModelDownload() {
@@ -239,9 +261,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     var modelDescriptionText: String {
         let model = self.settings.selectedSpeechModel
+        if model.supportsFolderImport { return model.cardDescription }
         switch model {
-        case .gigaam:
-            return "Our optimized GigaAM recognizes Russian locally on Apple Silicon and Intel. Import a verified model folder, then Activate. Dictation, files, meetings and the local API use the same model."
         case .appleSpeech:
             return "Apple Speech (Legacy) uses built-in macOS speech recognition. No model download required, works on Intel and Apple Silicon."
         case .appleSpeechAnalyzer:

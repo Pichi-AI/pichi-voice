@@ -319,6 +319,19 @@ extension VoiceEngineSettingsView {
                         .foregroundStyle(self.voiceEngineSecondaryText)
                 }
                 .accessibilityLabel("Deleting \(model.humanReadableName)")
+            } else if self.viewModel.importingModel == model {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text(PichiLocalization.text(self.viewModel.isCancellingModelImport ? "Cancelling…" : "Importing..."))
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.voiceEngineSecondaryText)
+                    Button(PichiLocalization.text(self.viewModel.isCancellingModelImport ? "Cancelling…" : "Cancel")) {
+                        self.viewModel.cancelModelImport()
+                    }
+                    .fluidOutlinedButton()
+                    .controlSize(.small)
+                    .disabled(self.viewModel.isCancellingModelImport)
+                }
             } else if self.viewModel.downloadingModel == model {
                 // This specific model is currently being downloaded
                 HStack(spacing: 8) {
@@ -455,9 +468,9 @@ extension VoiceEngineSettingsView {
                 }
             } else {
                 ZStack(alignment: .trailing) {
-                    if model == .gigaam {
+                    if model.supportsFolderImport {
                         Button("Import model folder") {
-                            self.viewModel.importGigaAMModel()
+                            self.viewModel.importSpeechModel(model)
                         }
                         .fluidGlassAction(prominent: true)
                         .disabled(self.viewModel.areSpeechModelActionsBlocked)
