@@ -8295,6 +8295,24 @@
         }
       }
     },
+    "Choose the folder containing the %@ model files.": {
+      "comment": "Generic model import UI. Model display names are format arguments and must remain verbatim.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the folder containing the %@ model files."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите папку с файлами модели %@."
+          }
+        }
+      }
+    },
     "Choose the folder containing your optimized GigaAM ONNX model and vocabulary.": {
       "extractionState": "manual",
       "localizations": {
@@ -21007,6 +21025,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Идентификатор модели"
+          }
+        }
+      }
+    },
+    "Model Import Failed": {
+      "comment": "Generic model import UI. Model display names are format arguments and must remain verbatim.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model Import Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось импортировать модель"
           }
         }
       }
