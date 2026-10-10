@@ -21306,6 +21306,23 @@
         }
       }
     },
+    "Microphone Speaker %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone Speaker %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участник у микрофона %lld"
+          }
+        }
+      }
+    },
     "Microphone access allowed": {
       "extractionState": "manual",
       "localizations": {
@@ -29775,6 +29792,40 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "Room Speaker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Room Speaker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участник в комнате"
+          }
+        }
+      }
+    },
+    "Room Speaker %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Room Speaker %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участник в комнате %lld"
+          }
+        }
+      }
+    },
     "Rose": {
       "extractionState": "manual",
       "localizations": {
@@ -33033,6 +33084,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Участник"
+          }
+        }
+      }
+    },
+    "Speaker %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker %lld"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участник %lld"
           }
         }
       }
@@ -37698,6 +37766,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Неизвестное приложение"
+          }
+        }
+      }
+    },
+    "Unknown speaker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown speaker"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неизвестный участник"
           }
         }
       }

@@ -379,8 +379,8 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             speaker: slot("slot-0")
         )
         let cough = self.unit(id: "u-1", span: spans[0], text: "hmm", analysisStart: 3.5, analysisEnd: 4, speaker: slot("slot-1"))
-        let assemble = { (units: [MeetingFinalTextUnit]) in
-            try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
+        let assemble = { (units: [MeetingFinalTextUnit], speakerNameFormat: String) in
+            try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(MeetingAssemblyInput(
                 plan: plan,
                 manifest: manifest,
                 evidence: self.evidence(plan: plan, units: units),
@@ -389,7 +389,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
             ))
         }
 
-        let result = try assemble([talker, cough])
+        let result = try assemble([talker, cough], "Speaker %lld")
 
         XCTAssertEqual(result.speakers.map(\.displayName), ["Speaker 1"])
         let coughSegment = try XCTUnwrap(result.segments.first { $0.text == "hmm" }, "brief speech stays in the transcript")
@@ -397,7 +397,13 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(coughSegment.attributionState, .unassigned)
         XCTAssertNotNil(result.segments.first { $0.text.hasPrefix("one") }?.speakerID)
         // A track where every slot is brief keeps its speakers.
-        XCTAssertEqual(try assemble([cough]).speakers.count, 1)
+        XCTAssertEqual(try assemble([cough], "Speaker %lld").speakers.count, 1)
+        let russian = try assemble([talker, cough], PichiLocalization.text("Speaker %lld", language: .russian, bundle: .main))
+        XCTAssertEqual(russian.speakers.map(\.displayName), ["Участник 1"])
+        XCTAssertEqual(russian.speakers.map(\.id), result.speakers.map(\.id))
+        XCTAssertEqual(russian.speakers.map(\.diarizationClusterID), result.speakers.map(\.diarizationClusterID))
+        XCTAssertEqual(russian.segments, result.segments)
+        XCTAssertEqual(russian.sidecar, result.sidecar)
     }
 
     func testContinuityFlagRoundTripsAndDefaultsOffForOlderEvidence() throws {

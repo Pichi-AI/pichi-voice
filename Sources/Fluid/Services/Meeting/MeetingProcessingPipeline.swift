@@ -1240,6 +1240,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     }
 
     private struct Accumulator {
+        // Freeze presentation policy for new names; checkpoint/user names remain data.
+        let speakerLabelLanguage = PichiLocalization.language
         var speakers: [MeetingSessionSpeaker] = []
         var segments: [MeetingTranscriptSegment] = []
         var speakerIDByKey: [String: SessionSpeakerID] = [:]
@@ -1557,6 +1559,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
         let request = plan.request
+        let speakerNameFormat = PichiLocalization.text("Speaker %lld")
         let observer = self.chunkObserver ?? MeetingChunkAudioObserver(
             sessionDirectory: request.sessionDirectory
         )
@@ -1604,7 +1607,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             echoVerdicts: echoVerdicts
         )
         let assemblyTask = Task.detached(priority: .userInitiated) {
-            try MeetingTranscriptAssembler().assemble(assemblyInput)
+            try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(assemblyInput)
         }
         let assembly = try await withTaskCancellationHandler {
             try await assemblyTask.value
@@ -2101,7 +2104,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 accumulator.addResolvedSpeaker(
                     id: speakerID,
                     key: "remote-cluster:\(speakerID.uuidString)",
-                    displayName: "Speaker \(accumulator.nextRemoteSpeaker)",
+                    displayName: PichiLocalization.format("Speaker %lld", language: accumulator.speakerLabelLanguage, bundle: .main, arguments: [Int64(accumulator.nextRemoteSpeaker)]),
                     clusterID: firstLabel,
                     trackKind: .applicationAudio,
                     isLocalUser: false
@@ -2742,7 +2745,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             for turn in stagedTurns {
                 let isNewSpeaker = !accumulator.speakers.contains { $0.id == turn.clusterID }
                 if isNewSpeaker {
-                    let displayName = "Room Speaker \(accumulator.nextMicrophoneSpeaker)"
+                    let displayName = PichiLocalization.format("Room Speaker %lld", language: accumulator.speakerLabelLanguage, bundle: .main, arguments: [Int64(accumulator.nextMicrophoneSpeaker)])
                     accumulator.nextMicrophoneSpeaker += 1
                     accumulator.addResolvedSpeaker(
                         id: turn.clusterID,
@@ -2756,7 +2759,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     accumulator.addResolvedSpeaker(
                         id: turn.clusterID,
                         key: "room-cluster:\(turn.clusterID.uuidString)",
-                        displayName: "Room Speaker",
+                        displayName: PichiLocalization.text("Room Speaker", language: accumulator.speakerLabelLanguage, bundle: .main),
                         clusterID: turn.clusterLabel,
                         trackKind: .microphone,
                         isLocalUser: false
@@ -2812,7 +2815,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     accumulator.addResolvedSpeaker(
                         id: turn.clusterID,
                         key: "microphone-speaker:\(turn.clusterID.uuidString)",
-                        displayName: "Microphone Speaker \(ordinal)",
+                        displayName: PichiLocalization.format("Microphone Speaker %lld", language: accumulator.speakerLabelLanguage, bundle: .main, arguments: [Int64(ordinal)]),
                         clusterID: turn.clusterLabel,
                         trackKind: .microphone,
                         isLocalUser: false

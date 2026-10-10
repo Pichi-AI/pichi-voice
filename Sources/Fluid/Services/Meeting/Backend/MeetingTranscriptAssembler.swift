@@ -154,8 +154,12 @@ nonisolated enum MeetingAssemblyError: LocalizedError, Equatable {
 
 nonisolated struct MeetingTranscriptAssembler {
     private let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
+    private let speakerNameFormat: String
 
-    init() {}
+    /// The product resolves this trusted UI template before assembly; assembly remains pure.
+    init(speakerNameFormat: String = "Speaker %lld") {
+        self.speakerNameFormat = speakerNameFormat
+    }
 
     func assemble(_ input: MeetingAssemblyInput) throws -> MeetingAssemblyResult {
         try Task.checkCancellation()
@@ -666,7 +670,7 @@ nonisolated struct MeetingTranscriptAssembler {
                     id: Self.stableUUID(
                         "speaker:\(attemptID.uuidString):\(scopedClusterID)"
                     ),
-                    displayName: "Speaker \(ordinals[canonical] ?? 1)",
+                    displayName: String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
                     diarizationClusterID: scopedClusterID,
                     trackKind: manifest.track(token.analysisEpochID.trackID)?.kind ?? .microphone,
                     isLocalUser: false,

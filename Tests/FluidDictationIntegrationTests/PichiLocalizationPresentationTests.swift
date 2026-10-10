@@ -129,6 +129,24 @@ final class PichiLocalizationPresentationTests: XCTestCase {
         XCTAssertEqual(callsAfterCompletion, 1)
     }
 
+    func testOnlyMissingSpeakerNamesAreLocalizedAndExistingNamesStayVerbatim() throws {
+        let session = self.session()
+        var segment = try XCTUnwrap(session.transcriptSegments.first)
+        let speakerID = try XCTUnwrap(segment.speakerID)
+        for name in ["Speaker 1", "Room Speaker 2", "Settings", "Участник 1"] {
+            for language in [PichiInterfaceLanguage.russian, .english] {
+                XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: segment, in: session, speakerNames: [speakerID: name], language: language), name)
+            }
+        }
+        for state in [MeetingTranscriptAttributionState.assigned, .unassigned, .overlappingSpeakers, .timingUncertain] {
+            segment.attributionState = state
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: segment, in: session, speakerNames: [:], language: .russian), "Неизвестный участник")
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: segment, in: session, speakerNames: [:], language: .english), "Unknown speaker")
+        }
+        XCTAssertEqual(session.speakers.first?.displayName, "Иван")
+        XCTAssertEqual(session.transcriptSegments.first?.text, "Решили оставить цену.")
+    }
+
     private actor InferenceGate {
         private var continuation: CheckedContinuation<Void, Never>?
         private var released = false
