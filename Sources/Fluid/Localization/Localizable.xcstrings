@@ -206,6 +206,24 @@
         }
       }
     },
+    "%@ and speaker model installed": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ and speaker model installed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель %@ и модель разделения голосов установлены"
+          }
+        }
+      }
+    },
     "%@ and your mic will be recorded.": {
       "extractionState": "manual",
       "localizations": {
@@ -287,6 +305,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Диктовок: %@"
+          }
+        }
+      }
+    },
+    "%@ installed · automatic speaker separation unavailable": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ installed · automatic speaker separation unavailable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель %@ установлена · автоматическое разделение голосов недоступно"
           }
         }
       }
@@ -17311,6 +17347,24 @@
         }
       }
     },
+    "Import %@ in Voice Engine before transcription": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import %@ in Voice Engine before transcription"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортируйте модель %@ в разделе распознавания речи перед расшифровкой"
+          }
+        }
+      }
+    },
     "Import & Activate": {
       "extractionState": "manual",
       "localizations": {
@@ -18891,6 +18945,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Субтитры пропустили часть звука и восстановили синхронизацию. Запись сохраняется."
+          }
+        }
+      }
+    },
+    "Live captions for this language on Intel require a compatible local model. Your recording is preserved.": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live captions for this language on Intel require a compatible local model. Your recording is preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для субтитров на этом языке на Intel нужна совместимая локальная модель. Запись сохранена."
           }
         }
       }
@@ -30382,6 +30454,24 @@
         }
       }
     },
+    "Select a compatible meeting model for Intel.": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a compatible meeting model for Intel."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите модель встреч, совместимую с Intel."
+          }
+        }
+      }
+    },
     "Select a file on the left to read, copy, or export its transcript.": {
       "extractionState": "manual",
       "localizations": {
@@ -34112,6 +34202,24 @@
         }
       }
     },
+    "The Nemotron diarization model is not installed at %@. Open FluidMeet settings to download the speaker model.": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments. Keep the literal FluidMeet marker for brand substitution before formatting; Nemotron is third-party model attribution.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The Nemotron diarization model is not installed at %@. Open FluidMeet settings to download the speaker model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель разделения голосов Nemotron не установлена в %@. Откройте настройки FluidMeet, чтобы загрузить модель голосов."
+          }
+        }
+      }
+    },
     "The active meeting could not be loaded.": {
       "extractionState": "manual",
       "localizations": {
@@ -34473,6 +34581,24 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "The selected model does not support live captions in this meeting language.": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected model does not support live captions in this meeting language."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранная модель не поддерживает субтитры на этом языке встречи."
+          }
+        }
+      }
     },
     "The small details count. Share what’s working—or what isn’t.": {
       "extractionState": "manual",
@@ -35221,6 +35347,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Стартовое слово, фразы и состояние действий форматирования, а также все правила пунктуации будут заменены настройками по умолчанию."
+          }
+        }
+      }
+    },
+    "This speech model does not support importing a model folder.": {
+      "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This speech model does not support importing a model folder."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель распознавания речи не поддерживает импорт из папки."
           }
         }
       }
