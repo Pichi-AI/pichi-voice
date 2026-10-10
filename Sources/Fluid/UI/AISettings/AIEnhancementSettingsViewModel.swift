@@ -279,7 +279,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         switch providerID {
-        case "": return "No Provider"
+        case "": return PichiLocalization.text("No Provider")
         case "openai": return "OpenAI"
         case "groq": return "Groq"
         default:
@@ -779,11 +779,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             : message
 
         let alert = NSAlert()
-        alert.messageText = "Keychain Access Required"
+        alert.messageText = PichiLocalization.text("Keychain Access Required")
         alert.informativeText = msg
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open Keychain Access")
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: PichiLocalization.text("Open Keychain Access"))
+        alert.addButton(withTitle: PichiLocalization.text("OK"))
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
@@ -1861,7 +1861,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func addAppPromptBinding(for mode: SettingsStore.PromptMode, appBundleID: String, appName: String) {
         let normalizedBundleID = self.normalizedBundleID(appBundleID)
         guard !normalizedBundleID.isEmpty else {
-            self.appPromptBindingErrorMessage = "The selected app is missing a valid bundle identifier."
+            self.appPromptBindingErrorMessage = PichiLocalization.text("The selected app is missing a valid bundle identifier.")
             return
         }
 
@@ -1899,9 +1899,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func addAppPromptBindingFromFilePicker(for mode: SettingsStore.PromptMode) {
         let panel = NSOpenPanel()
-        panel.title = "Choose Application"
-        panel.message = "Pick an app to add an app-specific prompt override."
-        panel.prompt = "Add App"
+        panel.title = PichiLocalization.text("Choose Application")
+        panel.message = PichiLocalization.text("Pick an app to add an app-specific prompt override.")
+        panel.prompt = PichiLocalization.text("Add App")
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -1912,7 +1912,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         guard panel.runModal() == .OK, let appURL = panel.url else { return }
 
         guard let target = self.bindingTarget(fromApplicationURL: appURL) else {
-            self.appPromptBindingErrorMessage = "Could not read that app. Please choose a valid .app bundle."
+            self.appPromptBindingErrorMessage = PichiLocalization.text("Could not read that app. Please choose a valid .app bundle.")
             return
         }
 

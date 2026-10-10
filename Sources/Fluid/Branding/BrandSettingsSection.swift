@@ -15,7 +15,7 @@ struct BrandSettingsSection: View {
                 Spacer()
                 Picker("Theme", selection: Binding(get: { self.settings.themePreference }, set: { self.settings.themePreference = $0 })) {
                     ForEach(SettingsStore.ThemePreference.allCases) { preference in
-                        Text(preference.displayName).tag(preference)
+                        Text(PichiLocalization.text(preference.displayName)).tag(preference)
                     }
                 }
                 .labelsHidden().pickerStyle(.segmented).frame(width: 240)
@@ -33,7 +33,7 @@ struct BrandSettingsSection: View {
             Text("Brand names, links and colors apply throughout the app. Restart to refresh window titles and menus. Installation identity and updates are configured when building the app.")
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if let errorMessage {
-                Text(errorMessage).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
+                Text(PichiLocalization.text(errorMessage)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
             }
         }
     }

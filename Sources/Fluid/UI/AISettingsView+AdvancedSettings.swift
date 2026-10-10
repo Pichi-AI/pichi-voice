@@ -43,7 +43,7 @@ private struct PromptAdvancedDisclosureStyle: DisclosureGroupStyle {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityValue(PichiLocalization.text(configuration.isExpanded ? "Expanded" : "Collapsed"))
             if configuration.isExpanded {
                 configuration.content
             }
@@ -91,7 +91,7 @@ extension AIEnhancementSettingsView {
 
             VStack(alignment: .leading, spacing: 8) {
                 self.promptProfilesHelpRow("Built-in is the normal prompt. Assign any prompt as Primary to use it with your main hotkey.")
-                self.promptProfilesHelpRow("\(PrivateAIProviderFeature.displayName) uses its own local prompt.")
+                self.promptProfilesHelpRow(PichiLocalization.format("%@ uses its own local prompt.", PrivateAIProviderFeature.displayName))
                 self.promptProfilesHelpRow("Custom prompts can be assigned globally, by app, or by shortcut.")
             }
         }
@@ -107,7 +107,7 @@ extension AIEnhancementSettingsView {
                 .frame(width: 4, height: 4)
                 .padding(.top, 6)
 
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(.caption))
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -161,7 +161,7 @@ extension AIEnhancementSettingsView {
 
                 HStack(spacing: 8) {
                     if let onManage, let manageTitle {
-                        Button(manageTitle, action: onManage)
+                        Button(PichiLocalization.text(manageTitle), action: onManage)
                             .fluidGlassAction()
                             .disabled(!isEnabled)
                     } else if let onManage {
@@ -294,9 +294,9 @@ extension AIEnhancementSettingsView {
             if !assignments.isReady {
                 self.promptConfigChip(
                     systemImage: "exclamationmark.triangle.fill",
-                    text: assignments.modelPicker?.providerName.isEmpty == false
+                    text: PichiLocalization.text(assignments.modelPicker?.providerName.isEmpty == false
                         ? "Needs setup"
-                        : "No valid provider configured",
+                        : "No valid provider configured"),
                     tone: .orange
                 )
             }
@@ -315,7 +315,7 @@ extension AIEnhancementSettingsView {
                 self.promptConfigChip(
                     systemImage: "cpu",
                     text: modelPicker.selectedModel.isEmpty
-                        ? (modelPicker.providerName.isEmpty ? "No model" : modelPicker.summary)
+                        ? (modelPicker.providerName.isEmpty ? PichiLocalization.text("No model") : modelPicker.summary)
                         : ModelDisplayName.forID(modelPicker.selectedModel),
                     tone: tone
                 )
@@ -331,7 +331,7 @@ extension AIEnhancementSettingsView {
             } else {
                 self.promptConfigChip(
                     systemImage: "keyboard",
-                    text: "No shortcut",
+                    text: PichiLocalization.text("No shortcut"),
                     tone: self.theme.palette.tertiaryText,
                     isGhost: true
                 )
@@ -374,7 +374,7 @@ extension AIEnhancementSettingsView {
         HStack(spacing: 5) {
             Image(systemName: "lock.fill")
                 .font(.fluidSystem(size: 10, weight: .semibold))
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(.caption2).weight(.medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -762,7 +762,7 @@ extension AIEnhancementSettingsView {
                         self.activeShortcutRecordingTarget = .dictationPrompt(configurationKey)
                     }
                 } label: {
-                    Text(isRecording ? "Cancel" : "Change")
+                    Text(PichiLocalization.text(isRecording ? "Cancel" : "Change"))
                         .font(.fluidSystem(size: 12, weight: .semibold))
                         .lineLimit(1)
                         .frame(width: 70, height: AISettingsLayout.controlHeight)
@@ -899,11 +899,11 @@ extension AIEnhancementSettingsView {
     ) -> some View {
         GridRow(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 13, weight: .semibold))
                     .foregroundStyle(self.theme.palette.primaryText)
                 if !description.isEmpty {
-                    Text(description)
+                    Text(PichiLocalization.text(description))
                         .font(.fluidSystem(size: 11))
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(2)
@@ -1065,7 +1065,7 @@ extension AIEnhancementSettingsView {
                             self.builtInStyleCard(
                                 title: SettingsStore.DictationModeLabels.smart,
                                 symbol: "sparkles",
-                                subtitle: "On-device · \(assignments.modelPicker.map { ModelDisplayName.forID($0.selectedModel) } ?? AppBrand.assistantName)",
+                                subtitle: PichiLocalization.format("On-device · %@", assignments.modelPicker.map { ModelDisplayName.forID($0.selectedModel) } ?? AppBrand.assistantName),
                                 detail: "Built-in style",
                                 assignments: assignments,
                                 isEnabled: true,
@@ -1076,7 +1076,7 @@ extension AIEnhancementSettingsView {
                         self.builtInStyleCard(
                             title: SettingsStore.DictationModeLabels.externalDefault,
                             symbol: "textformat",
-                            subtitle: assignments.isReady ? self.styleConfigurationSummary(assignments) : "External AI provider",
+                            subtitle: assignments.isReady ? self.styleConfigurationSummary(assignments) : PichiLocalization.text("External AI provider"),
                             detail: assignments.isReady ? "Customizable cleanup" : "Setup required",
                             assignments: assignments,
                             isEnabled: true,
@@ -1105,7 +1105,7 @@ extension AIEnhancementSettingsView {
                         ForEach(customProfiles) { profile in
                             let profileSelection = SettingsStore.DictationPromptSelection.profile(profile.id)
                             self.promptProfileCard(
-                                title: profile.name.isEmpty ? "Untitled Prompt" : profile.name,
+                                title: profile.name.isEmpty ? PichiLocalization.text("Untitled Prompt") : profile.name,
                                 subtitle: self.styleConfigurationSummary(self.promptAssignments(selection: profileSelection)),
                                 mode: profile.mode,
                                 assignments: profile.mode.normalized == .dictate
@@ -1145,7 +1145,7 @@ extension AIEnhancementSettingsView {
                             }
                             let ruleCount = self.viewModel.appBindings(for: mode).count
                             if ruleCount > 0 {
-                                Text("\(ruleCount) app \(ruleCount == 1 ? "rule" : "rules")")
+                                Text(PichiLocalization.format("App rules: %lld", ruleCount))
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.theme.palette.secondaryText)
                             }
@@ -1182,13 +1182,13 @@ extension AIEnhancementSettingsView {
                     .frame(width: 24, height: 24)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
+                    Text(PichiLocalization.text(title))
                         .font(.fluidSystem(size: 14, weight: .semibold))
                         .foregroundStyle(self.theme.palette.primaryText)
                     Text(subtitle)
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
-                    Text(detail)
+                    Text(PichiLocalization.text(detail))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(assignments.isReady ? self.theme.palette.secondaryText : self.theme.palette.warning)
                 }
@@ -1196,7 +1196,7 @@ extension AIEnhancementSettingsView {
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 6) {
-                Button(action.title, action: action.perform)
+                Button(PichiLocalization.text(action.title), action: action.perform)
                     .fluidGlassAction()
                     .fixedSize()
                     .disabled(!isEnabled)
@@ -1222,9 +1222,9 @@ extension AIEnhancementSettingsView {
 
     private func styleConfigurationSummary(_ assignments: PromptCardAssignments) -> String {
         guard let picker = assignments.modelPicker, !picker.providerName.isEmpty else {
-            return "External provider required"
+            return PichiLocalization.text("External provider required")
         }
-        guard assignments.isReady else { return "\(picker.providerName) · Setup required" }
+        guard assignments.isReady else { return PichiLocalization.format("%@ · Setup required", picker.providerName) }
         return "\(picker.providerName) · \(ModelDisplayName.forID(picker.selectedModel))"
     }
 
@@ -1280,7 +1280,7 @@ extension AIEnhancementSettingsView {
                 Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
                     .font(.fluidSystem(size: 17))
                     .foregroundStyle(isSelected ? tone : self.theme.palette.secondaryText)
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(isHovering ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
             }
@@ -1302,11 +1302,11 @@ extension AIEnhancementSettingsView {
                 .foregroundStyle(self.theme.palette.accent)
                 .frame(width: 18, height: 18)
 
-            Text(
+            Text(PichiLocalization.text(
                 mode.normalized == .dictate
                     ? "No default enhancement. Add app overrides to use prompts in selected apps."
                     : "Default edit stays built-in. App overrides can use custom prompts."
-            )
+            ))
             .font(.fluidSystem(.caption2))
             .foregroundStyle(self.theme.palette.secondaryText)
             .lineLimit(1)
@@ -1522,7 +1522,7 @@ extension AIEnhancementSettingsView {
                         if !modeProfiles.isEmpty {
                             Divider()
                             ForEach(modeProfiles) { profile in
-                                Button(profile.name.isEmpty ? "Untitled Prompt" : profile.name) {
+                                Button(profile.name.isEmpty ? PichiLocalization.text("Untitled Prompt") : profile.name) {
                                     self.viewModel.setPromptID(profile.id, for: binding)
                                 }
                             }
@@ -1755,9 +1755,9 @@ extension AIEnhancementSettingsView {
     private func friendlyModeName(_ mode: SettingsStore.PromptMode) -> String {
         switch mode.normalized {
         case .dictate:
-            return "Dictate"
+            return PichiLocalization.text("Dictate")
         case .edit, .write, .rewrite:
-            return "Edit Text"
+            return PichiLocalization.text("Edit Text")
         }
     }
 
@@ -1769,9 +1769,9 @@ extension AIEnhancementSettingsView {
                         VStack(alignment: .leading, spacing: 2) {
                             Text({
                                 switch mode {
-                                case let .defaultPrompt(promptMode): return "Default \(self.friendlyModeName(promptMode)) Prompt"
-                                case let .newPrompt(prefillMode): return "New \(self.friendlyModeName(prefillMode)) Prompt"
-                                case .edit: return "Edit Prompt"
+                                case let .defaultPrompt(promptMode): return PichiLocalization.format("Default %@ Prompt", self.friendlyModeName(promptMode))
+                                case let .newPrompt(prefillMode): return PichiLocalization.format("New %@ Prompt", self.friendlyModeName(prefillMode))
+                                case .edit: return PichiLocalization.text("Edit Prompt")
                                 case .privateAI: return PrivateAIProviderFeature.displayName
                                 }
                             }())

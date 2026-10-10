@@ -32,8 +32,8 @@ struct AddProviderSheet<Logo: View>: View {
                             .frame(width: 48, height: 48)
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(self.isEditing ? self.draft.name : "Add a provider").font(self.theme.typography.title)
-                        Text(self.isEditing ? "Add connection details to get started." : AppBrand.text("Your preferred models. Connected to FluidVoice."))
+                        Text(self.isEditing ? self.draft.name : PichiLocalization.text("Add a provider")).font(self.theme.typography.title)
+                        Text(self.isEditing ? PichiLocalization.text("Add connection details to get started.") : AppBrand.text("Your preferred models. Connected to FluidVoice."))
                             .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
                     }
                     Spacer()
@@ -62,7 +62,7 @@ struct AddProviderSheet<Logo: View>: View {
                                             self.logo(provider.id, provider.name).accessibilityHidden(true)
                                             VStack(alignment: .leading, spacing: 5) {
                                                 Text(provider.name).font(self.theme.typography.bodyStrong)
-                                                Text(["ollama", "lmstudio"].contains(provider.id) ? "Local connection" : "Connect with an API key")
+                                                Text(PichiLocalization.text(["ollama", "lmstudio"].contains(provider.id) ? "Local connection" : "Connect with an API key"))
                                                     .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                                             }
                                             Spacer()
@@ -121,7 +121,7 @@ struct AddProviderSheet<Logo: View>: View {
                             SecureField("Enter API key", text: self.$draft.apiKey)
                         }
                         if let website = ModelRepository.shared.providerWebsiteURL(for: self.draft.providerID), let url = URL(string: website.url) {
-                            Link(destination: url) { Label(website.label, systemImage: "arrow.up.right").font(self.theme.typography.caption) }
+                            Link(destination: url) { Label(PichiLocalization.text(website.label), systemImage: "arrow.up.right").font(self.theme.typography.caption) }
                         }
                     }
                     self.modelSection
@@ -183,12 +183,12 @@ struct AddProviderSheet<Logo: View>: View {
             if self.showingManualModel {
                 self.field("Model ID") { TextField("Enter a model ID", text: self.$draft.model) }
             }
-            Text(self.draft.requiresAPIKey && self.draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            Text(PichiLocalization.text(self.draft.requiresAPIKey && self.draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "Enter your API key, then load models with the reload button."
-                : "Load models with the reload button, or use + to enter a model ID.")
+                : "Load models with the reload button, or use + to enter a model ID."))
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if let error = self.modelFetchError {
-                Text(error).font(self.theme.typography.caption).foregroundStyle(.red)
+                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(.red)
                     .textSelection(.enabled)
             }
         }
@@ -233,7 +233,7 @@ struct AddProviderSheet<Logo: View>: View {
 
     private func field<Control: View>(_ title: String, @ViewBuilder control: () -> Control) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(self.theme.typography.bodyStrong)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong)
             control().textFieldStyle(.roundedBorder).controlSize(.large).accessibilityLabel(title)
         }
     }

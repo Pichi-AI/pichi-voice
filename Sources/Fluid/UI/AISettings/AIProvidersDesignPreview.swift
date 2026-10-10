@@ -213,7 +213,7 @@ private struct AIProvidersPresentation: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Show \(model.rawValue)")
-                    .accessibilityValue(self.preview == model ? "Current page" : "")
+                    .accessibilityValue(PichiLocalization.text(self.preview == model ? "Current page" : ""))
                 }
             }
         }
@@ -250,7 +250,7 @@ private struct AIProvidersPresentation: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(forward ? "Next model" : "Previous model")
+        .accessibilityLabel(PichiLocalization.text(forward ? "Next model" : "Previous model"))
     }
 
     private func modelCard(_ model: Model, compactSide: Bool) -> some View {
@@ -268,14 +268,14 @@ private struct AIProvidersPresentation: View {
                 Text(model.rawValue)
                     .font(compactSide ? self.theme.typography.sectionTitle : self.theme.typography.title)
                 if !compactSide {
-                    Text(model.detail)
+                    Text(PichiLocalization.text(model.detail))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.supportingText)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(minHeight: 36, alignment: .topLeading)
                     HStack(spacing: self.spacing.sm) {
                         ForEach(isPreview ? model.tags : Array(model.tags.prefix(1)), id: \.self) { tag in
-                            Text(tag)
+                            Text(PichiLocalization.text(tag))
                                 .font(self.theme.typography.badge)
                                 .padding(.horizontal, self.spacing.sm)
                                 .padding(.vertical, self.spacing.xs)
@@ -346,7 +346,7 @@ private struct AIProvidersPresentation: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: self.spacing.xs) {
                 Text(name).font(self.theme.typography.bodySmallStrong)
-                Text(subtitle).font(self.theme.typography.caption).foregroundStyle(self.supportingText)
+                Text(PichiLocalization.text(subtitle)).font(self.theme.typography.caption).foregroundStyle(self.supportingText)
             }
             Spacer()
             Button("Manage") { self.panel = .external }
@@ -360,7 +360,7 @@ private struct AIProvidersPresentation: View {
     private func inspector(_ panel: AIProvidersPreviewPanel) -> some View {
         VStack(alignment: .leading, spacing: self.spacing.xl) {
             HStack {
-                Text(panel == .add ? "Add Provider" : panel == .compare ? "Compare models" : "Manage")
+                Text(PichiLocalization.text(panel == .add ? "Add Provider" : panel == .compare ? "Compare models" : "Manage"))
                     .font(self.theme.typography.sectionTitle)
                 Spacer()
                 Button { self.panel = nil } label: { Image(systemName: "xmark") }
@@ -380,13 +380,13 @@ private struct AIProvidersPresentation: View {
                 ForEach(Model.allCases) { model in
                     VStack(alignment: .leading, spacing: self.spacing.sm) {
                         Text(model.rawValue).font(self.theme.typography.sectionTitle)
-                        Text(model.detail).font(self.theme.typography.bodySmall)
+                        Text(PichiLocalization.text(model.detail)).font(self.theme.typography.bodySmall)
                     }
                 }
             } else {
-                Text(panel == .manage ? AppBrand.text("Fluid Intelligence") : "Provider settings")
+                Text(panel == .manage ? AppBrand.text("Fluid Intelligence") : PichiLocalization.text("Provider settings"))
                     .font(self.theme.typography.title)
-                Text(panel == .manage ? "\(self.selected.rawValue) · On-device" : "Connection · Models · Preferences")
+                Text(panel == .manage ? PichiLocalization.format("%@ · On-device", self.selected.rawValue) : PichiLocalization.text("Connection · Models · Preferences"))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.supportingText)
                 Divider()
@@ -394,7 +394,7 @@ private struct AIProvidersPresentation: View {
                     panel == .manage ? ["Model downloads", "Backend & context", "Startup preferences", "Storage & maintenance"] : ["Connection details", "Model selection", "Verification"],
                     id: \.self
                 ) { label in
-                    Text(label).font(self.theme.typography.body)
+                    Text(PichiLocalization.text(label)).font(self.theme.typography.body)
                 }
             }
             Spacer()

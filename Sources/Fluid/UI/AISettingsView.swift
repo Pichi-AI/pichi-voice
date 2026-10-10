@@ -76,7 +76,7 @@ enum SpeechProviderFilter: String, CaseIterable, Identifiable {
     case openai = "OpenAI"
 
     var id: String { self.rawValue }
-    var displayName: String { self == .nvidia ? AppBrand.text("FluidVoice / NVIDIA") : self.rawValue }
+    var displayName: String { self == .nvidia ? AppBrand.text("FluidVoice / NVIDIA") : PichiLocalization.text(self.rawValue) }
 }
 
 enum AISettingsLayout {

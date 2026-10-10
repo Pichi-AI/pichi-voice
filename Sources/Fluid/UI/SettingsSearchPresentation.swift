@@ -146,7 +146,7 @@ private struct SettingsSearchTargetModifier: ViewModifier {
                 self.accessibilityReduceMotion ? nil : .easeOut(duration: 0.16),
                 value: self.isMatched
             )
-            .accessibilityHint(self.isMatched ? "Matches Settings search" : "")
+            .accessibilityHint(PichiLocalization.text(self.isMatched ? "Matches Settings search" : ""))
     }
 }
 
