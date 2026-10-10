@@ -4,6 +4,27 @@ import XCTest
 
 @MainActor
 final class SettingsBackupRoundTripTests: XCTestCase {
+    func testDetailedAnalyticsDefaultsOffWithoutWritingConsent() throws {
+        let suite = "AnalyticsConsentTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertNil(defaults.object(forKey: "ShareAnonymousAnalytics"))
+        XCTAssertFalse(SettingsStore.detailedAnalyticsEnabled(in: defaults))
+        XCTAssertNil(defaults.object(forKey: "ShareAnonymousAnalytics"))
+    }
+
+    func testDetailedAnalyticsPreservesExplicitLegacyChoicesAcrossReload() throws {
+        let suite = "AnalyticsConsentTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for consent in [true, false] {
+            defaults.set(consent, forKey: "ShareAnonymousAnalytics")
+            let reloaded = try XCTUnwrap(UserDefaults(suiteName: suite))
+            XCTAssertEqual(SettingsStore.detailedAnalyticsEnabled(in: reloaded), consent)
+            XCTAssertEqual(reloaded.object(forKey: "ShareAnonymousAnalytics") as? Bool, consent)
+        }
+    }
+
     func testModernBackupExportsAndRestoresMeetingIdleAndPromptConfiguration() throws {
         try self.withSavedDefaults {
             let settings = SettingsStore.shared

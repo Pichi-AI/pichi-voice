@@ -60,7 +60,7 @@ struct SettingsView: View {
     @State private var cachedDefaultInputUID: String = ""
     @State private var cachedDefaultOutputName: String = ""
 
-    // Detailed analytics consent UI state (default ON; daily activity remains enabled)
+    // Detailed analytics defaults off; the basic daily activity policy is separate.
     @State private var shareDetailedAnalytics: Bool = AnalyticsConfig.fromBundle().isConfigured && SettingsStore.shared.shareDetailedAnalytics
     @State private var showAnalyticsPrivacy: Bool = false
     @State private var pendingDetailedAnalyticsValue: Bool? = nil

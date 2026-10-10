@@ -1516,18 +1516,20 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Detailed anonymous analytics toggle (default: ON). The daily activity signal is always enabled.
-    /// Uses default-true semantics so existing installs upgrading to analytics do not default to OFF.
+    /// Detailed analytics requires an explicit preference. Existing saved choices
+    /// keep their legacy key; the basic daily activity policy remains separate.
     var shareDetailedAnalytics: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.shareAnonymousAnalytics)
-            if value == nil { return true }
-            return self.defaults.bool(forKey: Keys.shareAnonymousAnalytics)
-        }
+        get { Self.detailedAnalyticsEnabled(in: self.defaults) }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.shareAnonymousAnalytics)
         }
+    }
+
+    /// Allows preference tests to use an isolated suite without initializing the
+    /// settings singleton, its Keychain migrations or login-item operations.
+    static func detailedAnalyticsEnabled(in defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: Keys.shareAnonymousAnalytics)
     }
 
     var privateAIInterestCaptured: Bool {
