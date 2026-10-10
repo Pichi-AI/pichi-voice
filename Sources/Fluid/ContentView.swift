@@ -1481,7 +1481,7 @@ struct ContentView: View {
                 self.sidebarNavigationLink(.history, systemImage: "clock.arrow.circlepath")
                 self.sidebarNavigationLink(.stats, systemImage: "chart.bar.fill")
             } header: {
-                self.sidebarSectionHeader("Activity")
+                self.sidebarSectionHeader(PichiLocalization.text("Activity"))
             }
 
             Section {
@@ -1490,7 +1490,7 @@ struct ContentView: View {
                 self.sidebarNavigationLink(.cleanupStyles, systemImage: "wand.and.stars")
                 self.sidebarNavigationLink(.customDictionary, systemImage: "text.book.closed.fill")
             } header: {
-                self.sidebarSectionHeader("Configure")
+                self.sidebarSectionHeader(PichiLocalization.text("navigation.configure.section", defaultValue: "Configure"))
             }
 
             Section {
@@ -1501,14 +1501,14 @@ struct ContentView: View {
                     systemImage: "person.2.fill"
                 )
             } header: {
-                self.sidebarSectionHeader("Use")
+                self.sidebarSectionHeader(PichiLocalization.text("Use"))
             }
 
             Section {
                 self.sidebarNavigationLink(.changelog, systemImage: "doc.text.magnifyingglass")
                 self.sidebarNavigationLink(.feedback, systemImage: "envelope.fill")
             } header: {
-                self.sidebarSectionHeader("Help")
+                self.sidebarSectionHeader(PichiLocalization.text("Help"))
             }
         }
         .listStyle(.sidebar)
@@ -1775,7 +1775,7 @@ struct ContentView: View {
     }
 
     private func sidebarSectionHeader(_ title: String) -> some View {
-        Text(PichiLocalization.text(title))
+        Text(title)
             .font(self.theme.typography.sidebarSection)
             .foregroundStyle(.secondary)
             .textCase(nil)

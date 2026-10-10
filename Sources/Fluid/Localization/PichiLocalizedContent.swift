@@ -11,5 +11,6 @@ struct PichiLocalizedContent<Content: View>: View {
 
     var body: some View {
         self.content.environment(\.locale, PichiLocalization.locale)
+            .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
     }
 }

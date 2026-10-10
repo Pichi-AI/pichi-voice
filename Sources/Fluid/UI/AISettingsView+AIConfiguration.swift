@@ -1554,7 +1554,7 @@ extension AIEnhancementSettingsView {
                                 self.viewModel.startEditingProvider()
                             }
                         }) {
-                            Text("Edit")
+                            Text(PichiLocalization.text("action.edit", defaultValue: "Edit"))
                                 .font(.fluidSystem(size: 12, weight: .semibold))
                                 .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         }
@@ -1594,7 +1594,7 @@ extension AIEnhancementSettingsView {
                                 self.viewModel.setEditingAPIKey(true, for: item.id)
                             }
                         }) {
-                            Text("Edit")
+                            Text(PichiLocalization.text("action.edit", defaultValue: "Edit"))
                                 .font(.fluidSystem(size: 12, weight: .semibold))
                                 .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         }

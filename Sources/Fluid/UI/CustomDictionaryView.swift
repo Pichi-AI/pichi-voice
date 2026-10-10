@@ -1722,7 +1722,7 @@ struct CustomDictionaryView: View {
 
             Spacer(minLength: self.theme.metrics.spacing.md)
 
-            Button("Edit") {
+            Button(PichiLocalization.text("action.edit", defaultValue: "Edit")) {
                 self.startEditingFormattingAction(action)
             }
             .fluidButton(.compact, size: .compact)
@@ -2881,7 +2881,7 @@ private struct VoiceMatchingSettingsRow: View {
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: systemImage)
-                Text(PichiLocalization.text(title))
+                Text(enabledValue ? PichiLocalization.text("dictionary.matching.advanced", defaultValue: title) : PichiLocalization.text(title))
                 if isResearchPreview {
                     Text("Research Preview")
                         .font(self.theme.typography.captionSmall)

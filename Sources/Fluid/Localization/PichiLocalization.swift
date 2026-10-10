@@ -20,11 +20,11 @@ nonisolated struct PichiInterfaceLanguage: RawRepresentable, Hashable, CaseItera
 
     var id: String { self.rawValue }
     var locale: Locale { Locale(identifier: self.rawValue) }
+    // Apple's language metadata supplies direction for every catalog language.
+    var usesRightToLeftLayout: Bool { self.locale.language.characterDirection == .rightToLeft }
     // Native names remain recognisable from any interface language.
     var displayName: String {
-        if self == .russian { return "Русский" }
-        if self == .english { return "English" }
-        return self.locale.localizedString(forIdentifier: self.rawValue) ?? self.rawValue
+        self.locale.localizedString(forIdentifier: self.rawValue)?.capitalized(with: self.locale) ?? self.rawValue
     }
 
     static var allCases: [Self] { self.availableLanguages(in: .main) }
@@ -78,18 +78,23 @@ nonisolated enum PichiLocalization {
         self.text(source, language: self.language, bundle: .main)
     }
 
+    /// Semantic keys distinguish contexts while retaining English fallback copy.
+    static func text(_ key: String, defaultValue: String) -> String {
+        self.text(key, language: self.language, bundle: .main, defaultValue: defaultValue)
+    }
+
     static func text(_ source: String, locale: Locale) -> String {
         self.text(source, language: PichiInterfaceLanguage(rawValue: locale.identifier) ?? .russian, bundle: .main)
     }
 
-    static func text(_ source: String, language: PichiInterfaceLanguage, bundle: Bundle) -> String {
+    static func text(_ source: String, language: PichiInterfaceLanguage, bundle: Bundle, defaultValue: String? = nil) -> String {
         let available = bundle.localizations.filter { $0 != "Base" }
         guard let identifier = Bundle.preferredLocalizations(from: available, forPreferences: [language.rawValue, "en"]).first,
               let resolved = PichiInterfaceLanguage(rawValue: identifier),
               resolved.languageCode == language.languageCode || resolved == .english,
               let path = bundle.path(forResource: identifier, ofType: "lproj"),
-              let localizedBundle = Bundle(path: path) else { return source }
-        return localizedBundle.localizedString(forKey: source, value: source, table: "Localizable")
+              let localizedBundle = Bundle(path: path) else { return defaultValue ?? source }
+        return localizedBundle.localizedString(forKey: source, value: defaultValue ?? source, table: "Localizable")
     }
 
     static func format(_ source: String, _ arguments: CVarArg...) -> String {

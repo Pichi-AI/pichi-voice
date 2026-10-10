@@ -80,6 +80,51 @@ final class PichiLocalizationTests: XCTestCase {
         }
     }
 
+    func testSemanticKeysRetainEnglishFallbackAndSeparateTranslationContexts() throws {
+        try self.withLocalizedBundle { bundle in
+            XCTAssertEqual(PichiLocalization.text("action.edit", language: .russian, bundle: bundle, defaultValue: "Edit"), "Изменить")
+            XCTAssertEqual(PichiLocalization.text("Edit", language: .russian, bundle: bundle), "Редактирование")
+            XCTAssertEqual(PichiLocalization.text("action.edit", language: .english, bundle: bundle, defaultValue: "Edit"), "Edit")
+            let french = try XCTUnwrap(PichiInterfaceLanguage(rawValue: "fr"))
+            XCTAssertEqual(PichiLocalization.text("action.edit", language: french, bundle: bundle, defaultValue: "Edit"), "Edit")
+            XCTAssertEqual(PichiLocalization.text("future.context", language: .russian, bundle: bundle, defaultValue: "Future copy"), "Future copy")
+        }
+    }
+
+    func testDirectionComesFromAppleLanguageMetadataForAnyCatalogLanguage() throws {
+        for identifier in ["en", "ru", "fr-CA", "ja", "zh-Hant"] {
+            XCTAssertFalse(try XCTUnwrap(PichiInterfaceLanguage(rawValue: identifier)).usesRightToLeftLayout)
+        }
+        for identifier in ["ar", "ar-SA", "he", "fa-IR", "ur"] {
+            XCTAssertTrue(try XCTUnwrap(PichiInterfaceLanguage(rawValue: identifier)).usesRightToLeftLayout)
+        }
+        XCTAssertEqual(PichiInterfaceLanguage.russian.displayName, "Русский")
+        XCTAssertEqual(PichiInterfaceLanguage.english.displayName, "English")
+    }
+
+    func testCompiledAppleCatalogChoosesRussianAndEnglishPluralForms() {
+        let russian = [0: "0 слов", 1: "1 слово", 2: "2 слова", 5: "5 слов", 11: "11 слов",
+                       21: "21 слово", 22: "22 слова", 25: "25 слов", 101: "101 слово", 111: "111 слов"]
+        for (count, expected) in russian {
+            XCTAssertEqual(PichiLocalization.format("%lld words", language: .russian, bundle: .main, arguments: [count]), expected)
+        }
+        XCTAssertEqual(PichiLocalization.format("%lld words", language: .english, bundle: .main, arguments: [1]), "1 word")
+        XCTAssertEqual(PichiLocalization.format("%lld words", language: .english, bundle: .main, arguments: [2]), "2 words")
+        XCTAssertEqual(PichiLocalization.format("%lld entries", language: .russian, bundle: .main, arguments: [22]), "22 записи")
+        XCTAssertEqual(PichiLocalization.format("%lld percent", language: .russian, bundle: .main, arguments: [21]), "21 процент")
+    }
+
+    @MainActor
+    func testPromptIconUsesSelectionIdentityInsteadOfTranslatedOrCustomLabel() {
+        XCTAssertEqual(DictationPromptSelectorPresentation.iconName(for: .off, isAppOverrideActive: false), "bolt.fill")
+        XCTAssertEqual(DictationPromptSelectorPresentation.iconName(for: .privateAI, isAppOverrideActive: false), "sparkles")
+        XCTAssertNil(DictationPromptSelectorPresentation.iconName(for: .privateAI, isAppOverrideActive: true))
+        XCTAssertNil(DictationPromptSelectorPresentation.iconName(for: .default, isAppOverrideActive: false))
+        // A user's profile named Basic or its Russian translation is not the built-in off selection.
+        XCTAssertNil(DictationPromptSelectorPresentation.iconName(for: .profile("Basic"), isAppOverrideActive: false))
+        XCTAssertNil(DictationPromptSelectorPresentation.iconName(for: .profile("Базовый"), isAppOverrideActive: false))
+    }
+
     private func withLocalizedBundle(_ body: (Bundle) throws -> Void) throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("PichiLocalization-\(UUID().uuidString).bundle")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -95,6 +140,8 @@ final class PichiLocalizationTests: XCTestCase {
         try info.write(to: directory.appendingPathComponent("Info.plist"))
         let strings = [
             "Settings": "Настройки",
+            "Edit": "Редактирование",
+            "action.edit": "Изменить",
             "Welcome to FluidVoice": "Добро пожаловать в FluidVoice",
             "Progress: %lld%% for %@": "Готово: %lld%% для %@",
         ]

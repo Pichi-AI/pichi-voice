@@ -258,6 +258,7 @@ builds/
 !/scripts/dev/
 /scripts/dev/*
 !/scripts/dev/*.sh
+!/scripts/dev/check-localization.py
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/

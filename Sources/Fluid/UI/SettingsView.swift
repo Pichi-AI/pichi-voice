@@ -1482,7 +1482,7 @@ struct SettingsView: View {
                             .settingsSearchTarget(.overlaySensitivity)
 
                             HStack(spacing: 10) {
-                                Text("More")
+                                Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
                                     .frame(width: 36, alignment: .trailing)
@@ -1537,7 +1537,7 @@ struct SettingsView: View {
                                     )
                                     .controlSize(.regular)
 
-                                    Text("More")
+                                    Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
                                         .frame(width: 36, alignment: .leading)
@@ -2638,7 +2638,7 @@ private extension SettingsView {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Priority \(rank), \(entry.name)")
-        .accessibilityValue(isActive ? "Active" : (isAvailable ? "Available" : "Unavailable"))
+        .accessibilityValue(isActive ? PichiLocalization.text("microphone.active", defaultValue: "Active") : PichiLocalization.text(isAvailable ? "Available" : "Unavailable"))
         .accessibilityAction(named: "Move up") {
             guard self.isMicrophonePriorityEditingDisabled == false, rank > 1 else { return }
             self.settings.moveMicrophonePriority(uid: entry.uid, by: -1)

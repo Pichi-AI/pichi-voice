@@ -110,7 +110,7 @@ struct StatsActivityView: View {
                             .frame(width: 10, height: 10)
                             .accessibilityHidden(true)
                     }
-                    Text("More").font(self.theme.typography.captionSmall)
+                    Text(PichiLocalization.text("scale.more", defaultValue: "More")).font(self.theme.typography.captionSmall)
                 }
                 .foregroundStyle(.secondary)
                 if period.totalWords == 0 {

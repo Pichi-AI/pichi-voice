@@ -128,7 +128,10 @@ struct CommandSessionSidebar: View {
     }
 
     private func scopeTitle(_ scope: SessionScope) -> String {
-        "\(PichiLocalization.text(scope.rawValue)) (\(self.rows.filter { $0.isArchived == scope.isArchived }.count))"
+        let title = scope == .active
+            ? PichiLocalization.text("sessions.scope.active", defaultValue: "Active")
+            : PichiLocalization.text(scope.rawValue)
+        return "\(title) (\(self.rows.filter { $0.isArchived == scope.isArchived }.count))"
     }
 
     private var newSessionButton: some View {

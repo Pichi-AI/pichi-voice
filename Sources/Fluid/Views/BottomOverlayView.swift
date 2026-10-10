@@ -2722,14 +2722,11 @@ struct BottomOverlayView: View {
     }
 
     private var promptSelectorIconName: String? {
-        switch self.promptSelectorBuiltInLabel {
-        case "Basic"?:
-            return "bolt.fill"
-        case SettingsStore.DictationModeLabels.smart?:
-            return "sparkles"
-        default:
-            return nil
-        }
+        guard self.activePromptMode?.normalized == .dictate else { return nil }
+        return DictationPromptSelectorPresentation.iconName(
+            for: self.settings.resolvedDictationPromptSelection(for: self.activeDictationShortcutSlot, appBundleID: self.promptResolutionBundleID),
+            isAppOverrideActive: self.isAppPromptOverrideActive
+        )
     }
 
     private var promptSelectorFontSize: CGFloat {
@@ -3889,5 +3886,16 @@ private extension AnyTransition {
             active: PillChipTransitionModifier(progress: 0),
             identity: PillChipTransitionModifier(progress: 1)
         )
+    }
+}
+
+/// Presentation is based on stable selection identity, never a localized or user-written label.
+enum DictationPromptSelectorPresentation {
+    static func iconName(for selection: SettingsStore.DictationPromptSelection, isAppOverrideActive: Bool) -> String? {
+        switch selection {
+        case .off: return "bolt.fill"
+        case .privateAI: return isAppOverrideActive ? nil : "sparkles"
+        case .default, .profile: return nil
+        }
     }
 }

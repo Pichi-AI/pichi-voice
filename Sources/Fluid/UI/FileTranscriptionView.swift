@@ -256,7 +256,7 @@ struct FileTranscriptionView: View {
                                 self.selectedFileURL = nil
                                 self.transcriptionService.reset()
                             }) {
-                                Label("Remove", systemImage: "xmark")
+                                Label("Remove file", systemImage: "xmark")
                             }
                             .fluidGlassAction()
                             .disabled(self.transcriptionService.isTranscribing)

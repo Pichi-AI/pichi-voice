@@ -1075,7 +1075,7 @@ private struct MeetingTranscriptSegmentRow: View {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     self.speakerLabel
                     Spacer(minLength: self.theme.metrics.spacing.md)
-                    Button("Edit", systemImage: "pencil", action: self.onEditText)
+                    Button(PichiLocalization.text("action.edit", defaultValue: "Edit"), systemImage: "pencil", action: self.onEditText)
                         .fluidGlassAction()
                         .disabled(!self.isQuiescent)
                         .help("Edit text, or double-click this paragraph")

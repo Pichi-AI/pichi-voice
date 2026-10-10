@@ -207,7 +207,7 @@ struct OverlayAppearanceEditor: View {
                 Image(systemName: symbol)
                     .font(.fluidSystem(size: 12, weight: .semibold))
                     .foregroundStyle(selected ? (value == 1 ? Color.orange : Color.indigo) : self.theme.palette.secondaryText)
-                Text(PichiLocalization.text(title))
+                Text(PichiLocalization.text(value == 1 ? "backdrop.light" : "backdrop.dark", defaultValue: title))
                     .font(.fluidSystem(size: 12, weight: .semibold))
             }
             .foregroundStyle(selected ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
@@ -223,7 +223,7 @@ struct OverlayAppearanceEditor: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(PichiLocalization.format("%@ sample backdrop", PichiLocalization.text(title)))
+        .accessibilityLabel(PichiLocalization.format("%@ sample backdrop", PichiLocalization.text(value == 1 ? "backdrop.light" : "backdrop.dark", defaultValue: title)))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
