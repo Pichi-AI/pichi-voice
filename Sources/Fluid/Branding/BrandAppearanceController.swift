@@ -13,6 +13,11 @@ enum BrandAppearanceController {
         NotificationCenter.default.post(name: AppBrand.appearanceChanged, object: nil)
     }
 
+    /// Override only the visual identity; AppKit retains bundle version and legal credits.
+    static func aboutPanelOptions(appName: String, icon: NSImage) -> [NSApplication.AboutPanelOptionKey: Any] {
+        [.applicationName: appName, .applicationIcon: icon]
+    }
+
     static func refreshApplicationMenu(_ mainMenu: NSMenu?, appName: String, language: PichiInterfaceLanguage, bundle: Bundle = .main) {
         guard let applicationItem = mainMenu?.items.first, let applicationMenu = applicationItem.submenu else { return }
         applicationItem.title = appName

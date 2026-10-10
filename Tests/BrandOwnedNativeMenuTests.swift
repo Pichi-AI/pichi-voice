@@ -46,6 +46,11 @@ struct BrandOwnedNativeMenuTests {
         for name in ["File", "Settings", "%@", "%lld", "100%@ Voice", "Сбер Голос"] {
             BrandAppearanceController.refreshApplicationMenu(main, appName: name, language: .english)
             precondition(applicationItem.title == name && application.title == name)
+            let icon = NSImage(size: NSSize(width: 16, height: 16))
+            let options = BrandAppearanceController.aboutPanelOptions(appName: name, icon: icon)
+            precondition(options[.applicationName] as? String == name)
+            precondition(options[.applicationIcon] as? NSImage === icon)
+            precondition(Set(options.keys) == [.applicationName, .applicationIcon], "About options must not override bundle version or legal credits")
             precondition(about.title == "About " + name && hide.title == "Hide " + name && quit.title == "Quit " + name)
             precondition(hideOthers.title == "Hide Others" && settings.title == "Settings")
             precondition(fileItem.title == "File" && file.title == "File")
