@@ -203,7 +203,7 @@ struct PichiMeetingSummaryView: View {
                     get: { self.preferences.localReasoningSelection(settings: self.settings) },
                     set: { self.preferences.setLocalReasoningSelection($0, settings: self.settings) }
                 )) {
-                    Text("Model default").tag("default")
+                    Text("Application default").tag("default")
                     Text("Enabled").tag("enabled")
                     Text("Disabled").tag("disabled")
                     if self.preferences.localReasoningSelection(settings: self.settings) == "configured" {

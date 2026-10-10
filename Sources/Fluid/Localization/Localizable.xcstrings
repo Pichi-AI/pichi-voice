@@ -45766,6 +45766,23 @@
           }
         }
       }
+    },
+    "Application default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application default"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию для приложения"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
