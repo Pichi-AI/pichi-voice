@@ -2597,6 +2597,7 @@ private struct OnboardingMicrophoneSetupPanel: View {
                     .fluidDropdownStyle()
                     .frame(width: 248)
                     .tint(.white)
+                    .accessibilityLabel(Text("Input microphone"))
                     .accessibilityHint(AppBrand.text("Moves the selected microphone to first in FluidVoice priority"))
                 }
             }
