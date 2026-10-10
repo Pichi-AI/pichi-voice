@@ -376,7 +376,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                 } catch { result = .failure(error) }
                 // Release is joined on every path and performed exactly once. A
                 // provider cleanup failure prevents publishing a successful document.
-                try await snapshot.release()
+                do { try await snapshot.release() }
+                catch { throw PichiMeetingSummaryCleanupError(underlying: error) }
                 try Task.checkCancellation()
                 return PichiMeetingSummaryGeneration(document: try result.get(), configuration: snapshot.configuration)
             }
@@ -384,8 +385,22 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                 try await ContinuousClock().sleep(until: deadline)
                 throw PichiMeetingSummaryError.timeLimit
             }
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else { throw CancellationError() }
+            let first: Result<PichiMeetingSummaryGeneration, Error>
+            do {
+                guard let result = try await group.next() else { throw CancellationError() }
+                first = .success(result)
+            } catch { first = .failure(error) }
+            group.cancelAll()
+            // The cancelled deadline can finish before inference releases its
+            // resources. Drain all children and preserve a later cleanup failure.
+            var cleanupFailure: PichiMeetingSummaryCleanupError?
+            while !group.isEmpty {
+                do { _ = try await group.next() }
+                catch let error as PichiMeetingSummaryCleanupError { cleanupFailure = error }
+                catch { /* Preserve the first inference, timeout or cancellation outcome. */ }
+            }
+            if let cleanupFailure { throw cleanupFailure }
+            let result = try first.get()
             try Task.checkCancellation()
             guard ContinuousClock.now < deadline else { throw PichiMeetingSummaryError.timeLimit }
             return result
@@ -723,4 +738,16 @@ nonisolated struct PichiMeetingSummaryModelSnapshot: Sendable {
 nonisolated struct PichiMeetingSummaryGeneration: Sendable {
     let document: PichiMeetingSummaryDocument
     let configuration: PichiMeetingSummaryConfiguration
+}
+
+// Resource release failures remain actionable even after the user cancels.
+// Preserve the provider's existing localized diagnosis.
+nonisolated struct PichiMeetingSummaryCleanupError: LocalizedError {
+    let underlying: any Error
+
+    init(underlying: any Error) {
+        self.underlying = (underlying as? Self)?.underlying ?? underlying
+    }
+
+    var errorDescription: String? { self.underlying.localizedDescription }
 }

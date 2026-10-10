@@ -308,6 +308,8 @@ final class PichiMeetingSummaryController: ObservableObject {
                 try await Task.detached(priority: .utility) {
                     try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"), options: .atomic)
                 }.value
+            } catch let error as PichiMeetingSummaryCleanupError {
+                if self.generationID == generationID { self.failure = .underlying(error) }
             } catch is CancellationError {
                 self.failure = nil
             } catch {

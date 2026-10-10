@@ -86,8 +86,9 @@ nonisolated enum PichiMeetingSummaryTransport {
             // never issue a global runner unload on this shared local server.
             guard let http = response as? HTTPURLResponse, [200, 404].contains(http.statusCode) else { throw LLMError.invalidResponse }
         }
-        // Detached only for non-cancellable acknowledgement; this task is always
-        // awaited before cleanup. No operation outlives the enclosing attempt.
+        // Detached only for non-cancellable acknowledgement; the client task is
+        // always joined before cleanup. A server may finish a timed-out copy after
+        // DELETE returned 404; bounded client cleanup cannot guarantee its absence.
         let copy = Task.detached {
             let request = try self.managementRequest(configuration.baseURL, apiKey: configuration.apiKey,
                                                       path: "/api/copy", method: "POST",
@@ -279,9 +280,11 @@ private actor PichiMeetingSummarySnapshotRelease {
     init(operation: @escaping @Sendable () async throws -> Void) { self.operation = operation }
 
     func run() async throws {
-        if let task { return try await task.value }
-        let task = Task.detached { try await self.operation() }
-        self.task = task
-        try await task.value
+        do {
+            if let task { return try await task.value }
+            let task = Task.detached { try await self.operation() }
+            self.task = task
+            try await task.value
+        } catch { throw PichiMeetingSummaryCleanupError(underlying: error) }
     }
 }

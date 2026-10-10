@@ -1285,6 +1285,19 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
+    func testCopyFailurePreservesCleanupFailureDiagnosis() async throws {
+        let server = ArtifactServer(failCopyAcknowledgement: true, failDelete: true)
+        do {
+            _ = try await PichiMeetingSummaryTransport.snapshot(self.configuration(), load: { try await server.load($0) })
+            XCTFail("Release failure must be surfaced")
+        } catch let error as PichiMeetingSummaryCleanupError {
+            XCTAssertEqual((error.underlying as? URLError)?.code, .cannotConnectToHost)
+            XCTAssertEqual(error.localizedDescription, URLError(.cannotConnectToHost).localizedDescription)
+        } catch { XCTFail("Cleanup diagnosis must survive the original copy failure: \(error)") }
+        let deletes = await server.deletes
+        XCTAssertEqual(deletes.count, 1)
+    }
+
     func testNativeArtifactDriftFailsVerification() async throws {
         let server = ArtifactServer()
         let configuration = self.configuration()
@@ -1400,12 +1413,14 @@ final class PichiMeetingSummaryTests: XCTestCase {
         var deletes: [String] = []
         let changeDuringCopy: Bool
         let failCopyAcknowledgement: Bool
+        let failDelete: Bool
         let copyStarted: @Sendable () -> Void
         let gate: ArtifactCopyGate?
-        init(changeDuringCopy: Bool = false, failCopyAcknowledgement: Bool = false,
+        init(changeDuringCopy: Bool = false, failCopyAcknowledgement: Bool = false, failDelete: Bool = false,
              copyStarted: @escaping @Sendable () -> Void = {}, gate: ArtifactCopyGate? = nil) {
             self.changeDuringCopy = changeDuringCopy
             self.failCopyAcknowledgement = failCopyAcknowledgement
+            self.failDelete = failDelete
             self.copyStarted = copyStarted
             self.gate = gate
         }
@@ -1430,6 +1445,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 let model = try XCTUnwrap(body["model"])
                 XCTAssertTrue(model.hasPrefix("summary-attempt-"))
                 self.deletes.append(model)
+                if self.failDelete { throw URLError(.cannotConnectToHost) }
                 self.models.removeValue(forKey: model)
             } else { XCTFail("Unexpected management request") }
             return (Data(), response)

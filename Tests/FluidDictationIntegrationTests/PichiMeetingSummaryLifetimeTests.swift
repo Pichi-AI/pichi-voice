@@ -113,6 +113,55 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
     }
 
     @MainActor
+    func testCancellationStillSurfacesJoinedCleanupFailure() async throws {
+        let session = self.session()
+        let owner = MeetingModelResidencyCoordinator()
+        let asr = ASRService(meetingModelResidency: owner)
+        asr.meetingModelParticipantsForTesting = []
+        let entered = expectation(description: "Inference entered")
+        let releaseEntered = expectation(description: "Release entered after inference drained")
+        let settled = expectation(description: "Cleanup failure visible after resources restored")
+        let inference = InferenceDrain()
+        let cleanup = InferenceDrain()
+        let underlying = URLError(.cannotConnectToHost)
+        let generator = PichiMeetingSummaryGenerator(complete: { _ in
+            entered.fulfill()
+            await inference.wait()
+            throw CancellationError()
+        }, prepare: { configuration in
+            .init(configuration: configuration, release: {
+                releaseEntered.fulfill()
+                await cleanup.wait()
+                throw underlying
+            })
+        })
+        let controller = PichiMeetingSummaryController(sessionID: session.id, generator: generator)
+        controller.generationStateChanged = { controller in
+            if !controller.generating {
+                XCTAssertFalse(owner.isExclusive)
+                XCTAssertNil(MeetingSummaryActivityCoordinator.shared.selectionLock)
+                settled.fulfill()
+            }
+        }
+        controller.summarize(session: session, configuration: self.configuration(), asr: asr)
+        await fulfillment(of: [entered], timeout: 5)
+        controller.cancel()
+        // Give the cancelled timer a chance to finish while inference stays held.
+        // Its CancellationError must not mask the later release failure.
+        try await Task.sleep(nanoseconds: 30_000_000)
+        XCTAssertTrue(controller.generating)
+        inference.release()
+        await fulfillment(of: [releaseEntered], timeout: 5)
+        XCTAssertTrue(controller.generating)
+        XCTAssertTrue(owner.isExclusive)
+        XCTAssertNotNil(MeetingSummaryActivityCoordinator.shared.selectionLock)
+        cleanup.release()
+        await fulfillment(of: [settled], timeout: 5)
+        XCTAssertNil(controller.document)
+        XCTAssertEqual(controller.error, underlying.localizedDescription)
+    }
+
+    @MainActor
     func testCompletedBackgroundSummaryDisclosesTheNextDestinationWithoutChangingDocumentProvenance() async throws {
         let session = self.session()
         let local = self.configuration()
