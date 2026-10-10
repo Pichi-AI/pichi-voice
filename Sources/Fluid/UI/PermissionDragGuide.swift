@@ -41,7 +41,19 @@ final class PermissionDragGuideController {
 
     private func showPanel(instruction: String) {
         let panelWidth: CGFloat = 560
-        let panelHeight: CGFloat = 150
+        let contentView = NSHostingView(
+            rootView: PichiLocalizedContent {
+                PermissionDragGuideView(
+                    appURL: Self.draggableAppURL,
+                    appName: Bundle.main.fluidAppDisplayName,
+                    instruction: instruction,
+                    onReturnToApp: { [weak self] in self?.returnToApp() },
+                    onClose: { [weak self] in self?.dismiss() }
+                )
+                .frame(width: panelWidth)
+            }
+        )
+        let panelHeight = max(150, contentView.fittingSize.height)
         let gap: CGFloat = 14
         let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
@@ -71,17 +83,7 @@ final class PermissionDragGuideController {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
-        panel.contentView = NSHostingView(
-            rootView: PichiLocalizedContent {
-                PermissionDragGuideView(
-                    appURL: Self.draggableAppURL,
-                    appName: Bundle.main.fluidAppDisplayName,
-                    instruction: instruction,
-                    onReturnToApp: { [weak self] in self?.returnToApp() },
-                    onClose: { [weak self] in self?.dismiss() }
-                )
-            }
-        )
+        panel.contentView = contentView
         panel.setFrame(frame, display: true, animate: self.panel != nil)
         panel.orderFrontRegardless()
         self.panel = panel
@@ -217,7 +219,7 @@ private struct PermissionDragGuideView: View {
                 Text(self.instruction)
                     .font(.fluidSystem(size: 15, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.78))
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Spacer()
 
@@ -294,7 +296,7 @@ private struct PermissionDragGuideView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(red: 0.11, green: 0.11, blue: 0.13).opacity(0.96))

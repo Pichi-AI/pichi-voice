@@ -55,6 +55,7 @@ struct WelcomeView: View {
 struct OnboardingFlowView: View {
     @EnvironmentObject var appServices: AppServices
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var locale
     private var asr: ASRService {
         self.appServices.asr
     }
@@ -203,18 +204,18 @@ struct OnboardingFlowView: View {
         VoiceEngineLanguageCatalog.popularLanguages()
     }
 
-    private var selectedOnboardingLanguage: VoiceEngineLanguage {
+    private var selectedOnboardingLanguage: VoiceEngineLanguage? {
         VoiceEngineLanguageCatalog.language(id: self.selectedLanguageID)
-            ?? VoiceEngineLanguageCatalog.language(id: "en")
-            ?? VoiceEngineLanguage(id: "en", displayName: "English", aliases: [], isPopular: true)
+            ?? VoiceEngineLanguageCatalog.defaultOnboardingLanguage()
     }
 
     private var searchedOnboardingLanguages: [VoiceEngineLanguage] {
-        VoiceEngineLanguageCatalog.searchableLanguages(query: self.languageSearchText)
+        VoiceEngineLanguageCatalog.searchableLanguages(query: self.languageSearchText, locale: self.locale)
     }
 
     private var selectedLanguageRoutes: [VoiceEngineLanguageRoute] {
-        VoiceEngineLanguageCatalog.routes(for: self.selectedOnboardingLanguage)
+        guard let language = self.selectedOnboardingLanguage else { return [] }
+        return VoiceEngineLanguageCatalog.routes(for: language)
     }
 
     private var selectedOnboardingRoute: VoiceEngineLanguageRoute? {
@@ -233,7 +234,7 @@ struct OnboardingFlowView: View {
 
     private var defaultDisplayedModelRoutes: [VoiceEngineLanguageRoute] {
         OnboardingModelRecommendation.defaultRoutes(
-            forLanguageID: self.selectedOnboardingLanguage.id,
+            forLanguageID: self.selectedOnboardingLanguage?.id ?? self.selectedLanguageID,
             from: self.selectedLanguageRoutes
         )
     }
@@ -248,7 +249,10 @@ struct OnboardingFlowView: View {
     }
 
     private var recommendedModelReasonText: String {
-        PichiLocalization.format("Recommended for %@. You can see more options if needed.", PichiLocalization.text(self.selectedOnboardingLanguage.displayName))
+        guard let language = self.selectedOnboardingLanguage else {
+            return PichiLocalization.text("Choose a language", locale: self.locale)
+        }
+        return PichiLocalization.format("Recommended for %@. You can see more options if needed.", language.localizedDisplayName(locale: self.locale))
     }
 
     private var isRecommendedModelDownloaded: Bool {
@@ -689,7 +693,7 @@ struct OnboardingFlowView: View {
                     .foregroundStyle(isSelected ? self.theme.palette.accent : self.theme.palette.primaryText.opacity(0.72))
                     .frame(width: 22)
 
-                Text(PichiLocalization.text(language.popularDisplayName))
+                Text(language.localizedDisplayName(locale: self.locale))
                     .font(.fluidSystem(size: 15, weight: .semibold))
                     .foregroundStyle(self.theme.palette.primaryText)
                     .lineLimit(1)
@@ -734,12 +738,12 @@ struct OnboardingFlowView: View {
                 }
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(language.displayName)
-        .accessibilityValue(isSelected ? "Selected" : "")
+        .accessibilityLabel(Text(language.localizedDisplayName(locale: self.locale)))
+        .accessibilityValue(Text(LocalizedStringKey(isSelected ? "Selected" : "")))
     }
 
     private var otherLanguageCard: some View {
-        let isSelected = !self.selectedOnboardingLanguage.isPopular
+        let isSelected = self.selectedOnboardingLanguage?.isPopular == false
         let isHovered = self.hoveredLanguageID == "other"
         let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
         let fillOpacity = isSelected
@@ -761,7 +765,9 @@ struct OnboardingFlowView: View {
                     .foregroundStyle(isSelected ? self.theme.palette.accent : self.theme.palette.primaryText.opacity(self.isShowingAllLanguages ? 0.78 : 0.72))
                     .frame(width: 22)
 
-                Text(PichiLocalization.text(isSelected ? self.selectedOnboardingLanguage.displayName : "Other"))
+                Text(isSelected
+                    ? (self.selectedOnboardingLanguage?.localizedDisplayName(locale: self.locale) ?? "")
+                    : PichiLocalization.text("Other", locale: self.locale))
                     .font(.fluidSystem(size: 15, weight: .semibold))
                     .foregroundStyle(self.theme.palette.primaryText)
                     .lineLimit(1)
@@ -794,7 +800,7 @@ struct OnboardingFlowView: View {
             self.setHoveredLanguage(isHovered ? "other" : nil)
         }
         .accessibilityLabel("Other languages")
-        .accessibilityValue(self.isShowingAllLanguages ? "Expanded" : "Collapsed")
+        .accessibilityValue(Text(LocalizedStringKey(self.isShowingAllLanguages ? "Expanded" : "Collapsed")))
     }
 
     private var allLanguagesPicker: some View {
@@ -833,7 +839,9 @@ struct OnboardingFlowView: View {
 
             Menu("Choose a language") {
                 ForEach(self.searchedOnboardingLanguages) { language in
-                    Button(language.displayName) { self.selectOnboardingLanguage(language) }
+                    Button { self.selectOnboardingLanguage(language) } label: {
+                        Text(language.localizedDisplayName(locale: self.locale))
+                    }
                 }
             }
             .fluidDropdownStyle()
@@ -848,7 +856,7 @@ struct OnboardingFlowView: View {
             self.selectOnboardingLanguage(language)
         } label: {
             HStack(spacing: 10) {
-                Text(PichiLocalization.text(language.displayName))
+                Text(language.localizedDisplayName(locale: self.locale))
                     .font(.fluidSystem(size: 13, weight: .semibold))
                     .foregroundStyle(self.theme.palette.primaryText)
 
@@ -942,7 +950,7 @@ struct OnboardingFlowView: View {
         ) { isHovered in
             self.setHoveredFooterButton(isHovered ? kind : nil)
         }
-        .accessibilityLabel(title)
+        .accessibilityLabel(Text(LocalizedStringKey(title)))
     }
 
     private func setHoveredFooterButton(_ button: OnboardingFooterButton?) {
@@ -997,16 +1005,15 @@ struct OnboardingFlowView: View {
     }
 
     private func syncOnboardingSelectionFromSettings() {
-        let allRoutes = VoiceEngineLanguageCatalog.allLanguages()
-            .flatMap { VoiceEngineLanguageCatalog.routes(for: $0) }
-
         let storedLanguageID = self.settings.onboardingSelectedLanguageID
         let storedLanguageRoutes = VoiceEngineLanguageCatalog.routes(forLanguageID: storedLanguageID)
+        let defaultLanguageRoutes = VoiceEngineLanguageCatalog.defaultOnboardingLanguage()
+            .map { VoiceEngineLanguageCatalog.routes(for: $0) } ?? []
         let route = storedLanguageRoutes.first { route in
             self.isRouteModelAndLanguageSettingsSelected(route)
-        } ?? storedLanguageRoutes.first ?? allRoutes.first { route in
+        } ?? storedLanguageRoutes.first ?? defaultLanguageRoutes.first { route in
             self.isRouteModelAndLanguageSettingsSelected(route)
-        }
+        } ?? defaultLanguageRoutes.first
 
         guard let route else {
             if self.selectedModelRouteID == nil {
@@ -1058,7 +1065,7 @@ struct OnboardingFlowView: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.bottom, 14)
 
-                            Text(PichiLocalization.text(self.selectedOnboardingLanguage.displayName))
+                            Text(self.selectedOnboardingLanguage?.localizedDisplayName(locale: self.locale) ?? "")
                                 .font(.fluidSystem(size: 13, weight: .semibold))
                                 .foregroundStyle(self.theme.palette.accent)
                                 .padding(.horizontal, 12)
@@ -1294,19 +1301,21 @@ struct OnboardingFlowView: View {
                                 .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
                                 .padding(.bottom, 28)
 
-                            OnboardingTryoutStepView(
-                                finalText: Binding(
-                                    get: { self.asr.finalText },
-                                    set: { self.asr.finalText = $0 }
-                                ),
-                                language: self.selectedOnboardingLanguage,
-                                shortcutDisplay: self.onboardingShortcutDisplay,
-                                isReady: self.isPlaygroundReady,
-                                isRunning: self.asr.isRunning,
-                                isRecordingShortcut: self.isRecordingPrimaryShortcut,
-                                shortcutRecordingMessage: self.isRecordingPrimaryShortcut ? self.shortcutRecordingMessage : nil,
-                                onToggleShortcut: self.togglePrimaryShortcutRecording
-                            )
+                            if let language = self.selectedOnboardingLanguage {
+                                OnboardingTryoutStepView(
+                                    finalText: Binding(
+                                        get: { self.asr.finalText },
+                                        set: { self.asr.finalText = $0 }
+                                    ),
+                                    language: language,
+                                    shortcutDisplay: self.onboardingShortcutDisplay,
+                                    isReady: self.isPlaygroundReady,
+                                    isRunning: self.asr.isRunning,
+                                    isRecordingShortcut: self.isRecordingPrimaryShortcut,
+                                    shortcutRecordingMessage: self.isRecordingPrimaryShortcut ? self.shortcutRecordingMessage : nil,
+                                    onToggleShortcut: self.togglePrimaryShortcutRecording
+                                )
+                            }
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 34)
@@ -1571,7 +1580,7 @@ struct OnboardingFlowView: View {
                 if model.brandName == "FluidVoice" {
                     FluidVoiceBrandIcon(size: 22)
                 }
-                Text(self.onboardingModelTitle(for: model))
+                Text(LocalizedStringKey(self.onboardingModelTitle(for: model)))
                     .font(self.theme.typography.sectionTitle)
                     .foregroundStyle(self.theme.palette.primaryText)
                     .lineLimit(2)
@@ -1621,7 +1630,7 @@ struct OnboardingFlowView: View {
 
                 Spacer()
 
-                Text(self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize)
+                Text(LocalizedStringKey(self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize))
                     .font(self.theme.typography.bodySmallStrong)
                     .foregroundStyle(self.theme.palette.primaryText)
                     .lineLimit(1)
@@ -1977,7 +1986,7 @@ struct OnboardingFlowView: View {
                         .font(.fluidSystem(size: configuration.iconSize, weight: .bold))
                 }
 
-                Text(PichiLocalization.text(configuration.title))
+                Text(LocalizedStringKey(configuration.title))
                     .font(.fluidSystem(size: configuration.fontSize, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -2016,7 +2025,7 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelTooltip(for route: VoiceEngineLanguageRoute) -> String {
         let model = route.model
-        let downloadSize = self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize
+        let downloadSize = PichiLocalization.text(self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize, locale: self.locale)
         let credit = model.parakeetDescriptor.map { "\n\($0.creditLine)" } ?? ""
         return "\(self.onboardingModelSubtitle(for: model)) - \(downloadSize)\n\(PichiLocalization.text(model.cardDescription))\(credit)"
     }
@@ -2084,26 +2093,25 @@ struct OnboardingFlowView: View {
             }
 
             VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 8) {
-                    Text(PichiLocalization.text(title))
-                        .font(.fluidSystem(size: 17, weight: .semibold))
-                        .foregroundStyle(self.theme.palette.primaryText)
+                Text(LocalizedStringKey(title))
+                    .font(.fluidSystem(size: 17, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                    Text(PichiLocalization.text(resolvedStatusTitle))
-                        .font(.fluidSystem(size: 10, weight: .bold))
-                        .foregroundStyle(isReady ? Color.green.opacity(0.92) : self.theme.palette.accent)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(
-                            Capsule()
-                                .fill((isReady ? Color.green : self.theme.palette.accent).opacity(0.12))
-                        )
-                }
+                Text(LocalizedStringKey(resolvedStatusTitle))
+                    .font(.fluidSystem(size: 10, weight: .bold))
+                    .foregroundStyle(isReady ? Color.green.opacity(0.92) : self.theme.palette.accent)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill((isReady ? Color.green : self.theme.palette.accent).opacity(0.12))
+                    )
 
-                Text(PichiLocalization.text(subtitle))
+                Text(LocalizedStringKey(subtitle))
                     .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(self.theme.palette.primaryText.opacity(0.55))
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer()
@@ -2131,7 +2139,8 @@ struct OnboardingFlowView: View {
             }
         }
         .padding(.horizontal, 18)
-        .frame(height: 88)
+        .padding(.vertical, 14)
+        .frame(minHeight: 88)
         .background(
             shape
                 .fill(self.theme.palette.primaryText.opacity(isReady ? 0.045 : 0.070))
