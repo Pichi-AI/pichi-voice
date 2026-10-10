@@ -114,7 +114,12 @@ final class GigaAMTests: XCTestCase {
             throw XCTSkip("Set local optimized GigaAM and approved Russian WAV paths for real-model verification.")
         }
         let directory = URL(fileURLWithPath: modelPath, isDirectory: true)
-        let installed = try XCTUnwrap(GigaAMModelCatalog.discover(in: directory))
+        let installed: (descriptor: GigaAMModelDescriptor, directory: URL)
+        if let id = ProcessInfo.processInfo.environment["PICHI_GIGAAM_TEST_MODEL_ID"] {
+            installed = (try XCTUnwrap(GigaAMModelCatalog.models.first { $0.id == id }), directory)
+        } else {
+            installed = try XCTUnwrap(GigaAMModelCatalog.discover(in: directory))
+        }
         let runtime = try GigaAMRuntime()
         let provider: GigaAMExecutionProvider = ProcessInfo.processInfo.environment["PICHI_GIGAAM_TEST_COREML"] == "1" ? .coreML : .cpu
         let loadStart = ProcessInfo.processInfo.systemUptime
@@ -160,6 +165,77 @@ final class GigaAMTests: XCTestCase {
             _ = try await runtime.transcribe([0])
             XCTFail("Expected not-prepared error after unloading")
         } catch GigaAMError.notPrepared {}
+    }
+
+    func testAuthorizedLocalRecording() async throws {
+        guard let modelPath = ProcessInfo.processInfo.environment["PICHI_GIGAAM_TEST_MODEL_DIR"],
+              let wavPath = ProcessInfo.processInfo.environment["PICHI_GIGAAM_PRIVATE_TEST_WAV"] else {
+            throw XCTSkip("Set an explicitly authorized local recording path for private inference checks.")
+        }
+        let directory = URL(fileURLWithPath: modelPath, isDirectory: true)
+        let installed = try XCTUnwrap(GigaAMModelCatalog.discover(in: directory))
+        let runtime = try GigaAMRuntime()
+        try await runtime.load(descriptor: installed.descriptor, directory: installed.directory)
+        let samples = try Self.readWAV(URL(fileURLWithPath: wavPath))
+        let result = try await runtime.transcribe(samples)
+        let duration = Double(samples.count) / 16_000
+        XCTAssertFalse(result.text.isEmpty)
+        XCTAssertFalse(result.words.isEmpty)
+        XCTAssertTrue(zip(result.words, result.words.dropFirst()).allSatisfy { $0.start <= $1.start })
+        for word in result.words {
+            XCTAssertGreaterThanOrEqual(word.start, 0)
+            XCTAssertGreaterThan(word.end, word.start)
+            XCTAssertLessThanOrEqual(word.end, duration)
+            XCTAssertTrue(word.confidence.isFinite && (0...1).contains(word.confidence))
+        }
+        let boundaryWords = result.words.filter { word in
+            let midpoint = (word.start + word.end) / 2
+            let remainder = midpoint.truncatingRemainder(dividingBy: 20)
+            return midpoint >= 19 && (remainder < 1 || remainder > 19)
+        }.count
+        let adjacentRepeats = zip(result.words, result.words.dropFirst()).filter { $0.text == $1.text }.count
+        // Metrics only. Private audio, names and transcripts never appear in output.
+        print("GigaAM private evaluation: seconds=\(duration), inference=\(result.processingDuration), words=\(result.words.count), boundaryWords=\(boundaryWords), adjacentRepeats=\(adjacentRepeats)")
+        if let referencePath = ProcessInfo.processInfo.environment["PICHI_GIGAAM_PRIVATE_REFERENCE_FILE"] {
+            let reference = try String(contentsOf: URL(fileURLWithPath: referencePath), encoding: .utf8)
+            let referenceWords = Self.normalizedWords(reference)
+            let recognizedWords = Self.normalizedWords(result.text)
+            let distance = Self.editDistance(referenceWords, recognizedWords)
+            // Existing ASR text is an agreement reference, not human-checked truth.
+            print("GigaAM private reference disagreement: edits=\(distance), referenceWords=\(referenceWords.count), recognizedWords=\(recognizedWords.count)")
+        }
+        if ProcessInfo.processInfo.environment["PICHI_GIGAAM_TEST_CANCEL"] == "1" {
+            let cancellationStart = ProcessInfo.processInfo.systemUptime
+            let task = Task { try await runtime.transcribe(samples) }
+            try await Task.sleep(nanoseconds: 50_000_000)
+            task.cancel()
+            do {
+                _ = try await task.value
+                XCTFail("Canceled inference unexpectedly completed")
+            } catch is CancellationError {}
+            print("GigaAM private cancellation settled seconds: \(ProcessInfo.processInfo.systemUptime - cancellationStart)")
+        }
+        await runtime.unload()
+        let ready = await runtime.isReady
+        XCTAssertFalse(ready)
+    }
+
+    private static func normalizedWords(_ text: String) -> [String] {
+        let folded = text.lowercased().replacingOccurrences(of: "ё", with: "е")
+        let scalars = folded.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? String($0) : " " }
+        return scalars.joined().split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    private static func editDistance(_ reference: [String], _ recognized: [String]) -> Int {
+        var previous = Array(0...recognized.count)
+        for (index, word) in reference.enumerated() {
+            var current = [index + 1]
+            for (otherIndex, otherWord) in recognized.enumerated() {
+                current.append(min(previous[otherIndex + 1] + 1, current[otherIndex] + 1, previous[otherIndex] + (word == otherWord ? 0 : 1)))
+            }
+            previous = current
+        }
+        return previous.last ?? reference.count
     }
 
     private static func readWAV(_ url: URL) throws -> [Float] {

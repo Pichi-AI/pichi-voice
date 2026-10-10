@@ -47,3 +47,5 @@ swift test --package-path Vendor/PichiGigaAM
 ```
 
 The real-model fixture expects the existing synthetic Russian prototype sample, with `привет` in its first second and `русскую речь` in the complete transcript. The optional long check repeats that fixture with silence and verifies the overlap boundary. The optional reference parity JSON compares four stored frames from the original bf16 Torch frontend. Its log-mel differences are below 0.01, matching the pre-existing browser frontend; a separate deterministic PCM test checks the Accelerate DFT against the browser's arithmetic within 0.00002.
+
+For explicitly authorized private recordings, set `PICHI_GIGAAM_PRIVATE_TEST_WAV` and run the `testAuthorizedLocalRecording` filter. Output contains timing and word counts only. `PICHI_GIGAAM_PRIVATE_REFERENCE_FILE` optionally supplies an existing local raw ASR transcript for normalized word disagreement metrics, which are not accuracy against human-checked truth. `PICHI_GIGAAM_TEST_CANCEL=1` also checks cancellation settling after a native inference window. Keep all inputs and reference files outside Git.
