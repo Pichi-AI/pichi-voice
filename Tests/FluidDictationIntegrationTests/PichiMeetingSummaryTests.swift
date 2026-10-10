@@ -227,6 +227,89 @@ final class PichiMeetingSummaryTests: XCTestCase {
         } catch { XCTAssertEqual(error.localizedDescription, PichiMeetingSummaryError.invalidEvidence.localizedDescription) }
     }
 
+    func testIdenticalDecisionAndTaskReinstatementStayActiveAfterEarlierCancellation() async throws {
+        let transport = FixtureTransport(cancellationMode: true)
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        let session = self.reinstatementSession(includeLaterCancellation: false)
+        let result = try await generator.generate(session: session, configuration: self.configuration())
+        let releases = result.decisions.filter { $0.text == "Выпустить в пятницу." }
+        XCTAssertEqual(releases.count, 2)
+        XCTAssertEqual(releases.first?.superseded, true)
+        XCTAssertNil(releases.last?.superseded)
+        XCTAssertEqual(result.actions.count, 2)
+        XCTAssertEqual(result.actions.first?.superseded, true)
+        XCTAssertNil(result.actions.last?.superseded)
+        XCTAssertEqual(result.actions.last?.evidence.map(\.segmentID), [session.transcriptSegments[2].id])
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+    }
+
+    func testRepeatedLaterCancellationAlsoSupersedesReinstatedTask() async throws {
+        let transport = FixtureTransport(cancellationMode: true)
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        let session = self.reinstatementSession(includeLaterCancellation: true)
+        let result = try await generator.generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.actions.count, 2)
+        XCTAssertTrue(result.actions.allSatisfy { $0.superseded == true })
+        XCTAssertEqual(Set(result.actions[0].evidence.map(\.segmentID)), Set([session.transcriptSegments[0].id, session.transcriptSegments[1].id]))
+        XCTAssertEqual(Set(result.actions[1].evidence.map(\.segmentID)), Set([session.transcriptSegments[2].id, session.transcriptSegments[3].id]))
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+    }
+
+    @MainActor
+    func testControllerSuspendsAllResidentResourcesBeforeGenerationAndRestoresOnError() async {
+        let owner = MeetingModelResidencyCoordinator()
+        let resources = SummaryResidentResources(owner: owner)
+        let asr = ASRService(meetingModelResidency: owner)
+        asr.meetingModelParticipantsForTesting = resources.participants
+        let controller = PichiMeetingSummaryController(generator: .init { _ in
+            await resources.observeGeneration()
+            throw LLMError.invalidResponse
+        })
+        do {
+            _ = try await controller.generate(session: self.session(), configuration: self.configuration(), asr: asr)
+            XCTFail("Expected inference failure")
+        } catch { XCTAssertTrue(error is LLMError) }
+        resources.assertRestored()
+        XCTAssertEqual(owner.phase, .normal)
+        XCTAssertFalse(owner.isExclusive)
+        XCTAssertNil(asr.activeExclusiveActivity)
+    }
+
+    @MainActor
+    func testControllerCancellationDrainsGenerationBeforeUncancelledResourceRestoration() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let resources = SummaryResidentResources(owner: owner)
+        let asr = ASRService(meetingModelResidency: owner)
+        asr.meetingModelParticipantsForTesting = resources.participants
+        let entered = expectation(description: "Summary inference entered after model suspension")
+        let drain = SummaryInferenceDrain()
+        let transport = FixtureTransport()
+        let controller = PichiMeetingSummaryController(generator: .init { config in
+            await resources.observeGeneration()
+            entered.fulfill()
+            await drain.wait() // Deliberately non-cooperative inference must drain before restoration.
+            await resources.observeInferenceReturn()
+            return try await transport.complete(config)
+        })
+        let session = self.session()
+        let configuration = self.configuration()
+        let task = Task { try await controller.generate(session: session, configuration: configuration, asr: asr) }
+        await fulfillment(of: [entered], timeout: 5)
+        task.cancel()
+        XCTAssertTrue(owner.isExclusive)
+        XCTAssertEqual(owner.phase, .summary)
+        XCTAssertFalse(resources.events.contains { $0.hasPrefix("restore:") })
+        drain.release()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        resources.assertRestored()
+        let returned = try XCTUnwrap(resources.events.firstIndex(of: "inference-returned"))
+        let restored = try XCTUnwrap(resources.events.firstIndex(where: { $0.hasPrefix("restore:") }))
+        XCTAssertLessThan(returned, restored)
+        XCTAssertEqual(owner.phase, .normal)
+        XCTAssertNil(asr.activeExclusiveActivity)
+    }
+
     func testLaterChunkAnswerResolvesQuestionWithoutRewritingIt() async throws {
         let transport = FixtureTransport(answerMode: true)
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
@@ -322,6 +405,76 @@ final class PichiMeetingSummaryTests: XCTestCase {
         return session
     }
 
+    private func reinstatementSession(includeLaterCancellation: Bool) -> MeetingSession {
+        var session = self.cancellationSession()
+        var reinstated = session.transcriptSegments[0]
+        reinstated.id = UUID()
+        reinstated.start = .init(value: 120_000, timescale: 1000)
+        session.transcriptSegments.append(reinstated)
+        if includeLaterCancellation {
+            var cancelledAgain = session.transcriptSegments[1]
+            cancelledAgain.id = UUID()
+            cancelledAgain.start = .init(value: 180_000, timescale: 1000)
+            session.transcriptSegments.append(cancelledAgain)
+        }
+        return session
+    }
+
+    @MainActor
+    private final class SummaryResidentResources {
+        let owner: MeetingModelResidencyCoordinator
+        var buffers = Dictionary(uniqueKeysWithValues: ["speech", "fluid", "dictionary"].map { ($0, Data(count: 1024)) })
+        var events: [String] = []
+
+        init(owner: MeetingModelResidencyCoordinator) { self.owner = owner }
+
+        var participants: [MeetingModelParticipant] {
+            ["speech", "fluid", "dictionary"].map { name in
+                MeetingModelParticipant(owner: name, snapshot: {
+                    self.events.append("snapshot:\(name)")
+                    return self.buffers[name].map { _ in .init(id: name, configuration: "original") }
+                }, suspend: {
+                    self.buffers.removeValue(forKey: name)
+                    self.events.append("suspend:\(name)")
+                }, restore: { model in
+                    XCTAssertFalse(Task.isCancelled, "Restoration must run in the joined uncancelled cleanup")
+                    self.buffers[model.id] = Data(count: 1024)
+                    self.events.append("restore:\(model.id)")
+                })
+            }
+        }
+
+        func observeGeneration() {
+            XCTAssertTrue(self.buffers.isEmpty, "ASR, private AI and dictionary resources must retire before LLM inference")
+            XCTAssertEqual(self.owner.phase, .summary, "Mark the coordinator owned by this ASR instance")
+            XCTAssertThrowsError(try self.owner.beginOperation(owner: "speech", modelID: "ordinary-warmup"))
+            self.events.append("generation")
+        }
+
+        func observeInferenceReturn() { self.events.append("inference-returned") }
+        func assertRestored() {
+            XCTAssertEqual(Set(self.buffers.keys), Set(["speech", "fluid", "dictionary"]))
+            for name in ["speech", "fluid", "dictionary"] {
+                XCTAssertEqual(self.events.filter { $0 == "restore:\(name)" }.count, 1)
+            }
+        }
+    }
+
+    @MainActor
+    private final class SummaryInferenceDrain {
+        private var open = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        func wait() async {
+            if self.open { return }
+            await withCheckedContinuation { self.waiters.append($0) }
+        }
+        func release() {
+            self.open = true
+            for waiter in self.waiters { waiter.resume() }
+            self.waiters.removeAll()
+        }
+    }
+
     private actor FixtureTransport {
         var requests: [LLMClient.Config] = []
         let cancellationMode: Bool
@@ -342,14 +495,12 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
                 let candidates = try XCTUnwrap(request["candidates"] as? [[String: Any]])
                 let events = try XCTUnwrap(request["changes"] as? [[String: Any]])
-                let event = try XCTUnwrap(events.first)
-                let eventTime = try XCTUnwrap(event["sourceSeconds"] as? Double)
-                let eventItem = try XCTUnwrap(event["item"] as? [String: Any])
-                let evidence = try XCTUnwrap(eventItem["evidence"] as? [[String: Any]])
                 let updates = candidates.compactMap { candidate -> [String: Any]? in
                     guard let index = candidate["index"] as? Int,
                           let time = candidate["lastSourceSeconds"] as? Double,
-                          self.wrongChronology || eventTime > time else { return nil }
+                          let event = events.first(where: { self.wrongChronology || ($0["sourceSeconds"] as? Double ?? 0) > time }),
+                          let eventItem = event["item"] as? [String: Any],
+                          let evidence = eventItem["evidence"] as? [[String: Any]] else { return nil }
                     return ["index": index, "evidence": evidence]
                 }
                 return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": updates]), as: UTF8.self)

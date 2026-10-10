@@ -4068,6 +4068,10 @@ final class ASRService: ObservableObject {
 
     // MARK: - Exclusive model residency
 
+    #if DEBUG
+    var meetingModelParticipantsForTesting: [MeetingModelParticipant]?
+    #endif
+
     func meetingResidencyParticipant() -> MeetingModelParticipant {
         MeetingModelParticipant(
             owner: "speech",
@@ -4099,17 +4103,25 @@ final class ASRService: ObservableObject {
     }
 
     func withMeetingModelResidency<T>(attemptID: UUID, acceptsCompletedCancellation: (T) -> Bool = { _ in false }, work: () async throws -> T) async throws -> T {
-        try await self.meetingModelResidency.withExclusive(
+        let defaultParticipants = [
+            self.meetingResidencyParticipant(),
+            PrivateAIIntegrationService.meetingResidencyParticipant(),
+            DictionaryTrainingEndpointMonitor.shared.meetingResidencyParticipant(),
+        ]
+        #if DEBUG
+        let participants = self.meetingModelParticipantsForTesting ?? defaultParticipants
+        #else
+        let participants = defaultParticipants
+        #endif
+        return try await self.meetingModelResidency.withExclusive(
             attemptID: attemptID,
-            participants: [
-                self.meetingResidencyParticipant(),
-                PrivateAIIntegrationService.meetingResidencyParticipant(),
-                DictionaryTrainingEndpointMonitor.shared.meetingResidencyParticipant(),
-            ],
+            participants: participants,
             acceptsCompletedCancellation: acceptsCompletedCancellation,
             work: work
         )
     }
+
+    func markMeetingSummaryPhase() throws { try self.meetingModelResidency.markSummary() }
 
     // MARK: - Scoped Meeting ASR Preparation
 

@@ -161,7 +161,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     let language: String
 
     var isOnDevice: Bool { Self.isLoopback(self.baseURL) }
-    var cacheIdentity: String { "v4|\(self.providerID)|\(self.modelID)|\(self.baseURL)|\(self.language)" }
+    var cacheIdentity: String { "v5|\(self.providerID)|\(self.modelID)|\(self.baseURL)|\(self.language)" }
 
     static func isLoopback(_ value: String) -> Bool {
         guard let host = URL(string: value)?.host?.lowercased() else { return false }
@@ -220,10 +220,10 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         }
         // Keep every task/decision. Later corrections can mark an earlier entry superseded,
         // with a second, verified source. No reconciliation is allowed to erase an entry.
-        let changes = PichiMeetingSummaryDocument.unique(documents.flatMap { $0.changes ?? [] })
-        let decisions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.decisions)),
+        let changes = PichiMeetingSummaryDocument.unique(documents.flatMap { $0.changes ?? [] }, preserveOccurrences: true)
+        let decisions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.decisions), preserveOccurrences: true),
                                                  changes: changes, turns: turns, configuration: configuration)
-        let actions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.actions)),
+        let actions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.actions), preserveOccurrences: true),
                                                changes: changes, turns: turns, configuration: configuration)
         let answers = PichiMeetingSummaryDocument.unique(documents.flatMap { $0.answers ?? [] }, preserveOccurrences: true)
         let questions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.openQuestions), preserveOccurrences: true),

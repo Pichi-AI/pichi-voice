@@ -127,7 +127,7 @@ final class PichiMeetingSummaryController: ObservableObject {
             guard let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("pichi-meeting-summary.json")),
                   let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: data),
-                  artifact.version == 4, artifact.transcriptHash == hash, artifact.configurationIdentity == identity,
+                  artifact.version == 5, artifact.transcriptHash == hash, artifact.configurationIdentity == identity,
                   let validated = try? artifact.document.validated(against: PichiMeetingSummaryInput.turns(for: session))
             else { return nil }
             return validated
@@ -151,16 +151,12 @@ final class PichiMeetingSummaryController: ObservableObject {
                 MeetingSummaryActivityCoordinator.shared.unlockSelection(lock)
             }
             do {
-                let output = try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
-                    try await self.generator.generate(session: session, configuration: configuration) { [weak self] index, total in
-                        await self?.updateProgress(index: index, total: total)
-                    }
-                }
+                let output = try await self.generate(session: session, configuration: configuration, asr: asr)
                 try Task.checkCancellation()
                 guard self.generationID == generationID else { return }
                 self.document = output
                 let hash = PichiMeetingSummaryInput.fingerprint(session)
-                let artifact = PichiMeetingSummaryArtifact(version: 4, transcriptHash: hash,
+                let artifact = PichiMeetingSummaryArtifact(version: 5, transcriptHash: hash,
                                                           configurationIdentity: configuration.cacheIdentity,
                                                           generatedAt: Date(), document: output)
                 guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
@@ -175,6 +171,17 @@ final class PichiMeetingSummaryController: ObservableObject {
                 self.error = nil
             } catch {
                 if self.generationID == generationID, !Task.isCancelled { self.error = String(error.localizedDescription.prefix(500)) }
+            }
+        }
+    }
+
+    func generate(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration, asr: ASRService) async throws -> PichiMeetingSummaryDocument {
+        try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
+            try await asr.withMeetingModelResidency(attemptID: UUID()) {
+                try asr.markMeetingSummaryPhase()
+                return try await self.generator.generate(session: session, configuration: configuration) { [weak self] index, total in
+                    await self?.updateProgress(index: index, total: total)
+                }
             }
         }
     }

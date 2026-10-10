@@ -14,6 +14,8 @@ Long transcripts are processed sequentially in bounded chunks. A separate reduct
 
 Questions are reconciled against definite later answers in the same bounded process. A resolved question keeps its original wording and question source, adds the verified later answer quotation, and displays Answered later instead of remaining open. Earlier answers, tentative suggestions and unrelated facts cannot close a later question. Original owners and dates are never rewritten.
 
+Identical task, decision and correction wording from distinct source occurrences is retained. A task cancelled early and reinstated later remains active until a cancellation after its reinstatement. Summary generation runs inside the existing ASR model-residency scope, suspending speech, private AI and dictionary resources before LLM inference and restoring eligible residents after success, failure or cancellation.
+
 The saved artifact is `pichi-meeting-summary.json` inside the existing session directory. It stores the transcript fingerprint, configuration identity, generation time and structured result. It contains no API credentials. Generation errors and cancellation do not replace or delete the transcript or audio. Existing upstream postprocessing artifacts remain compatible.
 
 ## Verification
