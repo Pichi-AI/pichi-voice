@@ -1104,6 +1104,123 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
+    func testSummaryExecutionIdentityAndBounds() throws {
+        var configuration = self.configuration()
+        let standard = configuration.cacheIdentity
+        configuration.execution = .extended
+        XCTAssertNotEqual(standard, configuration.cacheIdentity)
+        let extended = configuration.cacheIdentity
+        configuration.execution.reasoningParameter = "enable_thinking"
+        configuration.execution.reasoningValue = "true"
+        XCTAssertNotEqual(extended, configuration.cacheIdentity)
+        XCTAssertNoThrow(try configuration.validate())
+        for invalid in [
+            PichiMeetingSummaryExecution(contextTokens: 65536, outputTokens: 8192, requestSeconds: 900, attemptSeconds: 3600),
+            .init(contextTokens: 8192, outputTokens: 8192, requestSeconds: 180, attemptSeconds: 600),
+            .init(contextTokens: 8192, outputTokens: 3000, requestSeconds: 180, attemptSeconds: 3601),
+            .init(contextTokens: 8192, outputTokens: 3000, requestSeconds: .nan, attemptSeconds: 600),
+        ] {
+            configuration.execution = invalid
+            XCTAssertThrowsError(try configuration.validate())
+        }
+    }
+
+    @MainActor
+    func testSummarySnapshotsCanonicalProviderReasoningAndBudget() throws {
+        let suite = "SummaryExecutionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let preferences = PichiMeetingSummarySettings(defaults: defaults)
+        let model = "fixture-\(UUID().uuidString)"
+        let settings = SettingsStore.shared
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            settings.setReasoningConfig(nil, forModel: model, provider: "ollama")
+        }
+        preferences.modelID = model
+        preferences.timeBudget = .extended
+        settings.setReasoningConfig(.init(parameterName: "enable_thinking", parameterValue: "true"), forModel: model, provider: "ollama")
+        XCTAssertEqual(preferences.localReasoningSelection(settings: settings), "enabled")
+        let snapshot = try preferences.configuration(sessionLanguage: "ru", settings: settings)
+        XCTAssertEqual(snapshot.execution.reasoningParameter, "enable_thinking")
+        XCTAssertEqual(snapshot.execution.reasoningValue, "true")
+        XCTAssertEqual(snapshot.execution.contextTokens, 16384)
+        settings.setReasoningConfig(.disabled, forModel: model, provider: "ollama")
+        preferences.timeBudget = .standard
+        let changed = try preferences.configuration(sessionLanguage: "ru", settings: settings)
+        XCTAssertNil(changed.execution.reasoningParameter)
+        XCTAssertEqual(changed.execution.contextTokens, 8192)
+        XCTAssertEqual(snapshot.execution.reasoningValue, "true", "An active attempt must not reread mutable settings")
+        preferences.setLocalReasoningSelection("enabled", settings: settings)
+        XCTAssertEqual(preferences.localReasoningSelection(settings: settings), "enabled")
+        preferences.setLocalReasoningSelection("disabled", settings: settings)
+        XCTAssertEqual(preferences.localReasoningSelection(settings: settings), "disabled")
+        preferences.setLocalReasoningSelection("default", settings: settings)
+        XCTAssertEqual(preferences.localReasoningSelection(settings: settings), "default")
+        XCTAssertNotEqual(snapshot.cacheIdentity, changed.cacheIdentity)
+    }
+
+    func testNativeThinkingPreservesSupportedProtocolValuesAndRejectsUnknownOnes() throws {
+        XCTAssertEqual(try PichiMeetingSummaryTransport.ollamaThinking([:]) as? Bool, false)
+        for name in ["think", "thinking", "enable_thinking"] {
+            XCTAssertEqual(try PichiMeetingSummaryTransport.ollamaThinking([name: true]) as? Bool, true)
+            XCTAssertEqual(try PichiMeetingSummaryTransport.ollamaThinking([name: "false"]) as? Bool, false)
+            XCTAssertThrowsError(try PichiMeetingSummaryTransport.ollamaThinking([name: "maximum"]))
+        }
+        for level in ["low", "medium", "high"] {
+            XCTAssertEqual(try PichiMeetingSummaryTransport.ollamaThinking(["reasoning_effort": level]) as? String, level)
+        }
+        XCTAssertEqual(try PichiMeetingSummaryTransport.ollamaThinking(["reasoning_effort": "none"]) as? Bool, false)
+        XCTAssertThrowsError(try PichiMeetingSummaryTransport.ollamaThinking(["reasoning_effort": "ultra"]))
+    }
+
+    func testExtendedExecutionSurvivesStructuredRepairOnEveryRequest() async throws {
+        let transport = RepairTransport(responses: ["invalid JSON", try self.referenceResponse(0)])
+        var configuration = self.configuration()
+        configuration.execution = .extended
+        configuration.execution.reasoningParameter = "enable_thinking"
+        configuration.execution.reasoningValue = "true"
+        _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: self.session(), configuration: configuration)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2)
+        for config in requests {
+            XCTAssertEqual(config.timeoutSeconds, 900)
+            XCTAssertEqual(config.maxTokens, 8192)
+            let request = try PichiMeetingSummaryTransport.ollamaRequest(config)
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+            XCTAssertEqual(body["think"] as? Bool, true)
+            XCTAssertNil((body["options"] as? [String: Any])?["temperature"], "Thinking keeps the artifact sampling defaults instead of forcing greedy decoding")
+            XCTAssertEqual((body["options"] as? [String: Int])?["num_ctx"], 16384)
+            XCTAssertEqual((body["options"] as? [String: Int])?["num_predict"], 8192)
+        }
+    }
+
+    private actor DeadlineTransport {
+        var calls = 0
+        var joined = false
+        func complete() async throws -> String {
+            self.calls += 1
+            defer { self.joined = true }
+            try await Task.sleep(for: .seconds(30))
+            return "unreachable"
+        }
+    }
+
+    func testWholeAttemptDeadlineCancelsAndJoinsActiveCompletion() async throws {
+        let transport = DeadlineTransport()
+        var configuration = self.configuration()
+        configuration.execution = .init(contextTokens: 8192, outputTokens: 3000, requestSeconds: 0.1, attemptSeconds: 0.1)
+        do {
+            _ = try await PichiMeetingSummaryGenerator { _ in try await transport.complete() }
+                .generate(session: self.session(), configuration: configuration)
+            XCTFail("Expected the complete attempt budget to expire")
+        } catch PichiMeetingSummaryError.timeLimit {} catch { XCTFail("Unexpected error: \(error)") }
+        let joined = await transport.joined
+        let calls = await transport.calls
+        XCTAssertTrue(joined, "Inference cancellation must finish before model restoration or another attempt")
+        XCTAssertEqual(calls, 1, "A deadline must not start a repair or the next chunk")
+    }
+
     private func configuration(endpoint: String = "http://127.0.0.1:11434/v1") -> PichiMeetingSummaryConfiguration {
         .init(providerID: "fixture", modelID: "fixture-model", baseURL: endpoint, apiKey: "", language: "ru")
     }

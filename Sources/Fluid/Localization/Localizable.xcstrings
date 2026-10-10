@@ -1,6 +1,176 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Processing continues while you use other screens in this app. Dictation is temporarily unavailable. Return to this meeting to cancel. Keep the app open.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Processing continues while you use other screens in this app. Dictation is temporarily unavailable. Return to this meeting to cancel. Keep the app open."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обработка продолжается при переходе на другие экраны приложения. Диктовка временно недоступна. Чтобы отменить обработку, вернитесь к этой встрече. Не закрывайте приложение."
+          }
+        }
+      }
+    },
+    "Local model thinking": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model thinking"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рассуждение локальной модели"
+          }
+        }
+      }
+    },
+    "Model default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model default"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию для модели"
+          }
+        }
+      }
+    },
+    "Configured model reasoning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configured model reasoning"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроенное рассуждение модели"
+          }
+        }
+      }
+    },
+    "Enable only if the installed model supports thinking. This updates the model's shared reasoning setting; unsupported models may reject the request.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable only if the installed model supports thinking. This updates the model's shared reasoning setting; unsupported models may reject the request."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включайте только для модели с поддержкой рассуждений. Это изменяет общую настройку рассуждения для выбранной модели. Модели без поддержки могут отклонить запрос."
+          }
+        }
+      }
+    },
+    "Extended: up to 60 minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extended: up to 60 minutes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расширенный: до 60 минут"
+          }
+        }
+      }
+    },
+    "Standard: up to 10 minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standard: up to 10 minutes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стандартный: до 10 минут"
+          }
+        }
+      }
+    },
+    "Summary time budget": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary time budget"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время на обработку саммари"
+          }
+        }
+      }
+    },
+    "The summary time limit was reached. The transcript and previous summary are safe.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The summary time limit was reached. The transcript and previous summary are safe."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Достигнут лимит времени на саммари. Расшифровка и предыдущее саммари сохранены."
+          }
+        }
+      }
+    },
+    "Extended processing allows more generation tokens and time. Reasoning follows this model's settings in AI Providers. Local Ollama context is limited to 16K; more time does not guarantee better quality. Speech recognition is paused until processing finishes or is cancelled.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extended processing allows more generation tokens and time. Reasoning follows this model's settings in AI Providers. Local Ollama context is limited to 16K; more time does not guarantee better quality. Speech recognition is paused until processing finishes or is cancelled."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расширенный режим даёт модели больше токенов и времени. Рассуждение использует настройки модели в разделе «Провайдеры ИИ». Контекст локальной Ollama ограничен 16K. Дополнительное время не гарантирует лучшее качество. Распознавание речи приостановлено до завершения или отмены обработки."
+          }
+        }
+      }
+    },
     "\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access.": {
       "extractionState": "manual",
       "localizations": {

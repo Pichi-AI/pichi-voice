@@ -234,6 +234,39 @@ nonisolated enum PichiMeetingSummaryInput {
     }
 }
 
+/// Per-attempt resource limits and protocol settings. Longer work remains sequential;
+/// opting in does not enable reasoning on a model that has no configured support.
+nonisolated struct PichiMeetingSummaryExecution: Sendable, Equatable {
+    let contextTokens: Int
+    let outputTokens: Int
+    let requestSeconds: TimeInterval
+    let attemptSeconds: TimeInterval
+    var reasoningParameter: String? = nil
+    var reasoningValue: String? = nil
+
+    static let standard = Self(contextTokens: 8192, outputTokens: 3000, requestSeconds: 180, attemptSeconds: 600)
+    static let extended = Self(contextTokens: 16384, outputTokens: 8192, requestSeconds: 900, attemptSeconds: 3600)
+
+    var identity: String {
+        "\(self.contextTokens)|\(self.outputTokens)|\(self.requestSeconds)|\(self.attemptSeconds)|\(self.reasoningParameter ?? "")|\(self.reasoningValue ?? "")"
+    }
+
+    func validate() throws {
+        guard (8192...16384).contains(self.contextTokens), (1...8192).contains(self.outputTokens),
+              self.outputTokens < self.contextTokens,
+              self.requestSeconds.isFinite, self.attemptSeconds.isFinite,
+              self.requestSeconds > 0, self.requestSeconds <= self.attemptSeconds,
+              self.attemptSeconds <= 3600,
+              (self.reasoningParameter == nil) == (self.reasoningValue == nil)
+        else { throw PichiMeetingSummaryError.notConfigured }
+        if let parameter = self.reasoningParameter, let value = self.reasoningValue {
+            guard ["think", "thinking", "enable_thinking", "reasoning_effort"].contains(parameter),
+                  !value.isEmpty, value.count <= 32
+            else { throw PichiMeetingSummaryError.notConfigured }
+        }
+    }
+}
+
 nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     let providerID: String
     let modelID: String
@@ -241,11 +274,12 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     let apiKey: String
     let language: String
     var connectionOptions: [String: String] = [:]
+    var execution: PichiMeetingSummaryExecution = .standard
 
     var isOnDevice: Bool { Self.isLoopback(self.baseURL) }
     var cacheIdentity: String {
         let options = self.connectionOptions.keys.sorted().flatMap { [$0, self.connectionOptions[$0] ?? ""] }
-        let identity = "v5|\(self.providerID)|\(self.modelID)|\(self.baseURL)|\(self.language)"
+        let identity = "v6|\(self.providerID)|\(self.modelID)|\(self.baseURL)|\(self.language)|\(self.execution.identity)"
         return options.isEmpty ? identity : identity + "|" + options.joined(separator: "|")
     }
 
@@ -255,6 +289,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     }
 
     func validate() throws {
+        try self.execution.validate()
         guard let url = URL(string: self.baseURL), let scheme = url.scheme,
               ["http", "https"].contains(scheme), url.host != nil,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
@@ -265,7 +300,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
 }
 
 nonisolated enum PichiMeetingSummaryError: LocalizedError {
-    case notConfigured, localEndpointRequired, insecureEndpoint, unsupportedProvider, emptyTranscript, invalidOutput, invalidEvidence, tooManyChunks, outputLimit
+    case notConfigured, localEndpointRequired, insecureEndpoint, unsupportedProvider, emptyTranscript, invalidOutput, invalidEvidence, tooManyChunks, outputLimit, timeLimit
     var errorDescription: String? {
         switch self {
         case .notConfigured: PichiLocalization.text("Choose an installed model and configure its API endpoint before generating a summary.")
@@ -275,6 +310,7 @@ nonisolated enum PichiMeetingSummaryError: LocalizedError {
         case .emptyTranscript: PichiLocalization.text("This meeting has no completed transcript to summarize.")
         case .invalidOutput, .outputLimit: PichiLocalization.text("The model did not return a valid structured summary. Try a different model. The transcript is safe.")
         case .invalidEvidence: PichiLocalization.text("The model returned an unsupported source, owner or date. The result was rejected. The transcript is safe.")
+        case .timeLimit: PichiLocalization.text("The summary time limit was reached. The transcript and previous summary are safe.")
         case .tooManyChunks: PichiLocalization.text("This transcript is too large to summarize in one operation.")
         }
     }
@@ -289,8 +325,28 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
     }
 
     func generate(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration,
-                  progress: @Sendable (Int, Int) async -> Void = { _, _ in }) async throws -> PichiMeetingSummaryDocument {
+                  progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }) async throws -> PichiMeetingSummaryDocument {
         try configuration.validate()
+        try Task.checkCancellation()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(configuration.execution.attemptSeconds))
+        // Structured cancellation joins the active inference before cleanup or a new
+        // attempt can start. Cancelling the timer on success avoids waiting its budget.
+        return try await withThrowingTaskGroup(of: PichiMeetingSummaryDocument.self) { group in
+            group.addTask { try await self.generateWithinBudget(session: session, configuration: configuration, progress: progress) }
+            group.addTask {
+                try await ContinuousClock().sleep(until: deadline)
+                throw PichiMeetingSummaryError.timeLimit
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw CancellationError() }
+            try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw PichiMeetingSummaryError.timeLimit }
+            return result
+        }
+    }
+
+    private func generateWithinBudget(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration,
+                                      progress: @Sendable (Int, Int) async -> Void) async throws -> PichiMeetingSummaryDocument {
         let turns = PichiMeetingSummaryInput.turns(for: session)
         guard !turns.isEmpty else { throw PichiMeetingSummaryError.emptyTranscript }
         let chunks = PichiMeetingSummaryInput.chunks(turns)
@@ -434,12 +490,17 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                         sources: [PichiMeetingSummarySource]? = nil, candidateIndexes: [Int]? = nil) throws -> LLMClient.Config {
         var config = LLMClient.Config(messages: [["role": "system", "content": prompt], ["role": "user", "content": input]],
                                       model: configuration.modelID, baseURL: configuration.baseURL,
-                                      apiKey: configuration.apiKey, streaming: false, maxTokens: 6000)
+                                      apiKey: configuration.apiKey, streaming: false, maxTokens: configuration.execution.outputTokens)
         config.providerOptions = configuration.connectionOptions
-        // Ollama documents "none" for disabling boolean thinking models. Keep this
-        // endpoint-specific setting away from other compatible APIs.
-        if configuration.isOnDevice, URL(string: configuration.baseURL)?.port == 11434 {
-            config.extraParameters["reasoning_effort"] = "none"
+        if let parameter = configuration.execution.reasoningParameter, let value = configuration.execution.reasoningValue {
+            if ["think", "thinking", "enable_thinking"].contains(parameter), let boolean = Bool(value.lowercased()) {
+                config.extraParameters[parameter] = boolean
+            } else {
+                config.extraParameters[parameter] = value
+            }
+        }
+        if PichiMeetingSummaryTransport.usesNativeOllama(config) {
+            config.extraParameters["options"] = ["num_ctx": configuration.execution.contextTokens]
         }
         if let sources, PichiMeetingSummaryTransport.usesNativeOllama(config)
             || CloudTextProvider.descriptor(forEndpoint: config.baseURL) != nil {
@@ -452,7 +513,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                 "schema": schema,
             ]]
         }
-        config.timeoutSeconds = 180
+        config.timeoutSeconds = configuration.execution.requestSeconds
         config.maxRetries = 1
         return config
     }

@@ -9,6 +9,15 @@ final class PichiMeetingSummarySettings: ObservableObject {
         var title: String { self == .local ? PichiLocalization.text("Local model on this Mac") : PichiLocalization.text("Configured AI provider") }
     }
 
+    enum TimeBudget: String, CaseIterable, Identifiable {
+        case standard, extended
+        var id: String { self.rawValue }
+        var title: String {
+            self == .standard ? PichiLocalization.text("Standard: up to 10 minutes") : PichiLocalization.text("Extended: up to 60 minutes")
+        }
+        var execution: PichiMeetingSummaryExecution { self == .standard ? .standard : .extended }
+    }
+
     private let defaults: UserDefaults
     @Published var mode: Mode { didSet { self.defaults.set(self.mode.rawValue, forKey: "PichiMeetingSummaryMode") } }
     @Published var baseURL: String {
@@ -19,6 +28,7 @@ final class PichiMeetingSummarySettings: ObservableObject {
         }
     }
     @Published var modelID: String { didSet { self.defaults.set(self.modelID, forKey: "PichiMeetingSummaryModelID") } }
+    @Published var timeBudget: TimeBudget { didSet { self.defaults.set(self.timeBudget.rawValue, forKey: "PichiMeetingSummaryTimeBudget") } }
     @Published var language: String { didSet { self.defaults.set(self.language, forKey: "PichiMeetingSummaryLanguage") } }
     @Published private(set) var models: [String] = []
     @Published private(set) var discovering = false
@@ -30,21 +40,24 @@ final class PichiMeetingSummarySettings: ObservableObject {
         self.mode = Mode(rawValue: defaults.string(forKey: "PichiMeetingSummaryMode") ?? "") ?? .local
         self.baseURL = defaults.string(forKey: "PichiMeetingSummaryBaseURL") ?? "http://127.0.0.1:11434/v1"
         self.modelID = defaults.string(forKey: "PichiMeetingSummaryModelID") ?? "qwen3.5:4b"
+        self.timeBudget = TimeBudget(rawValue: defaults.string(forKey: "PichiMeetingSummaryTimeBudget") ?? "") ?? .standard
         self.language = defaults.string(forKey: "PichiMeetingSummaryLanguage") ?? "ru"
     }
 
-    var selectionIdentity: String { "\(self.mode.rawValue)|\(self.baseURL)|\(self.modelID)|\(self.language)" }
+    var selectionIdentity: String { "\(self.mode.rawValue)|\(self.baseURL)|\(self.modelID)|\(self.language)|\(self.timeBudget.rawValue)" }
 
     func configuration(sessionLanguage: String, settings: SettingsStore? = nil) throws -> PichiMeetingSummaryConfiguration {
+        let settings = settings ?? .shared
         let outputLanguage = self.language == "transcript" ? sessionLanguage : self.language
         if self.mode == .local {
             guard PichiMeetingSummaryConfiguration.isLoopback(self.baseURL) else { throw PichiMeetingSummaryError.localEndpointRequired }
+            let provider = ModelRepository.shared.localTextModelProvider(for: self.baseURL) ?? "pichi-local"
             let config = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: self.modelID,
-                                                         baseURL: self.baseURL, apiKey: "", language: outputLanguage)
+                                                         baseURL: self.baseURL, apiKey: "", language: outputLanguage,
+                                                         execution: self.execution(model: self.modelID, provider: provider, settings: settings))
             try config.validate()
             return config
         }
-        let settings = settings ?? .shared
         let id = settings.selectedProviderID
         guard !id.isEmpty else { throw PichiMeetingSummaryError.notConfigured }
         guard id != "anthropic", id != PrivateAIProviderFeature.shared.providerID else { throw PichiMeetingSummaryError.unsupportedProvider }
@@ -56,10 +69,39 @@ final class PichiMeetingSummarySettings: ObservableObject {
         let model = preferred ?? ModelRepository.shared.defaultModels(for: id).first ?? ""
         let apiKey = settings.getAPIKey(for: id) ?? ""
         let config = PichiMeetingSummaryConfiguration(providerID: id, modelID: model, baseURL: endpoint,
-                                                     apiKey: apiKey, language: outputLanguage, connectionOptions: settings.providerConnectionOptions[id] ?? [:])
+                                                     apiKey: apiKey, language: outputLanguage, connectionOptions: settings.providerConnectionOptions[id] ?? [:],
+                                                     execution: self.execution(model: model, provider: id, settings: settings))
         try config.validate()
         guard config.isOnDevice || !apiKey.isEmpty else { throw PichiMeetingSummaryError.notConfigured }
         return config
+    }
+
+    private func execution(model: String, provider: String, settings: SettingsStore) -> PichiMeetingSummaryExecution {
+        var execution = self.timeBudget.execution
+        if let reasoning = settings.getReasoningConfig(forModel: model, provider: provider), reasoning.isEnabled {
+            execution.reasoningParameter = reasoning.parameterName
+            execution.reasoningValue = reasoning.parameterValue
+        }
+        return execution
+    }
+
+    func localReasoningSelection(settings: SettingsStore) -> String {
+        guard let provider = ModelRepository.shared.localTextModelProvider(for: self.baseURL) else { return "default" }
+        let key = "\(provider):\(self.modelID)"
+        guard let config = settings.modelReasoningConfigs[key] else { return "default" }
+        if !config.isEnabled { return "disabled" }
+        if ["think", "enable_thinking", "thinking"].contains(config.parameterName), config.parameterValue == "true" { return "enabled" }
+        return "configured"
+    }
+
+    func setLocalReasoningSelection(_ selection: String, settings: SettingsStore) {
+        guard let provider = ModelRepository.shared.localTextModelProvider(for: self.baseURL) else { return }
+        switch selection {
+        case "default": settings.setReasoningConfig(nil, forModel: self.modelID, provider: provider)
+        case "enabled": settings.setReasoningConfig(.init(parameterName: "enable_thinking", parameterValue: "true"), forModel: self.modelID, provider: provider)
+        case "disabled": settings.setReasoningConfig(.disabled, forModel: self.modelID, provider: provider)
+        default: break
+        }
     }
 
     func discoverModels() async {

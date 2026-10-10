@@ -174,6 +174,34 @@ struct PichiMeetingSummaryView: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if self.preferences.mode == .local, let config = self.configuration,
+               PichiMeetingSummaryTransport.usesNativeOllama(LLMClient.Config(messages: [], model: config.modelID,
+                   baseURL: config.baseURL, apiKey: "", streaming: false)) {
+                Picker("Local model thinking", selection: Binding(
+                    get: { self.preferences.localReasoningSelection(settings: self.settings) },
+                    set: { self.preferences.setLocalReasoningSelection($0, settings: self.settings) }
+                )) {
+                    Text("Model default").tag("default")
+                    Text("Enabled").tag("enabled")
+                    Text("Disabled").tag("disabled")
+                    if self.preferences.localReasoningSelection(settings: self.settings) == "configured" {
+                        Text("Configured model reasoning").tag("configured")
+                    }
+                }
+                .pickerStyle(.menu)
+                Text("Enable only if the installed model supports thinking. This updates the model's shared reasoning setting; unsupported models may reject the request.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Picker("Summary time budget", selection: self.$preferences.timeBudget) {
+                ForEach(PichiMeetingSummarySettings.TimeBudget.allCases) { budget in Text(budget.title).tag(budget) }
+            }
+            .pickerStyle(.menu)
+            Text("Extended processing allows more generation tokens and time. Reasoning follows this model's settings in AI Providers. Local Ollama context is limited to 16K; more time does not guarantee better quality. Speech recognition is paused until processing finishes or is cancelled.")
+                .font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
             Picker("Summary language", selection: self.$preferences.language) {
                 Text("Русский").tag("ru")
                 Text("English").tag("en")

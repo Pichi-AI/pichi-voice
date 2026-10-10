@@ -17,7 +17,7 @@ nonisolated enum PichiMeetingSummaryTransport {
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 180
-        configuration.timeoutIntervalForResource = 600
+        configuration.timeoutIntervalForResource = 3600
         return URLSession(configuration: configuration, delegate: redirectPolicy, delegateQueue: nil)
     }()
     static let client = LLMClient(session: session)
@@ -66,10 +66,16 @@ nonisolated enum PichiMeetingSummaryTransport {
         let responseFormat = config.extraParameters["response_format"] as? [String: Any]
         let structured = responseFormat?["json_schema"] as? [String: Any]
         let schema = structured?["schema"] as? [String: Any] ?? self.schema(ledger: ledger)
+        let thinking = try self.ollamaThinking(config.extraParameters)
+        let outputTokens = config.maxTokens ?? self.ollamaOutputTokens
+        guard (1...8192).contains(outputTokens) else { throw PichiMeetingSummaryError.notConfigured }
+        var options: [String: Any] = ["num_ctx": try self.ollamaContext(config.extraParameters), "num_predict": outputTokens]
+        // Thinking models may degenerate under greedy decoding. Use the selected
+        // artifact's sampling defaults, which belong to its inference adapter.
+        if (thinking as? Bool) == false { options["temperature"] = 0 }
         let body: [String: Any] = [
             "model": config.model, "messages": config.messages, "stream": false,
-            "think": false, "keep_alive": 0, "format": schema,
-            "options": ["num_ctx": self.ollamaContextTokens, "num_predict": self.ollamaOutputTokens, "temperature": 0],
+            "think": thinking, "keep_alive": 0, "format": schema, "options": options,
         ]
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -78,6 +84,33 @@ nonisolated enum PichiMeetingSummaryTransport {
         if !config.apiKey.isEmpty { request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization") }
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
+    }
+
+    // Protocol adaptation only: boolean thinking and effort levels are distinct
+    // supported Ollama values. Never infer capability from a model's display name.
+    static func ollamaThinking(_ parameters: [String: Any]) throws -> Any {
+        for key in ["think", "enable_thinking", "thinking"] {
+            if let value = parameters[key] {
+                if let boolean = value as? Bool { return boolean }
+                if let text = value as? String, let boolean = Bool(text.lowercased()) { return boolean }
+                if key == "think", let text = value as? String, ["low", "medium", "high"].contains(text) { return text }
+                throw PichiMeetingSummaryError.notConfigured
+            }
+        }
+        if let value = parameters["reasoning_effort"] as? String {
+            if value == "none" { return false }
+            if ["low", "medium", "high"].contains(value) { return value }
+            throw PichiMeetingSummaryError.notConfigured
+        }
+        return false
+    }
+
+    private static func ollamaContext(_ parameters: [String: Any]) throws -> Int {
+        guard let options = parameters["options"] as? [String: Any] else { return self.ollamaContextTokens }
+        guard let context = options["num_ctx"] as? Int, (8192...16384).contains(context) else {
+            throw PichiMeetingSummaryError.notConfigured
+        }
+        return context
     }
 
     static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil) -> [String: Any] {
