@@ -19,6 +19,11 @@ public struct GigaAMModelDescriptor: Sendable, Equatable {
         self.endOfUtteranceThreshold = endOfUtteranceThreshold
     }
 
+    /// Stable content identity for resumable jobs, independent of local paths.
+    public var fingerprint: String {
+        "gigaam-native-v1/\(self.id)/\(self.modelSHA256)/\(self.vocabularySHA256 ?? "russian-characters-v1")"
+    }
+
     public func filesExist(in directory: URL) -> Bool {
         let names = [self.modelFile] + [self.vocabularyFile].compactMap { $0 }
         return names.allSatisfy { name in

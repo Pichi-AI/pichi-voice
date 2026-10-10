@@ -45,11 +45,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     }
 
     func installedModelFingerprint() throws -> String {
-        Self.fingerprint(for: try self.installedModel().descriptor)
-    }
-
-    private static func fingerprint(for descriptor: GigaAMModelDescriptor) -> String {
-        "gigaam-native-v1/\(descriptor.id)/\(descriptor.modelSHA256)/\(descriptor.vocabularySHA256 ?? "russian-characters-v1")"
+        try self.installedModel().descriptor.fingerprint
     }
 
     func importModel(from sourceDirectory: URL) async throws {
@@ -117,6 +113,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private(set) var loadedModelFingerprint: String?
     private var runtime: GigaAMRuntime?
     private var preparationTask: Task<Void, Error>?
+    private var lifecycleGeneration = 0
 
     init(modelStore: PichiGigaAMModelStore = .shared, expectedModelFingerprint: String? = nil) {
         self.modelStore = modelStore
@@ -127,26 +124,37 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         try Task.checkCancellation()
         if self.isReady { return }
         if let task = self.preparationTask {
+            let generation = self.lifecycleGeneration
             try await task.value
             try Task.checkCancellation()
+            guard self.lifecycleGeneration == generation, self.isReady, self.runtime != nil else {
+                throw CancellationError()
+            }
             return
         }
         let model = try self.modelStore.installedModel()
-        let fingerprint = try self.modelStore.installedModelFingerprint()
+        let fingerprint = model.descriptor.fingerprint
         if let expected = self.expectedModelFingerprint, expected != fingerprint {
             throw NSError(domain: "PichiGigaAMProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "The installed GigaAM export has changed since this meeting was scheduled. Restore that export or start a new processing run."])
         }
         let runtime = try GigaAMRuntime()
+        self.lifecycleGeneration += 1
+        let generation = self.lifecycleGeneration
         self.runtime = runtime
         progressHandler?(.loading)
         let task = Task {
             try await runtime.load(descriptor: model.descriptor, directory: model.directory)
             try Task.checkCancellation()
+            guard self.lifecycleGeneration == generation, self.runtime === runtime else {
+                throw CancellationError()
+            }
             self.loadedModelFingerprint = fingerprint
             self.isReady = true
         }
         self.preparationTask = task
-        defer { self.preparationTask = nil }
+        defer {
+            if self.lifecycleGeneration == generation { self.preparationTask = nil }
+        }
         do {
             try await withTaskCancellationHandler {
                 try await task.value
@@ -154,13 +162,16 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 task.cancel()
             }
             try Task.checkCancellation()
-            self.loadedModelFingerprint = fingerprint
-            self.isReady = true
+            guard self.lifecycleGeneration == generation, self.isReady, self.runtime === runtime else {
+                throw CancellationError()
+            }
         } catch {
             await runtime.unload()
-            self.runtime = nil
-            self.loadedModelFingerprint = nil
-            self.isReady = false
+            if self.lifecycleGeneration == generation {
+                self.runtime = nil
+                self.loadedModelFingerprint = nil
+                self.isReady = false
+            }
             throw error
         }
     }
@@ -195,13 +206,18 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     func modelsExistOnDisk() -> Bool { self.modelStore.modelsExistOnDisk() }
 
     func unloadModel() async {
-        self.preparationTask?.cancel()
-        if let task = self.preparationTask { _ = try? await task.value }
+        // Invalidate ownership before suspending. An old prepare completion cannot
+        // publish readiness or clear a newer session after this point.
+        self.lifecycleGeneration += 1
+        let preparationTask = self.preparationTask
+        let runtime = self.runtime
         self.preparationTask = nil
+        self.runtime = nil
         self.isReady = false
         self.loadedModelFingerprint = nil
-        await self.runtime?.unload()
-        self.runtime = nil
+        preparationTask?.cancel()
+        if let task = preparationTask { _ = try? await task.value }
+        await runtime?.unload()
     }
 
     func clearCache() async throws {
