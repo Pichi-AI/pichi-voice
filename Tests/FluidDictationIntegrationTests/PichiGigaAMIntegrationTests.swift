@@ -56,6 +56,28 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         await provider.unloadModel()
         await asr.shutdownForTermination()
         XCTAssertFalse(provider.isReady)
+
+        let meetingASR = ASRService()
+        let meetingLease = try meetingASR.acquireExclusiveActivity(.meeting)
+        let attemptID = UUID()
+        let store = PichiGigaAMModelStore(directory: URL(fileURLWithPath: modelPath))
+        let configuration = MeetingFinalProcessingConfiguration(
+            asrModel: SettingsStore.SpeechModel.gigaam.id,
+            asrArtifactFingerprint: try store.installedModelFingerprint(),
+            asrArtifactDirectory: store.directory,
+            languageCode: "ru",
+            diarizationFingerprint: PichiMeetingProviderFactory.transcriptOnlyDiarizationFingerprint
+        )
+        let meetingResult = try await meetingASR.withMeetingModelResidency(attemptID: attemptID) {
+            try await meetingASR.withPreparedMeetingASR(attemptID: attemptID, configuration: configuration) { prepared in
+                XCTAssertTrue(prepared is PichiGigaAMProvider)
+                return try await meetingASR.transcribeMeetingSamplesWithTimings(samples, provider: prepared)
+            }
+        }
+        meetingASR.releaseExclusiveActivity(meetingLease)
+        XCTAssertEqual(meetingResult.result.text, final.text)
+        XCTAssertFalse(meetingResult.words.isEmpty)
+        await meetingASR.shutdownForTermination()
     }
 
     @MainActor
