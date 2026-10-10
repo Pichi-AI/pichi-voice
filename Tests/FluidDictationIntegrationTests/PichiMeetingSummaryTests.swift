@@ -202,6 +202,41 @@ final class PichiMeetingSummaryTests: XCTestCase {
         } catch { XCTAssertEqual(error.localizedDescription, PichiMeetingSummaryError.invalidEvidence.localizedDescription) }
     }
 
+    func testLaterChunkAnswerResolvesQuestionWithoutRewritingIt() async throws {
+        let transport = FixtureTransport(answerMode: true)
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        let session = self.questionSession()
+        let result = try await generator.generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.openQuestions.count, 1)
+        let question = try XCTUnwrap(result.openQuestions.first)
+        XCTAssertEqual(question.text, "Когда будет готов отчёт?")
+        XCTAssertEqual(question.resolved, true)
+        XCTAssertNil(question.superseded, "Answering a question is distinct from cancelling a task")
+        XCTAssertNil(question.owner)
+        XCTAssertNil(question.deadline)
+        XCTAssertEqual(Set(question.evidence.map(\.segmentID)), Set(session.transcriptSegments.map(\.id)))
+        XCTAssertTrue(question.evidence.contains { $0.quote.contains("в пятницу") })
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+    }
+
+    func testEarlierAnswerCannotResolveLaterQuestion() async {
+        let transport = FixtureTransport(wrongChronology: true, answerMode: true)
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        var session = self.questionSession()
+        session.transcriptSegments[0].start = .init(value: 120_000, timescale: 1000)
+        session.transcriptSegments[1].start = .init(value: 0, timescale: 1000)
+        do {
+            _ = try await generator.generate(session: session, configuration: self.configuration())
+            XCTFail("An earlier answer cannot resolve a question asked later")
+        } catch { XCTAssertEqual(error.localizedDescription, PichiMeetingSummaryError.invalidEvidence.localizedDescription) }
+    }
+
+    func testRepeatedQuestionOccurrencesAreNotMergedAcrossEarlierAnswer() {
+        let question = PichiMeetingSummaryItem(text: "Когда будет готов отчёт?", evidence: [.init(segmentID: self.id, quote: "Когда будет готов отчёт?")])
+        let repeated = PichiMeetingSummaryItem(text: question.text, evidence: [.init(segmentID: UUID(), quote: "Когда будет готов отчёт?")])
+        XCTAssertEqual(PichiMeetingSummaryDocument.unique([question, repeated], preserveOccurrences: true).count, 2)
+    }
+
     func testLiveRussianSummaryWithOllamaWhenEnabled() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
                           "Opt-in local inference check. Requires an installed qwen3.5:4b model in Ollama.")
@@ -252,21 +287,30 @@ final class PichiMeetingSummaryTests: XCTestCase {
         return session
     }
 
+    private func questionSession() -> MeetingSession {
+        var session = self.cancellationSession()
+        session.transcriptSegments[0].text = "Когда будет готов отчёт? " + String(repeating: "Подробности разговора. ", count: 300)
+        session.transcriptSegments[1].text = "Ответ: отчёт будет готов в пятницу. " + String(repeating: "Другие подробности. ", count: 300)
+        return session
+    }
+
     private actor FixtureTransport {
         var requests: [LLMClient.Config] = []
         let cancellationMode: Bool
         let wrongChronology: Bool
+        let answerMode: Bool
 
-        init(cancellationMode: Bool = false, wrongChronology: Bool = false) {
+        init(cancellationMode: Bool = false, wrongChronology: Bool = false, answerMode: Bool = false) {
             self.cancellationMode = cancellationMode
             self.wrongChronology = wrongChronology
+            self.answerMode = answerMode
         }
 
         func complete(_ config: LLMClient.Config) throws -> String {
             self.requests.append(config)
             let text = config.messages.last?["content"] as? String ?? ""
             let prompt = config.messages[0]["content"] as? String ?? ""
-            if prompt.contains("Reconcile meeting decisions/tasks") {
+            if prompt.contains("Reconcile meeting") {
                 let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
                 let candidates = try XCTUnwrap(request["candidates"] as? [[String: Any]])
                 let events = try XCTUnwrap(request["changes"] as? [[String: Any]])
@@ -287,10 +331,18 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let item: PichiMeetingSummaryItem
             if prompt.contains("Condense") {
                 let items = try JSONDecoder().decode([PichiMeetingSummaryItem].self, from: data)
-                item = try XCTUnwrap(self.cancellationMode ? items.last : items.first)
+                item = try XCTUnwrap(self.cancellationMode || self.answerMode ? items.last : items.first)
             } else {
                 let turn = try XCTUnwrap(JSONDecoder().decode([PichiMeetingSummaryTurn].self, from: data).first)
                 item = .init(text: "Резюме \(turn.id)", evidence: [.init(segmentID: turn.id, quote: String(turn.text.prefix(100)))])
+                if self.answerMode {
+                    let questioning = turn.text.hasPrefix("Когда")
+                    let evidence = [PichiMeetingSummaryEvidence(segmentID: turn.id, quote: String(turn.text.prefix(34)))]
+                    let fact = PichiMeetingSummaryItem(text: questioning ? "Когда будет готов отчёт?" : "Отчёт будет готов в пятницу.", evidence: evidence)
+                    let document = PichiMeetingSummaryDocument(summary: [fact], decisions: [], actions: [],
+                                                               openQuestions: questioning ? [fact] : [], answers: questioning ? [] : [fact])
+                    return String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
+                }
                 if self.cancellationMode {
                     let cancelling = turn.text.hasPrefix("Отменяем")
                     let evidence = [PichiMeetingSummaryEvidence(segmentID: turn.id, quote: String(turn.text.prefix(57)))]

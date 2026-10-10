@@ -95,7 +95,7 @@ struct PichiMeetingSummaryView: View {
                 self.summarySection(self.title(ru: "Резюме", en: "Recap"), items: document.summary)
                 self.summarySection(self.title(ru: "Решения", en: "Decisions"), items: document.decisions)
                 self.summarySection(self.title(ru: "Задачи", en: "Action items"), items: document.actions)
-                self.summarySection(self.title(ru: "Открытые вопросы", en: "Open questions"), items: document.openQuestions)
+                self.summarySection(self.title(ru: "Вопросы и ответы", en: "Questions and answers"), items: document.openQuestions, questions: true)
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Button("Copy summary", systemImage: "doc.on.doc") { self.copy(document) }
                         .meetingGlassAction()
@@ -180,7 +180,7 @@ struct PichiMeetingSummaryView: View {
         self.configuration?.language == "ru" ? ru : en
     }
 
-    private func summarySection(_ title: String, items: [PichiMeetingSummaryItem]) -> some View {
+    private func summarySection(_ title: String, items: [PichiMeetingSummaryItem], questions: Bool = false) -> some View {
         FluidManagementGroup(title: title) {
             if items.isEmpty {
                 Text(self.title(ru: "Не указаны в расшифровке.", en: "None stated in the transcript."))
@@ -198,6 +198,13 @@ struct PichiMeetingSummaryView: View {
                                 Text(self.title(ru: "Отменено или заменено позднее", en: "Cancelled or replaced later"))
                                     .font(self.theme.typography.captionStrong)
                                     .foregroundStyle(self.theme.palette.warning)
+                            }
+                            if questions {
+                                Text(item.resolved == true
+                                     ? self.title(ru: "Ответ получен позднее", en: "Answered later")
+                                     : self.title(ru: "Открытый вопрос", en: "Open question"))
+                                    .font(self.theme.typography.captionStrong)
+                                    .foregroundStyle(item.resolved == true ? self.theme.palette.success : self.theme.palette.secondaryText)
                             }
                             if let owner = item.owner {
                                 Text(self.title(ru: "Ответственный: ", en: "Owner: ") + owner)
@@ -237,11 +244,12 @@ struct PichiMeetingSummaryView: View {
             (self.title(ru: "Резюме", en: "Recap"), document.summary),
             (self.title(ru: "Решения", en: "Decisions"), document.decisions),
             (self.title(ru: "Задачи", en: "Action items"), document.actions),
-            (self.title(ru: "Открытые вопросы", en: "Open questions"), document.openQuestions),
+            (self.title(ru: "Вопросы и ответы", en: "Questions and answers"), document.openQuestions),
         ]
         let text = sections.map { title, items in
             title + "\n" + items.map { item in
                 "- " + (item.superseded == true ? self.title(ru: "[Отменено/заменено] ", en: "[Superseded] ") : "")
+                    + (item.resolved == true ? self.title(ru: "[Ответ получен] ", en: "[Answered] ") : "")
                     + item.text + (item.owner.map { " (\($0))" } ?? "") + (item.deadline.map { " [\($0)]" } ?? "")
                     + "\n" + item.evidence.map { "  > \($0.quote)" }.joined(separator: "\n")
             }.joined(separator: "\n")

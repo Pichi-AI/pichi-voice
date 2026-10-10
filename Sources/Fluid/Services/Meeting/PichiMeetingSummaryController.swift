@@ -127,7 +127,7 @@ final class PichiMeetingSummaryController: ObservableObject {
             guard let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("pichi-meeting-summary.json")),
                   let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: data),
-                  artifact.version == 2, artifact.transcriptHash == hash, artifact.configurationIdentity == identity,
+                  artifact.version == 3, artifact.transcriptHash == hash, artifact.configurationIdentity == identity,
                   let validated = try? artifact.document.validated(against: PichiMeetingSummaryInput.turns(for: session))
             else { return nil }
             return validated
@@ -160,7 +160,7 @@ final class PichiMeetingSummaryController: ObservableObject {
                 guard self.generationID == generationID else { return }
                 self.document = output
                 let hash = PichiMeetingSummaryInput.fingerprint(session)
-                let artifact = PichiMeetingSummaryArtifact(version: 2, transcriptHash: hash,
+                let artifact = PichiMeetingSummaryArtifact(version: 3, transcriptHash: hash,
                                                           configurationIdentity: configuration.cacheIdentity,
                                                           generatedAt: Date(), document: output)
                 guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {

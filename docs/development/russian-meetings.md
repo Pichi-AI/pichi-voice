@@ -10,6 +10,8 @@ Every recap, decision, task and open question includes source segment IDs and ex
 
 Long transcripts are processed sequentially in bounded chunks. A separate reduction stage condenses the recap; the decisions and task ledger remains complete. Explicit later cancellations or replacements are extracted and reconciled against the ledger. An earlier entry is retained as superseded, with the later correction's source quotation. Reconciliation cannot rewrite its original text, owner or date, remove it, or use an earlier event to supersede it. Transcript gaps appear as a warning. Provisional turns and probable echoes are excluded. Corrections, speaker changes, language changes, gaps, and summary model changes invalidate saved results.
 
+Questions are reconciled against definite later answers in the same bounded process. A resolved question keeps its original wording and question source, adds the verified later answer quotation, and displays Answered later instead of remaining open. Earlier answers, tentative suggestions and unrelated facts cannot close a later question. Original owners and dates are never rewritten.
+
 The saved artifact is `pichi-meeting-summary.json` inside the existing session directory. It stores the transcript fingerprint, configuration identity, generation time and structured result. It contains no API credentials. Generation errors and cancellation do not replace or delete the transcript or audio. Existing upstream postprocessing artifacts remain compatible.
 
 ## Verification
