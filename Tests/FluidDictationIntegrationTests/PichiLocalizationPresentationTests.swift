@@ -147,6 +147,24 @@ final class PichiLocalizationPresentationTests: XCTestCase {
         XCTAssertEqual(session.transcriptSegments.first?.text, "Решили оставить цену.")
     }
 
+    func testUnknownSpeakerSummaryInputAndFingerprintStayStableAcrossUILocalePresentation() throws {
+        var session = self.session()
+        session.transcriptSegments[0].speakerID = nil
+        session.transcriptSegments[0].attributionState = .unassigned
+        let segment = try XCTUnwrap(session.transcriptSegments.first)
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let canonicalTurns = PichiMeetingSummaryInput.turns(for: session)
+        XCTAssertEqual(canonicalTurns.first?.speaker, "Unknown speaker")
+        for (language, expected) in [(PichiInterfaceLanguage.russian, "Неизвестный участник"), (.english, "Unknown speaker")] {
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: segment, in: session, speakerNames: [:], language: language), expected)
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: segment, in: session, speakerNames: [:]), "Unknown speaker")
+            XCTAssertEqual(PichiMeetingSummaryInput.turns(for: session), canonicalTurns)
+            XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+        }
+        session.transcriptSegments[0].text += " Исправление."
+        XCTAssertNotEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
     private actor InferenceGate {
         private var continuation: CheckedContinuation<Void, Never>?
         private var released = false

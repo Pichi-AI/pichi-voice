@@ -361,6 +361,7 @@ struct MeetingResultCanvas: View {
     var summaryASRService: ASRService? = nil
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
     @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
     @State private var pendingRenameText = ""
@@ -478,7 +479,8 @@ struct MeetingResultCanvas: View {
                                     speakerName: MeetingTranscriptExporter.speakerLabel(
                                         for: row.segment,
                                         in: self.session,
-                                        speakerNames: speakerNames
+                                        speakerNames: speakerNames,
+                                        language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
                                     ),
                                     speakerTint: row.segment.speakerID.flatMap { self.speakerTints[$0] },
                                     onRenameSpeakerTapped: {

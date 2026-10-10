@@ -21,7 +21,8 @@ nonisolated enum MeetingTranscriptExporter {
         for segment: MeetingTranscriptSegment,
         in session: MeetingSession,
         speakerNames: [SessionSpeakerID: String],
-        language: PichiInterfaceLanguage = PichiLocalization.language,
+        // Stable fallback for exports and summary fingerprints; UI passes its locale explicitly.
+        language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
         guard let state = segment.attributionState else {
