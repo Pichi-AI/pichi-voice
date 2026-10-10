@@ -317,14 +317,14 @@ final class MeetingLiveEchoFilterTests: XCTestCase {
 }
 
 final class MeetingLiveMemoryGateTests: XCTestCase {
-    func testNonEnglishRecordingDoesNotStartEnglishCaptionEngines() {
-        let notice = expectation(description: "Final transcript available after recording")
+    func testGigaAMRejectsUnsupportedLanguageBeforeCaptionModelsLoad() {
+        let notice = expectation(description: "Unsupported GigaAM language is rejected before loading")
         let coordinator = MeetingLiveTranscriptionCoordinator { snapshot in
-            XCTAssertEqual(snapshot.availability, .unavailable(reason: "Live captions support English only. Your transcript will be generated after recording."))
+            XCTAssertEqual(snapshot.availability, .unavailable(reason: "GigaAM captions require Russian as the meeting language."))
             XCTAssertTrue(snapshot.utterances.isEmpty)
             notice.fulfill()
         }
-        coordinator.start(mode: .onlineCall, languageCode: "de")
+        coordinator.start(mode: .onlineCall, languageCode: "de", modelID: PichiMeetingProviderFactory.gigaamModelID)
         wait(for: [notice], timeout: 1)
     }
 
