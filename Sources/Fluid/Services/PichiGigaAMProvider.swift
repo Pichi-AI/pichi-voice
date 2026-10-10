@@ -44,6 +44,14 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
         return model
     }
 
+    func installedModelFingerprint() throws -> String {
+        Self.fingerprint(for: try self.installedModel().descriptor)
+    }
+
+    private static func fingerprint(for descriptor: GigaAMModelDescriptor) -> String {
+        "gigaam-native-v1/\(descriptor.id)/\(descriptor.modelSHA256)/\(descriptor.vocabularySHA256 ?? "russian-characters-v1")"
+    }
+
     func importModel(from sourceDirectory: URL) async throws {
         let destinationRoot = self.overriddenDirectory ?? Self.defaultDirectory
         let task = Task.detached(priority: .userInitiated) {
@@ -105,10 +113,15 @@ final class PichiGigaAMProvider: TranscriptionProvider {
     private(set) var isReady = false
 
     private let modelStore: PichiGigaAMModelStore
+    private let expectedModelFingerprint: String?
+    private(set) var loadedModelFingerprint: String?
     private var runtime: GigaAMRuntime?
     private var preparationTask: Task<Void, Error>?
 
-    init(modelStore: PichiGigaAMModelStore = .shared) { self.modelStore = modelStore }
+    init(modelStore: PichiGigaAMModelStore = .shared, expectedModelFingerprint: String? = nil) {
+        self.modelStore = modelStore
+        self.expectedModelFingerprint = expectedModelFingerprint
+    }
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws {
         try Task.checkCancellation()
@@ -119,12 +132,17 @@ final class PichiGigaAMProvider: TranscriptionProvider {
             return
         }
         let model = try self.modelStore.installedModel()
+        let fingerprint = try self.modelStore.installedModelFingerprint()
+        if let expected = self.expectedModelFingerprint, expected != fingerprint {
+            throw NSError(domain: "PichiGigaAMProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "The installed GigaAM export has changed since this meeting was scheduled. Restore that export or start a new processing run."])
+        }
         let runtime = try GigaAMRuntime()
         self.runtime = runtime
         progressHandler?(.loading)
         let task = Task {
             try await runtime.load(descriptor: model.descriptor, directory: model.directory)
             try Task.checkCancellation()
+            self.loadedModelFingerprint = fingerprint
             self.isReady = true
         }
         self.preparationTask = task
@@ -136,10 +154,12 @@ final class PichiGigaAMProvider: TranscriptionProvider {
                 task.cancel()
             }
             try Task.checkCancellation()
+            self.loadedModelFingerprint = fingerprint
             self.isReady = true
         } catch {
             await runtime.unload()
             self.runtime = nil
+            self.loadedModelFingerprint = nil
             self.isReady = false
             throw error
         }
@@ -179,6 +199,7 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         if let task = self.preparationTask { _ = try? await task.value }
         self.preparationTask = nil
         self.isReady = false
+        self.loadedModelFingerprint = nil
         await self.runtime?.unload()
         self.runtime = nil
     }
