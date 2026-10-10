@@ -34,6 +34,20 @@ Read [development setup](docs/development/codex.md) and [upstream strategy](docs
 - Upstream community and contribution rules apply when proposing changes to FluidVoice. The user's instructions authorize work on this downstream repository.
 - Preserve upstream copyright notices and GPL-3.0. Check model and dataset licenses separately before distribution. The private Fluid Intelligence runtime is not supplied by the public repository.
 
+## Architecture requirements for every agent
+
+**CRITICAL:** Minimal upstream changes mean extending the existing architecture correctly, not adding hardcoded shortcuts. These requirements apply to parent agents, delegated agents, implementation and code review.
+
+- **MUST** inspect the current implementation, upstream contracts and neighboring implementations before choosing an extension point. Reuse the existing `TranscriptionProvider`, meeting backend registry, settings, storage and resource mechanisms when their contracts fit.
+- **NEVER** add a model-specific factory, constructor parameter or model switch to a common meeting coordinator, processing pipeline or execution context for each new model. Register providers/backends through the existing extension boundary; common orchestration must consume contracts and capabilities. Model identifiers, artifact validation and engine-specific behavior belong to the registered descriptor or inference adapter.
+- Keep model-specific types only where they represent actual inference/runtime differences. Do not rename inherited upstream types merely to make names generic, or create a parallel provider hierarchy that duplicates existing preparation, cancellation, audio routing or residency management.
+- **MUST** justify each new abstraction, class, factory or shared integration point with the concrete existing limitation it solves. Prefer the smallest coherent extension over a new framework, speculative plug-in system or repository-wide rewrite. A small diff is insufficient justification for a brittle shortcut.
+- Product names, logos, palettes and appearance belong to the versioned portable brand package. Common UI and services must use the shared branding/theme contracts; do not embed Pichi, a bank or the original product name as a new product default in Swift code. Preserve source copyright and genuine third-party model attribution.
+- Interface copy belongs to Apple's String Catalogs and standard localization resources. Adding a language must not require a new language branch in application logic. Never use translated labels for behavior selection, or translate user transcripts, dictionaries, imported brand names, model/API identifiers or other user data.
+- Keep imported appearance separate from trusted distribution identity, credential storage, analytics destinations and update/signing policy. A brand import must not change these service/security boundaries or reuse another installation's data.
+- Reliability requirements include immutable model/artifact selection per attempt, explicit resource ownership, bounded memory, joined cancellation and restoration on success, failure and cancellation. Do not bypass these rules to make a new provider appear supported.
+- **MUST** include architecture in the independent automated code review: check existing extension-point reuse, common-layer model/brand/language hardcoding, duplicated pipelines, mutable selection, cancellation, resource ownership and upstream merge impact. Report concrete design decisions and tests rather than claiming universal architecture without evidence.
+
 ## Data and completion
 
 - **NEVER** commit personal dictionaries, private training audio, model weights, credentials, signing identities, or private evaluation datasets. Keep them in ignored local storage or an explicitly authorized artifact store. Only synthetic or approved public fixtures belong in Git.
