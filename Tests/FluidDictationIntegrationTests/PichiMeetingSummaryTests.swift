@@ -538,8 +538,9 @@ final class PichiMeetingSummaryTests: XCTestCase {
 
     func testLiveRussianSummaryWithOllamaWhenEnabled() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
-                          "Opt-in local inference check. Requires an installed qwen3.5:4b model in Ollama.")
-        let configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: "qwen3.5:4b",
+                          "Opt-in local inference check. Requires an installed local model in Ollama.")
+        let modelID = ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b"
+        let configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: modelID,
                                                              baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru")
         let session = self.session()
         let result = try await PichiMeetingSummaryGenerator().generate(session: session, configuration: configuration)
@@ -555,15 +556,49 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
     }
 
+    func testLiveUnansweredQuestionCannotBeResolvedByUnrelatedLaterStatusWhenEnabled() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
+                          "Opt-in semantic regression using synthetic speech, never a private recording.")
+        let modelID = ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b"
+        let configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: modelID,
+                                                             baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru")
+        var session = self.session()
+        session.transcriptSegments[0].text = "Оборудование установлено. Можно ли уже отправить итоговые материалы клиенту?"
+        var closing = session.transcriptSegments[0]
+        closing.id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        closing.start = .init(value: 60_000, timescale: 1000)
+        closing.end = .init(value: 61_000, timescale: 1000)
+        closing.text = "Какие вопросы ещё остались? Нужно выяснить, можно ли вернуть платёж. Решения о возврате пока нет."
+        session.transcriptSegments.append(closing)
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await PichiMeetingSummaryGenerator().generate(session: session, configuration: configuration)
+        let opening = try XCTUnwrap(result.openQuestions.first { item in
+            item.text.localizedCaseInsensitiveContains("отправ") && item.text.localizedCaseInsensitiveContains("материал")
+                && item.evidence.contains { $0.segmentID == self.id }
+        }, "Retain the explicitly unanswered opening question, not only a recap of its topic")
+        XCTAssertNotEqual(opening.resolved, true, "The later refund status does not answer whether materials can be sent")
+        XCTAssertTrue(result.openQuestions.contains { item in
+            (item.text.localizedCaseInsensitiveContains("верн") || item.text.localizedCaseInsensitiveContains("возврат"))
+                && (item.text.localizedCaseInsensitiveContains("плат") || item.text.localizedCaseInsensitiveContains("средств"))
+                && item.evidence.contains { $0.segmentID == closing.id } && item.resolved != true
+        }, "The closing requested check must also remain unanswered")
+        XCTAssertTrue(result.decisions.isEmpty, "No agreed choice was spoken")
+        XCTAssertTrue(result.actions.allSatisfy { $0.owner == nil && $0.deadline == nil },
+                      "Requested work may be retained, but no owner or deadline was assigned")
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
     func testLiveSavedSessionSummaryWhenExplicitlyEnabled() async throws {
         let path = ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE_SESSION_PATH"] ?? ""
         try XCTSkipIf(path.isEmpty, "Opt-in local verification of an explicitly authorized private saved session.")
+        let modelID = ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b"
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let session = try decoder.decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
         let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
         let result = try await PichiMeetingSummaryGenerator().generate(session: session, configuration: .init(
-            providerID: "pichi-local", modelID: "qwen3.5:4b", baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru"
+            providerID: "pichi-local", modelID: modelID, baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru"
         ))
         XCTAssertFalse(result.summary.isEmpty)
         XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
