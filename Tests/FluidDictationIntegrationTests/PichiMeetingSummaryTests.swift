@@ -1292,7 +1292,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             XCTFail("Release failure must be surfaced")
         } catch let error as PichiMeetingSummaryCleanupError {
             XCTAssertEqual((error.underlying as? URLError)?.code, .cannotConnectToHost)
-            XCTAssertEqual(error.localizedDescription, URLError(.cannotConnectToHost).localizedDescription)
+            XCTAssertEqual(error.localizedDescription, PichiLocalization.format("Could not release temporary summary resources: %@", URLError(.cannotConnectToHost).localizedDescription))
         } catch { XCTFail("Cleanup diagnosis must survive the original copy failure: \(error)") }
         let deletes = await server.deletes
         XCTAssertEqual(deletes.count, 1)
