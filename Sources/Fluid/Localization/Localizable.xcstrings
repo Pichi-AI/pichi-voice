@@ -17754,6 +17754,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "History filter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History filter"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фильтр истории"
+          }
+        }
+      }
+    },
     "History is unavailable. Retry from History in FluidVoice.": {
       "extractionState": "manual",
       "localizations": {

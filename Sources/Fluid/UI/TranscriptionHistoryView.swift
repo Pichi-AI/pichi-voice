@@ -79,7 +79,11 @@ struct TranscriptionHistoryView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     self.searchBar
-                    FluidDropdownPicker("History filter", selectedTitle: self.pinnedOnly ? "Pinned" : "All", selection: self.$pinnedOnly) {
+                    FluidDropdownPicker(
+                        PichiLocalization.text("History filter"),
+                        selectedTitle: PichiLocalization.text(self.pinnedOnly ? "Pinned" : "All"),
+                        selection: self.$pinnedOnly
+                    ) {
                         Text("All").tag(false)
                         Text("Pinned").tag(true)
                     }
