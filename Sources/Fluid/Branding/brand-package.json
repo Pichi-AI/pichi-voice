@@ -52,6 +52,8 @@
     "defaultAppearance": "system",
     "cornerRadiusScale": 1,
     "spacingScale": 1,
+    "bodyFontDesign": "sans",
+    "titleFontDesign": "sans",
     "defaultOnboardingLanguageID": "ru"
   },
   "logos": {
