@@ -75,6 +75,20 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(pieces.map(\.quote.count), [160, 160, 160, 30], "Repeated passages and the final tail must remain in their original order")
     }
 
+    func testExistingChunkBudgetPreservesManyShortTurnsAndDifficultWordBoundaries() {
+        let shortTurns = (0..<2000).map { index in
+            PichiMeetingSummaryTurn(id: UUID(), seconds: Double(index), speaker: "", text: "да")
+        }
+        let fragments = PichiMeetingSummaryInput.chunks(shortTurns)
+        XCTAssertEqual(fragments.flatMap { $0 }.count, shortTurns.count)
+        XCTAssertTrue(fragments.allSatisfy { PichiMeetingSummaryInput.evidenceChoices($0).count <= 128 })
+        let difficult = String(repeating: "а " + String(repeating: "б", count: 159) + " ", count: 50)
+        let source = PichiMeetingSummaryTurn(id: self.id, seconds: 0, speaker: "", text: difficult)
+        let chunks = PichiMeetingSummaryInput.chunks([source])
+        XCTAssertEqual(chunks.flatMap { $0 }.map(\.text).joined(), difficult)
+        XCTAssertTrue(chunks.allSatisfy { PichiMeetingSummaryInput.evidenceChoices($0).count <= 128 })
+    }
+
     func testRepeatedSourcePassagesRemainInOrderInCompactInput() async throws {
         var session = self.session()
         let agreement = "Решили выпустить релиз в пятницу. " + String(repeating: "А", count: 125) + " "
@@ -212,9 +226,10 @@ final class PichiMeetingSummaryTests: XCTestCase {
     }
 
     func testOtherCompatibleEndpointsKeepTheirExistingRequestFormat() async throws {
-        let transport = FixtureTransport()
+        let transport = RepairTransport(responses: [try self.referenceResponse(0)])
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
-        _ = try await generator.generate(session: self.session(), configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+        let result = try await generator.generate(session: self.session(), configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+        XCTAssertEqual(result.summary[0].evidence, [.init(segmentID: self.id, quote: self.turns[0].text)])
         let requests = await transport.requests
         XCTAssertNil(requests[0].extraParameters["response_format"])
     }
