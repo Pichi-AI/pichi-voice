@@ -1720,7 +1720,7 @@ struct SettingsView: View {
 
             self.presentInfoAlert(
                 title: "Backup Exported",
-                message: AppBrand.text("Saved your FluidVoice backup to:\n\(url.path)")
+                message: AppBrand.format("Saved your FluidVoice backup to:\n%@", url.path)
             )
         } catch {
             self.presentErrorAlert(
@@ -1748,20 +1748,16 @@ struct SettingsView: View {
             let document = try BackupService.shared.decode(data)
 
             let formatter = DateFormatter()
+            formatter.locale = PichiLocalization.locale
             formatter.dateStyle = .medium
             formatter.timeStyle = .short
 
             let confirm = NSAlert()
-            confirm.messageText = "Import this backup?"
-            confirm.informativeText = """
-            This replaces your current settings, prompt profiles, and stats history.
-
-            Exported: \(formatter.string(from: document.exportedAt))
-            API keys are not included and will not be changed.
-            """
+            confirm.messageText = PichiLocalization.text("Import this backup?")
+            confirm.informativeText = PichiLocalization.format("This replaces your current settings, prompt profiles, and stats history.\n\nExported: %@\nAPI keys are not included and will not be changed.", formatter.string(from: document.exportedAt))
             confirm.alertStyle = .warning
-            confirm.addButton(withTitle: "Import")
-            confirm.addButton(withTitle: "Cancel")
+            confirm.addButton(withTitle: PichiLocalization.text("Import"))
+            confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
 
             guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
@@ -1770,7 +1766,7 @@ struct SettingsView: View {
 
             self.presentInfoAlert(
                 title: "Backup Imported",
-                message: "Your settings, prompt profiles, and stats were restored successfully."
+                message: PichiLocalization.text("Your settings, prompt profiles, and stats were restored successfully.")
             )
         } catch {
             self.presentErrorAlert(
@@ -1797,7 +1793,7 @@ struct SettingsView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: ",", with: ".")
         guard let value = Double(normalized), value > 0 else {
-            self.presentErrorAlert(title: "Invalid Budget", message: "Enter a positive number of GB.")
+            self.presentErrorAlert(title: "Invalid Budget", message: PichiLocalization.text("Enter a positive number of GB."))
             self.refreshAudioHistoryUsage()
             return
         }
@@ -1806,13 +1802,11 @@ struct SettingsView: View {
         let newBudgetBytes = DictationAudioHistoryStore.bytes(forGigabytes: newBudget)
         if self.audioHistoryUsageBytes > newBudgetBytes {
             let confirm = NSAlert()
-            confirm.messageText = "Prune saved audio?"
-            confirm.informativeText = """
-            This budget is below current audio usage. \(AppBrand.appName) will delete the oldest saved audio first and keep transcript history.
-            """
+            confirm.messageText = PichiLocalization.text("Prune saved audio?")
+            confirm.informativeText = PichiLocalization.format("This budget is below current audio usage. %@ will delete the oldest saved audio first and keep transcript history.", AppBrand.appName)
             confirm.alertStyle = .warning
-            confirm.addButton(withTitle: "Apply and Prune")
-            confirm.addButton(withTitle: "Cancel")
+            confirm.addButton(withTitle: PichiLocalization.text("Apply and Prune"))
+            confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
             guard confirm.runModal() == .alertFirstButtonReturn else {
                 self.refreshAudioHistoryUsage()
                 return
@@ -1823,22 +1817,22 @@ struct SettingsView: View {
         let pruned = TranscriptionHistoryStore.shared.pruneAudioToBudget()
         self.refreshAudioHistoryUsage()
         if pruned > 0 {
-            self.presentInfoAlert(title: "Audio Pruned", message: "Deleted oldest saved audio from \(pruned) history entries.")
+            self.presentInfoAlert(title: "Audio Pruned", message: PichiLocalization.format("Deleted oldest saved audio from %lld history entries.", Int64(pruned)))
         }
     }
 
     private func deleteSavedAudio() {
         let confirm = NSAlert()
-        confirm.messageText = "Delete saved audio?"
-        confirm.informativeText = "This removes saved dictation audio only. Transcript history stays intact."
+        confirm.messageText = PichiLocalization.text("Delete saved audio?")
+        confirm.informativeText = PichiLocalization.text("This removes saved dictation audio only. Transcript history stays intact.")
         confirm.alertStyle = .warning
-        confirm.addButton(withTitle: "Delete Audio")
-        confirm.addButton(withTitle: "Cancel")
+        confirm.addButton(withTitle: PichiLocalization.text("Delete Audio"))
+        confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
         let removed = TranscriptionHistoryStore.shared.deleteAllSavedAudio()
         self.refreshAudioHistoryUsage()
-        self.presentInfoAlert(title: "Audio Deleted", message: "Removed audio from \(removed) history entries.")
+        self.presentInfoAlert(title: "Audio Deleted", message: PichiLocalization.format("Removed audio from %lld history entries.", Int64(removed)))
     }
 
     private func exportAudioZip() {
@@ -1859,7 +1853,7 @@ struct SettingsView: View {
                 entries: TranscriptionHistoryStore.shared.entries,
                 to: url
             )
-            self.presentInfoAlert(title: "Audio Export Saved", message: "Saved your dictation audio export to:\n\(url.path)")
+            self.presentInfoAlert(title: "Audio Export Saved", message: PichiLocalization.format("Saved your dictation audio export to:\n%@", url.path))
         } catch {
             self.presentErrorAlert(title: "Audio Export Failed", message: error.localizedDescription)
         }
@@ -1870,7 +1864,7 @@ struct SettingsView: View {
         alert.messageText = PichiLocalization.text(title)
         alert.informativeText = message
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: PichiLocalization.text("OK"))
         alert.runModal()
     }
 
@@ -1879,7 +1873,7 @@ struct SettingsView: View {
         alert.messageText = PichiLocalization.text(title)
         alert.informativeText = message
         alert.alertStyle = .critical
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: PichiLocalization.text("OK"))
         alert.runModal()
     }
 
@@ -1906,15 +1900,15 @@ struct SettingsView: View {
         }
 
         let picker = NSAlert()
-        picker.messageText = "Download Previous Build"
-        picker.informativeText = "No local rollback backup was found. Choose a recent release build:"
+        picker.messageText = PichiLocalization.text("Download Previous Build")
+        picker.informativeText = PichiLocalization.text("No local rollback backup was found. Choose a recent release build:")
         picker.alertStyle = .informational
 
         for option in options {
             picker.addButton(withTitle: option.version)
         }
-        picker.addButton(withTitle: "All Releases")
-        picker.addButton(withTitle: "Cancel")
+        picker.addButton(withTitle: PichiLocalization.text("All Releases"))
+        picker.addButton(withTitle: PichiLocalization.text("Cancel"))
 
         let response = picker.runModal()
         let first = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue

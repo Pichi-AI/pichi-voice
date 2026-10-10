@@ -156,6 +156,47 @@ final class PichiLocalizationTests: XCTestCase {
         XCTAssertNotNil(privacyCopy.range(of: PichiLocalization.text("support team", language: .russian, bundle: .main)))
     }
 
+    func testCompiledSettingsAlertsPreserveBrandPathAndDateArgumentsAndUseNativePlurals() {
+        let profile = BrandProfile(
+            appName: "Settings 100%", meetingName: "My meetings", assistantName: "My AI",
+            tagline: "My product", accentLight: "#123456", accentDark: "#654321",
+            website: "https://example.invalid", support: "https://example.invalid/support"
+        )
+        let path = "/tmp/FluidVoice/Settings ё %@.json"
+        XCTAssertEqual(AppBrand.format("Saved your FluidVoice backup to:\n%@", profile: profile, language: .russian,
+                                       bundle: .main, arguments: [path]), "Резервная копия Settings 100% сохранена:\n\(path)")
+        XCTAssertEqual(PichiLocalization.format("Saved your dictation audio export to:\n%@", language: .russian,
+                                                bundle: .main, arguments: [path]), "Экспорт аудиозаписей диктовок сохранён:\n\(path)")
+        let exportedDate = "Settings ё 10.10.2026, 12:34"
+        let importBody = "This replaces your current settings, prompt profiles, and stats history.\n\nExported: %@\nAPI keys are not included and will not be changed."
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            XCTAssertTrue(PichiLocalization.format(importBody, language: language, bundle: .main, arguments: [exportedDate]).contains(exportedDate))
+            XCTAssertTrue(PichiLocalization.format("This budget is below current audio usage. %@ will delete the oldest saved audio first and keep transcript history.",
+                                                    language: language, bundle: .main, arguments: [profile.appName]).contains(profile.appName))
+        }
+        for (key, expected) in [
+            "Import this backup?": "Импортировать эту резервную копию?",
+            "Prune saved audio?": "Удалить старые аудиозаписи?",
+            "Apply and Prune": "Применить и удалить старые записи",
+            "Delete saved audio?": "Удалить сохранённые аудиозаписи?",
+            "This removes saved dictation audio only. Transcript history stays intact.": "Будут удалены только сохранённые аудиозаписи диктовок. История расшифровок останется.",
+            "Your settings, prompt profiles, and stats were restored successfully.": "Настройки, профили запросов и статистика успешно восстановлены.",
+        ] {
+            XCTAssertEqual(PichiLocalization.text(key, language: .russian, bundle: .main), expected)
+            XCTAssertEqual(PichiLocalization.text(key, language: .english, bundle: .main), key)
+        }
+        for (key, prefix) in [
+            "Deleted oldest saved audio from %lld history entries.": "Удалено старое аудио из",
+            "Removed audio from %lld history entries.": "Аудио удалено из",
+        ] {
+            for (count, noun) in [0: "записей", 1: "записи", 2: "записей", 5: "записей", 11: "записей", 21: "записи", 22: "записей"] {
+                XCTAssertEqual(PichiLocalization.format(key, language: .russian, bundle: .main, arguments: [Int64(count)]), "\(prefix) \(count) \(noun) истории.")
+            }
+            XCTAssertTrue(PichiLocalization.format(key, language: .english, bundle: .main, arguments: [Int64(1)]).hasSuffix("1 history entry."))
+            XCTAssertTrue(PichiLocalization.format(key, language: .english, bundle: .main, arguments: [Int64(2)]).hasSuffix("2 history entries."))
+        }
+    }
+
     func testMeetingHealthWarningsUseCompiledCatalogWithoutChangingPersistedDiagnostics() throws {
         let warnings = [
             "No meeting audio is being captured while your microphone is active.": "Звук встречи не записывается, хотя микрофон активен.",

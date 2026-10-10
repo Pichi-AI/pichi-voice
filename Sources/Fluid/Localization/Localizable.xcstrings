@@ -5142,6 +5142,23 @@
         }
       }
     },
+    "Apply and Prune": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apply and Prune"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применить и удалить старые записи"
+          }
+        }
+      }
+    },
     "Approved public transcription and AI provider/model identifiers, counted as daily totals. Custom names are replaced with generic categories.": {
       "extractionState": "manual",
       "localizations": {
@@ -12272,6 +12289,23 @@
         }
       }
     },
+    "Delete saved audio?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete saved audio?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить сохранённые аудиозаписи?"
+          }
+        }
+      }
+    },
     "Delete transcript": {
       "extractionState": "manual",
       "localizations": {
@@ -12336,6 +12370,60 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удалить «%@»? Это действие нельзя отменить."
+          }
+        }
+      }
+    },
+    "Deleted oldest saved audio from %lld history entries.": {
+      "extractionState": "manual",
+      "comment": "Native plural forms for audio-only history cleanup. The integer is the number of history entries, not audio duration. Transcript text is retained.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Deleted oldest saved audio from %lld history entry."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Deleted oldest saved audio from %lld history entries."
+                }
+              }
+            }
+          }
+        },
+        "ru": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Удалено старое аудио из %lld записи истории."
+                }
+              },
+              "few": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Удалено старое аудио из %lld записей истории."
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Удалено старое аудио из %lld записей истории."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Удалено старое аудио из %lld записей истории."
+                }
+              }
+            }
           }
         }
       }
@@ -14415,6 +14503,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Введите новое название встречи."
+          }
+        }
+      }
+    },
+    "Enter a positive number of GB.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a positive number of GB."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Введите положительное число гигабайт."
           }
         }
       }
@@ -18362,6 +18467,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Импорт папки модели"
+          }
+        }
+      }
+    },
+    "Import this backup?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import this backup?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать эту резервную копию?"
           }
         }
       }
@@ -23522,6 +23644,23 @@
         }
       }
     },
+    "No local rollback backup was found. Choose a recent release build:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No local rollback backup was found. Choose a recent release build:"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная копия для отката не найдена. Выберите одну из последних сборок:"
+          }
+        }
+      }
+    },
     "No matching active sessions": {
       "extractionState": "manual",
       "localizations": {
@@ -27763,6 +27902,23 @@
         }
       }
     },
+    "Prune saved audio?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prune saved audio?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить старые аудиозаписи?"
+          }
+        }
+      }
+    },
     "Punctuation": {
       "extractionState": "manual",
       "localizations": {
@@ -29377,6 +29533,60 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удалить слово?"
+          }
+        }
+      }
+    },
+    "Removed audio from %lld history entries.": {
+      "extractionState": "manual",
+      "comment": "Native plural forms for audio-only history cleanup. The integer is the number of history entries, not audio duration. Transcript text is retained.",
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Removed audio from %lld history entry."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Removed audio from %lld history entries."
+                }
+              }
+            }
+          }
+        },
+        "ru": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Аудио удалено из %lld записи истории."
+                }
+              },
+              "few": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Аудио удалено из %lld записей истории."
+                }
+              },
+              "many": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Аудио удалено из %lld записей истории."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Аудио удалено из %lld записей истории."
+                }
+              }
+            }
           }
         }
       }
@@ -31101,6 +31311,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сохранено на этом Mac"
+          }
+        }
+      }
+    },
+    "Saved your FluidVoice backup to:\n%@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved your FluidVoice backup to:\n%@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервная копия FluidVoice сохранена:\n%@"
+          }
+        }
+      }
+    },
+    "Saved your dictation audio export to:\n%@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved your dictation audio export to:\n%@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспорт аудиозаписей диктовок сохранён:\n%@"
           }
         }
       }
@@ -36926,6 +37170,23 @@
         }
       }
     },
+    "This budget is below current audio usage. %@ will delete the oldest saved audio first and keep transcript history.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This budget is below current audio usage. %@ will delete the oldest saved audio first and keep transcript history."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лимит меньше текущего объёма аудио. %@ удалит сначала самые старые аудиозаписи, сохранив историю расшифровок."
+          }
+        }
+      }
+    },
     "This cannot be undone.": {
       "extractionState": "manual",
       "localizations": {
@@ -37217,6 +37478,23 @@
         }
       }
     },
+    "This removes saved dictation audio only. Transcript history stays intact.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This removes saved dictation audio only. Transcript history stays intact."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Будут удалены только сохранённые аудиозаписи диктовок. История расшифровок останется."
+          }
+        }
+      }
+    },
     "This removes the saved corrections and pronunciation for this word.": {
       "extractionState": "manual",
       "localizations": {
@@ -37247,6 +37525,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Стартовое слово, фразы и состояние действий форматирования, а также все правила пунктуации будут заменены настройками по умолчанию."
+          }
+        }
+      }
+    },
+    "This replaces your current settings, prompt profiles, and stats history.\n\nExported: %@\nAPI keys are not included and will not be changed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This replaces your current settings, prompt profiles, and stats history.\n\nExported: %@\nAPI keys are not included and will not be changed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текущие настройки, профили запросов и история статистики будут заменены.\n\nДата экспорта: %@\nКлючи API не входят в резервную копию и не будут изменены."
           }
         }
       }
@@ -41910,6 +42205,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ваш сервис или сервер"
+          }
+        }
+      }
+    },
+    "Your settings, prompt profiles, and stats were restored successfully.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your settings, prompt profiles, and stats were restored successfully."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки, профили запросов и статистика успешно восстановлены."
           }
         }
       }
