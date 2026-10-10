@@ -90,3 +90,31 @@ python3 -S Tests/test_text_model_eval_protocol.py
 ```
 
 A recommendation requires a completed clean run, the complete 16-case model corpus, all task rows independently reviewed, no critical semantic failure and repeated critical cases for finalists. A tiny smoke slice cannot qualify. Do not change the application default based on one positive fixture, nonempty response, citation acceptance or publisher benchmark. Evaluate an explicitly authorized private held-out recording locally after screening synthetic cases; keep its content, outputs and paths out of Git. The existing saved-session opt-in test can provide structural held-out evidence, but its nonempty result alone is not a semantic quality score.
+
+
+## October 10 local verification
+
+The evaluated baseline was `ec0475daf671f51275abbea94163d96aa872aa4d`. Its seven source files, copied native host and model digests were preserved before integration. Eight models completed a 128-attempt synthetic matrix with independent blinded judgments. The initial host exited normally after 124 rows while XCTest returned 65; the remaining four source-identical rows passed in a separate run. This is a complete combined evaluation, not a claimed full-suite pass for the interrupted run.
+
+An explicitly authorized private held-out transcript was approximately 67 minutes with 224 turns. A frontier assistant created a 25-fact reference before viewing candidates, and an independent audit checked literal source quotations and chronology. The reference is based on noisy ASR text; audio was not annotated. No transcript, raw output, private source identity or credential belongs in this repository.
+
+All eight baseline structured pipeline attempts at 8k context were rejected. Failure categories include bounded request failure, unsupported owner/deadline and final validation; rejection is not itself proof of fabricated meaning. An additional direct prose experiment used the complete transcript with a common 32768-context/3000-output profile, temperature zero and thinking off. Every output ended normally and every unload was joined. This direct experiment is separate from production structured compatibility.
+
+| Candidate | Disk GB | Observed server and runner RSS peak GB | Direct prose seconds | Weighted fact coverage | Critical distortion |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Qwen3.5 2B | 1.95 | 2.78 | 16 | 18.9% | yes |
+| Qwen3.5 4B | 3.32 | 4.95 | 40 | 44.3% | yes |
+| Qwen3.5 9B | 6.55 | 8.15 | 75 | 38.7% | yes |
+| T-lite-it 2.1 | 5.03 | 10.09 | 66 | 26.4% | yes |
+| Gemma 4 E2B | 4.34 | 5.07 | 25 | 33.0% | yes |
+| Gemma 4 31B | 19.87 | 26.00 | 252 | 46.2% | no |
+| GigaChat 3.1 Lightning | 6.47 | 7.64 | 77 | 25.5% | no |
+| YandexGPT 5 Lite compatible | 4.92 | 9.42 | 49 | 7.5% | no |
+
+Coverage is a salience-weighted reference metric, not accuracy. A generic answer can have few false claims while omitting the meeting's outcome; Yandex omitted the final QA topic. None qualifies as a reliable automatic summary default. The short dictation matrix favored Gemma E2B, but its held-out summary still had material errors. GigaChat enhancement executed one dictated instruction and translated three Russian inputs into English. The separate Gemma E2B SSE check passed three fixtures repeated twice, with ten lexical checks; it is a transport smoke check, not a replacement quality score.
+
+Memory was sampled on a 128 GiB Mac. RSS sums observed server/runner processes and can include shared pages; server-reported allocation is recorded separately. These metrics are not whole-device RAM and do not establish a physical 16 GB result. The initial sampler omitted runners; those earlier RSS values are explicitly server-only. The corrected sampler covered every direct 32k attempt.
+
+The reviewed application code at `43b44b9acd2be83dffbedccf2c01db9de9abcf7f` adds bounded extraction recovery and registered cloud schema transport. A real held-out rerun retained rejection: Qwen 2B reached an explicit output limit after eight calls; Qwen 4B reached unsupported-owner validation after ten. Recovery improves safe progress and diagnostics; it does not repair model meaning.
+
+Native Release arm64/x86_64 and Debug build-for-testing passed. The combined `a6050f38` suite passed 2357 tests with 63 skips and no failures; 260 affected tests at `43b44b9a` passed with eight skips and no failures. Independent review found and fixed live dictation metadata drift and unsafe splitting within a source turn. Re-review of the final code and localization at `008bf97b74c26c6023e676789199bf4129ea416d` was clean. Private test artifacts and screenshots stay in ignored local storage.
