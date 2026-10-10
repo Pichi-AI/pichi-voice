@@ -1014,9 +1014,9 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let directory = try XCTUnwrap(existingDirectory)
             let artifactURL = directory.appendingPathComponent("pichi-meeting-summary.json")
             let prior = self.document()
-            let bytes = try JSONEncoder().encode(PichiMeetingSummaryArtifact(version: 5,
+            let bytes = try JSONEncoder().encode(PichiMeetingSummaryArtifact(version: 6,
                 transcriptHash: PichiMeetingSummaryInput.fingerprint(session), configurationIdentity: configuration.cacheIdentity,
-                generatedAt: Date(), document: prior))
+                generatedAt: Date(), document: prior, baseConfigurationIdentity: configuration.baseCacheIdentity))
             try bytes.write(to: artifactURL, options: .atomic)
             let owner = MeetingModelResidencyCoordinator()
             let resources = SummaryResidentResources(owner: owner)
@@ -1219,6 +1219,221 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let calls = await transport.calls
         XCTAssertTrue(joined, "Inference cancellation must finish before model restoration or another attempt")
         XCTAssertEqual(calls, 1, "A deadline must not start a repair or the next chunk")
+    }
+
+    func testArtifactSnapshotFreezesCopiedDigestAndDeletesOnlyOwnedAlias() async throws {
+        let server = ArtifactServer()
+        let configuration = self.configuration()
+        let snapshot = try await PichiMeetingSummaryTransport.snapshot(configuration, load: { try await server.load($0) })
+        let alias = try XCTUnwrap(snapshot.configuration.inferenceModelID)
+        XCTAssertNotEqual(alias, configuration.modelID)
+        XCTAssertEqual(snapshot.configuration.modelID, configuration.modelID)
+        XCTAssertEqual(snapshot.configuration.modelArtifactID, ArtifactServer.digest)
+        await server.retagSource()
+        try await PichiMeetingSummaryTransport.verifyArtifact(ArtifactServer.digest, model: alias,
+            baseURL: configuration.baseURL, apiKey: "", load: { try await server.load($0) })
+        try await snapshot.release()
+        try await snapshot.release()
+        let models = await server.models
+        let deletes = await server.deletes
+        XCTAssertEqual(deletes, [alias])
+        XCTAssertEqual(models.count, 2)
+        XCTAssertEqual(models["unrelated:latest"], ArtifactServer.digest)
+        XCTAssertEqual(models["fixture-model:latest"], ArtifactServer.changedDigest)
+    }
+
+    func testCopySourceRetagRaceRejectsAndCleansAlias() async throws {
+        let server = ArtifactServer(changeDuringCopy: true)
+        do {
+            _ = try await PichiMeetingSummaryTransport.snapshot(self.configuration(), load: { try await server.load($0) })
+            XCTFail("Changed source cannot be admitted")
+        } catch { XCTAssertFalse(error is CancellationError) }
+        let count = await server.models.count
+        let deletes = await server.deletes
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(deletes.count, 1)
+    }
+
+    func testCopyUnknownOutcomeStillDeletesOnlyAttemptAlias() async throws {
+        let server = ArtifactServer(failCopyAcknowledgement: true)
+        do {
+            _ = try await PichiMeetingSummaryTransport.snapshot(self.configuration(), load: { try await server.load($0) })
+            XCTFail("Lost acknowledgement must reject")
+        } catch { XCTAssertTrue(error is URLError) }
+        let count = await server.models.count
+        let deletes = await server.deletes
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(deletes.count, 1)
+    }
+
+    func testCancellationJoinsCopyAcknowledgementAndCleanup() async throws {
+        let entered = expectation(description: "copy started")
+        let gate = ArtifactCopyGate()
+        let server = ArtifactServer(copyStarted: { entered.fulfill() }, gate: gate)
+        let configuration = self.configuration()
+        let task = Task { try await PichiMeetingSummaryTransport.snapshot(configuration, load: { try await server.load($0) }) }
+        await fulfillment(of: [entered], timeout: 3)
+        task.cancel()
+        let before = await server.deletes
+        XCTAssertTrue(before.isEmpty)
+        await gate.release()
+        do { _ = try await task.value; XCTFail("Must cancel after joining copy") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let deletes = await server.deletes
+        let count = await server.models.count
+        XCTAssertEqual(deletes.count, 1)
+        XCTAssertEqual(count, 2)
+    }
+
+    func testNativeArtifactDriftFailsVerification() async throws {
+        let server = ArtifactServer()
+        let configuration = self.configuration()
+        let snapshot = try await PichiMeetingSummaryTransport.snapshot(configuration, load: { try await server.load($0) })
+        let alias = try XCTUnwrap(snapshot.configuration.inferenceModelID)
+        await server.retag(alias)
+        do {
+            try await PichiMeetingSummaryTransport.verifyArtifact(ArtifactServer.digest, model: alias,
+                baseURL: configuration.baseURL, apiKey: "", load: { try await server.load($0) })
+            XCTFail("Mutated alias must fail closed")
+        } catch { XCTAssertFalse(error is CancellationError) }
+        try await snapshot.release()
+    }
+
+    func testOpaqueEndpointDoesNotPerformArtifactManagement() async throws {
+        let configuration = self.configuration(endpoint: "http://127.0.0.1:1234/v1")
+        let snapshot = try await PichiMeetingSummaryTransport.snapshot(configuration, load: { _ in
+            XCTFail("Other providers retain the opaque model contract")
+            throw URLError(.unsupportedURL)
+        })
+        XCTAssertNil(snapshot.configuration.modelArtifactID)
+        XCTAssertNil(snapshot.configuration.inferenceModelID)
+        try await snapshot.release()
+    }
+
+    func testArtifactIdentityExcludesAliasAndCredentials() {
+        var first = self.configuration()
+        first.modelArtifactID = ArtifactServer.digest
+        first.inferenceModelID = "owned-first:snapshot"
+        var second = first
+        second.inferenceModelID = "owned-second:snapshot"
+        XCTAssertEqual(first.cacheIdentity, second.cacheIdentity)
+        second.modelArtifactID = ArtifactServer.changedDigest
+        XCTAssertNotEqual(first.cacheIdentity, second.cacheIdentity)
+        XCTAssertEqual(first.baseCacheIdentity, second.baseCacheIdentity)
+        XCTAssertEqual(first.cacheIdentity.count, 64)
+    }
+
+    @MainActor
+    func testCachedArtifactResolvesDigestAndOfflineCacheIsHistorical() async throws {
+        let session = self.session()
+        var configuration = self.configuration()
+        configuration.modelArtifactID = ArtifactServer.digest
+        let store = MeetingSessionStore.shared
+        try await store.create(session)
+        do {
+            let existing = try await store.existingSessionDirectory(for: session.id)
+            let directory = try XCTUnwrap(existing)
+            let artifact = PichiMeetingSummaryArtifact(version: 6,
+                transcriptHash: PichiMeetingSummaryInput.fingerprint(session), configurationIdentity: configuration.cacheIdentity,
+                generatedAt: Date(), document: self.document(), baseConfigurationIdentity: configuration.baseCacheIdentity,
+                modelArtifactID: ArtifactServer.digest)
+            try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"))
+            let current = self.configuration()
+            let changed = PichiMeetingSummaryController(generator: .init(complete: { _ in "" }, prepare: { .init(configuration: $0, release: {}) }, resolveArtifact: { _ in ArtifactServer.changedDigest }))
+            await changed.refresh(session: session, configuration: current)
+            XCTAssertNil(changed.document, "Online retag must invalidate cache")
+            let offline = PichiMeetingSummaryController(generator: .init(complete: { _ in "" }, prepare: { .init(configuration: $0, release: {}) }, resolveArtifact: { _ in throw URLError(.cannotConnectToHost) }))
+            await offline.refresh(session: session, configuration: current)
+            XCTAssertEqual(offline.document, self.document())
+            XCTAssertTrue(offline.documentIsHistorical)
+            XCTAssertEqual(offline.documentConfiguration?.modelArtifactID, ArtifactServer.digest)
+            let matching = PichiMeetingSummaryController(generator: .init(complete: { _ in "" }, prepare: { .init(configuration: $0, release: {}) }, resolveArtifact: { _ in ArtifactServer.digest }))
+            await matching.refresh(session: session, configuration: current)
+            XCTAssertEqual(matching.document, self.document())
+            XCTAssertFalse(matching.documentIsHistorical)
+        } catch { try await store.delete(id: session.id); throw error }
+        try await store.delete(id: session.id)
+    }
+
+    func testGeneratorPublishesPinnedProvenanceAfterExactlyOneRelease() async throws {
+        let server = ArtifactServer()
+        let expected = self.document()
+        let raw = try self.json(expected)
+        let generator = PichiMeetingSummaryGenerator(complete: { config in
+            XCTAssertTrue(config.model.hasPrefix("summary-attempt-"))
+            XCTAssertEqual(config.extraParameters["summary_artifact_id"] as? String, ArtifactServer.digest)
+            return raw
+        }, prepare: { try await PichiMeetingSummaryTransport.snapshot($0, load: { try await server.load($0) }) })
+        let result = try await generator.generateWithProvenance(session: self.session(), configuration: self.configuration())
+        XCTAssertEqual(result.document, expected)
+        XCTAssertEqual(result.configuration.modelID, "fixture-model")
+        XCTAssertEqual(result.configuration.modelArtifactID, ArtifactServer.digest)
+        let deletes = await server.deletes
+        XCTAssertEqual(deletes.count, 1)
+    }
+
+    func testGeneratorFailureJoinsOwnedAliasRelease() async throws {
+        let server = ArtifactServer()
+        let generator = PichiMeetingSummaryGenerator(complete: { _ in throw URLError(.cannotConnectToHost) },
+            prepare: { try await PichiMeetingSummaryTransport.snapshot($0, load: { try await server.load($0) }) })
+        do {
+            _ = try await generator.generate(session: self.session(), configuration: self.configuration())
+            XCTFail("Inference failure must remain rejected")
+        } catch { XCTAssertTrue(error is URLError) }
+        let deletes = await server.deletes
+        let count = await server.models.count
+        XCTAssertEqual(deletes.count, 1)
+        XCTAssertEqual(count, 2)
+    }
+
+    private actor ArtifactCopyGate {
+        var continuation: CheckedContinuation<Void, Never>?
+        var released = false
+        func wait() async { if !self.released { await withCheckedContinuation { self.continuation = $0 } } }
+        func release() { self.released = true; self.continuation?.resume(); self.continuation = nil }
+    }
+
+    private actor ArtifactServer {
+        static let digest = String(repeating: "a", count: 64)
+        static let changedDigest = String(repeating: "b", count: 64)
+        var models = ["fixture-model:latest": digest, "unrelated:latest": digest]
+        var deletes: [String] = []
+        let changeDuringCopy: Bool
+        let failCopyAcknowledgement: Bool
+        let copyStarted: @Sendable () -> Void
+        let gate: ArtifactCopyGate?
+        init(changeDuringCopy: Bool = false, failCopyAcknowledgement: Bool = false,
+             copyStarted: @escaping @Sendable () -> Void = {}, gate: ArtifactCopyGate? = nil) {
+            self.changeDuringCopy = changeDuringCopy
+            self.failCopyAcknowledgement = failCopyAcknowledgement
+            self.copyStarted = copyStarted
+            self.gate = gate
+        }
+        func retagSource() { self.models["fixture-model:latest"] = Self.changedDigest }
+        func retag(_ model: String) { self.models[model] = Self.changedDigest }
+        func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
+            if url.path == "/api/tags" {
+                let data = try JSONSerialization.data(withJSONObject: ["models": self.models.map { ["name": $0.key, "digest": $0.value] }])
+                return (data, response)
+            }
+            let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: String])
+            if url.path == "/api/copy" {
+                self.copyStarted()
+                if let gate { await gate.wait() }
+                let destination = try XCTUnwrap(body["destination"])
+                XCTAssertNil(self.models[destination])
+                self.models[destination] = self.changeDuringCopy ? Self.changedDigest : Self.digest
+                if self.failCopyAcknowledgement { throw URLError(.networkConnectionLost) }
+            } else if url.path == "/api/delete" {
+                let model = try XCTUnwrap(body["model"])
+                XCTAssertTrue(model.hasPrefix("summary-attempt-"))
+                self.deletes.append(model)
+                self.models.removeValue(forKey: model)
+            } else { XCTFail("Unexpected management request") }
+            return (Data(), response)
+        }
     }
 
     private func configuration(endpoint: String = "http://127.0.0.1:11434/v1") -> PichiMeetingSummaryConfiguration {

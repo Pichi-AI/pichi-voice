@@ -275,12 +275,23 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     let language: String
     var connectionOptions: [String: String] = [:]
     var execution: PichiMeetingSummaryExecution = .standard
+    var modelArtifactID: String? = nil
+    var inferenceModelID: String? = nil
 
     var isOnDevice: Bool { Self.isLoopback(self.baseURL) }
+    var baseCacheIdentity: String {
+        // Hash a canonical payload rather than delimiter-joining user-controlled values.
+        // Credentials and the temporary inference alias never become persisted metadata.
+        let payload: [String: Any] = ["version": 7, "provider": self.providerID, "model": self.modelID,
+                                      "endpoint": self.baseURL, "language": self.language,
+                                      "execution": self.execution.identity, "connection": self.connectionOptions]
+        let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     var cacheIdentity: String {
-        let options = self.connectionOptions.keys.sorted().flatMap { [$0, self.connectionOptions[$0] ?? ""] }
-        let identity = "v6|\(self.providerID)|\(self.modelID)|\(self.baseURL)|\(self.language)|\(self.execution.identity)"
-        return options.isEmpty ? identity : identity + "|" + options.joined(separator: "|")
+        guard let artifact = self.modelArtifactID else { return self.baseCacheIdentity }
+        return SHA256.hash(data: Data("\(self.baseCacheIdentity)|\(artifact)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     static func isLoopback(_ value: String) -> Bool {
@@ -318,21 +329,57 @@ nonisolated enum PichiMeetingSummaryError: LocalizedError {
 
 nonisolated struct PichiMeetingSummaryGenerator: Sendable {
     typealias Completion = @Sendable (LLMClient.Config) async throws -> String
+    typealias Prepare = @Sendable (PichiMeetingSummaryConfiguration) async throws -> PichiMeetingSummaryModelSnapshot
+    typealias Resolve = @Sendable (PichiMeetingSummaryConfiguration) async throws -> String?
     let complete: Completion
+    let prepare: Prepare
+    let resolveArtifact: Resolve
 
-    init(complete: @escaping Completion = { try await PichiMeetingSummaryTransport.complete($0) }) {
+    init() {
+        self.init(complete: { try await PichiMeetingSummaryTransport.complete($0) },
+                  prepare: { try await PichiMeetingSummaryTransport.snapshot($0) },
+                  resolveArtifact: { try await PichiMeetingSummaryTransport.artifactID($0) })
+    }
+
+    // Injected completions are deliberately network-free unless the caller opts into
+    // artifact preparation. This preserves deterministic provider/fixture boundaries.
+    init(complete: @escaping Completion) {
+        self.init(complete: complete, prepare: { .init(configuration: $0, release: {}) })
+    }
+
+    init(complete: @escaping Completion, prepare: @escaping Prepare,
+         resolveArtifact: @escaping Resolve = { _ in nil }) {
         self.complete = complete
+        self.prepare = prepare
+        self.resolveArtifact = resolveArtifact
     }
 
     func generate(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration,
                   progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }) async throws -> PichiMeetingSummaryDocument {
+        try await self.generateWithProvenance(session: session, configuration: configuration, progress: progress).document
+    }
+
+    func generateWithProvenance(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration,
+                                progress: @escaping @Sendable (Int, Int) async -> Void = { _, _ in }) async throws -> PichiMeetingSummaryGeneration {
         try configuration.validate()
         try Task.checkCancellation()
         let deadline = ContinuousClock.now.advanced(by: .seconds(configuration.execution.attemptSeconds))
         // Structured cancellation joins the active inference before cleanup or a new
         // attempt can start. Cancelling the timer on success avoids waiting its budget.
-        return try await withThrowingTaskGroup(of: PichiMeetingSummaryDocument.self) { group in
-            group.addTask { try await self.generateWithinBudget(session: session, configuration: configuration, progress: progress) }
+        return try await withThrowingTaskGroup(of: PichiMeetingSummaryGeneration.self) { group in
+            group.addTask {
+                let snapshot = try await self.prepare(configuration)
+                let result: Result<PichiMeetingSummaryDocument, Error>
+                do {
+                    try Task.checkCancellation()
+                    result = .success(try await self.generateWithinBudget(session: session, configuration: snapshot.configuration, progress: progress))
+                } catch { result = .failure(error) }
+                // Release is joined on every path and performed exactly once. A
+                // provider cleanup failure prevents publishing a successful document.
+                try await snapshot.release()
+                try Task.checkCancellation()
+                return PichiMeetingSummaryGeneration(document: try result.get(), configuration: snapshot.configuration)
+            }
             group.addTask {
                 try await ContinuousClock().sleep(until: deadline)
                 throw PichiMeetingSummaryError.timeLimit
@@ -489,7 +536,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
     private func config(prompt: String, input: String, configuration: PichiMeetingSummaryConfiguration,
                         sources: [PichiMeetingSummarySource]? = nil, candidateIndexes: [Int]? = nil) throws -> LLMClient.Config {
         var config = LLMClient.Config(messages: [["role": "system", "content": prompt], ["role": "user", "content": input]],
-                                      model: configuration.modelID, baseURL: configuration.baseURL,
+                                      model: configuration.inferenceModelID ?? configuration.modelID, baseURL: configuration.baseURL,
                                       apiKey: configuration.apiKey, streaming: false, maxTokens: configuration.execution.outputTokens)
         config.providerOptions = configuration.connectionOptions
         if let parameter = configuration.execution.reasoningParameter, let value = configuration.execution.reasoningValue {
@@ -501,6 +548,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         }
         if PichiMeetingSummaryTransport.usesNativeOllama(config) {
             config.extraParameters["options"] = ["num_ctx": configuration.execution.contextTokens]
+            if let artifact = configuration.modelArtifactID { config.extraParameters["summary_artifact_id"] = artifact }
         }
         if let sources, PichiMeetingSummaryTransport.usesNativeOllama(config)
             || CloudTextProvider.descriptor(forEndpoint: config.baseURL) != nil {
@@ -663,4 +711,16 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         }
         return result
     }
+}
+
+// Provider preparation owns only its temporary resource. The existing generator
+// joins its release before callers restore ASR resources or publish a result.
+nonisolated struct PichiMeetingSummaryModelSnapshot: Sendable {
+    let configuration: PichiMeetingSummaryConfiguration
+    let release: @Sendable () async throws -> Void
+}
+
+nonisolated struct PichiMeetingSummaryGeneration: Sendable {
+    let document: PichiMeetingSummaryDocument
+    let configuration: PichiMeetingSummaryConfiguration
 }

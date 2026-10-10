@@ -177,6 +177,8 @@ nonisolated struct PichiMeetingSummaryArtifact: Codable, Sendable {
     let configurationIdentity: String
     let generatedAt: Date
     let document: PichiMeetingSummaryDocument
+    var baseConfigurationIdentity: String? = nil
+    var modelArtifactID: String? = nil
 }
 
 @MainActor
@@ -184,6 +186,7 @@ final class PichiMeetingSummaryController: ObservableObject {
     @Published private(set) var document: PichiMeetingSummaryDocument?
     @Published private(set) var generating = false
     @Published private(set) var checking = false
+    @Published private(set) var documentIsHistorical = false
     @Published private(set) var progressState: PichiMeetingSummaryProgress?
     @Published private var failure: PichiMeetingSummaryFailure?
     // Keep source state until presentation so a language change never restarts inference.
@@ -221,24 +224,43 @@ final class PichiMeetingSummaryController: ObservableObject {
         self.documentConfiguration = configuration
         self.documentSourceSession = session
         self.document = nil
+        self.documentIsHistorical = false
         self.failure = nil
         self.checking = false
         guard let session, let configuration else { return }
         self.checking = true
         defer { if self.generationID == generationID { self.checking = false } }
         let hash = PichiMeetingSummaryInput.fingerprint(session)
-        let identity = configuration.cacheIdentity
-        let cached = await Task.detached(priority: .utility) { () -> PichiMeetingSummaryDocument? in
+        var resolved = configuration
+        var historical = false
+        do { resolved.modelArtifactID = try await self.generator.resolveArtifact(configuration) }
+        catch let error as URLError where [.cannotConnectToHost, .cannotFindHost, .networkConnectionLost, .notConnectedToInternet, .timedOut].contains(error.code) {
+            historical = true
+        } catch { return }
+        guard self.generationID == generationID, !Task.isCancelled else { return }
+        let identity = resolved.cacheIdentity
+        let baseIdentity = configuration.baseCacheIdentity
+        let offline = historical
+        let cached = await Task.detached(priority: .utility) { () -> PichiMeetingSummaryArtifact? in
             guard let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("pichi-meeting-summary.json")),
                   let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: data),
-                  artifact.version == 5, artifact.transcriptHash == hash, artifact.configurationIdentity == identity,
+                  artifact.version == 6, artifact.transcriptHash == hash,
+                  artifact.baseConfigurationIdentity == baseIdentity,
+                  (offline || artifact.configurationIdentity == identity),
                   let validated = try? artifact.document.validated(against: PichiMeetingSummaryInput.turns(for: session))
             else { return nil }
-            return validated
+            return PichiMeetingSummaryArtifact(version: artifact.version, transcriptHash: artifact.transcriptHash,
+                configurationIdentity: artifact.configurationIdentity, generatedAt: artifact.generatedAt, document: validated,
+                baseConfigurationIdentity: artifact.baseConfigurationIdentity, modelArtifactID: artifact.modelArtifactID)
         }.value
         guard self.generationID == generationID, !Task.isCancelled else { return }
-        self.document = cached
+        if let cached {
+            resolved.modelArtifactID = cached.modelArtifactID
+            self.documentConfiguration = resolved
+        }
+        self.document = cached?.document
+        self.documentIsHistorical = historical && cached != nil
     }
 
     func summarize(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration, asr: ASRService) {
@@ -264,16 +286,20 @@ final class PichiMeetingSummaryController: ObservableObject {
             }
             do {
                 try Task.checkCancellation()
-                let output = try await self.generate(session: session, configuration: configuration, asr: asr)
+                let result = try await self.generateWithProvenance(session: session, configuration: configuration, asr: asr)
+                let output = result.document
                 try Task.checkCancellation()
                 guard self.generationID == generationID else { return }
-                self.documentConfiguration = configuration
+                self.documentConfiguration = result.configuration
+                self.documentIsHistorical = false
                 self.documentSourceSession = session
                 self.document = output
                 let hash = PichiMeetingSummaryInput.fingerprint(session)
-                let artifact = PichiMeetingSummaryArtifact(version: 5, transcriptHash: hash,
-                                                          configurationIdentity: configuration.cacheIdentity,
-                                                          generatedAt: Date(), document: output)
+                let artifact = PichiMeetingSummaryArtifact(version: 6, transcriptHash: hash,
+                                                          configurationIdentity: result.configuration.cacheIdentity,
+                                                          generatedAt: Date(), document: output,
+                                                          baseConfigurationIdentity: configuration.baseCacheIdentity,
+                                                          modelArtifactID: result.configuration.modelArtifactID)
                 guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
                     self.failure = .noSavedDirectory
                     return
@@ -291,10 +317,14 @@ final class PichiMeetingSummaryController: ObservableObject {
     }
 
     func generate(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration, asr: ASRService) async throws -> PichiMeetingSummaryDocument {
+        try await self.generateWithProvenance(session: session, configuration: configuration, asr: asr).document
+    }
+
+    private func generateWithProvenance(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration, asr: ASRService) async throws -> PichiMeetingSummaryGeneration {
         try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: asr) {
             try await asr.withMeetingModelResidency(attemptID: UUID()) {
                 try asr.markMeetingSummaryPhase()
-                return try await self.generator.generate(session: session, configuration: configuration) { [weak self] index, total in
+                return try await self.generator.generateWithProvenance(session: session, configuration: configuration) { [weak self] index, total in
                     await self?.updateProgress(index: index, total: total)
                 }
             }
