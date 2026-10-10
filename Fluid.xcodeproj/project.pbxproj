@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */; };
+		C41C41000000000000000003 /* PichiGigaAM in Frameworks */ = {isa = PBXBuildFile; productRef = C41C41000000000000000002 /* PichiGigaAM */; };
+		C41C41000000000000000004 /* PichiGigaAM in Frameworks */ = {isa = PBXBuildFile; productRef = C41C41000000000000000002 /* PichiGigaAM */; };
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
 		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
 		B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */; };
@@ -321,6 +323,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */,
+				C41C41000000000000000003 /* PichiGigaAM in Frameworks */,
 				7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */,
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
 				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
@@ -343,6 +346,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */,
+				C41C41000000000000000004 /* PichiGigaAM in Frameworks */,
 				A5B000000000000000000014 /* DynamicNotchKit in Frameworks */,
 				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
 				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
@@ -567,6 +571,7 @@
 			name = fluid;
 			packageProductDependencies = (
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
+				C41C41000000000000000002 /* PichiGigaAM */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
@@ -620,6 +625,7 @@
 			name = FluidASRBaselineHost;
 			packageProductDependencies = (
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
+				C41C41000000000000000002 /* PichiGigaAM */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
@@ -687,6 +693,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
+				C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */,
 				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
@@ -1372,6 +1379,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/PichiGigaAM;
+		};
 		AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/WebRTCAudioProcessing;
@@ -1432,6 +1443,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C41C41000000000000000002 /* PichiGigaAM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */;
+			productName = PichiGigaAM;
+		};
 		AEC300000000000000000002 /* FluidAEC3Bridge */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */;
