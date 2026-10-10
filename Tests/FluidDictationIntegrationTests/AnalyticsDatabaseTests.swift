@@ -269,9 +269,10 @@ final class AnalyticsDatabaseTests: XCTestCase {
         XCTAssertEqual(usage.properties["ram_gb"] as? Int, 24)
         XCTAssertEqual(usage.properties["chip"] as? String, "Apple M3 Pro")
 
-        let personProperties = try XCTUnwrap(usage.properties["$set"] as? [String: Any])
-        XCTAssertEqual(personProperties["ram_gb"] as? Int, 24)
-        XCTAssertEqual(personProperties["chip"] as? String, "Apple M3 Pro")
+        XCTAssertNil(usage.properties["$set"])
+        XCTAssertEqual(usage.properties["$process_person_profile"] as? Bool, false)
+        XCTAssertEqual(usage.properties["$geoip_disable"] as? Bool, true)
+        XCTAssertEqual(usage.properties["$ip"] as? String, "")
 
         let model = try XCTUnwrap(events.first { $0.name == AnalyticsEvent.modelUsageDailySummary.rawValue })
         XCTAssertEqual(model.properties["provider"] as? String, "fluid_audio")
@@ -773,6 +774,50 @@ final class AnalyticsDatabaseTests: XCTestCase {
 
         XCTAssertFalse(gate.accepts(queuedGeneration))
         XCTAssertTrue(gate.accepts(currentGeneration))
+    }
+
+    func testPrivateCustomProviderAndModelNamesNeverEnterTheOutbox() throws {
+        let database = try self.makeDatabase()
+        let firstDay = Date(timeIntervalSince1970: 1_735_689_600)
+        let secondDay = firstDay.addingTimeInterval(24 * 60 * 60)
+        let descriptor = AnalyticsModelDescriptor(
+            provider: "Customer Alice alice@example.com",
+            model: "/Users/alice/private/customer-project.gguf"
+        )
+        try database.recordUsage(mode: .dictation, transcriptionModel: nil, aiModel: descriptor, at: firstDay)
+        try database.finalizeDays(before: secondDay)
+        let event = try XCTUnwrap(try self.events(in: database).first {
+            $0.name == AnalyticsEvent.modelUsageDailySummary.rawValue
+        })
+        XCTAssertEqual(event.properties["provider"] as? String, "custom_provider")
+        XCTAssertEqual(event.properties["model"] as? String, "custom_model")
+        let serialized = try JSONSerialization.data(withJSONObject: event.properties)
+        XCTAssertFalse(String(decoding: serialized, as: UTF8.self).contains("alice"))
+        XCTAssertFalse(String(decoding: serialized, as: UTF8.self).contains("customer-project"))
+    }
+
+    func testUploadSanitizesOlderPayloadsAndRefusesUnconfiguredDestinations() throws {
+        let payload: [String: Any] = [
+            "event": AnalyticsEvent.modelUsageDailySummary.rawValue,
+            "properties": ["provider": "Private client", "model": "/private/client.gguf", "use_count": 2,
+                           "$set": ["name": "Alice"], "transcript": "Private words", "filename": "/private/audio.wav"],
+        ]
+        let item = AnalyticsOutboxItem(id: "synthetic", payload: try JSONSerialization.data(withJSONObject: payload))
+        XCTAssertThrowsError(try AnalyticsUploadTransport.request(items: [item], config: AnalyticsConfig.from(info: [:])))
+        let config = AnalyticsConfig.from(info: ["PICHI_POSTHOG_ENABLED": "YES", "PICHI_POSTHOG_PROJECT_TOKEN": "phc_testfixture", "PICHI_POSTHOG_HOST": "https://eu.i.posthog.com"])
+        let request = try AnalyticsUploadTransport.request(items: [item], config: config)
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+        let batch = try XCTUnwrap(body["batch"] as? [[String: Any]])
+        let properties = try XCTUnwrap(batch.first?["properties"] as? [String: Any])
+        XCTAssertNil(properties["$set"])
+        XCTAssertNil(properties["transcript"])
+        XCTAssertNil(properties["filename"])
+        XCTAssertEqual(properties["$process_person_profile"] as? Bool, false)
+        XCTAssertEqual(properties["$geoip_disable"] as? Bool, true)
+        XCTAssertEqual(properties["provider"] as? String, "custom_provider")
+        XCTAssertEqual(properties["model"] as? String, "custom_model")
+        XCTAssertEqual(properties["use_count"] as? Int, 2)
+        XCTAssertEqual(properties["app_product"] as? String, "desktop_voice")
     }
 
     func testPurgingDetailedAnalyticsPreservesOnlyDailyActivity() throws {

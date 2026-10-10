@@ -653,25 +653,6 @@ private actor AnalyticsCore {
     }
 
     private func send(items: [AnalyticsOutboxItem], config: AnalyticsConfig) async throws -> Int {
-        guard let url = URL(string: config.postHogHost)?.appendingPathComponent("batch") else {
-            throw URLError(.badURL)
-        }
-        let batch = try items.map { item -> Any in
-            try JSONSerialization.jsonObject(with: item.payload)
-        }
-        let body: [String: Any] = ["api_key": config.postHogApiKey, "batch": batch]
-        let data = try JSONSerialization.data(withJSONObject: body)
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = data
-        request.timeoutInterval = 10
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        return httpResponse.statusCode
+        try await AnalyticsUploadTransport.send(items: items, config: config)
     }
 }

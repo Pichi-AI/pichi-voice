@@ -252,6 +252,7 @@ builds/
 !/docs/development/upstream.md
 !/docs/development/branding.md
 !/docs/development/localization.md
+!/docs/development/analytics.md
 !/scripts/
 /scripts/*
 !/scripts/dev/

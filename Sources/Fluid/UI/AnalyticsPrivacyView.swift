@@ -34,6 +34,7 @@ struct AnalyticsPrivacyView: View {
                         self.bullet("This app does not send daily activity, detailed metrics or beta timing summaries to an analytics service.")
                         self.bullet("Speech recognition runs on this Mac. AI enhancement may use a provider you configure.")
                     } else {
+                    self.bullet(PichiLocalization.format("Analytics destination: %@", AnalyticsConfig.fromBundle().postHogHost))
                     self.sectionTitle("Always collected")
                     self.bullet("A random installation ID, app version, the operating-system label macOS, and basic hardware info.")
                     self.bullet("One active-use signal per local day after you interact with the app, buffered on this Mac and sent weekly.")
@@ -42,7 +43,7 @@ struct AnalyticsPrivacyView: View {
                     self.sectionTitle("When detailed analytics is enabled")
                     self.bullet("Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription.")
                     self.bullet("Onboarding steps viewed and completed, including skips.")
-                    self.bullet("Transcription and AI provider/model identifiers, counted as daily totals.")
+                    self.bullet("Approved public transcription and AI provider/model identifiers, counted as daily totals. Custom names are replaced with generic categories.")
                     self.bullet("Model download source, outcome, and download duration.")
                     self.bullet("Daily aggregated insertion timing statistics—including toggle-stop-to-paste-dispatch—split by delivery path and outcome.")
 
@@ -52,6 +53,7 @@ struct AnalyticsPrivacyView: View {
                     self.bullet("Terminal commands or outputs from Command Mode.")
                     self.bullet("Window titles, app names, file names/paths, clipboard contents, or anything you type.")
                     self.bullet("Hardware serial numbers, other unique device identifiers, target-app identity, or individual transcription and insertion timings/events.")
+                    self.bullet("No session replay, automatic UI capture, person profiles or geographic enrichment are enabled.")
 
                     self.sectionTitle("How it’s used")
                     self.bullet("Daily activity measures active installations and retention without requiring accounts.")

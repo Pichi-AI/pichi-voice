@@ -1,0 +1,5 @@
+{
+  "Analytics destination: %@": "Сервис аналитики: %@",
+  "Approved public transcription and AI provider/model identifiers, counted as daily totals. Custom names are replaced with generic categories.": "Суточные счётчики использования общедоступных провайдеров и моделей распознавания и ИИ. Пользовательские названия заменяются общими категориями.",
+  "No session replay, automatic UI capture, person profiles or geographic enrichment are enabled.": "Запись действий на экране, автоматический сбор интерфейса, профили пользователей и определение местоположения выключены."
+}

@@ -1,7 +1,7 @@
 import Foundation
 import SQLite3
 
-struct AnalyticsOutboxItem {
+nonisolated struct AnalyticsOutboxItem: Sendable {
     let id: String
     let payload: Data
 }
@@ -784,10 +784,9 @@ final class AnalyticsDatabase {
         approvedProperties["app_version"] = self.appVersion
         approvedProperties["ram_gb"] = self.systemConfiguration.ramGB
         approvedProperties["chip"] = self.systemConfiguration.chip
-        approvedProperties["$set"] = [
-            "ram_gb": self.systemConfiguration.ramGB,
-            "chip": self.systemConfiguration.chip,
-        ]
+        approvedProperties["$process_person_profile"] = false
+        approvedProperties["$geoip_disable"] = true
+        approvedProperties["$ip"] = ""
         approvedProperties["schema_version"] = 2
 
         let payload: [String: Any] = [

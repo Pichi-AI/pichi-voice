@@ -32,10 +32,12 @@
 	<false/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>$(PICHI_PRODUCT_NAME) needs permission to control system events for managing launch at startup settings.</string>
-	<key>POSTHOG_API_KEY</key>
-	<string></string>
-	<key>POSTHOG_HOST</key>
-	<string>https://eu.i.posthog.com</string>
+	<key>PICHI_POSTHOG_ENABLED</key>
+	<string>$(PICHI_POSTHOG_ENABLED)</string>
+	<key>PICHI_POSTHOG_PROJECT_TOKEN</key>
+	<string>$(PICHI_POSTHOG_PROJECT_TOKEN)</string>
+	<key>PICHI_POSTHOG_HOST</key>
+	<string>$(PICHI_POSTHOG_HOST)</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>$(PICHI_PRODUCT_NAME) uses on-device speech recognition to transcribe your voice commands and text quickly and privately.</string>
 </dict>
