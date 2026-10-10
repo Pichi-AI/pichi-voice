@@ -36,7 +36,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
             settings.selectedSpeechModel = originalModel
             settings.fileTranscriptionSpeakerLabelsEnabled = originalSpeakerLabels
         }
-        let asr = ASRService()
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
         asr.modelProvidersForTesting[.gigaam] = provider
         let controller = InferenceAPIController { url in
             let result = try await asr.transcribeFileForAPI(url)
@@ -57,7 +57,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         await asr.shutdownForTermination()
         XCTAssertFalse(provider.isReady)
 
-        let meetingASR = ASRService()
+        let meetingASR = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
         let meetingLease = try meetingASR.acquireExclusiveActivity(.meeting)
         defer { meetingASR.releaseExclusiveActivity(meetingLease) }
         let attemptID = UUID()
