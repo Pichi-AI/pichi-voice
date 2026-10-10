@@ -2301,7 +2301,7 @@ private struct MeetingSetupCanvas: View {
             Button(
                 self.readiness.showMicrophoneSettingsAction ? PichiLocalization.text("Allow microphone access") :
                     (self.readiness.showScreenRecordingSettingsAction ? PichiLocalization.text("Allow meeting audio access") :
-                        "Set up microphone…"),
+                        PichiLocalization.text("Set up microphone…")),
                 systemImage: self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction ? "arrow.up.right" : "gearshape",
                 action: self.onRepairSetup
             )
