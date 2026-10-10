@@ -63,9 +63,75 @@ struct OnboardingAIEnhancementStepView: View {
     }
 
     private var canNavigate: Bool { !self.isRunning && !self.isRecordingShortcut && !self.contentState.isProcessing && !self.isShowingIntroduction }
-    private var isShowingIntroduction: Bool { self.isReady && !self.setup.introductionFinished && !self.reduceMotion }
+    private var isShowingIntroduction: Bool { PrivateAIProviderFeature.shared.isAvailable && self.isReady && !self.setup.introductionFinished && !self.reduceMotion }
     private var isReady: Bool { self.setup.phase == .ready }
     var body: some View {
+        Group {
+            if PrivateAIProviderFeature.shared.isAvailable {
+                self.privateContent
+            } else {
+                self.publicContent
+            }
+        }
+    }
+
+    /// The public downstream does not include upstream's private Fluid-1 runtime.
+    /// Offer an optional, truthful setup path without starting an unusable download.
+    private var publicContent: some View {
+        let canFinish = !self.isRunning && !self.isRecordingShortcut && !self.contentState.isProcessing
+        let hasConfiguredCleanup = DictationAIPostProcessingGate.isOnboardingChoiceConfigured()
+        return GeometryReader { proxy in
+            ZStack {
+                FluidOnboardingLandingBackdrop(glowCenter: self.glowCenter)
+                VStack(spacing: 24) {
+                    FluidOnboardingCompactProgress(value: self.progressValue)
+                        .padding(.top, 28)
+                    Spacer()
+                    FluidOnboardingCompactAppIconMark(size: 56)
+                    Text(AppBrand.text("AI text cleanup with Fluid Intelligence"))
+                        .font(.fluidSystem(size: 30, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                    Text("AI cleanup is optional. Dictation already works with your selected speech model.")
+                        .font(.fluidSystem(size: 17, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.78))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 660)
+                    Text("Connect Ollama or LM Studio in AI Providers to process text locally. Meeting summaries have their own local AI settings.")
+                        .font(.fluidSystem(size: 15))
+                        .foregroundStyle(.white.opacity(0.64))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 660)
+                    if hasConfiguredCleanup {
+                        Text("Your configured text provider is ready. This step does not change it or contact another service.")
+                            .font(.fluidSystem(size: 14))
+                            .foregroundStyle(.white.opacity(0.64))
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 660)
+                    }
+                    Spacer()
+                    HStack(spacing: 16) {
+                        self.action(id: "public-back", title: "Back", tone: .secondary, width: 132, action: self.onBack)
+                        Spacer()
+                        if hasConfiguredCleanup {
+                            self.action(id: "public-use-provider", title: "Use configured provider", tone: .primary, width: 238, action: self.onFinishSetup)
+                        } else {
+                            self.action(id: "public-skip", title: "Set up later", tone: .primary, width: 210, action: self.onSkip)
+                        }
+                    }
+                    .disabled(!canFinish)
+                    .padding(.horizontal, FluidOnboardingLayout.footerHorizontalInset)
+                    .padding(.bottom, FluidOnboardingLayout.footerBottomInset)
+                }
+                .padding(.horizontal, 32)
+                FluidOnboardingLandingHoverTracker(onMove: self.onGlowMove, onExit: self.onGlowExit)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var privateContent: some View {
         GeometryReader { proxy in
             ZStack {
                 FluidOnboardingLandingBackdrop(glowCenter: self.glowCenter)
@@ -280,14 +346,14 @@ struct OnboardingAIEnhancementStepView: View {
                                 .fixedSize()
                         }
                     }
-                    Text(self.downloadProgressTitle)
+                    Text(PichiLocalization.text(self.downloadProgressTitle))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(.white.opacity(0.58))
                         .monospacedDigit()
                 } else {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text(self.preparationStatus)
+                        Text(PichiLocalization.text(self.preparationStatus))
                             .font(self.theme.typography.captionStrong)
                             .foregroundStyle(.white.opacity(0.62))
                     }
@@ -319,7 +385,7 @@ struct OnboardingAIEnhancementStepView: View {
     private var downloadProgressTitle: String {
         guard let fraction = self.setup.progress?.fraction, fraction.isFinite else { return "Preparing…" }
         let percent = min(max(fraction, 0), 1).formatted(.percent.precision(.fractionLength(0)))
-        return "Preparing \(percent)"
+        return PichiLocalization.format("Preparing %@", percent)
     }
 
     private var preparationStatus: String {
@@ -396,14 +462,14 @@ struct OnboardingAIEnhancementStepView: View {
     private func modeSummary(name: String, subtitle: String, detail: String, smart: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Label(name, systemImage: smart ? "sparkles" : "bolt.fill")
+                Label(PichiLocalization.text(name), systemImage: smart ? "sparkles" : "bolt.fill")
                     .font(.fluidSystem(size: 18, weight: .semibold))
                     .foregroundStyle(smart ? Color(red: 0.48, green: 0.72, blue: 1) : .white)
-                Text(subtitle)
+                Text(PichiLocalization.text(subtitle))
                     .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
-            Text(detail)
+            Text(PichiLocalization.text(detail))
                 .font(.fluidSystem(size: 15))
                 .foregroundStyle(.white.opacity(0.78))
                 .fixedSize(horizontal: false, vertical: true)
@@ -431,14 +497,14 @@ struct OnboardingAIEnhancementStepView: View {
     private func action(id: String, title: String, tone: ButtonTone, width: CGFloat, action: @escaping () -> Void) -> some View {
         if #available(macOS 26, *), !self.reduceTransparency {
             Button(action: action) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: width - 32, height: 40)
             }
             .fluidGlassAction(prominent: tone == .primary)
             .font(.fluidSystem(size: 17, weight: .semibold))
-            .tint(tone == .primary ? Color(red: 0.20, green: 0.43, blue: 0.88) : nil)
+            .tint(tone == .primary ? FluidOnboardingLandingColors.blue : nil)
             .disabled(!self.canNavigate)
         } else {
             self.pillButton(PillButtonConfiguration(
@@ -497,7 +563,7 @@ struct OnboardingAIEnhancementStepView: View {
                         .font(.fluidSystem(size: 12, weight: .bold))
                 }
 
-                Text(configuration.title)
+                Text(PichiLocalization.text(configuration.title))
                     .font(.fluidSystem(size: configuration.fontSize, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)

@@ -48,6 +48,7 @@ struct AdaptiveAppTheme<Content: View>: View {
 
         self.content
             .appTheme(AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme))
+            .environment(\.locale, PichiLocalization.locale)
             .tint(activeAccent)
             .preferredColorScheme(preferredScheme)
     }

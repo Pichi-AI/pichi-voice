@@ -92,7 +92,7 @@ struct OnboardingCleanupExampleCarousel: View {
     private func card(_ example: Example, compact: Bool, contentWidth: CGFloat, visibleWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Group {
-                Text(example.title)
+                Text(PichiLocalization.text(example.title))
                     .font(.fluidSystem(size: 25, weight: .regular, design: .serif))
                     .tracking(-0.5)
                     .foregroundStyle(Color(red: 0.96, green: 0.95, blue: 0.91))
@@ -135,7 +135,7 @@ struct OnboardingCleanupExampleCarousel: View {
                 .font(.fluidSystem(size: 18, weight: .regular, design: .serif))
                 .tracking(-0.5)
                 .foregroundStyle(enhanced ? Color(red: 0.48, green: 0.72, blue: 1) : .white.opacity(0.62))
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(size: 13, weight: .regular))
                 .foregroundStyle(.white.opacity(0.9))
                 .lineSpacing(4)

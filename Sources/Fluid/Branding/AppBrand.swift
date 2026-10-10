@@ -89,6 +89,11 @@ nonisolated enum AppBrand {
     static var appName: String { self.profile.appName }
     static var meetingName: String { self.profile.meetingName }
     static var assistantName: String { self.profile.assistantName }
+    static var tagline: String {
+        // Imported white-label copy is user content, even when it matches a UI key.
+        UserDefaults.standard.data(forKey: self.profileDefaultsKey) == nil && self.packagedProfile == .pichi
+            ? PichiLocalization.text(self.packagedProfile.tagline) : self.profile.tagline
+    }
     static var supportURL: URL { URL(string: self.profile.support)! }
     static var websiteURL: URL { URL(string: self.profile.website)! }
     static let repositoryOwner = "Pichi-AI"
@@ -100,8 +105,30 @@ nonisolated enum AppBrand {
 
     static func text(_ source: String) -> String {
         let profile = self.profile
-        return source.replacingOccurrences(of: "FluidVoice", with: profile.appName)
-            .replacingOccurrences(of: "FluidMeet", with: profile.meetingName)
-            .replacingOccurrences(of: "Fluid Intelligence", with: profile.assistantName)
+        return self.text(source, profile: profile, language: PichiLocalization.language)
+    }
+
+    static func text(_ source: String, profile: BrandProfile, language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
+        self.substitutingProductNames(in: PichiLocalization.text(source, language: language, bundle: bundle), profile: profile)
+    }
+
+    static func substitutingProductNames(in source: String, profile: BrandProfile) -> String {
+        let names = [
+            "FluidVoice": profile.appName, "Fluid Voice": profile.appName,
+            "FLUIDVOICE": profile.appName.uppercased(), "FLUID VOICE": profile.appName.uppercased(),
+            "FluidMeet": profile.meetingName, "Fluid Meet": profile.meetingName,
+            "FLUIDMEET": profile.meetingName.uppercased(), "FLUID MEET": profile.meetingName.uppercased(),
+            "Fluid Intelligence": profile.assistantName, "FLUID INTELLIGENCE": profile.assistantName.uppercased(),
+        ]
+        // Replace original matches only, so a custom brand name is never processed twice.
+        let expression = try! NSRegularExpression(pattern: names.keys.sorted().map(NSRegularExpression.escapedPattern).joined(separator: "|"))
+        var result = source
+        for match in expression.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
+            guard let originalRange = Range(match.range, in: source),
+                  let resultRange = Range(match.range, in: result),
+                  let replacement = names[String(source[originalRange])] else { continue }
+            result.replaceSubrange(resultRange, with: replacement)
+        }
+        return result
     }
 }

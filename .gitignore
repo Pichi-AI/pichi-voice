@@ -251,6 +251,7 @@ builds/
 !/docs/development/codex.md
 !/docs/development/upstream.md
 !/docs/development/branding.md
+!/docs/development/localization.md
 !/scripts/
 /scripts/*
 !/scripts/dev/

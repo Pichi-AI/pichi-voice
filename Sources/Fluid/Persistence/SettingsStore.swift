@@ -2651,6 +2651,17 @@ final class SettingsStore: ObservableObject {
         Color(hex: self.accentColorOption.hex) ?? Color(red: 0.404, green: 0.286, blue: 0.757)
     }
 
+    var interfaceLanguage: PichiInterfaceLanguage {
+        get { .stored(in: self.defaults) }
+        set {
+            guard newValue != self.interfaceLanguage else { return }
+            objectWillChange.send()
+            newValue.persist(in: self.defaults)
+            PichiLocalization.configureApplicationLanguage()
+            NotificationCenter.default.post(name: PichiLocalization.languageChanged, object: nil)
+        }
+    }
+
     var themePreference: ThemePreference {
         get {
             guard let raw = self.defaults.string(forKey: Keys.themePreference),

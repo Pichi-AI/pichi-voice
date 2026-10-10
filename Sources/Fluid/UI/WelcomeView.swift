@@ -246,7 +246,7 @@ struct OnboardingFlowView: View {
     }
 
     private var recommendedModelReasonText: String {
-        "Recommended for \(self.selectedOnboardingLanguage.displayName). You can see more options if needed."
+        PichiLocalization.format("Recommended for %@. You can see more options if needed.", PichiLocalization.text(self.selectedOnboardingLanguage.displayName))
     }
 
     private var isRecommendedModelDownloaded: Bool {
@@ -454,7 +454,7 @@ struct OnboardingFlowView: View {
                 .font(self.theme.typography.title)
                 .foregroundStyle(self.theme.palette.primaryText)
 
-            Text(self.step.subtitle)
+            Text(PichiLocalization.text(self.step.subtitle))
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
 
@@ -463,7 +463,7 @@ struct OnboardingFlowView: View {
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(self.step.title)
+                Text(PichiLocalization.text(self.step.title))
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.accent)
             }
@@ -503,7 +503,7 @@ struct OnboardingFlowView: View {
                             eyebrow: AppBrand.appName,
                             title: "Just speak.",
                             accentTitle: "We'll handle the rest.",
-                            firstDetail: AppBrand.profile.tagline,
+                            firstDetail: AppBrand.tagline,
                             secondDetail: "Built for creators, thinkers, and builders."
                         ) { EmptyView() }
                             .padding(24)
@@ -687,7 +687,7 @@ struct OnboardingFlowView: View {
                     .foregroundStyle(isSelected ? FluidOnboardingLandingColors.blue : Color.white.opacity(0.72))
                     .frame(width: 22)
 
-                Text(language.popularDisplayName)
+                Text(PichiLocalization.text(language.popularDisplayName))
                     .font(.fluidSystem(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -759,7 +759,7 @@ struct OnboardingFlowView: View {
                     .foregroundStyle(isSelected ? FluidOnboardingLandingColors.blue : Color.white.opacity(self.isShowingAllLanguages ? 0.78 : 0.72))
                     .frame(width: 22)
 
-                Text(isSelected ? self.selectedOnboardingLanguage.displayName : "Other")
+                Text(PichiLocalization.text(isSelected ? self.selectedOnboardingLanguage.displayName : "Other"))
                     .font(.fluidSystem(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -846,7 +846,7 @@ struct OnboardingFlowView: View {
             self.selectOnboardingLanguage(language)
         } label: {
             HStack(spacing: 10) {
-                Text(language.displayName)
+                Text(PichiLocalization.text(language.displayName))
                     .font(.fluidSystem(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
 
@@ -1056,7 +1056,7 @@ struct OnboardingFlowView: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.bottom, 14)
 
-                            Text(self.selectedOnboardingLanguage.displayName)
+                            Text(PichiLocalization.text(self.selectedOnboardingLanguage.displayName))
                                 .font(.fluidSystem(size: 13, weight: .semibold))
                                 .foregroundStyle(FluidOnboardingLandingColors.blue)
                                 .padding(.horizontal, 12)
@@ -1363,12 +1363,12 @@ struct OnboardingFlowView: View {
 
     private var accessibilityPermissionSubtitle: String {
         if self.isAccessibilityReady {
-            return "\(self.appDisplayName) can place text into the app you're using."
+            return PichiLocalization.format("%@ can place text into the app you're using.", self.appDisplayName)
         }
         if self.accessibilitySetupInProgress {
-            return "Use the floating guide to drag \(self.appDisplayName) into the Accessibility apps list."
+            return PichiLocalization.format("Use the floating guide to drag %@ into the Accessibility apps list.", self.appDisplayName)
         }
-        return "Open Settings, then use the floating guide to add \(self.appDisplayName)."
+        return PichiLocalization.format("Open Settings, then use the floating guide to add %@.", self.appDisplayName)
     }
 
     private var appDisplayName: String {
@@ -1391,7 +1391,7 @@ struct OnboardingFlowView: View {
             self.toggleOtherModelRoutes()
         } label: {
             HStack(spacing: 6) {
-                Text(self.isShowingOtherModelRoutes ? "Hide other models" : "Show other models")
+                Text(PichiLocalization.text(self.isShowingOtherModelRoutes ? "Hide other models" : "Show other models"))
 
                 Image(systemName: self.isShowingOtherModelRoutes ? "chevron.up" : "chevron.down")
                     .font(.fluidSystem(size: 8, weight: .bold))
@@ -1464,8 +1464,8 @@ struct OnboardingFlowView: View {
             panel.canChooseFiles = false
             panel.canChooseDirectories = true
             panel.allowsMultipleSelection = false
-            panel.message = "Choose the folder containing your optimized GigaAM ONNX model and vocabulary."
-            panel.prompt = "Import"
+            panel.message = PichiLocalization.text("Choose the folder containing your optimized GigaAM ONNX model and vocabulary.")
+            panel.prompt = PichiLocalization.text("Import")
             guard panel.runModal() == .OK, let directory = panel.url else { return }
             gigaAMImportDirectory = directory
         }
@@ -1584,7 +1584,7 @@ struct OnboardingFlowView: View {
             .frame(height: 38, alignment: .top)
 
             if isCompactModel {
-                Text(model.languageSupport)
+                Text(PichiLocalization.text(model.languageSupport))
                     .font(self.theme.typography.bodySmallStrong)
                     .foregroundStyle(Color.white.opacity(0.62))
             }
@@ -1784,7 +1784,7 @@ struct OnboardingFlowView: View {
                     .tint(FluidOnboardingLandingColors.blue)
 
                 HStack(spacing: 6) {
-                    Text(self.asr.modelPreparationStatusText)
+                    Text(PichiLocalization.text(self.asr.modelPreparationStatusText))
                         .font(self.theme.typography.captionStrong)
                         .foregroundStyle(Color.white.opacity(0.56))
                         .lineLimit(1)
@@ -1796,11 +1796,11 @@ struct OnboardingFlowView: View {
                         .controlSize(.small)
                         .fixedSize()
 
-                    Text(
+                    Text(PichiLocalization.text(
                         isUninstalling
                             ? "Deleting..."
                             : self.asr.modelPreparationStatusText
-                    )
+                    ))
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(Color.white.opacity(0.62))
                     .lineLimit(1)
@@ -1840,7 +1840,7 @@ struct OnboardingFlowView: View {
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(color)
 
-                Text(label)
+                Text(PichiLocalization.text(label))
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(Color.white.opacity(0.66))
                     .lineLimit(1)
@@ -1968,7 +1968,7 @@ struct OnboardingFlowView: View {
                         .font(.fluidSystem(size: configuration.iconSize, weight: .bold))
                 }
 
-                Text(configuration.title)
+                Text(PichiLocalization.text(configuration.title))
                     .font(.fluidSystem(size: configuration.fontSize, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -2008,7 +2008,7 @@ struct OnboardingFlowView: View {
         let model = route.model
         let downloadSize = self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize
         let credit = model.parakeetDescriptor.map { "\n\($0.creditLine)" } ?? ""
-        return "\(self.onboardingModelSubtitle(for: model)) - \(downloadSize)\n\(model.cardDescription)\(credit)"
+        return "\(self.onboardingModelSubtitle(for: model)) - \(downloadSize)\n\(PichiLocalization.text(model.cardDescription))\(credit)"
     }
 
     private func onboardingModelTitle(for model: SettingsStore.SpeechModel) -> String {
@@ -2075,11 +2075,11 @@ struct OnboardingFlowView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Text(title)
+                    Text(PichiLocalization.text(title))
                         .font(.fluidSystem(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
 
-                    Text(resolvedStatusTitle)
+                    Text(PichiLocalization.text(resolvedStatusTitle))
                         .font(.fluidSystem(size: 10, weight: .bold))
                         .foregroundStyle(isReady ? Color.green.opacity(0.92) : FluidOnboardingLandingColors.blue)
                         .padding(.horizontal, 7)
@@ -2090,7 +2090,7 @@ struct OnboardingFlowView: View {
                         )
                 }
 
-                Text(subtitle)
+                Text(PichiLocalization.text(subtitle))
                     .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(Color.white.opacity(0.55))
                     .lineLimit(2)
@@ -2593,7 +2593,7 @@ private struct OnboardingMicrophoneSetupPanel: View {
                     .fill(self.status.color)
                     .frame(width: 6, height: 6)
 
-                Text(self.status.text)
+                Text(PichiLocalization.text(self.status.text))
                     .font(.fluidSystem(size: 11, weight: .semibold))
                     .foregroundStyle(self.status.color)
 

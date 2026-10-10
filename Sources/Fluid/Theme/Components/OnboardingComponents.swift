@@ -29,6 +29,7 @@ struct OnboardingModelInfoTooltip: View {
 }
 
 struct FluidOnboardingLandingHero<Actions: View>: View {
+    @Environment(\.locale) private var locale
     @Environment(\.theme) private var theme
 
     let eyebrow: String
@@ -69,13 +70,13 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
             }
 
             VStack(spacing: 4) {
-                Text(self.title)
+                Text(PichiLocalization.text(self.title, locale: self.locale))
                     .font(.fluidSystem(size: 52, weight: .semibold))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.82)
 
-                Text(self.accentTitle)
+                Text(PichiLocalization.text(self.accentTitle, locale: self.locale))
                     .font(.fluidSystem(size: 50, weight: .semibold))
                     .italic()
                     .foregroundStyle(FluidOnboardingLandingColors.blue)
@@ -88,7 +89,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
 
             VStack(spacing: 8) {
                 Text(self.firstDetail)
-                Text(self.secondDetail)
+                Text(PichiLocalization.text(self.secondDetail, locale: self.locale))
             }
             .font(.fluidSystem(size: 22, weight: .medium))
             .foregroundStyle(Color.white.opacity(0.70))
@@ -341,6 +342,7 @@ struct FluidOnboardingLandingHoverTracker: NSViewRepresentable {
 }
 
 struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
+    @Environment(\.locale) private var locale
     static let size = CGSize(width: 236, height: 56)
 
     let title: String
@@ -360,8 +362,8 @@ struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
         button.focusRingType = .none
         button.keyEquivalent = "\r"
         button.keyEquivalentModifierMask = []
-        button.setAccessibilityLabel(self.title)
-        button.update(title: self.title, isHighlighted: false)
+        button.setAccessibilityLabel(PichiLocalization.text(self.title, locale: self.locale))
+        button.update(title: PichiLocalization.text(self.title, locale: self.locale), isHighlighted: false)
         return button
     }
 
@@ -369,13 +371,13 @@ struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
         context.coordinator.action = self.action
 
         guard let button = button as? LandingPrimaryNSButton else {
-            button.title = self.title
-            button.setAccessibilityLabel(self.title)
+            button.title = PichiLocalization.text(self.title, locale: self.locale)
+            button.setAccessibilityLabel(PichiLocalization.text(self.title, locale: self.locale))
             return
         }
 
-        button.setAccessibilityLabel(self.title)
-        button.update(title: self.title, isHighlighted: button.isHighlighted)
+        button.setAccessibilityLabel(PichiLocalization.text(self.title, locale: self.locale))
+        button.update(title: PichiLocalization.text(self.title, locale: self.locale), isHighlighted: button.isHighlighted)
     }
 
     final class Coordinator: NSObject {

@@ -15,6 +15,8 @@ struct FluidApp: App {
     @ObservedObject private var settings = SettingsStore.shared
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    init() { PichiLocalization.configureApplicationLanguage() }
+
     var body: some Scene {
         WindowGroup(AppBrand.appName, id: "main") {
             #if DEBUG
@@ -37,13 +39,13 @@ struct FluidApp: App {
         .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
+                Button(PichiLocalization.text("Settings...")) {
                     self.menuBarManager.openPreferencesFromUI()
                 }
                 .keyboardShortcut(",", modifiers: .command)
             }
             CommandGroup(after: .textEditing) {
-                Button("Find") {
+                Button(PichiLocalization.text("Find")) {
                     NotificationCenter.default.post(name: .sidebarSearchFocusRequested, object: nil)
                 }
                 .keyboardShortcut("f", modifiers: .command)
@@ -58,6 +60,7 @@ struct FluidApp: App {
                 // Resolve the singleton only when the normal application content branch is built.
                 // The DEBUG C2 autorun branch returns Color.clear before this view is evaluated.
                 .environmentObject(AppServices.shared)
+                .environment(\.locale, PichiLocalization.locale)
         }
     }
 }

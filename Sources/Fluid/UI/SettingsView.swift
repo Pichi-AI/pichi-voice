@@ -266,6 +266,31 @@ struct SettingsView: View {
                             .settingsSearchTarget(.dockVisibility)
                             Divider().opacity(0.2)
 
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Interface language")
+                                        .font(self.theme.typography.bodyStrong)
+                                    Text("Russian by default. Speech and summary languages are configured separately.")
+                                        .font(self.theme.typography.bodySmall)
+                                        .foregroundStyle(self.settingsSecondaryText)
+                                }
+                                Spacer()
+                                Picker("Interface language", selection: Binding(
+                                    get: { self.settings.interfaceLanguage },
+                                    set: { self.settings.interfaceLanguage = $0 }
+                                )) {
+                                    ForEach(PichiInterfaceLanguage.allCases) { language in
+                                        Text(verbatim: language.displayName).tag(language)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 130)
+                            }
+                            Text("Standard macOS menu titles update after restarting the app.")
+                                .font(self.theme.typography.caption)
+                                .foregroundStyle(self.settingsSecondaryText)
+                            Divider().opacity(0.2)
+
                             BrandSettingsSection()
                             Divider().opacity(0.2)
 
@@ -342,7 +367,7 @@ struct SettingsView: View {
                                     }
                                 )) {
                                     ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
-                                        Text(option.displayName).tag(option)
+                                        Text(PichiLocalization.text(option.displayName)).tag(option)
                                     }
                                 }
                                 .fluidDropdownStyle()
@@ -821,9 +846,9 @@ struct SettingsView: View {
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                                            FluidDropdownPicker("Activation mode", selectedTitle: self.hotkeyMode.displayName, selection: self.$hotkeyMode) {
+                                            FluidDropdownPicker("Activation mode", selectedTitle: PichiLocalization.text(self.hotkeyMode.displayName), selection: self.$hotkeyMode) {
                                                 ForEach(HotkeyActivationMode.allCases) { mode in
-                                                    Text(mode.displayName).tag(mode)
+                                                    Text(PichiLocalization.text(mode.displayName)).tag(mode)
                                                 }
                                             }
                                             .fluidDropdownStyle()
@@ -864,7 +889,7 @@ struct SettingsView: View {
                                                 set: { SettingsStore.shared.textInsertionMode = $0 }
                                             )) {
                                                 ForEach(SettingsStore.TextInsertionMode.allCases) { mode in
-                                                    Text(mode.displayName).tag(mode)
+                                                    Text(PichiLocalization.text(mode.displayName)).tag(mode)
                                                 }
                                             }
                                             .fluidDropdownStyle()
@@ -1307,9 +1332,9 @@ struct SettingsView: View {
                                 Spacer()
 
                                 if self.settings.overlayPosition == .bottom {
-                                    FluidDropdownPicker("Overlay size", selectedTitle: self.settings.overlaySize.displayName, selection: self.$settings.overlaySize) {
+                                    FluidDropdownPicker("Overlay size", selectedTitle: PichiLocalization.text(self.settings.overlaySize.displayName), selection: self.$settings.overlaySize) {
                                         ForEach(SettingsStore.OverlaySize.allCases, id: \.self) { size in
-                                            Text(size.displayName).tag(size)
+                                            Text(PichiLocalization.text(size.displayName)).tag(size)
                                         }
                                     }
                                     .fluidDropdownStyle()
@@ -1317,11 +1342,11 @@ struct SettingsView: View {
                                 } else {
                                     FluidDropdownPicker(
                                         "Notch presentation",
-                                        selectedTitle: self.settings.notchPresentationMode.displayName,
+                                        selectedTitle: PichiLocalization.text(self.settings.notchPresentationMode.displayName),
                                         selection: self.$settings.notchPresentationMode
                                     ) {
                                         ForEach(SettingsStore.NotchPresentationMode.allCases, id: \.self) { mode in
-                                            Text(mode.displayName).tag(mode)
+                                            Text(PichiLocalization.text(mode.displayName)).tag(mode)
                                         }
                                     }
                                     .fluidDropdownStyle()
@@ -1423,9 +1448,9 @@ struct SettingsView: View {
 
                                 Spacer()
 
-                                FluidDropdownPicker("Overlay position", selectedTitle: self.settings.overlayPosition.displayName, selection: self.$settings.overlayPosition) {
+                                FluidDropdownPicker("Overlay position", selectedTitle: PichiLocalization.text(self.settings.overlayPosition.displayName), selection: self.$settings.overlayPosition) {
                                     ForEach(SettingsStore.OverlayPosition.allCases, id: \.self) { position in
-                                        Text(position.displayName).tag(position)
+                                        Text(PichiLocalization.text(position.displayName)).tag(position)
                                     }
                                 }
                                 .fluidDropdownStyle()
@@ -1926,11 +1951,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(PichiLocalization.text(title))
                         .font(self.theme.typography.bodyStrong)
                         .foregroundStyle(self.settingsTitleText)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(description)
+                    Text(PichiLocalization.text(description))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.settingsSecondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1942,11 +1967,11 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .tint(self.theme.palette.accent)
                     .labelsHidden()
-                    .accessibilityLabel(title)
+                    .accessibilityLabel(PichiLocalization.text(title))
             }
 
             if let footnote = footnote {
-                Text(footnote)
+                Text(PichiLocalization.text(footnote))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2087,10 +2112,10 @@ struct SettingsView: View {
     ) -> some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodyStrong)
                     .foregroundStyle(self.settingsTitleText)
-                Text(description)
+                Text(PichiLocalization.text(description))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2114,7 +2139,7 @@ struct SettingsView: View {
                 Image(systemName: "info.circle.fill")
                     .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
                     .font(.fluidSystem(.caption))
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodySmallStrong)
                     .foregroundStyle(self.settingsTitleText)
             }
@@ -2212,8 +2237,8 @@ private extension SettingsView {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon).foregroundStyle(color).frame(width: 20).padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(self.theme.typography.bodyStrong).foregroundStyle(self.settingsTitleText)
-                Text(description).font(self.theme.typography.bodySmall).foregroundStyle(self.settingsSecondaryText)
+                Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong).foregroundStyle(self.settingsTitleText)
+                Text(PichiLocalization.text(description)).font(self.theme.typography.bodySmall).foregroundStyle(self.settingsSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -3097,7 +3122,7 @@ private struct DictionarySuggestionsSettingsRow: View {
                         selection: self.$settings.automaticDictionarySuggestionFrequency
                     ) {
                         ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
-                            Text(frequency.displayName).tag(frequency)
+                            Text(PichiLocalization.text(frequency.displayName)).tag(frequency)
                         }
                     }
                     .fluidDropdownStyle()

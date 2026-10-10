@@ -72,13 +72,15 @@ final class PermissionDragGuideController {
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.contentView = NSHostingView(
-            rootView: PermissionDragGuideView(
-                appURL: Self.draggableAppURL,
-                appName: Bundle.main.fluidAppDisplayName,
-                instruction: instruction,
-                onReturnToApp: { [weak self] in self?.returnToApp() },
-                onClose: { [weak self] in self?.dismiss() }
-            )
+            rootView: PichiLocalizedContent {
+                PermissionDragGuideView(
+                    appURL: Self.draggableAppURL,
+                    appName: Bundle.main.fluidAppDisplayName,
+                    instruction: instruction,
+                    onReturnToApp: { [weak self] in self?.returnToApp() },
+                    onClose: { [weak self] in self?.dismiss() }
+                )
+            }
         )
         panel.setFrame(frame, display: true, animate: self.panel != nil)
         panel.orderFrontRegardless()

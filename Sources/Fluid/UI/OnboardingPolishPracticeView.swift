@@ -17,7 +17,7 @@ struct OnboardingPolishPracticeView: View {
 
     private var blue: Color { FluidOnboardingLandingColors.blue }
     private var status: String {
-        if !self.hasActivated { return "Press \(self.shortcutDisplay) to begin." }
+        if !self.hasActivated { return PichiLocalization.format("Press %@ to begin.", self.shortcutDisplay) }
         if self.isRunning { return "Listening" }
         if self.isProcessing { return "Polishing…" }
         return ""
@@ -38,7 +38,7 @@ struct OnboardingPolishPracticeView: View {
                         Label("Say this", systemImage: "quote.opening")
                             .font(.fluidSystem(size: 13, weight: .semibold))
                             .foregroundStyle(Color(red: 0.48, green: 0.72, blue: 1))
-                        Text(self.practice.example.spoken)
+                        Text(PichiLocalization.text(self.practice.example.spoken))
                             .font(.fluidSystem(size: 17))
                             .foregroundStyle(.white.opacity(0.92))
                             .lineSpacing(5)
@@ -87,7 +87,7 @@ struct OnboardingPolishPracticeView: View {
                     .foregroundStyle(self.blue)
                     .symbolEffect(.variableColor, options: .repeating, isActive: self.isRunning && self.isActive && self.scenePhase == .active && !self.reduceMotion)
                     .accessibilityHidden(true)
-                Text(self.status)
+                Text(PichiLocalization.text(self.status))
                     .font(.fluidSystem(size: 14, weight: .medium))
                     .foregroundStyle(.white.opacity(0.86))
             }
@@ -96,7 +96,7 @@ struct OnboardingPolishPracticeView: View {
             .background(self.blue.opacity(0.09), in: Capsule())
             .accessibilityElement(children: .combine)
         } else if !self.hasActivated {
-            Text(self.status)
+            Text(PichiLocalization.text(self.status))
                 .font(.fluidSystem(size: 14, weight: .medium))
                 .foregroundStyle(.white.opacity(0.64))
         }

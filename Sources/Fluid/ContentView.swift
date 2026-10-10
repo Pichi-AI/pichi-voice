@@ -1598,7 +1598,7 @@ struct ContentView: View {
                     get: { self.settingsSearchQuery },
                     set: { self.updateSettingsSearchQuery($0) }
                 ),
-                placeholder: "Search Settings",
+                placeholder: PichiLocalization.text("Search Settings"),
                 isActive: self.settingsNavigation.isPresented
             )
             .padding(.horizontal, self.theme.metrics.spacing.md)
@@ -1625,7 +1625,7 @@ struct ContentView: View {
                                 .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
                                 .frame(width: 18)
 
-                            Text(section.title)
+                            Text(PichiLocalization.text(section.title))
                                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                         }
                         .font(self.theme.typography.sidebarItem)
@@ -1776,7 +1776,7 @@ struct ContentView: View {
     }
 
     private func sidebarSectionHeader(_ title: String) -> some View {
-        Text(title)
+        Text(PichiLocalization.text(title))
             .font(self.theme.typography.sidebarSection)
             .foregroundStyle(.secondary)
             .textCase(nil)
@@ -1796,7 +1796,7 @@ struct ContentView: View {
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
 
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
             }
             .font(self.theme.typography.sidebarItem)
@@ -1815,7 +1815,7 @@ struct ContentView: View {
             Image(systemName: self.settings.themePreference.systemImageName)
                 .fluidToolbarIcon()
         }
-        .help("Theme: \(self.settings.themePreference.displayName)")
+        .help(PichiLocalization.format("Theme: %@", PichiLocalization.text(self.settings.themePreference.displayName)))
         .accessibilityLabel("Theme")
     }
 
@@ -1852,7 +1852,7 @@ struct ContentView: View {
             }
         }
         .animation(self.modeTransitionAnimation, value: self.settingsNavigation.isPresented)
-        .navigationTitle(self.pagePresentation.title)
+        .navigationTitle(PichiLocalization.text(self.pagePresentation.title))
     }
 
     private var pagePresentation: AppPagePresentation {
@@ -5774,16 +5774,18 @@ extension ContentView {
             panel.hasShadow = true
             panel.hidesOnDeactivate = false
             panel.contentView = NSHostingView(
-                rootView: AccessibilitySettingsFloatingGuideView(
-                    appURL: self.draggableAccessibilityAppURL,
-                    appName: self.accessibilityAppDisplayName,
-                    onReturnToApp: {
-                        self.cancelAccessibilityPermissionFlow()
-                    },
-                    onClose: {
-                        self.cancelAccessibilityPermissionFlow()
-                    }
-                )
+                rootView: PichiLocalizedContent {
+                    AccessibilitySettingsFloatingGuideView(
+                        appURL: self.draggableAccessibilityAppURL,
+                        appName: self.accessibilityAppDisplayName,
+                        onReturnToApp: {
+                            self.cancelAccessibilityPermissionFlow()
+                        },
+                        onClose: {
+                            self.cancelAccessibilityPermissionFlow()
+                        }
+                    )
+                }
             )
             panel.setFrame(frame, display: true, animate: self.accessibilityGuidePanel != nil)
             panel.orderFrontRegardless()

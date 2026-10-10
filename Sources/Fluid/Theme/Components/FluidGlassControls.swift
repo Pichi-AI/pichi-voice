@@ -112,7 +112,7 @@ struct ProviderDefaultButton: View {
         Button(action: self.action) {
             HStack(spacing: 6) {
                 if self.isCurrent { Image(systemName: "checkmark.circle.fill") }
-                Text(self.isCurrent ? "Current default" : "Set as default")
+                Text(LocalizedStringKey(self.isCurrent ? "Current default" : "Set as default"))
             }
         }
         .fluidGlassAction()
