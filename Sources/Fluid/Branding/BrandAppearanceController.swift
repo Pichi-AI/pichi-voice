@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 /// Native shell surfaces refresh together with SwiftUI content after an atomic package commit.
 @MainActor
