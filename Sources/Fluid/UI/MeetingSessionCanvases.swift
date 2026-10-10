@@ -965,15 +965,10 @@ private struct MeetingTrackHealthRow: View {
     let health: MeetingTrackHealth
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
 
     private var statusText: String {
-        switch self.health.status {
-        case .waiting: return PichiLocalization.text("Waiting for audio")
-        case .healthy: return PichiLocalization.text("Receiving audio")
-        case .degraded: return self.health.detail.map(PichiLocalization.text) ?? PichiLocalization.text("Audio source degraded")
-        case .unavailable: return self.health.detail.map(PichiLocalization.text) ?? PichiLocalization.text("Audio source unavailable")
-        case .stopped: return PichiLocalization.text("Stopped")
-        }
+        self.health.localizedStatusText(language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language)
     }
 
     private var statusColor: Color {
@@ -1018,6 +1013,40 @@ private struct MeetingTrackHealthRow: View {
             }
         }
         .help("\(self.title): \(self.statusText)")
+    }
+}
+
+extension MeetingTrackHealth {
+    /// Fixed capture warnings are UI resources. Unstructured writer errors remain diagnostics.
+    /// Rendering never rewrites the English detail retained in the session manifest.
+    func localizedStatusText(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
+        switch self.status {
+        case .waiting: return PichiLocalization.text("Waiting for audio", language: language, bundle: bundle)
+        case .healthy: return PichiLocalization.text("Receiving audio", language: language, bundle: bundle)
+        case .stopped: return PichiLocalization.text("Stopped", language: language, bundle: bundle)
+        case .degraded, .unavailable:
+            guard let detail = self.detail else {
+                return self.status == .degraded
+                    ? PichiLocalization.text("Audio source degraded", language: language, bundle: bundle)
+                    : PichiLocalization.text("Audio source unavailable", language: language, bundle: bundle)
+            }
+            switch detail {
+            case "No meeting audio is being captured while your microphone is active.":
+                return PichiLocalization.text("No meeting audio is being captured while your microphone is active.", language: language, bundle: bundle)
+            case "Capture delivered an invalid audio sample.":
+                return PichiLocalization.text("Capture delivered an invalid audio sample.", language: language, bundle: bundle)
+            case "Capture delivered audio without a valid presentation timestamp.":
+                return PichiLocalization.text("Capture delivered audio without a valid presentation timestamp.", language: language, bundle: bundle)
+            case "Capture delivered audio from a retired producer epoch.":
+                return PichiLocalization.text("Capture delivered audio from a retired producer epoch.", language: language, bundle: bundle)
+            case "Capture audio could not be normalized onto the meeting timeline.":
+                return PichiLocalization.text("Capture audio could not be normalized onto the meeting timeline.", language: language, bundle: bundle)
+            case "Audio chunk timing was not monotonic.":
+                return PichiLocalization.text("Audio chunk timing was not monotonic.", language: language, bundle: bundle)
+            default:
+                return detail
+            }
+        }
     }
 }
 

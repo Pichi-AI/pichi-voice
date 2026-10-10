@@ -5448,6 +5448,23 @@
         }
       }
     },
+    "Audio chunk timing was not monotonic.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio chunk timing was not monotonic."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудиофрагмента нарушают порядок записи."
+          }
+        }
+      }
+    },
     "Audio file": {
       "extractionState": "manual",
       "localizations": {
@@ -7279,6 +7296,74 @@
           "stringUnit": {
             "state": "translated",
             "value": "Субтитры"
+          }
+        }
+      }
+    },
+    "Capture audio could not be normalized onto the meeting timeline.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture audio could not be normalized onto the meeting timeline."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось синхронизировать аудио со шкалой времени встречи."
+          }
+        }
+      }
+    },
+    "Capture delivered an invalid audio sample.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture delivered an invalid audio sample."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получен некорректный аудиосэмпл."
+          }
+        }
+      }
+    },
+    "Capture delivered audio from a retired producer epoch.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture delivered audio from a retired producer epoch."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получено аудио от уже заменённого источника захвата."
+          }
+        }
+      }
+    },
+    "Capture delivered audio without a valid presentation timestamp.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture delivered audio without a valid presentation timestamp."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получено аудио без корректной временной метки."
           }
         }
       }
@@ -23042,6 +23127,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подходящих слов нет."
+          }
+        }
+      }
+    },
+    "No meeting audio is being captured while your microphone is active.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No meeting audio is being captured while your microphone is active."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звук встречи не записывается, хотя микрофон активен."
           }
         }
       }

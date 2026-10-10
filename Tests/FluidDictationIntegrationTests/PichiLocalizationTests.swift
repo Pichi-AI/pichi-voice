@@ -114,6 +114,42 @@ final class PichiLocalizationTests: XCTestCase {
         XCTAssertEqual(PichiLocalization.format("%lld percent", language: .russian, bundle: .main, arguments: [21]), "21 процент")
     }
 
+    func testMeetingHealthWarningsUseCompiledCatalogWithoutChangingPersistedDiagnostics() throws {
+        let warnings = [
+            "No meeting audio is being captured while your microphone is active.": "Звук встречи не записывается, хотя микрофон активен.",
+            "Capture delivered an invalid audio sample.": "Получен некорректный аудиосэмпл.",
+            "Capture delivered audio without a valid presentation timestamp.": "Получено аудио без корректной временной метки.",
+            "Capture delivered audio from a retired producer epoch.": "Получено аудио от уже заменённого источника захвата.",
+            "Capture audio could not be normalized onto the meeting timeline.": "Не удалось синхронизировать аудио со шкалой времени встречи.",
+            "Audio chunk timing was not monotonic.": "Временные метки аудиофрагмента нарушают порядок записи.",
+        ]
+        let french = try XCTUnwrap(PichiInterfaceLanguage(rawValue: "fr"))
+        for (detail, translated) in warnings {
+            var health = MeetingTrackHealth.waiting
+            health.status = .degraded
+            health.detail = detail
+            let stored = try JSONEncoder().encode(health)
+            XCTAssertEqual(health.localizedStatusText(language: .russian), translated)
+            XCTAssertEqual(health.localizedStatusText(language: .english), detail)
+            XCTAssertEqual(health.localizedStatusText(language: french), detail)
+            XCTAssertEqual(try JSONDecoder().decode(MeetingTrackHealth.self, from: stored), health)
+            XCTAssertEqual(health.detail, detail)
+        }
+    }
+
+    func testMeetingHealthPresentationPreservesUnknownDeviceAndWriterDetailsVerbatim() {
+        for detail in ["Settings", "Microphone Pichi %ld [ru] https://example.invalid/stream", "Audio writer queue dropped 7 samples while saturated."] {
+            var health = MeetingTrackHealth.waiting
+            health.status = .unavailable
+            health.detail = detail
+            XCTAssertEqual(health.localizedStatusText(language: .russian), detail)
+            XCTAssertEqual(health.localizedStatusText(language: .english), detail)
+        }
+        var health = MeetingTrackHealth.waiting
+        health.status = .degraded
+        XCTAssertEqual(health.localizedStatusText(language: .russian), "Проблема с источником звука")
+    }
+
     @MainActor
     func testPromptIconUsesSelectionIdentityInsteadOfTranslatedOrCustomLabel() {
         XCTAssertEqual(DictationPromptSelectorPresentation.iconName(for: .off, isAppOverrideActive: false), "bolt.fill")
