@@ -54,6 +54,28 @@ final class CloudTextProviderTests: XCTestCase {
 
     nonisolated override func tearDown() { CloudProviderFixtureProtocol.handler = nil; super.tearDown() }
 
+    func testDictationRouteKeepsConnectionMetadataWhenSettingsChangeDuringFinalization() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.providerConnectionOptions
+        defer { settings.providerConnectionOptions = previous }
+        settings.providerConnectionOptions = ["yandex": ["project": "original-folder"],
+                                              "gigachat": ["scope": "GIGACHAT_API_PERS"]]
+        let yandex = DictationProviderRoute.resolve(settings: settings, providerID: "yandex",
+                                                    model: "gpt://original-folder/synthetic-model")
+        let sber = DictationProviderRoute.resolve(settings: settings, providerID: "gigachat", model: "synthetic-model")
+        await Task.yield()
+        settings.providerConnectionOptions = ["yandex": ["project": "changed-folder"],
+                                              "gigachat": ["scope": "GIGACHAT_API_B2B"]]
+        XCTAssertEqual(yandex.connectionOptions, ["project": "original-folder"])
+        XCTAssertEqual(sber.connectionOptions, ["scope": "GIGACHAT_API_PERS"])
+        var config = LLMClient.Config(messages: [["role": "user", "content": "Synthetic test."]],
+                                      model: yandex.model, baseURL: yandex.baseURL, apiKey: "synthetic-key", streaming: false)
+        config.providerOptions = yandex.connectionOptions
+        XCTAssertEqual(try LLMClient.shared.buildRequest(config).value(forHTTPHeaderField: "OpenAI-Project"), "original-folder")
+        config.providerOptions = settings.providerConnectionOptions["yandex"] ?? [:]
+        XCTAssertThrowsError(try LLMClient.shared.buildRequest(config))
+    }
+
     func testRegisteredProvidersUseCurrentEndpointsAndNoInventedModels() {
         for id in ["gigachat", "yandex"] {
             XCTAssertTrue(ModelRepository.shared.isBuiltIn(id))

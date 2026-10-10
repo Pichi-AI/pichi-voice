@@ -6,6 +6,17 @@ struct DictationProviderRoute: Equatable {
     let baseURL: String
     let model: String
     let apiKey: String
+    let connectionOptions: [String: String]
+
+    init(providerID: String, providerKey: String, baseURL: String, model: String, apiKey: String,
+         connectionOptions: [String: String] = [:]) {
+        self.providerID = providerID
+        self.providerKey = providerKey
+        self.baseURL = baseURL
+        self.model = model
+        self.apiKey = apiKey
+        self.connectionOptions = connectionOptions
+    }
 
     var usesPrivateAI: Bool {
         self.providerID == PrivateAIProviderFeature.shared.providerID ||
@@ -67,7 +78,8 @@ struct DictationProviderRoute: Equatable {
                 providerKey: key,
                 baseURL: saved.baseURL,
                 model: configuredModel ?? selectedModels[key] ?? saved.models.first ?? "",
-                apiKey: providerKeys[key] ?? providerKeys[selectedProviderID] ?? ""
+                apiKey: providerKeys[key] ?? providerKeys[selectedProviderID] ?? "",
+                connectionOptions: settings.providerConnectionOptions[selectedProviderID] ?? [:]
             )
         }
 
@@ -77,7 +89,8 @@ struct DictationProviderRoute: Equatable {
                 providerKey: selectedProviderID,
                 baseURL: ModelRepository.shared.defaultBaseURL(for: selectedProviderID),
                 model: configuredModel ?? selectedModels[selectedProviderID] ?? ModelRepository.shared.defaultModels(for: selectedProviderID).first ?? "",
-                apiKey: providerKeys[selectedProviderID] ?? ""
+                apiKey: providerKeys[selectedProviderID] ?? "",
+                connectionOptions: settings.providerConnectionOptions[selectedProviderID] ?? [:]
             )
         }
 
@@ -86,7 +99,8 @@ struct DictationProviderRoute: Equatable {
             providerKey: selectedProviderID,
             baseURL: "",
             model: configuredModel ?? selectedModels[selectedProviderID] ?? "",
-            apiKey: providerKeys[selectedProviderID] ?? ""
+            apiKey: providerKeys[selectedProviderID] ?? "",
+            connectionOptions: settings.providerConnectionOptions[selectedProviderID] ?? [:]
         )
     }
 
@@ -146,7 +160,8 @@ struct DictationProviderRoute: Equatable {
                 providerKey: key,
                 baseURL: saved.baseURL,
                 model: trimmedModel,
-                apiKey: providerKeys[key] ?? providerKeys[trimmedProviderID] ?? ""
+                apiKey: providerKeys[key] ?? providerKeys[trimmedProviderID] ?? "",
+                connectionOptions: settings.providerConnectionOptions[trimmedProviderID] ?? [:]
             )
         }
         return Self(
@@ -154,7 +169,8 @@ struct DictationProviderRoute: Equatable {
             providerKey: trimmedProviderID,
             baseURL: ModelRepository.shared.defaultBaseURL(for: trimmedProviderID),
             model: trimmedModel,
-            apiKey: providerKeys[trimmedProviderID] ?? ""
+            apiKey: providerKeys[trimmedProviderID] ?? "",
+            connectionOptions: settings.providerConnectionOptions[trimmedProviderID] ?? [:]
         )
     }
 
@@ -298,7 +314,7 @@ final class DictationPostProcessingService {
             temperature: settings.isTemperatureUnsupported(resolved.model) ? nil : 0.2,
             extraParameters: extraParams
         )
-        config.providerOptions = settings.providerConnectionOptions[resolved.providerID] ?? [:]
+        config.providerOptions = resolved.connectionOptions
         config.timeoutSeconds = 120
 
         let response = try await LLMClient.shared.call(config)

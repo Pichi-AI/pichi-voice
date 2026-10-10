@@ -2912,7 +2912,7 @@ struct ContentView: View {
             extraParameters: extraParams,
             benchmarkID: benchmarkID
         )
-        config.providerOptions = SettingsStore.shared.providerConnectionOptions[currentSelectedProviderID] ?? [:]
+        config.providerOptions = route.connectionOptions
         if enableStreaming {
             config.onContentChunk = { chunk in
                 streamHandler?(chunk)
