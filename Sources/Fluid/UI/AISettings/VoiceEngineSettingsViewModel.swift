@@ -235,6 +235,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     var modelDescriptionText: String {
         let model = self.settings.selectedSpeechModel
         switch model {
+        case .gigaam:
+            return "Our optimized GigaAM recognizes Russian locally on Apple Silicon and Intel. Import a verified model folder, then Activate. Dictation, files, meetings and the local API use the same model."
         case .appleSpeech:
             return "Apple Speech (Legacy) uses built-in macOS speech recognition. No model download required, works on Intel and Apple Silicon."
         case .appleSpeechAnalyzer:
