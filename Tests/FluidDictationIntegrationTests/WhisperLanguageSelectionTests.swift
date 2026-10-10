@@ -64,6 +64,32 @@ final class WhisperLanguageSelectionTests: XCTestCase {
         XCTAssertTrue(VoiceEngineLanguageCatalog.searchableLanguages(query: "German", availableModels: [.parakeetTDT], locale: locale).contains { $0.id == "de" })
     }
 
+    @MainActor
+    func testMeetingLanguagePresentationUsesInterfaceLocaleAndPreservesEngineMetadata() throws {
+        let languages = VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])
+        let metadata = languages.map { ($0.id, $0.displayName, $0.aliases) }
+        let russian = Locale(identifier: "ru")
+        let french = Locale(identifier: "fr")
+        let russianLabels = Dictionary(uniqueKeysWithValues: languages.map { ($0.id, $0.localizedDisplayName(locale: russian)) })
+        let frenchLabels = Dictionary(uniqueKeysWithValues: languages.map { ($0.id, $0.localizedDisplayName(locale: french)) })
+
+        XCTAssertEqual(russianLabels["bg"], "Болгарский")
+        XCTAssertEqual(russianLabels["ru"], "Русский")
+        XCTAssertEqual(russianLabels["uk"], "Украинский")
+        XCTAssertEqual(frenchLabels["ru"], "Russe")
+        XCTAssertEqual(frenchLabels["uk"], "Ukrainien")
+        XCTAssertEqual(Set(russianLabels.keys), Set(frenchLabels.keys))
+        for (language, original) in zip(languages, metadata) {
+            XCTAssertEqual(language.id, original.0)
+            XCTAssertEqual(language.displayName, original.1)
+            XCTAssertEqual(language.aliases, original.2)
+        }
+
+        let selected = try XCTUnwrap(languages.first { $0.id == "ru" })
+        XCTAssertEqual(VoiceEngineLanguageCatalog.routes(for: selected, availableModels: [.gigaam]).first?.binding, .automatic)
+        XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguageCode(for: selected.id), "ru")
+    }
+
     func testHungarianLanguageCodeIsAvailable() {
         XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguageCode(for: "hu"), "hu")
         XCTAssertEqual(VoiceEngineLanguageCatalog.whisperLanguage(forCode: "hu")?.displayName, "Hungarian")

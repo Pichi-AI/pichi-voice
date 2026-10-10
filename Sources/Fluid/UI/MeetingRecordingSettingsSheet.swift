@@ -44,6 +44,7 @@ struct MeetingRecordingSettingsSheet: View {
     let onSave: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
 
     @State private var selectedSection: MeetingSettingsSection
 
@@ -285,12 +286,12 @@ struct MeetingRecordingSettingsSheet: View {
                     Menu {
                         Picker("Meeting language", selection: self.$draft.languageCode) {
                             ForEach(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])) { language in
-                                Text(language.displayName).tag(language.id)
+                                Text(language.localizedDisplayName(locale: self.locale)).tag(language.id)
                             }
                         }
                         .pickerStyle(.inline)
                     } label: {
-                        Text(VoiceEngineLanguageCatalog.language(id: self.draft.languageCode, availableModels: [.parakeetTDT])?.displayName ?? PichiLocalization.text("Choose language…"))
+                        Text(VoiceEngineLanguageCatalog.language(id: self.draft.languageCode, availableModels: [.parakeetTDT])?.localizedDisplayName(locale: self.locale) ?? PichiLocalization.text("Choose language…"))
                     }
                     .fluidDropdownStyle(fillsWidth: true)
                     .accessibilityLabel("Meeting transcript language")
