@@ -59,6 +59,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
 
         let meetingASR = ASRService()
         let meetingLease = try meetingASR.acquireExclusiveActivity(.meeting)
+        defer { meetingASR.releaseExclusiveActivity(meetingLease) }
         let attemptID = UUID()
         let store = PichiGigaAMModelStore(directory: URL(fileURLWithPath: modelPath))
         let configuration = MeetingFinalProcessingConfiguration(
@@ -74,7 +75,6 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
                 return try await meetingASR.transcribeMeetingSamplesWithTimings(samples, provider: prepared)
             }
         }
-        meetingASR.releaseExclusiveActivity(meetingLease)
         XCTAssertEqual(meetingResult.result.text, final.text)
         XCTAssertFalse(meetingResult.words.isEmpty)
         await meetingASR.shutdownForTermination()
