@@ -735,13 +735,13 @@
         }
       }
     },
-    "%@ — Change your dictation shortcuts": {
+    "%@ \u2014 Change your dictation shortcuts": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ — Change your dictation shortcuts"
+            "value": "%@ \u2014 Change your dictation shortcuts"
           }
         },
         "ru": {
@@ -2892,13 +2892,13 @@
         }
       }
     },
-    "AI enhancement failed—raw transcription was used": {
+    "AI enhancement failed\u2014raw transcription was used": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI enhancement failed—raw transcription was used"
+            "value": "AI enhancement failed\u2014raw transcription was used"
           }
         },
         "ru": {
@@ -2909,13 +2909,13 @@
         }
       }
     },
-    "AI generation speed, in tokens per second—not total processing time": {
+    "AI generation speed, in tokens per second\u2014not total processing time": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI generation speed, in tokens per second—not total processing time"
+            "value": "AI generation speed, in tokens per second\u2014not total processing time"
           }
         },
         "ru": {
@@ -6235,13 +6235,13 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
-    "Basic — No cleanup": {
+    "Basic \u2014 No cleanup": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Basic — No cleanup"
+            "value": "Basic \u2014 No cleanup"
           }
         },
         "ru": {
@@ -11175,13 +11175,13 @@
         }
       }
     },
-    "Daily aggregated insertion timing statistics—including toggle-stop-to-paste-dispatch—split by delivery path and outcome.": {
+    "Daily aggregated insertion timing statistics\u2014including toggle-stop-to-paste-dispatch\u2014split by delivery path and outcome.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Daily aggregated insertion timing statistics—including toggle-stop-to-paste-dispatch—split by delivery path and outcome."
+            "value": "Daily aggregated insertion timing statistics\u2014including toggle-stop-to-paste-dispatch\u2014split by delivery path and outcome."
           }
         },
         "ru": {
@@ -13524,13 +13524,13 @@
         }
       }
     },
-    "Enable %@ MCP link — coming soon": {
+    "Enable %@ MCP link \u2014 coming soon": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Enable %@ MCP link — coming soon"
+            "value": "Enable %@ MCP link \u2014 coming soon"
           }
         },
         "ru": {
@@ -15626,6 +15626,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "FluidVoice is tidying up meeting storage. Try again in a moment.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice is tidying up meeting storage. Try again in a moment."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice очищает хранилище встреч. Попробуйте ещё раз через несколько секунд."
+          }
+        }
+      }
+    },
     "FluidVoice may sometimes use these words when you meant something similar.": {
       "extractionState": "manual",
       "localizations": {
@@ -15643,6 +15660,23 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "FluidVoice meeting recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice meeting recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись встречи в FluidVoice"
+          }
+        }
+      }
     },
     "FluidVoice meeting status": {
       "extractionState": "manual",
@@ -15715,6 +15749,40 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "FluidVoice restarted before capture finalized.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice restarted before capture finalized."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice перезапустился до завершения записи."
+          }
+        }
+      }
+    },
+    "FluidVoice restarted before transcription completed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice restarted before transcription completed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "FluidVoice перезапустился до завершения расшифровки."
+          }
+        }
+      }
     },
     "FluidVoice selected this microphone for capture.": {
       "extractionState": "manual",
@@ -16119,13 +16187,13 @@
         }
       }
     },
-    "Full %.2f s · trained section %.2f–%.2f s": {
+    "Full %.2f s · trained section %.2f\u2013%.2f s": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Full %.2f s · trained section %.2f–%.2f s"
+            "value": "Full %.2f s · trained section %.2f\u2013%.2f s"
           }
         },
         "ru": {
@@ -17296,13 +17364,13 @@
         }
       }
     },
-    "Illustrative design preview — not benchmark scores": {
+    "Illustrative design preview \u2014 not benchmark scores": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Illustrative design preview — not benchmark scores"
+            "value": "Illustrative design preview \u2014 not benchmark scores"
           }
         },
         "ru": {
@@ -18796,13 +18864,13 @@
         }
       }
     },
-    "Listening — stop when you’re finished": {
+    "Listening \u2014 stop when you’re finished": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Listening — stop when you’re finished"
+            "value": "Listening \u2014 stop when you’re finished"
           }
         },
         "ru": {
@@ -23926,13 +23994,13 @@
         }
       }
     },
-    "One more—you’ve got this": {
+    "One more\u2014you’ve got this": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "One more—you’ve got this"
+            "value": "One more\u2014you’ve got this"
           }
         },
         "ru": {
@@ -34288,6 +34356,23 @@
         }
       }
     },
+    "The development model path is missing or invalid. Remove the override and restart FluidVoice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The development model path is missing or invalid. Remove the override and restart FluidVoice."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Путь к модели для разработки отсутствует или недействителен. Удалите переопределение и перезапустите FluidVoice."
+          }
+        }
+      }
+    },
     "The installed app changed. Restart FluidVoice before trying the update again.": {
       "extractionState": "manual",
       "localizations": {
@@ -34478,13 +34563,13 @@
         }
       }
     },
-    "The recap, the decisions, and the follow-ups—without rereading the transcript.": {
+    "The recap, the decisions, and the follow-ups\u2014without rereading the transcript.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The recap, the decisions, and the follow-ups—without rereading the transcript."
+            "value": "The recap, the decisions, and the follow-ups\u2014without rereading the transcript."
           }
         },
         "ru": {
@@ -34600,13 +34685,13 @@
         }
       }
     },
-    "The small details count. Share what’s working—or what isn’t.": {
+    "The small details count. Share what’s working\u2014or what isn’t.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The small details count. Share what’s working—or what isn’t."
+            "value": "The small details count. Share what’s working\u2014or what isn’t."
           }
         },
         "ru": {
