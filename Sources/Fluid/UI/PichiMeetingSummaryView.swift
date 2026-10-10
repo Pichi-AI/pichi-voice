@@ -41,7 +41,7 @@ struct PichiMeetingSummaryView: View {
                 if self.controller.generating {
                     Button("Cancel") { self.controller.cancel() }.meetingGlassAction()
                 } else {
-                    Button(self.controller.document == nil ? "Generate summary" : "Regenerate") {
+                    Button(PichiLocalization.text(self.controller.document == nil ? "Generate summary" : "Regenerate")) {
                         guard let session = self.session, let config = self.configuration else { return }
                         self.controller.summarize(session: session, configuration: config,
                                                   asr: self.asrService ?? AppServices.shared.asr)
@@ -59,8 +59,8 @@ struct PichiMeetingSummaryView: View {
             .disabled(self.controller.generating)
 
             if let config = self.configuration {
-                Label(config.isOnDevice ? "Transcript stays on this Mac · \(config.modelID)"
-                      : "Transcript will be sent to \(config.baseURL) · \(config.modelID)",
+                Label(config.isOnDevice ? PichiLocalization.format("Transcript stays on this Mac · %@", config.modelID)
+                      : PichiLocalization.format("Transcript will be sent to %@ · %@", config.baseURL, config.modelID),
                       systemImage: config.isOnDevice ? "lock" : "network")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -76,7 +76,7 @@ struct PichiMeetingSummaryView: View {
             if self.controller.generating || self.controller.checking {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     ProgressView().controlSize(.small)
-                    Text(self.controller.generating ? self.controller.progress : "Loading saved summary…")
+                    Text(self.controller.generating ? self.controller.progress : PichiLocalization.text("Loading saved summary…"))
                         .font(self.theme.typography.bodySmall)
                 }
             }
@@ -92,10 +92,10 @@ struct PichiMeetingSummaryView: View {
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.warning)
                 }
-                self.summarySection(self.title(ru: "Резюме", en: "Recap"), items: document.summary)
-                self.summarySection(self.title(ru: "Решения", en: "Decisions"), items: document.decisions)
-                self.summarySection(self.title(ru: "Задачи", en: "Action items"), items: document.actions)
-                self.summarySection(self.title(ru: "Вопросы и ответы", en: "Questions and answers"), items: document.openQuestions, questions: true)
+                self.summarySection(PichiLocalization.text("Recap"), items: document.summary)
+                self.summarySection(PichiLocalization.text("Decisions"), items: document.decisions)
+                self.summarySection(PichiLocalization.text("Action items"), items: document.actions)
+                self.summarySection(PichiLocalization.text("Questions and answers"), items: document.openQuestions, questions: true)
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Button("Copy summary", systemImage: "doc.on.doc") { self.copy(document) }
                         .meetingGlassAction()
@@ -104,8 +104,8 @@ struct PichiMeetingSummaryView: View {
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
             } else if !self.controller.generating, !self.controller.checking {
-                Text(self.session == nil ? "Record or open a meeting to generate its summary."
-                     : "Finish the transcript, choose a model, then generate a summary. Russian is the default output language.")
+                Text(PichiLocalization.text(self.session == nil ? "Record or open a meeting to generate its summary."
+                     : "Finish the transcript, choose a model, then generate a summary. Russian is the default output language."))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -148,7 +148,7 @@ struct PichiMeetingSummaryView: View {
                         }
                         .fluidDropdownStyle()
                     }
-                    Button(self.preferences.discovering ? "Refreshing…" : "Refresh models") {
+                    Button(PichiLocalization.text(self.preferences.discovering ? "Refreshing…" : "Refresh models")) {
                         Task { await self.preferences.discoverModels() }
                     }
                     .meetingGlassAction()
@@ -183,7 +183,7 @@ struct PichiMeetingSummaryView: View {
     private func summarySection(_ title: String, items: [PichiMeetingSummaryItem], questions: Bool = false) -> some View {
         FluidManagementGroup(title: title) {
             if items.isEmpty {
-                Text(self.title(ru: "Не указаны в расшифровке.", en: "None stated in the transcript."))
+                Text("None stated in the transcript.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             } else {
@@ -195,26 +195,24 @@ struct PichiMeetingSummaryView: View {
                                 .strikethrough(item.superseded == true)
                                 .textSelection(.enabled)
                             if item.superseded == true {
-                                Text(self.title(ru: "Отменено или заменено позднее", en: "Cancelled or replaced later"))
+                                Text("Cancelled or replaced later")
                                     .font(self.theme.typography.captionStrong)
                                     .foregroundStyle(self.theme.palette.warning)
                             }
                             if questions {
-                                Text(item.resolved == true
-                                     ? self.title(ru: "Ответ получен позднее", en: "Answered later")
-                                     : self.title(ru: "Открытый вопрос", en: "Open question"))
+                                Text(PichiLocalization.text(item.resolved == true ? "Answered later" : "Open question"))
                                     .font(self.theme.typography.captionStrong)
                                     .foregroundStyle(item.resolved == true ? self.theme.palette.success : self.theme.palette.secondaryText)
                             }
                             if let owner = item.owner {
-                                Text(self.title(ru: "Ответственный: ", en: "Owner: ") + owner)
+                                Text(PichiLocalization.text("Owner: ") + owner)
                                     .font(self.theme.typography.captionStrong)
                             }
                             if let deadline = item.deadline {
-                                Text(self.title(ru: "Срок: ", en: "Due: ") + deadline)
+                                Text(PichiLocalization.text("Due: ") + deadline)
                                     .font(self.theme.typography.caption)
                             }
-                            DisclosureGroup(self.title(ru: "Источники", en: "Sources")) {
+                            DisclosureGroup("Sources") {
                                 ForEach(Array(item.evidence.enumerated()), id: \.offset) { _, evidence in
                                     self.source(evidence)
                                 }
@@ -232,7 +230,7 @@ struct PichiMeetingSummaryView: View {
         let turn = self.session.flatMap { PichiMeetingSummaryInput.turns(for: $0).first { $0.id == evidence.segmentID } }
         let seconds = Int(max(0, turn?.seconds ?? 0))
         return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-            Text("\(seconds / 60):\(String(format: "%02d", seconds % 60)) · \(turn?.speaker ?? "Speaker")")
+            Text("\(seconds / 60):\(String(format: "%02d", seconds % 60)) · \(turn?.speaker ?? PichiLocalization.text("Speaker"))")
                 .font(self.theme.typography.captionStrong)
             Text(evidence.quote).textSelection(.enabled)
         }

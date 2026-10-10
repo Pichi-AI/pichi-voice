@@ -182,14 +182,14 @@ nonisolated enum PichiMeetingSummaryError: LocalizedError {
     case notConfigured, localEndpointRequired, insecureEndpoint, unsupportedProvider, emptyTranscript, invalidOutput, invalidEvidence, tooManyChunks
     var errorDescription: String? {
         switch self {
-        case .notConfigured: "Choose an installed model and configure its API endpoint before generating a summary."
-        case .localEndpointRequired: "Local mode requires a localhost endpoint. To use a server, select the configured AI provider."
-        case .insecureEndpoint: "Remote summaries require an HTTPS endpoint."
-        case .unsupportedProvider: "Choose an OpenAI-compatible provider in AI Enhancement settings, such as Ollama, LM Studio or OpenRouter."
-        case .emptyTranscript: "This meeting has no completed transcript to summarize."
-        case .invalidOutput: "The model did not return a valid structured summary. Try a different model. The transcript is safe."
-        case .invalidEvidence: "The model returned an unsupported source, owner or date. The result was rejected. The transcript is safe."
-        case .tooManyChunks: "This transcript is too large to summarize in one operation."
+        case .notConfigured: PichiLocalization.text("Choose an installed model and configure its API endpoint before generating a summary.")
+        case .localEndpointRequired: PichiLocalization.text("Local mode requires a localhost endpoint. To use a server, select the configured AI provider.")
+        case .insecureEndpoint: PichiLocalization.text("Remote summaries require an HTTPS endpoint.")
+        case .unsupportedProvider: PichiLocalization.text("Choose an OpenAI-compatible provider in AI Enhancement settings, such as Ollama, LM Studio or OpenRouter.")
+        case .emptyTranscript: PichiLocalization.text("This meeting has no completed transcript to summarize.")
+        case .invalidOutput: PichiLocalization.text("The model did not return a valid structured summary. Try a different model. The transcript is safe.")
+        case .invalidEvidence: PichiLocalization.text("The model returned an unsupported source, owner or date. The result was rejected. The transcript is safe.")
+        case .tooManyChunks: PichiLocalization.text("This transcript is too large to summarize in one operation.")
         }
     }
 }

@@ -6,7 +6,7 @@ final class PichiMeetingSummarySettings: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case local, configuredProvider
         var id: String { self.rawValue }
-        var title: String { self == .local ? "Local model on this Mac" : "Configured AI provider" }
+        var title: String { self == .local ? PichiLocalization.text("Local model on this Mac") : PichiLocalization.text("Configured AI provider") }
     }
 
     private let defaults: UserDefaults
@@ -80,12 +80,12 @@ final class PichiMeetingSummarySettings: ObservableObject {
             guard endpoint == self.baseURL.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw LLMError.invalidResponse }
             self.models = try JSONDecoder().decode(Models.self, from: data).data.map(\.id).sorted()
-            if self.models.isEmpty { self.discoveryError = "No installed models found. Install a model in Ollama or LM Studio, then refresh." }
+            if self.models.isEmpty { self.discoveryError = PichiLocalization.text("No installed models found. Install a model in Ollama or LM Studio, then refresh.") }
         } catch is CancellationError {
             self.discoveryError = nil
         } catch {
             self.models = []
-            self.discoveryError = "Could not list local models. Start Ollama or LM Studio's local server and check the endpoint."
+            self.discoveryError = PichiLocalization.text("Could not list local models. Start Ollama or LM Studio's local server and check the endpoint.")
         }
     }
 }
@@ -160,7 +160,7 @@ final class PichiMeetingSummaryController: ObservableObject {
                                                           configurationIdentity: configuration.cacheIdentity,
                                                           generatedAt: Date(), document: output)
                 guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
-                    self.error = "The summary is ready, but this meeting has no saved directory yet."
+                    self.error = PichiLocalization.text("The summary is ready, but this meeting has no saved directory yet.")
                     return
                 }
                 try Task.checkCancellation()
@@ -186,6 +186,6 @@ final class PichiMeetingSummaryController: ObservableObject {
         }
     }
 
-    private func updateProgress(index: Int, total: Int) { self.progress = "Processing transcript part \(index) of \(total)…" }
+    private func updateProgress(index: Int, total: Int) { self.progress = PichiLocalization.format("Processing transcript part %lld of %lld…", index, total) }
     func cancel() { self.operation?.cancel() }
 }

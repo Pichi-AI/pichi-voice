@@ -247,7 +247,7 @@ struct MeetingFloatingCaptionsContent: View {
             if active { self.isStopping = false }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("FluidMeet live captions")
+        .accessibilityLabel(AppBrand.text("FluidMeet live captions"))
     }
 
     private var header: some View {
