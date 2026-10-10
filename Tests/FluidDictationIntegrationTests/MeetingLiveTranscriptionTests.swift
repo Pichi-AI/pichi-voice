@@ -638,3 +638,328 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         await engine.stop()
     }
 }
+
+#if DEBUG
+/// Tracks fake model allocations through the real ASR capture handoff and buffered workers.
+/// No fixture downloads weights, records a microphone, or prepares a production model.
+@MainActor
+final class ASRServiceMeetingCaptureResidencyTests: XCTestCase {
+    private enum FixtureError: Error { case suspensionFailed }
+
+    @MainActor private final class Gate {
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        var isOpen: Bool
+        init(open: Bool = false) { self.isOpen = open }
+        func wait() async {
+            if self.isOpen { return }
+            await withCheckedContinuation { self.waiters.append($0) }
+        }
+        func open() {
+            self.isOpen = true
+            let waiters = self.waiters
+            self.waiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    @MainActor private final class Allocations {
+        var models: Set<String> = ["dictation"]
+        var maximum = 1
+        var events: [String] = []
+        func load(_ model: String) {
+            self.models.insert(model)
+            self.maximum = max(self.maximum, self.models.count)
+            self.events.append("load:\(model)")
+        }
+        func unload(_ model: String) {
+            guard self.models.remove(model) != nil else { return }
+            self.events.append("unload:\(model)")
+        }
+    }
+
+    @MainActor private final class Fixture {
+        let residency = MeetingModelResidencyCoordinator()
+        lazy var service = ASRService(meetingModelResidency: self.residency)
+        let allocations = Allocations()
+        let snapshot: MeetingResidentModel
+        let suspendEntered = Gate()
+        let suspendGate = Gate(open: true)
+        let restoreEntered = Gate()
+        let restoreGate = Gate(open: true)
+        var restored: [MeetingResidentModel] = []
+        var restoreWasCancelled = false
+        var suspensionFails = false
+
+        init() {
+            self.snapshot = MeetingResidentModel(
+                id: SettingsStore.shared.selectedSpeechModel.id,
+                configuration: "original-loaded-configuration"
+            )
+            self.service.meetingCaptureResidencyParticipantForTesting = MeetingModelParticipant(
+                owner: "speech",
+                snapshot: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    return self.allocations.models.contains("dictation") ? self.snapshot : nil
+                },
+                suspend: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    self.allocations.unload("dictation")
+                    self.suspendEntered.open()
+                    await self.suspendGate.wait()
+                    if self.suspensionFails {
+                        self.suspensionFails = false
+                        throw FixtureError.suspensionFailed
+                    }
+                },
+                restore: { [weak self] model in
+                    guard let self else { throw CancellationError() }
+                    // Production restoration also checks that the current selection still
+                    // matches the value captured before retirement.
+                    guard SettingsStore.shared.selectedSpeechModel.id == model.id else { return }
+                    self.restoreEntered.open()
+                    await self.restoreGate.wait()
+                    self.restoreWasCancelled = Task.isCancelled
+                    self.restored.append(model)
+                    self.allocations.load("dictation")
+                }
+            )
+        }
+
+        func openGates() {
+            self.suspendGate.open()
+            self.restoreGate.open()
+        }
+    }
+
+    @MainActor private final class CaptionRecognizer: PichiMeetingCaptionRecognizing {
+        let allocations: Allocations
+        var prepareCalls = 0
+        private var loaded = false
+        init(allocations: Allocations) { self.allocations = allocations }
+        @MainActor func prepare() async throws {
+            self.prepareCalls += 1
+            guard !self.loaded else { return }
+            self.loaded = true
+            self.allocations.load("captions")
+        }
+        @MainActor func recognize(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition {
+            PichiMeetingCaptionRecognition(text: "", endOfUtteranceProbability: nil)
+        }
+        @MainActor func unload() async {
+            self.loaded = false
+            self.allocations.unload("captions")
+        }
+    }
+
+    @MainActor private final class WarmupProvider: TranscriptionProvider {
+        let name = "Capture warmup fixture"
+        let isAvailable = true
+        var isReady = false
+        var prepareCalls = 0
+        var artifactChecks = 0
+        func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
+            self.prepareCalls += 1
+            self.isReady = true
+        }
+        func modelsExistOnDisk() -> Bool {
+            self.artifactChecks += 1
+            return true
+        }
+        func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            ASRTranscriptionResult(text: "", confidence: 0)
+        }
+    }
+
+    private func waitUntil(_ predicate: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(3)
+        while !predicate(), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        return predicate()
+    }
+
+    private func makeFixture() -> Fixture {
+        let fixture = Fixture()
+        self.addTeardownBlock { @MainActor in fixture.openGates() }
+        return fixture
+    }
+
+    func testDictationRetiresBeforeBufferedCaptionAllocationAndRestoresAfterUnload() async throws {
+        let fixture = self.makeFixture()
+        let lease = try fixture.service.acquireExclusiveActivity(.meeting)
+        defer { fixture.service.releaseExclusiveActivity(lease) }
+
+        try await fixture.service.suspendDictationModelsForMeetingCapture(lease)
+        XCTAssertTrue(fixture.allocations.models.isEmpty, "Handoff must finish retirement before caption allocation")
+
+        let recognizer = CaptionRecognizer(allocations: fixture.allocations)
+        let microphone = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let application = PichiMeetingBufferedTrackEngine(kind: .applicationAudio, recognizer: recognizer)
+        await microphone.start()
+        await application.start()
+        let didPrepareBothTracks = await self.waitUntil { recognizer.prepareCalls == 2 }
+        XCTAssertTrue(didPrepareBothTracks)
+        XCTAssertEqual(fixture.allocations.models, ["captions"])
+        XCTAssertTrue(fixture.restored.isEmpty, "Capture must keep the dictation snapshot unloaded")
+
+        await microphone.stop()
+        await application.stop()
+        await recognizer.unload()
+        await fixture.service.finishDictationModelsAfterMeetingCapture(lease)
+        // Joining a second finish cannot restore the same snapshot twice.
+        await fixture.service.finishDictationModelsAfterMeetingCapture(lease)
+
+        XCTAssertEqual(fixture.restored, [fixture.snapshot])
+        XCTAssertEqual(fixture.allocations.models, ["dictation"])
+        XCTAssertEqual(fixture.allocations.maximum, 1, "Loaded dictation and caption weights must never overlap")
+        XCTAssertEqual(fixture.allocations.events, ["unload:dictation", "load:captions", "unload:captions", "load:dictation"])
+    }
+
+    func testCaptureBlocksAlreadyWarmedProviderReadinessAndDownloads() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .whisperTiny
+        let fixture = self.makeFixture()
+        let provider = WarmupProvider()
+        fixture.service.modelProvidersForTesting[.whisperTiny] = provider
+        try await fixture.service.ensureAsrReady()
+        XCTAssertEqual(provider.prepareCalls, 1)
+
+        let lease = try fixture.service.acquireExclusiveActivity(.meeting)
+        defer { fixture.service.releaseExclusiveActivity(lease) }
+        try await fixture.service.suspendDictationModelsForMeetingCapture(lease)
+        for operation in ["readiness", "download"] {
+            do {
+                if operation == "readiness" {
+                    try await fixture.service.ensureAsrReady()
+                } else {
+                    try await fixture.service.downloadModel(.whisperTiny, progressHandler: nil)
+                }
+                XCTFail("Capture must reject ordinary \(operation) before reaching a provider")
+            } catch MeetingModelResidencyError.busy {
+            } catch {
+                XCTFail("Expected the capture residency admission gate, got \(error)")
+            }
+        }
+        XCTAssertEqual(provider.prepareCalls, 1)
+        XCTAssertTrue(fixture.allocations.models.isEmpty)
+        await fixture.service.finishDictationModelsAfterMeetingCapture(lease)
+        XCTAssertEqual(fixture.restored, [fixture.snapshot])
+    }
+
+    func testChangedSelectionSkipsProductionRestorationBeforeReplacementArtifactLookup() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .whisperTiny
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let original = WarmupProvider()
+        let replacement = WarmupProvider()
+        service.modelProvidersForTesting[.whisperTiny] = original
+        service.modelProvidersForTesting[.whisperBase] = replacement
+        try await service.ensureAsrReady()
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        try await service.suspendDictationModelsForMeetingCapture(lease)
+        settings.selectedSpeechModel = .whisperBase
+
+        await service.finishDictationModelsAfterMeetingCapture(lease)
+
+        XCTAssertEqual(original.prepareCalls, 1)
+        XCTAssertEqual(replacement.artifactChecks, 0, "The production participant must veto a changed selection before inspecting its artifacts")
+        XCTAssertEqual(replacement.prepareCalls, 0)
+        XCTAssertFalse(service.isAsrReady)
+    }
+
+    func testFinalResidencyRestoresCapturedSnapshotAndHandbackDoesNotRestoreAgain() async throws {
+        let fixture = self.makeFixture()
+        let lease = try fixture.service.acquireExclusiveActivity(.meeting)
+        defer { fixture.service.releaseExclusiveActivity(lease) }
+        try await fixture.service.suspendDictationModelsForMeetingCapture(lease)
+        XCTAssertTrue(fixture.allocations.models.isEmpty)
+
+        let result = try await fixture.service.withMeetingModelResidency(attemptID: UUID()) {
+            XCTAssertTrue(fixture.allocations.models.isEmpty)
+            fixture.allocations.load("final-transcription")
+            fixture.allocations.unload("final-transcription")
+            return "saved transcript"
+        }
+        XCTAssertEqual(result, "saved transcript")
+        XCTAssertEqual(fixture.restored, [fixture.snapshot], "Final processing must receive the pre-capture snapshot")
+
+        await fixture.service.finishDictationModelsAfterMeetingCapture(lease)
+
+        XCTAssertEqual(fixture.restored, [fixture.snapshot], "Handback must not reload a snapshot already restored by final processing")
+        XCTAssertEqual(fixture.allocations.models, ["dictation"])
+        XCTAssertEqual(fixture.allocations.maximum, 1)
+    }
+
+    func testFailedAndCancelledSuspensionJoinUncancelledRestoration() async throws {
+        for failure in [false, true] {
+            let fixture = self.makeFixture()
+            fixture.suspendGate.isOpen = false
+            fixture.restoreGate.isOpen = false
+            fixture.suspensionFails = failure
+            let lease = try fixture.service.acquireExclusiveActivity(.meeting)
+            let handoff = Task { try await fixture.service.suspendDictationModelsForMeetingCapture(lease) }
+            let didEnterSuspend = await self.waitUntil { fixture.suspendEntered.isOpen }
+            XCTAssertTrue(didEnterSuspend)
+            if !failure { handoff.cancel() }
+            fixture.suspendGate.open()
+            do {
+                try await handoff.value
+                XCTFail("Expected suspension \(failure ? "failure" : "cancellation")")
+            } catch FixtureError.suspensionFailed {
+                XCTAssertTrue(failure)
+            } catch is CancellationError {
+                XCTAssertFalse(failure)
+            }
+
+            var finished = false
+            let handback = Task {
+                await fixture.service.finishDictationModelsAfterMeetingCapture(lease)
+                finished = true
+            }
+            let didEnterRestore = await self.waitUntil { fixture.restoreEntered.isOpen }
+            XCTAssertTrue(didEnterRestore)
+            handback.cancel()
+            // Let the cancelled caller run while restoration is deliberately parked.
+            // An immediate assertion in the same actor turn cannot detect early return.
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            XCTAssertFalse(finished, "Cleanup must stay joined to non-cooperative restoration")
+            XCTAssertTrue(fixture.allocations.models.isEmpty)
+            fixture.restoreGate.open()
+            await handback.value
+
+            XCTAssertTrue(finished)
+            XCTAssertFalse(fixture.restoreWasCancelled)
+            XCTAssertEqual(fixture.restored, [fixture.snapshot])
+            XCTAssertEqual(fixture.allocations.models, ["dictation"])
+            XCTAssertEqual(fixture.allocations.maximum, 1)
+            fixture.service.releaseExclusiveActivity(lease)
+        }
+    }
+
+    func testAudioHandoffDropsProductionGigaAMCacheBeforeReturning() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .gigaam
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        weak var cached = service.fileTranscriptionProvider as? PichiGigaAMProvider
+        XCTAssertNotNil(cached, "The production provider must be held by the dictation cache")
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        self.addTeardownBlock { @MainActor in
+            await service.completeMeetingAudioHandback(lease)
+            service.releaseExclusiveActivity(lease)
+        }
+
+        try await service.prepareMeetingAudioHandoff(lease)
+
+        XCTAssertNil(cached, "Audio handoff must retire cached GigaAM before caption allocation is admitted")
+        XCTAssertFalse(service.isAsrReady)
+        await service.completeMeetingAudioHandback(lease)
+    }
+}
+#endif
