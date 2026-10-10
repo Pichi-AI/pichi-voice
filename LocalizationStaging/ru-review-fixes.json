@@ -1,0 +1,5 @@
+{
+  "Transcribing audio (%llds)...": "Распознавание аудио (%lld с)...",
+  "Transcribing... %lld%%": "Распознавание... %lld%%",
+  "Transcribing speaker segments (%lld/%lld)...": "Распознавание реплик участников (%lld/%lld)..."
+}

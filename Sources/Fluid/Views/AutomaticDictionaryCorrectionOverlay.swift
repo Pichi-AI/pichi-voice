@@ -13,7 +13,8 @@ final class DictionaryCorrectionOverlayController {
     private static let dismissalDuration: TimeInterval = 0.05
 
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<AutomaticDictionaryCorrectionOverlayView>?
+    private var hostingView: NSHostingView<PichiLocalizedContent<AutomaticDictionaryCorrectionOverlayView>>?
+    private var languageCancellable: AnyCancellable?
     private var session: AutomaticDictionaryTrainingSession?
     private var sessionCancellable: AnyCancellable?
     private var dismissTask: Task<Void, Never>?
@@ -74,7 +75,7 @@ final class DictionaryCorrectionOverlayController {
         )
 
         if let hostingView = self.hostingView {
-            hostingView.rootView = rootView
+            hostingView.rootView = PichiLocalizedContent { rootView }
         } else {
             self.createPanel(rootView: rootView)
         }
@@ -197,13 +198,18 @@ final class DictionaryCorrectionOverlayController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = NSHostingView(rootView: PichiLocalizedContent { rootView })
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = .clear
         panel.contentView = hostingView
 
         self.panel = panel
         self.hostingView = hostingView
+        self.languageCancellable = NotificationCenter.default.publisher(for: PichiLocalization.languageChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.transientOverlayLayoutDidChange() }
+            }
     }
 
     private func resizeAndPositionPanel(animated: Bool) {
@@ -265,7 +271,8 @@ final class MicrophoneChangeOverlayController {
         AppBrand.releaseBundleIdentifier + ".debug",
     ]
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<MicrophoneChangeOverlayView>?
+    private var hostingView: NSHostingView<PichiLocalizedContent<MicrophoneChangeOverlayView>>?
+    private var languageCancellable: AnyCancellable?
     private var dismissTask: Task<Void, Never>?
     private var generation: UInt64 = 0
 
@@ -293,7 +300,7 @@ final class MicrophoneChangeOverlayController {
             onDismiss: { [weak self] in self?.hide() }
         )
         if let hostingView = self.hostingView {
-            hostingView.rootView = rootView
+            hostingView.rootView = PichiLocalizedContent { rootView }
         } else {
             self.createPanel(rootView: rootView)
         }
@@ -363,6 +370,8 @@ final class MicrophoneChangeOverlayController {
     }
 
     private func releasePanel() {
+        self.languageCancellable?.cancel()
+        self.languageCancellable = nil
         self.panel?.orderOut(nil)
         self.panel?.contentView = nil
         self.hostingView = nil
@@ -390,12 +399,21 @@ final class MicrophoneChangeOverlayController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = NSHostingView(rootView: PichiLocalizedContent { rootView })
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = .clear
         panel.contentView = hostingView
         self.panel = panel
         self.hostingView = hostingView
+        self.languageCancellable = NotificationCenter.default.publisher(for: PichiLocalization.languageChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.panel?.isVisible == true else { return }
+                    self.resizeAndPositionPanel()
+                    DictionaryCorrectionOverlayController.shared.transientOverlayLayoutDidChange()
+                }
+            }
     }
 
     private func resizeAndPositionPanel() {
@@ -446,6 +464,7 @@ private struct MicrophoneChangeOverlayView: View {
     let onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var interfaceLocale
     @State private var isCloseHovered = false
     @State private var isDisableHovered = false
     @State private var isSettingsHovered = false
@@ -458,7 +477,7 @@ private struct MicrophoneChangeOverlayView: View {
                     .foregroundStyle(.white.opacity(0.78))
                     .frame(width: 24, height: 24)
 
-                Text(PichiLocalization.text(self.title))
+                Text(PichiLocalization.text(self.title, locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.72))
 
@@ -486,7 +505,7 @@ private struct MicrophoneChangeOverlayView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
-                Text(PichiLocalization.text(self.explanation))
+                Text(PichiLocalization.text(self.explanation, locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 11))
                     .foregroundStyle(.white.opacity(0.58))
                     .lineLimit(1)
@@ -529,11 +548,11 @@ private struct MicrophoneChangeOverlayView: View {
         case let (previous?, current?):
             return "\(previous)  →  \(current)"
         case let (previous?, nil):
-            return PichiLocalization.format("%@ is no longer available", previous)
+            return PichiLocalization.format("%@ is no longer available", language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian, bundle: .main, arguments: [previous])
         case let (nil, current?):
-            return PichiLocalization.format("Now using %@", current)
+            return PichiLocalization.format("Now using %@", language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian, bundle: .main, arguments: [current])
         case (nil, nil):
-            return PichiLocalization.text("Connect or restore a microphone in Settings")
+            return PichiLocalization.text("Connect or restore a microphone in Settings", locale: self.interfaceLocale)
         }
     }
 

@@ -6,10 +6,13 @@ struct PichiMeetingSummaryView: View {
     var asrService: ASRService?
     var isQuiescent: Bool
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @StateObject private var preferences = PichiMeetingSummarySettings()
     @StateObject private var controller = PichiMeetingSummaryController()
     @ObservedObject private var settings = SettingsStore.shared
     @State private var showingConfiguration = false
+
+    private var interfaceLanguage: PichiInterfaceLanguage { PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian }
 
     private var configuration: PichiMeetingSummaryConfiguration? {
         try? self.preferences.configuration(sessionLanguage: self.session?.languageCode ?? "ru", settings: self.settings)
@@ -76,7 +79,7 @@ struct PichiMeetingSummaryView: View {
             if self.controller.generating || self.controller.checking {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     ProgressView().controlSize(.small)
-                    Text(self.controller.generating ? self.controller.progress : PichiLocalization.text("Loading saved summary…"))
+                    Text(self.controller.generating ? (self.controller.progressState?.text(language: self.interfaceLanguage) ?? "") : PichiLocalization.text("Loading saved summary…", locale: self.interfaceLocale))
                         .font(self.theme.typography.bodySmall)
                 }
             }
@@ -158,8 +161,8 @@ struct PichiMeetingSummaryView: View {
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                if let error = self.preferences.discoveryError {
-                    Text(error).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
+                if let issue = self.preferences.discoveryIssue {
+                    Text(issue.text(language: self.interfaceLanguage)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
                 }
             } else {
                 Text("Uses the provider and model selected in AI Enhancement settings. Choose an OpenAI-compatible API. Review the destination above before generating.")

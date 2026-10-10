@@ -23,20 +23,25 @@ enum SidebarItem: Hashable {
     case rewriteMode
 
     var title: String {
+        self.title(profile: AppBrand.profile, language: PichiLocalization.language)
+    }
+
+    /// Resolve UI keys before branding. Consumers display this result verbatim.
+    func title(profile: BrandProfile, language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
         switch self {
-        case .welcome: PichiLocalization.text("Dashboard")
-        case .voiceEngine: PichiLocalization.text("Voice Engine")
-        case .aiEnhancements: PichiLocalization.text("AI Providers")
-        case .cleanupStyles: PichiLocalization.text("Cleanup Styles")
-        case .fileTranscription: PichiLocalization.text("File Transcription")
-        case .meetingTranscription: AppBrand.text("FluidMeet")
-        case .customDictionary: PichiLocalization.text("Custom Dictionary")
-        case .stats: PichiLocalization.text("Stats")
-        case .history: PichiLocalization.text("History")
-        case .changelog: PichiLocalization.text("Change logs")
-        case .feedback: PichiLocalization.text("Feedback")
-        case .commandMode: PichiLocalization.text("Command Mode")
-        case .rewriteMode: PichiLocalization.text("Edit Mode")
+        case .welcome: PichiLocalization.text("Dashboard", language: language, bundle: bundle)
+        case .voiceEngine: PichiLocalization.text("Voice Engine", language: language, bundle: bundle)
+        case .aiEnhancements: PichiLocalization.text("AI Providers", language: language, bundle: bundle)
+        case .cleanupStyles: PichiLocalization.text("Cleanup Styles", language: language, bundle: bundle)
+        case .fileTranscription: PichiLocalization.text("File Transcription", language: language, bundle: bundle)
+        case .meetingTranscription: AppBrand.text("FluidMeet", profile: profile, language: language, bundle: bundle)
+        case .customDictionary: PichiLocalization.text("Custom Dictionary", language: language, bundle: bundle)
+        case .stats: PichiLocalization.text("Stats", language: language, bundle: bundle)
+        case .history: PichiLocalization.text("History", language: language, bundle: bundle)
+        case .changelog: PichiLocalization.text("Change logs", language: language, bundle: bundle)
+        case .feedback: PichiLocalization.text("Feedback", language: language, bundle: bundle)
+        case .commandMode: PichiLocalization.text("Command Mode", language: language, bundle: bundle)
+        case .rewriteMode: PichiLocalization.text("Edit Mode", language: language, bundle: bundle)
         }
     }
 }

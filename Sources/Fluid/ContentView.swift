@@ -1477,28 +1477,27 @@ struct ContentView: View {
     private var appSidebarSections: some View {
         List(selection: self.$selectedSidebarItem) {
             Section {
-                self.sidebarNavigationLink(.welcome, title: "Dashboard", systemImage: "house.fill")
-                self.sidebarNavigationLink(.history, title: "History", systemImage: "clock.arrow.circlepath")
-                self.sidebarNavigationLink(.stats, title: "Stats", systemImage: "chart.bar.fill")
+                self.sidebarNavigationLink(.welcome, systemImage: "house.fill")
+                self.sidebarNavigationLink(.history, systemImage: "clock.arrow.circlepath")
+                self.sidebarNavigationLink(.stats, systemImage: "chart.bar.fill")
             } header: {
                 self.sidebarSectionHeader("Activity")
             }
 
             Section {
-                self.sidebarNavigationLink(.voiceEngine, title: "Voice Engine", systemImage: "waveform")
-                self.sidebarNavigationLink(.aiEnhancements, title: "AI Providers", systemImage: "cpu")
-                self.sidebarNavigationLink(.cleanupStyles, title: "Cleanup Styles", systemImage: "wand.and.stars")
-                self.sidebarNavigationLink(.customDictionary, title: "Custom Dictionary", systemImage: "text.book.closed.fill")
+                self.sidebarNavigationLink(.voiceEngine, systemImage: "waveform")
+                self.sidebarNavigationLink(.aiEnhancements, systemImage: "cpu")
+                self.sidebarNavigationLink(.cleanupStyles, systemImage: "wand.and.stars")
+                self.sidebarNavigationLink(.customDictionary, systemImage: "text.book.closed.fill")
             } header: {
                 self.sidebarSectionHeader("Configure")
             }
 
             Section {
-                self.sidebarNavigationLink(.commandMode, title: "Command Mode", systemImage: "terminal.fill")
-                self.sidebarNavigationLink(.fileTranscription, title: "File Transcription", systemImage: "doc.text.fill")
+                self.sidebarNavigationLink(.commandMode, systemImage: "terminal.fill")
+                self.sidebarNavigationLink(.fileTranscription, systemImage: "doc.text.fill")
                 self.sidebarNavigationLink(
                     .meetingTranscription,
-                    title: AppBrand.text("FluidMeet"),
                     systemImage: "person.2.fill"
                 )
             } header: {
@@ -1506,8 +1505,8 @@ struct ContentView: View {
             }
 
             Section {
-                self.sidebarNavigationLink(.changelog, title: "Change logs", systemImage: "doc.text.magnifyingglass")
-                self.sidebarNavigationLink(.feedback, title: "Feedback", systemImage: "envelope.fill")
+                self.sidebarNavigationLink(.changelog, systemImage: "doc.text.magnifyingglass")
+                self.sidebarNavigationLink(.feedback, systemImage: "envelope.fill")
             } header: {
                 self.sidebarSectionHeader("Help")
             }
@@ -1625,7 +1624,7 @@ struct ContentView: View {
                                 .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
                                 .frame(width: 18)
 
-                            Text(PichiLocalization.text(section.title))
+                            Text(section.title)
                                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                         }
                         .font(self.theme.typography.sidebarItem)
@@ -1784,7 +1783,7 @@ struct ContentView: View {
             .padding(.bottom, self.theme.metrics.spacing.xs)
     }
 
-    private func sidebarNavigationLink(_ item: SidebarItem, title: String, systemImage: String) -> some View {
+    private func sidebarNavigationLink(_ item: SidebarItem, systemImage: String) -> some View {
         let isSelected = self.selectedSidebarItem == item
         return NavigationLink(value: item) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -1796,7 +1795,7 @@ struct ContentView: View {
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
 
-                Text(PichiLocalization.text(title))
+                Text(item.title)
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
             }
             .font(self.theme.typography.sidebarItem)
@@ -1852,7 +1851,7 @@ struct ContentView: View {
             }
         }
         .animation(self.modeTransitionAnimation, value: self.settingsNavigation.isPresented)
-        .navigationTitle(PichiLocalization.text(self.pagePresentation.title))
+        .navigationTitle(self.pagePresentation.title)
     }
 
     private var pagePresentation: AppPagePresentation {

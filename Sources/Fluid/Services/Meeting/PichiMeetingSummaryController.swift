@@ -15,14 +15,15 @@ final class PichiMeetingSummarySettings: ObservableObject {
         didSet {
             self.defaults.set(self.baseURL, forKey: "PichiMeetingSummaryBaseURL")
             self.models = []
-            self.discoveryError = nil
+            self.discoveryIssue = nil
         }
     }
     @Published var modelID: String { didSet { self.defaults.set(self.modelID, forKey: "PichiMeetingSummaryModelID") } }
     @Published var language: String { didSet { self.defaults.set(self.language, forKey: "PichiMeetingSummaryLanguage") } }
     @Published private(set) var models: [String] = []
     @Published private(set) var discovering = false
-    @Published private(set) var discoveryError: String?
+    @Published private(set) var discoveryIssue: PichiMeetingSummaryDiscoveryIssue?
+    var discoveryError: String? { self.discoveryIssue?.text() }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -64,7 +65,7 @@ final class PichiMeetingSummarySettings: ObservableObject {
     func discoverModels() async {
         guard !self.discovering else { return }
         self.discovering = true
-        self.discoveryError = nil
+        self.discoveryIssue = nil
         defer { self.discovering = false }
         let endpoint = self.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
@@ -80,12 +81,50 @@ final class PichiMeetingSummarySettings: ObservableObject {
             guard endpoint == self.baseURL.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw LLMError.invalidResponse }
             self.models = try JSONDecoder().decode(Models.self, from: data).data.map(\.id).sorted()
-            if self.models.isEmpty { self.discoveryError = PichiLocalization.text("No installed models found. Install a model in Ollama or LM Studio, then refresh.") }
+            if self.models.isEmpty { self.discoveryIssue = .noInstalledModels }
         } catch is CancellationError {
-            self.discoveryError = nil
+            self.discoveryIssue = nil
         } catch {
             self.models = []
-            self.discoveryError = PichiLocalization.text("Could not list local models. Start Ollama or LM Studio's local server and check the endpoint.")
+            self.discoveryIssue = .localServerUnavailable
+        }
+    }
+}
+
+/// Store UI intent, not a translation chosen when discovery happened.
+nonisolated enum PichiMeetingSummaryDiscoveryIssue: Equatable, Sendable {
+    case noInstalledModels, localServerUnavailable
+
+    func text(language: PichiInterfaceLanguage = PichiLocalization.language, bundle: Bundle = .main) -> String {
+        switch self {
+        case .noInstalledModels:
+            return PichiLocalization.text("No installed models found. Install a model in Ollama or LM Studio, then refresh.", language: language, bundle: bundle)
+        case .localServerUnavailable:
+            return PichiLocalization.text("Could not list local models. Start Ollama or LM Studio's local server and check the endpoint.", language: language, bundle: bundle)
+        }
+    }
+}
+
+nonisolated struct PichiMeetingSummaryProgress: Equatable, Sendable {
+    let index: Int
+    let total: Int
+
+    func text(language: PichiInterfaceLanguage = PichiLocalization.language, bundle: Bundle = .main) -> String {
+        PichiLocalization.format("Processing transcript part %lld of %lld…", language: language, bundle: bundle, arguments: [self.index, self.total])
+    }
+}
+
+/// Preserve typed application errors and external error data until the view renders.
+private enum PichiMeetingSummaryFailure {
+    case noSavedDirectory
+    case underlying(any Error)
+
+    var text: String {
+        switch self {
+        case .noSavedDirectory:
+            return PichiLocalization.text("The summary is ready, but this meeting has no saved directory yet.")
+        case let .underlying(error):
+            return String(error.localizedDescription.prefix(500))
         }
     }
 }
@@ -103,8 +142,11 @@ final class PichiMeetingSummaryController: ObservableObject {
     @Published private(set) var document: PichiMeetingSummaryDocument?
     @Published private(set) var generating = false
     @Published private(set) var checking = false
-    @Published private(set) var progress = ""
-    @Published private(set) var error: String?
+    @Published private(set) var progressState: PichiMeetingSummaryProgress?
+    @Published private var failure: PichiMeetingSummaryFailure?
+    // Keep source state until presentation so a language change never restarts inference.
+    var progress: String { self.progressState?.text() ?? "" }
+    var error: String? { self.failure?.text }
     private var operation: Task<Void, Never>?
     private var generationID = UUID()
     private let generator: PichiMeetingSummaryGenerator
@@ -116,7 +158,7 @@ final class PichiMeetingSummaryController: ObservableObject {
         self.generationID = generationID
         self.operation?.cancel()
         self.document = nil
-        self.error = nil
+        self.failure = nil
         self.checking = false
         guard let session, let configuration else { return }
         self.checking = true
@@ -140,14 +182,14 @@ final class PichiMeetingSummaryController: ObservableObject {
         guard !self.generating, !self.checking,
               let lock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
         self.generating = true
-        self.error = nil
+        self.failure = nil
         let generationID = self.generationID
         self.operation = Task { [weak self] in
             guard let self else { MeetingSummaryActivityCoordinator.shared.unlockSelection(lock); return }
             defer {
                 self.generating = false
                 self.operation = nil
-                self.progress = ""
+                self.progressState = nil
                 MeetingSummaryActivityCoordinator.shared.unlockSelection(lock)
             }
             do {
@@ -160,7 +202,7 @@ final class PichiMeetingSummaryController: ObservableObject {
                                                           configurationIdentity: configuration.cacheIdentity,
                                                           generatedAt: Date(), document: output)
                 guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
-                    self.error = PichiLocalization.text("The summary is ready, but this meeting has no saved directory yet.")
+                    self.failure = .noSavedDirectory
                     return
                 }
                 try Task.checkCancellation()
@@ -168,9 +210,9 @@ final class PichiMeetingSummaryController: ObservableObject {
                     try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"), options: .atomic)
                 }.value
             } catch is CancellationError {
-                self.error = nil
+                self.failure = nil
             } catch {
-                if self.generationID == generationID, !Task.isCancelled { self.error = String(error.localizedDescription.prefix(500)) }
+                if self.generationID == generationID, !Task.isCancelled { self.failure = .underlying(error) }
             }
         }
     }
@@ -186,6 +228,6 @@ final class PichiMeetingSummaryController: ObservableObject {
         }
     }
 
-    private func updateProgress(index: Int, total: Int) { self.progress = PichiLocalization.format("Processing transcript part %lld of %lld…", index, total) }
+    private func updateProgress(index: Int, total: Int) { self.progressState = .init(index: index, total: total) }
     func cancel() { self.operation?.cancel() }
 }

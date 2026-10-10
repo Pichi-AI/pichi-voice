@@ -143,6 +143,7 @@ struct MeetingTranscriptionView: View {
     let onOpenVoiceEngine: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     @State private var setupDraft: MeetingTranscriptionSetupDraft
@@ -162,7 +163,7 @@ struct MeetingTranscriptionView: View {
     @State private var cachedModelReady = false
     @State private var cachedSpeakerModelReady = false
     @State private var modelReadinessRevision = 0
-    @State private var cachedStorageStatus = PichiLocalization.text("Checking…")
+    @State private var cachedStorageStatus: MeetingStorageStatus = .checking
     @State private var cachedStorageReady = false
     @ObservedObject var historySnapshot: MeetingHistorySnapshot
     @State private var selectedHistorySessionID: MeetingSessionID?
@@ -552,7 +553,7 @@ struct MeetingTranscriptionView: View {
                     : PichiLocalization.text("Import GigaAM in Voice Engine before transcription"))
                 : (modelReady ? PichiLocalization.text("Speaker model installed · transcription prepares after Stop") : PichiLocalization.text("Speaker model downloads before transcription")),
             modelReady: modelReady,
-            storageStatus: self.cachedStorageStatus,
+            storageStatus: self.cachedStorageStatus.text(language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian),
             storageReady: self.cachedStorageReady,
             activityStatus: conflictingActivity.map { PichiLocalization.format("Wait for %@", $0.displayName) } ?? PichiLocalization.text("Ready"),
             activityReady: activityReady,
@@ -1306,7 +1307,7 @@ struct MeetingTranscriptionView: View {
         self.cachedStorageReady = storage.ready
     }
 
-    private static func storageReadiness(trackCount: Int) -> (status: String, ready: Bool) {
+    private static func storageReadiness(trackCount: Int) -> (status: MeetingStorageStatus, ready: Bool) {
         guard let applicationSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -1315,10 +1316,26 @@ struct MeetingTranscriptionView: View {
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]
             ).volumeAvailableCapacityForImportantUsage
         else {
-            return (PichiLocalization.text("Storage availability unavailable"), false)
+            return (.unavailable, false)
         }
         let requiredBytes = MeetingPCMStoragePolicy.requiredFreeBytes(trackCount: trackCount)
-        return (PichiLocalization.format("%@ available", capacity.formatted(.byteCount(style: .file).locale(PichiLocalization.locale))), capacity >= requiredBytes)
+        return (.available(bytes: capacity), capacity >= requiredBytes)
+    }
+}
+
+/// Capacity is captured once for readiness; its presentation follows the interface locale.
+nonisolated enum MeetingStorageStatus: Equatable, Sendable {
+    case checking, unavailable
+    case available(bytes: Int64)
+
+    func text(language: PichiInterfaceLanguage = PichiLocalization.language, bundle: Bundle = .main) -> String {
+        switch self {
+        case .checking: return PichiLocalization.text("Checking…", language: language, bundle: bundle)
+        case .unavailable: return PichiLocalization.text("Storage availability unavailable", language: language, bundle: bundle)
+        case let .available(bytes):
+            let size = bytes.formatted(.byteCount(style: .file).locale(language.locale))
+            return PichiLocalization.format("%@ available", language: language, bundle: bundle, arguments: [size])
+        }
     }
 }
 
