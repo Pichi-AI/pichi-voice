@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChangelogView: View {
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
 
     @State private var releases: [SimpleUpdater.ReleaseNote] = []
     @State private var isRefreshing = false
@@ -15,7 +16,7 @@ struct ChangelogView: View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                 if let errorMessage {
-                    Label(errorMessage, systemImage: "wifi.exclamationmark")
+                    Label(PichiLocalization.text(errorMessage), systemImage: "wifi.exclamationmark")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.warning)
                 }
@@ -53,8 +54,8 @@ struct ChangelogView: View {
                 .frame(width: 22, height: 22)
             }
             .disabled(self.isRefreshing)
-            .help("Refresh changelog")
-            .accessibilityLabel("Refresh changelog")
+            .help(PichiLocalization.text("Refresh changelog"))
+            .accessibilityLabel(PichiLocalization.text("Refresh changelog"))
         }
         .task {
             self.loadCachedReleases()
@@ -160,6 +161,7 @@ private struct ChangelogCache: Codable {
 }
 
 private struct ChangelogReleaseCard: View {
+    @Environment(\.locale) private var interfaceLocale
     let release: SimpleUpdater.ReleaseNote
     let isLatest: Bool
     let theme: AppTheme
@@ -214,7 +216,7 @@ private struct ChangelogReleaseCard: View {
                                 .padding(7)
                         }
                         .buttonStyle(.borderless)
-                        .help("Open this release on GitHub")
+                        .help(PichiLocalization.text("Open this release on GitHub"))
                     }
                 }
 
@@ -229,7 +231,7 @@ private struct ChangelogReleaseCard: View {
 
     private var metadataText: String {
         if let publishedAt = self.release.publishedAt {
-            return "\(self.release.version) - \(publishedAt.formatted(date: .abbreviated, time: .omitted))"
+            return "\(self.release.version) - \(publishedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(self.interfaceLocale)))"
         }
         return self.release.version
     }

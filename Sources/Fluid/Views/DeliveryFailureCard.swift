@@ -21,13 +21,13 @@ struct DeliveryFailureCard: View {
             HStack(alignment: .top, spacing: 10) {
                 self.glyph
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.title)
+                    Text(PichiLocalization.text(self.title))
                         .font(.fluidSystem(size: self.fontSize, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.95))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if let detail {
-                        Text(detail)
+                        Text(PichiLocalization.text(detail))
                             .font(.fluidSystem(size: max(self.fontSize - 2, 10), weight: .regular))
                             .foregroundStyle(.white.opacity(0.58))
                             .lineLimit(self.compact ? 1 : 2)
@@ -68,7 +68,7 @@ struct DeliveryFailureCard: View {
                 .background(Circle().fill(Color.white.opacity(0.08)))
         }
         .buttonStyle(.plain)
-        .help("Dismiss")
+        .help(PichiLocalization.text("Dismiss"))
     }
 
     private func copyButton(fullWidth: Bool) -> some View {
@@ -76,7 +76,7 @@ struct DeliveryFailureCard: View {
             HStack(spacing: 6) {
                 Image(systemName: self.didCopy ? "checkmark" : "doc.on.doc")
                     .font(.fluidSystem(size: max(self.fontSize - 2, 10), weight: .semibold))
-                Text(self.didCopy ? "Copied" : "Copy transcript")
+                Text(PichiLocalization.text(self.didCopy ? "Copied" : "Copy transcript"))
                     .font(.fluidSystem(size: max(self.fontSize - 1, 10), weight: .semibold))
             }
             .foregroundStyle(self.didCopy ? Color.black.opacity(0.85) : Color.white.opacity(0.92))
@@ -88,7 +88,7 @@ struct DeliveryFailureCard: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("Copy transcript")
+        .help(PichiLocalization.text("Copy transcript"))
     }
 
     private func copy() {

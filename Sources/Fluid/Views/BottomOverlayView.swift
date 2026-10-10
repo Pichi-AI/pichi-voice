@@ -1658,7 +1658,7 @@ private struct BottomOverlayModeMenuView: View {
             self.onDismissRequested()
         }) {
             HStack(alignment: .center, spacing: 8) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 15, weight: .semibold))
                 Spacer()
                 if !shortcut.isEmpty {
@@ -1700,6 +1700,7 @@ private struct BottomOverlayModeMenuView: View {
         .bottomOverlaySurface(self.settings.bottomOverlayAppearance, cornerRadius: 8)
         .frame(maxWidth: self.maxWidth)
         .preferredColorScheme(.dark)
+        .environment(\.locale, PichiLocalization.locale)
         .onHover { hovering in
             self.onHoverChanged(hovering)
         }
@@ -1878,7 +1879,7 @@ private struct BottomOverlayPromptMenuView: View {
         .buttonStyle(.plain)
         .disabled(!isAvailable)
         .opacity(isAvailable ? 1 : 0.45)
-        .help(isAvailable ? "Use your default provider" : "Add an API key to a provider to enable this prompt")
+        .help(PichiLocalization.text(isAvailable ? "Use your default provider" : "Add an API key to a provider to enable this prompt"))
         .onHover { hovering in
             self.hoveredRowID = hovering && isAvailable ? "default" : nil
         }
@@ -1916,7 +1917,7 @@ private struct BottomOverlayPromptMenuView: View {
         .buttonStyle(.plain)
         .disabled(!isAvailable)
         .opacity(isAvailable ? 1 : 0.45)
-        .help(isAvailable ? "Use \(PrivateAIProviderFeature.displayName)" : "Select \(PrivateAIProviderFeature.displayName) to enable this prompt")
+        .help(PichiLocalization.format(isAvailable ? "Use %@" : "Select %@ to enable this prompt", PrivateAIProviderFeature.displayName))
         .onHover { hovering in
             self.hoveredRowID = hovering && isAvailable ? PrivateAIProviderFeature.shared.providerID : nil
         }
@@ -1940,7 +1941,7 @@ private struct BottomOverlayPromptMenuView: View {
             self.onDismissRequested()
         }) {
             HStack {
-                Text(profile.name.isEmpty ? "Untitled" : profile.name)
+                Text(profile.name.isEmpty ? PichiLocalization.text("Untitled") : profile.name)
                 Spacer()
                 if isSelected {
                     Image(systemName: "checkmark")
@@ -2009,6 +2010,7 @@ private struct BottomOverlayPromptMenuView: View {
         .bottomOverlaySurface(self.settings.bottomOverlayAppearance, cornerRadius: self.isCompact ? 9 : 8)
         .frame(width: self.isCompact ? 96 : min(self.maxWidth, 250), alignment: .leading)
         .preferredColorScheme(.dark)
+        .environment(\.locale, PichiLocalization.locale)
         .onHover { hovering in
             self.onHoverChanged(hovering)
         }
@@ -2110,7 +2112,7 @@ private struct BottomOverlayActionsMenuView: View {
             self.onDismissRequested()
         }) {
             HStack(spacing: 8) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 14, weight: .semibold))
                 Spacer()
                 Image(systemName: icon)
@@ -2141,7 +2143,7 @@ private struct BottomOverlayActionsMenuView: View {
             self.onDismissRequested()
         }) {
             HStack(spacing: 8) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 14, weight: .semibold))
                 Spacer()
                 if !shortcut.isEmpty {
@@ -2227,6 +2229,7 @@ private struct BottomOverlayActionsMenuView: View {
         .bottomOverlaySurface(self.settings.bottomOverlayAppearance, cornerRadius: 8)
         .frame(maxWidth: self.maxWidth)
         .preferredColorScheme(.dark)
+        .environment(\.locale, PichiLocalization.locale)
         .onHover { hovering in
             self.onHoverChanged(hovering)
         }
@@ -2646,7 +2649,7 @@ struct BottomOverlayView: View {
     }
 
     private var selectedPromptLabel: String {
-        guard let activePromptMode else { return "N/A" }
+        guard let activePromptMode else { return PichiLocalization.text("N/A") }
         if activePromptMode.normalized == .dictate {
             if let label = self.contentState.stopSnapshotLabel { return label }
             return self.settings.dictationOverlayLabel(
@@ -2659,9 +2662,9 @@ struct BottomOverlayView: View {
             appBundleID: self.promptResolutionBundleID
         ) {
             let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? "Untitled" : name
+            return name.isEmpty ? PichiLocalization.text("Untitled") : name
         }
-        return "Default"
+        return PichiLocalization.text("Default")
     }
 
     private var promptSelectorBuiltInLabel: String? {
@@ -2669,7 +2672,7 @@ struct BottomOverlayView: View {
         if activePromptMode.normalized == .dictate {
             switch self.settings.resolvedDictationPromptSelection(for: self.activeDictationShortcutSlot, appBundleID: self.promptResolutionBundleID) {
             case .off:
-                return "Basic"
+                return PichiLocalization.text("Basic")
             case .privateAI:
                 return self.isAppPromptOverrideActive ? nil : SettingsStore.DictationModeLabels.smart
             case .default:
@@ -2686,7 +2689,7 @@ struct BottomOverlayView: View {
         return self.settings.resolvedPromptProfile(
             for: activePromptMode,
             appBundleID: self.promptResolutionBundleID
-        ) == nil ? "Default" : nil
+        ) == nil ? PichiLocalization.text("Default") : nil
     }
 
     private var promptSelectorDisplayLabel: String {
@@ -2702,7 +2705,7 @@ struct BottomOverlayView: View {
         }
         let selectedLabel = self.selectedPromptLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = self.promptSelectorBuiltInLabel ?? selectedLabel
-        guard !label.isEmpty else { return "Default" }
+        guard !label.isEmpty else { return PichiLocalization.text("Default") }
 
         let maxLength: Int
         if self.promptSelectorBuiltInLabel == nil {
@@ -2822,7 +2825,7 @@ struct BottomOverlayView: View {
         if self.shouldShowProcessingPreview {
             return self.processingPreviewText
         }
-        return self.shouldShowProcessingStatus ? self.processingStatusText : self.transcriptionPreviewText
+        return self.shouldShowProcessingStatus ? PichiLocalization.text(self.processingStatusText) : self.transcriptionPreviewText
     }
 
     private var shouldShowProcessingStatus: Bool {
@@ -3083,7 +3086,7 @@ struct BottomOverlayView: View {
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
-            Text(self.modeLabel)
+            Text(PichiLocalization.text(self.modeLabel))
                 .font(.fluidSystem(size: self.promptSelectorFontSize, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.75))
                 .lineLimit(1)
@@ -3186,7 +3189,7 @@ struct BottomOverlayView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Select dictation mode")
+        .accessibilityLabel(PichiLocalization.text("Select dictation mode"))
     }
 
     private var promptSelectorView: some View {
@@ -3256,7 +3259,7 @@ struct BottomOverlayView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Actions")
+        .accessibilityLabel(PichiLocalization.text("Actions"))
     }
 
     private var actionsSelectorView: some View {
@@ -3313,7 +3316,7 @@ struct BottomOverlayView: View {
             self.closeActionsMenu()
             self.contentState.onOpenPreferencesRequested?()
         }
-        .help("Open Preferences")
+        .help(PichiLocalization.text("Open Preferences"))
     }
 
     private func failureIconButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
@@ -3333,7 +3336,7 @@ struct BottomOverlayView: View {
 
     private var aiProcessingFailureView: some View {
         HStack(spacing: 8) {
-            Text(self.contentState.aiProcessingFailureMessage)
+            Text(PichiLocalization.text(self.contentState.aiProcessingFailureMessage))
                 .font(.fluidSystem(size: self.layout.transFontSize, weight: .semibold))
                 .foregroundStyle(
                     self.contentState.canRetryAIProcessingFailure
@@ -3633,7 +3636,7 @@ struct BottomOverlayView: View {
                     // Compact overlays still need a visible mode because they have no selector.
                     if self.layout.showsModeLabel, !self.layout.showsTopControls {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(self.modeLabel)
+                            Text(PichiLocalization.text(self.modeLabel))
                                 .font(.fluidSystem(size: self.layout.modeFontSize, weight: .semibold))
                                 .foregroundStyle(self.modeColor)
                                 .lineLimit(1)
@@ -3756,6 +3759,7 @@ struct BottomOverlayView: View {
         )
         // Reserve space around the pill so its drop shadow isn't clipped by the (content-sized) window.
         .padding(self.isPillSize ? 26 : 0)
+        .environment(\.locale, PichiLocalization.locale)
         .onChange(of: self.contentState.isBottomOverlayPresented) { _, presented in
             self.borderAnimationStartedAt = presented ? Date() : nil
             if !presented { self.collapsePillImmediately() }

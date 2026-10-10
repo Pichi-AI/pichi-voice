@@ -24,19 +24,19 @@ enum SidebarItem: Hashable {
 
     var title: String {
         switch self {
-        case .welcome: "Dashboard"
-        case .voiceEngine: "Voice Engine"
-        case .aiEnhancements: "AI Providers"
-        case .cleanupStyles: "Cleanup Styles"
-        case .fileTranscription: "File Transcription"
+        case .welcome: PichiLocalization.text("Dashboard")
+        case .voiceEngine: PichiLocalization.text("Voice Engine")
+        case .aiEnhancements: PichiLocalization.text("AI Providers")
+        case .cleanupStyles: PichiLocalization.text("Cleanup Styles")
+        case .fileTranscription: PichiLocalization.text("File Transcription")
         case .meetingTranscription: AppBrand.text("FluidMeet")
-        case .customDictionary: "Custom Dictionary"
-        case .stats: "Stats"
-        case .history: "History"
-        case .changelog: "Change logs"
-        case .feedback: "Feedback"
-        case .commandMode: "Command Mode"
-        case .rewriteMode: "Edit Mode"
+        case .customDictionary: PichiLocalization.text("Custom Dictionary")
+        case .stats: PichiLocalization.text("Stats")
+        case .history: PichiLocalization.text("History")
+        case .changelog: PichiLocalization.text("Change logs")
+        case .feedback: PichiLocalization.text("Feedback")
+        case .commandMode: PichiLocalization.text("Command Mode")
+        case .rewriteMode: PichiLocalization.text("Edit Mode")
         }
     }
 }
@@ -69,15 +69,15 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .general: return "General"
-        case .dictation: return "Dictation"
-        case .dictationFormatting: return "Dictation Formatting"
-        case .shortcuts: return "Shortcuts"
-        case .notifications: return "Notifications"
-        case .audio: return "Audio"
-        case .overlay: return "Overlay"
-        case .dataAndDiagnostics: return "Data & Diagnostics"
-        case .experimental: return "Experimental"
+        case .general: return PichiLocalization.text("General")
+        case .dictation: return PichiLocalization.text("Dictation")
+        case .dictationFormatting: return PichiLocalization.text("Dictation Formatting")
+        case .shortcuts: return PichiLocalization.text("Shortcuts")
+        case .notifications: return PichiLocalization.text("Notifications")
+        case .audio: return PichiLocalization.text("Audio")
+        case .overlay: return PichiLocalization.text("Overlay")
+        case .dataAndDiagnostics: return PichiLocalization.text("Data & Diagnostics")
+        case .experimental: return PichiLocalization.text("Experimental")
         }
     }
 

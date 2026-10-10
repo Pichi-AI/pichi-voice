@@ -95,10 +95,10 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
         } message: { model in
             Text("This removes \(model.displayName) from your Mac. You’ll need to download it again to use it. Your dictation history and shortcut settings won’t change.")
         }
-        .alert(self.verificationError == nil ? "Model verified" : "Verification failed", isPresented: self.$showsVerificationResult) {
+        .alert(PichiLocalization.text(self.verificationError == nil ? "Model verified" : "Verification failed"), isPresented: self.$showsVerificationResult) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(self.verificationError ?? "\(self.verifiedModelName) is ready to use on your Mac.")
+            Text(self.verificationError ?? PichiLocalization.format("%@ is ready to use on your Mac.", self.verifiedModelName))
         }
         .sheet(isPresented: self.$showsManagement) {
             FluidManagementSheet(
@@ -142,7 +142,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
             } else if let failure = self.controller.privateAILoadState.failureMessage(for: model.id) {
                 Text(failure).font(self.theme.typography.caption).foregroundStyle(.red).lineLimit(2).help(failure)
             } else if active {
-                Text(inMemory ? "In memory" : "Not in memory · loads when you dictate")
+                Text(PichiLocalization.text(inMemory ? "In memory" : "Not in memory · loads when you dictate"))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -152,7 +152,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                         .font(self.theme.typography.bodyStrong)
                         .foregroundStyle(Color.fluidGreen)
                         .frame(minWidth: 76, minHeight: 24)
-                        .accessibilityLabel("Active model")
+                        .accessibilityLabel(PichiLocalization.text("Active model"))
                 } else {
                     VStack(spacing: 4) {
                         Button {
@@ -160,7 +160,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                             self.controller.previewModel(model.id)
                             self.controller.usePreviewModel(isInstalled: files.installed && !needsDownload, onReady: {})
                         } label: {
-                            Text(needsDownload ? "Download again" : files?.installed == false ? "Download" : "Activate")
+                            Text(PichiLocalization.text(needsDownload ? "Download again" : files?.installed == false ? "Download" : "Activate"))
                                 .font(self.theme.typography.bodyStrong)
                                 .frame(minWidth: 76, minHeight: 24)
                         }
@@ -170,7 +170,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                             Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.theme.palette.secondaryText)
-                                .accessibilityLabel("Download size: \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                                .accessibilityLabel(PichiLocalization.format("Download size: %@", ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)))
                         }
                     }
                 }
@@ -208,7 +208,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                     Image(systemName: "ellipsis").frame(width: 32, height: 32)
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .accessibilityLabel("Options for \(model.displayName)")
+                .accessibilityLabel(PichiLocalization.format("Options for %@", model.displayName))
             }
         }
     }

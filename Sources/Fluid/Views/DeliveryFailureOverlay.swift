@@ -162,6 +162,7 @@ final class DeliveryFailureOverlayController {
 }
 
 private struct DeliveryFailureOverlayView: View {
+    @ObservedObject private var settings = SettingsStore.shared
     let kind: DeliveryFailureOverlayController.Kind
     let transcript: String
     let displayDuration: TimeInterval
@@ -185,7 +186,7 @@ private struct DeliveryFailureOverlayView: View {
                     .frame(width: 24, height: 24)
                     .background(Circle().fill(Color.orange.opacity(0.14)))
 
-                Text(self.kind.title)
+                Text(PichiLocalization.text(self.kind.title))
                     .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.72))
 
@@ -201,8 +202,8 @@ private struct DeliveryFailureOverlayView: View {
                 .buttonStyle(.plain)
                 .contentShape(Circle())
                 .onHover { self.isCloseHovered = $0 }
-                .help("Dismiss")
-                .accessibilityLabel("Dismiss")
+                .help(PichiLocalization.text("Dismiss"))
+                .accessibilityLabel(PichiLocalization.text("Dismiss"))
             }
 
             Text(self.transcriptPreview)
@@ -230,19 +231,19 @@ private struct DeliveryFailureOverlayView: View {
                     }
                     .buttonStyle(TransientOverlaySettingsButtonStyle(isHovered: self.isSettingsHovered))
                     .onHover { self.isSettingsHovered = $0 }
-                    .help("Open Accessibility settings")
+                    .help(PichiLocalization.text("Open Accessibility settings"))
                 }
 
                 Button(action: self.copy) {
                     HStack(spacing: 5) {
                         Image(systemName: self.didCopy ? "checkmark" : "doc.on.doc")
                             .font(.fluidSystem(size: 10, weight: .semibold))
-                        Text(self.didCopy ? "Copied" : "Copy transcript")
+                        Text(PichiLocalization.text(self.didCopy ? "Copied" : "Copy transcript"))
                     }
                 }
                 .buttonStyle(TransientOverlaySettingsButtonStyle(isHovered: self.isCopyHovered))
                 .onHover { self.isCopyHovered = $0 }
-                .help("Copy transcript")
+                .help(PichiLocalization.text("Copy transcript"))
             }
         }
         .padding(.horizontal, 14)
@@ -262,11 +263,12 @@ private struct DeliveryFailureOverlayView: View {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { self.appeared = true }
         }
         .preferredColorScheme(.dark)
+        .environment(\.locale, PichiLocalization.locale)
     }
 
     private var transcriptPreview: String {
         let trimmed = self.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Nothing was captured" : "\u{201C}\(trimmed)\u{201D}"
+        return trimmed.isEmpty ? PichiLocalization.text("Nothing was captured") : "\u{201C}\(trimmed)\u{201D}"
     }
 
     private func openAccessibilitySettings() {

@@ -85,7 +85,7 @@ struct CommandMessageView: View {
 
     private func thinking(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            self.disclosure(title: "Reasoning", symbol: "text.bubble", expanded: self.$thinkingExpanded)
+            self.disclosure(title: PichiLocalization.text("Reasoning"), symbol: "text.bubble", expanded: self.$thinkingExpanded)
             if self.thinkingExpanded {
                 ScrollView {
                     Text(verbatim: text)
@@ -103,7 +103,7 @@ struct CommandMessageView: View {
     private func command(_ tool: CommandModeService.Message.ToolCall) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             self.disclosure(
-                title: tool.purpose?.isEmpty == false ? tool.purpose ?? "Command" : "Command",
+                title: tool.purpose?.isEmpty == false ? tool.purpose ?? PichiLocalization.text("Command") : PichiLocalization.text("Command"),
                 symbol: "terminal",
                 expanded: self.$commandExpanded
             )
@@ -124,7 +124,7 @@ struct CommandMessageView: View {
 
     private var toolResult: some View {
         let failed = self.toolOutput?.success == false || self.message.stepType == .failure
-        let title = self.toolOutput?.title ?? (failed ? "Command failed" : "Command result")
+        let title = self.toolOutput?.title ?? PichiLocalization.text(failed ? "Command failed" : "Command result")
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 self.disclosure(
@@ -192,8 +192,8 @@ struct CommandMessageView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
-        .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
-        .help(expanded.wrappedValue ? "Hide details" : "Show details")
+        .accessibilityValue(PichiLocalization.text(expanded.wrappedValue ? "Expanded" : "Collapsed"))
+        .help(PichiLocalization.text(expanded.wrappedValue ? "Hide details" : "Show details"))
     }
 }
 
@@ -208,7 +208,7 @@ struct CommandToolOutput: Sendable, Equatable {
 
     static func parse(_ text: String) -> CommandToolOutput {
         guard let data = text.data(using: .utf8), let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return CommandToolOutput(success: nil, title: "Command output", output: text, error: nil, executionTime: 0, language: "Output")
+            return CommandToolOutput(success: nil, title: PichiLocalization.text("Command output"), output: text, error: nil, executionTime: 0, language: "Output")
         }
         let success = result["success"] as? Bool
         let error = result["error"] as? String
@@ -218,7 +218,7 @@ struct CommandToolOutput: Sendable, Equatable {
         let display = output ?? (result["content"] as? String) ?? text
         return CommandToolOutput(
             success: success,
-            title: purpose?.isEmpty == false ? purpose ?? "Command result" : (success == false ? "Command failed" : "Command result"),
+            title: purpose?.isEmpty == false ? purpose ?? PichiLocalization.text("Command result") : PichiLocalization.text(success == false ? "Command failed" : "Command result"),
             output: display,
             error: error,
             executionTime: result["executionTimeMs"] as? Int ?? 0,

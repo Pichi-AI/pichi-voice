@@ -10,7 +10,7 @@ struct AnalyticsPrivacyView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Anonymous Analytics")
                         .font(.fluidSystem(size: 18, weight: .semibold))
-                    Text(AnalyticsConfig.fromBundle().isConfigured ? "Daily activity and optional detailed analytics" : "Telemetry is disabled in this distribution")
+                    Text(PichiLocalization.text(AnalyticsConfig.fromBundle().isConfigured ? "Daily activity and optional detailed analytics" : "Telemetry is disabled in this distribution"))
                         .font(.fluidSystem(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -87,8 +87,8 @@ struct AnalyticsPrivacyView: View {
     }
 
     private var contactInfoText: AttributedString {
-        var text = AttributedString("For privacy questions, contact our support team.")
-        if let range = text.range(of: "support team") {
+        var text = AttributedString(PichiLocalization.text("For privacy questions, contact our support team."))
+        if let range = text.range(of: PichiLocalization.text("support team")) {
             text[range].link = AppBrand.supportURL
             text[range].foregroundColor = self.theme.palette.accent
         }
@@ -97,7 +97,7 @@ struct AnalyticsPrivacyView: View {
     }
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text)
+        Text(PichiLocalization.text(text))
             .font(.fluidSystem(size: 12, weight: .semibold))
             .foregroundStyle(self.theme.palette.accent)
             .padding(.top, 4)
@@ -107,7 +107,7 @@ struct AnalyticsPrivacyView: View {
         HStack(alignment: .top, spacing: 8) {
             Text("•")
                 .foregroundStyle(.secondary)
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(size: 13))
                 .foregroundStyle(.primary)
             Spacer(minLength: 0)

@@ -11,6 +11,7 @@ struct CommandSessionSidebar: View {
     let onRestore: (String) -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @State private var searchText = ""
     @State private var rows: [SessionRow] = []
     @State private var scope = SessionScope.active
@@ -89,10 +90,11 @@ struct CommandSessionSidebar: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.contentBackground)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Command sessions")
+        .accessibilityLabel(PichiLocalization.text("Command sessions"))
         .onChange(of: self.scope) { _, _ in self.keyboardSessionID = nil }
         .onChange(of: self.searchText) { _, _ in self.keyboardSessionID = nil }
         .onReceive(self.history.$sessions) { self.refreshRows(from: $0) }
+        .onChange(of: self.interfaceLocale) { _, _ in self.refreshRows(from: self.history.sessions) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             self.refreshRows(from: self.history.sessions)
         }
@@ -116,7 +118,7 @@ struct CommandSessionSidebar: View {
                 Text(self.scopeTitle(self.scope))
             }
             .fluidDropdownStyle(fillsWidth: true)
-            .accessibilityLabel("Session history view")
+            .accessibilityLabel(PichiLocalization.text("Session history view"))
             .accessibilityValue(self.scopeTitle(self.scope))
             self.searchField
         }
@@ -126,7 +128,7 @@ struct CommandSessionSidebar: View {
     }
 
     private func scopeTitle(_ scope: SessionScope) -> String {
-        "\(scope.rawValue) (\(self.rows.filter { $0.isArchived == scope.isArchived }.count))"
+        "\(PichiLocalization.text(scope.rawValue)) (\(self.rows.filter { $0.isArchived == scope.isArchived }.count))"
     }
 
     private var newSessionButton: some View {
@@ -156,7 +158,7 @@ struct CommandSessionSidebar: View {
         .buttonStyle(.plain)
         .onHover { self.newSessionHovered = $0 }
         .disabled(!self.canChangeSession)
-        .help(self.blockingReason ?? "Start a new chat")
+        .help(self.blockingReason ?? PichiLocalization.text("Start a new chat"))
     }
 
     private var searchField: some View {
@@ -167,14 +169,14 @@ struct CommandSessionSidebar: View {
                 .accessibilityHidden(true)
             TextField("Search sessions", text: self.$searchText)
                 .textFieldStyle(.plain)
-                .accessibilityLabel("Search session titles and previews")
+                .accessibilityLabel(PichiLocalization.text("Search session titles and previews"))
             if !self.searchText.isEmpty {
                 Button { self.searchText = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear session search")
+                .accessibilityLabel(PichiLocalization.text("Clear session search"))
             }
         }
         .font(self.theme.typography.bodySmall)
@@ -214,7 +216,7 @@ struct CommandSessionSidebar: View {
                     ForEach(items) { item in
                         switch item {
                         case let .heading(group):
-                            Text(group.rawValue)
+                            Text(PichiLocalization.text(group.rawValue))
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.horizontal, self.theme.metrics.spacing.md)
@@ -293,6 +295,7 @@ struct CommandSessionSidebar: View {
         let onRestore: (String) -> Void
 
         @Environment(\.theme) private var theme
+        @Environment(\.locale) private var interfaceLocale
         @State private var hovered = false
         @FocusState private var focusedControl: RowControl?
 
@@ -302,8 +305,8 @@ struct CommandSessionSidebar: View {
         }
 
         private var showsActions: Bool { self.keyboardSelected || self.hovered || self.focusedControl != nil }
-        private var actionTitle: String { self.row.isArchived ? "Restore session" : "Archive session" }
-        private var openHint: String { self.row.isArchived ? "Restore and open this session" : "Open this session" }
+        private var actionTitle: String { PichiLocalization.text(self.row.isArchived ? "Restore session" : "Archive session") }
+        private var openHint: String { PichiLocalization.text(self.row.isArchived ? "Restore and open this session" : "Open this session") }
 
         var body: some View {
             Button {
@@ -378,7 +381,9 @@ struct CommandSessionSidebar: View {
 
     private var emptyState: some View {
         let isSearching = !self.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let title = isSearching ? "No matching \(self.scope.rawValue.lowercased()) sessions" : "No \(self.scope.rawValue.lowercased()) sessions"
+        let title = isSearching
+            ? PichiLocalization.text(self.scope.isArchived ? "No matching archived sessions" : "No matching active sessions")
+            : PichiLocalization.text(self.scope.isArchived ? "No archived sessions" : "No active sessions")
         return VStack(spacing: self.theme.metrics.spacing.sm) {
             Image(systemName: isSearching ? "magnifyingglass" : (self.scope.isArchived ? "archivebox" : "bubble.left.and.bubble.right"))
                 .font(self.theme.typography.titleIcon)
@@ -386,7 +391,7 @@ struct CommandSessionSidebar: View {
                 .accessibilityHidden(true)
             Text(title)
                 .font(self.theme.typography.bodySmallStrong)
-            Text(isSearching ? "Try another title or phrase from the preview." : (self.scope.isArchived ? "Archived sessions stay here until you restore them." : "Start a new session to work with your Mac."))
+            Text(PichiLocalization.text(isSearching ? "Try another title or phrase from the preview." : (self.scope.isArchived ? "Archived sessions stay here until you restore them." : "Start a new session to work with your Mac.")))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }
@@ -402,6 +407,7 @@ struct CommandSessionSidebar: View {
         let yesterday = calendar.date(byAdding: .day, value: -1, to: now)
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
+        formatter.locale = self.interfaceLocale
         self.rows = sessions.sorted { $0.updatedAt > $1.updatedAt }.map { session in
             let message = session.messages.last {
                 ($0.role == .user || $0.role == .assistant) && $0.content.contains { !$0.isWhitespace }
@@ -418,7 +424,7 @@ struct CommandSessionSidebar: View {
             return SessionRow(
                 id: session.id,
                 title: session.title,
-                preview: preview.isEmpty ? "No messages yet" : preview,
+                preview: preview.isEmpty ? PichiLocalization.text("No messages yet") : preview,
                 relativeTime: formatter.localizedString(for: session.updatedAt, relativeTo: now),
                 group: group,
                 isArchived: session.isArchived

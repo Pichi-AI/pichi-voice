@@ -61,10 +61,10 @@ struct FluidIntelligenceDemoView: View {
                 Button { self.dismiss() } label: {
                     Image(systemName: "xmark").frame(width: 32, height: 32).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).disabled(self.busy).accessibilityLabel("Close demo")
+                .buttonStyle(.plain).disabled(self.busy).accessibilityLabel(PichiLocalization.text("Close demo"))
             }
             Picker("Example", selection: self.$selected) {
-                ForEach(Self.examples.indices, id: \.self) { index in Text(Self.examples[index].title).tag(index) }
+                ForEach(Self.examples.indices, id: \.self) { index in Text(PichiLocalization.text(Self.examples[index].title)).tag(index) }
             }
             .pickerStyle(.segmented).disabled(self.busy)
             ScrollView {
@@ -109,7 +109,7 @@ struct FluidIntelligenceDemoView: View {
                     }
                 }
             }
-            Text(self.modelID == nil ? AppBrand.text("A local Fluid Intelligence model is needed to try these examples.") : "Practice stays here. Nothing is typed into another app or saved to history.")
+            Text(self.modelID == nil ? AppBrand.text("A local Fluid Intelligence model is needed to try these examples.") : PichiLocalization.text("Practice stays here. Nothing is typed into another app or saved to history."))
                 .font(self.theme.typography.caption).foregroundStyle(.secondary)
             if self.modelID != nil, !self.asr.isAsrReady || self.asr.micStatus != .authorized {
                 Text("Voice practice needs a ready Voice Engine model and microphone access. You can still try the written examples.")
@@ -147,7 +147,7 @@ struct FluidIntelligenceDemoView: View {
 
     private func textPanel(_ title: String, text: String, accented: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(self.theme.typography.captionStrong).foregroundStyle(accented ? self.theme.palette.accent : self.theme.palette.secondaryText)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.captionStrong).foregroundStyle(accented ? self.theme.palette.accent : self.theme.palette.secondaryText)
             Text(text).font(self.theme.typography.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)

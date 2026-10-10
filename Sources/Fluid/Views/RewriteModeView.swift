@@ -73,7 +73,7 @@ struct RewriteModeView: View {
                                     .foregroundStyle(.secondary)
                                 Spacer()
                                 if !self.service.rewrittenText.isEmpty {
-                                    Button(self.showOriginal ? "Hide" : "Show") {
+                                    Button(PichiLocalization.text(self.showOriginal ? "Hide" : "Show")) {
                                         withAnimation { self.showOriginal.toggle() }
                                     }
                                     .font(.fluidSystem(.caption))
@@ -408,7 +408,7 @@ struct RewriteModeView: View {
             // Header with shimmer effect - tap to expand/collapse
             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { self.isThinkingExpanded.toggle() } }) {
                 HStack(spacing: 8) {
-                    CommandShimmerText(text: "Thinking")
+                    CommandShimmerText(text: PichiLocalization.text("Thinking"))
 
                     Spacer()
 

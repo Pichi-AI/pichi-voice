@@ -81,14 +81,14 @@ struct ReleaseFeaturePreview: View {
         VStack(alignment: .leading, spacing: 5) {
             Image(systemName: symbol).font(.system(size: 10)).foregroundStyle(FluidBrandColors.blue)
             Text(value).font(.system(size: 16, weight: .semibold, design: .rounded))
-            Text(label).font(.system(size: 6, weight: .medium)).foregroundStyle(self.theme.palette.secondaryText)
+            Text(PichiLocalization.text(label)).font(.system(size: 6, weight: .medium)).foregroundStyle(self.theme.palette.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var models: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(PrivateAIProviderFeature.shared.isAvailable ? AppBrand.text("Fluid Intelligence") : "AI Providers", systemImage: "sparkles")
+            Label(PrivateAIProviderFeature.shared.isAvailable ? AppBrand.text("Fluid Intelligence") : PichiLocalization.text("AI Providers"), systemImage: "sparkles")
                 .font(.system(size: 11, weight: .semibold))
             if PrivateAIProviderFeature.shared.isAvailable {
                 self.model("Fluid-1 Pico", detail: "Light & quick", symbol: "bolt")
@@ -107,9 +107,9 @@ struct ReleaseFeaturePreview: View {
                 .font(.system(size: 11)).foregroundStyle(FluidBrandColors.blue)
                 .frame(width: 23, height: 23)
                 .background(FluidBrandColors.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-            Text(name).font(.system(size: 10, weight: .medium))
+            Text(PichiLocalization.text(name)).font(.system(size: 10, weight: .medium))
             Spacer(minLength: 0)
-            Text(detail).font(.system(size: 8)).foregroundStyle(self.theme.palette.secondaryText)
+            Text(PichiLocalization.text(detail)).font(.system(size: 8)).foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 }

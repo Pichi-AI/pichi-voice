@@ -22,12 +22,12 @@ struct StatsShareContent {
     var headline: String {
         if self.pagesEquivalent >= 300 {
             let novels = Double(self.pagesEquivalent) / 300
-            return String(format: "That's about %.1f novels, spoken instead of typed.", novels)
+            return PichiLocalization.format("That's about %.1f novels, spoken instead of typed.", novels)
         }
         if self.pagesEquivalent >= 2 {
-            return "That's about \(self.pagesEquivalent) book pages, spoken instead of typed."
+            return PichiLocalization.format("That's about %lld book pages, spoken instead of typed.", self.pagesEquivalent)
         }
-        return "Spoken instead of typed."
+        return PichiLocalization.text("Spoken instead of typed.")
     }
 }
 
@@ -93,6 +93,7 @@ enum StatsShareStat: String, CaseIterable, Identifiable {
 
 /// Fixed-size artwork rendered to an image; sized for a 1200×675 social preview at 2×.
 struct StatsShareCard: View {
+    @Environment(\.locale) private var interfaceLocale
     static let size = CGSize(width: 600, height: 337.5)
 
     let content: StatsShareContent
@@ -110,7 +111,7 @@ struct StatsShareCard: View {
                 Text(AppBrand.text("FluidVoice"))
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Text(Date.now.formatted(.dateTime.month(.wide).year()))
+                Text(Date.now.formatted(.dateTime.month(.wide).year().locale(self.interfaceLocale)))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
@@ -178,7 +179,7 @@ struct StatsShareCard: View {
                         .foregroundStyle(flame.color)
                 }
             }
-            Text(stat.label)
+            Text(PichiLocalization.text(stat.label))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
         }
@@ -231,7 +232,7 @@ struct StatsShareSheet: View {
     }
 
     private var image: NSImage? {
-        let renderer = ImageRenderer(content: self.card)
+        let renderer = ImageRenderer(content: self.card.environment(\.locale, PichiLocalization.locale))
         renderer.scale = 2
         return renderer.nsImage
     }
@@ -278,7 +279,7 @@ struct StatsShareSheet: View {
                     }
                     .fluidGlassAction(prominent: true)
                 }
-                Button(self.copied ? "Copied" : "Copy image", systemImage: self.copied ? "checkmark" : "doc.on.doc", action: self.copy)
+                Button(PichiLocalization.text(self.copied ? "Copied" : "Copy image"), systemImage: self.copied ? "checkmark" : "doc.on.doc", action: self.copy)
                     .fluidGlassAction()
                 Button("Save…", systemImage: "arrow.down.to.line", action: self.save)
                     .fluidGlassAction()
@@ -296,7 +297,7 @@ struct StatsShareSheet: View {
             HStack(spacing: 5) {
                 Image(systemName: isOn ? "checkmark" : "plus")
                     .font(.fluidSystem(size: 9, weight: .bold))
-                Text(title).font(self.theme.typography.captionStrong)
+                Text(PichiLocalization.text(title)).font(self.theme.typography.captionStrong)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)

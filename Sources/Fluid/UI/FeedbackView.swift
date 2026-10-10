@@ -71,7 +71,7 @@ struct FeedbackView: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.categoryChips }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Feedback type")
+        .accessibilityLabel(PichiLocalization.text("Feedback type"))
     }
 
     private var categoryChips: some View {
@@ -81,7 +81,7 @@ struct FeedbackView: View {
                 self.category = category
                 self.messageFocused = true
             } label: {
-                Label(category.rawValue, systemImage: category.icon)
+                Label(PichiLocalization.text(category.rawValue), systemImage: category.icon)
                     .font(self.theme.typography.bodySmallStrong)
                     .foregroundStyle(selected ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
                     .padding(.horizontal, self.theme.metrics.spacing.lg)
@@ -124,7 +124,7 @@ struct FeedbackView: View {
 
     private var messageField: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            Text(self.category.prompt)
+            Text(PichiLocalization.text(self.category.prompt))
                 .font(self.theme.typography.bodyStrong)
                 .foregroundStyle(self.theme.palette.primaryText)
 
@@ -135,9 +135,9 @@ struct FeedbackView: View {
                     .focused(self.$messageFocused)
                     .padding(self.theme.metrics.spacing.sm)
                     .frame(minHeight: 168, maxHeight: 240)
-                    .accessibilityLabel(self.category.prompt)
+                    .accessibilityLabel(PichiLocalization.text(self.category.prompt))
                 if self.message.isEmpty {
-                    Text(self.category.hint)
+                    Text(PichiLocalization.text(self.category.hint))
                         .font(self.theme.typography.body)
                         .foregroundStyle(self.theme.palette.tertiaryText)
                         .padding(.horizontal, self.theme.metrics.spacing.md + 1)
@@ -148,7 +148,7 @@ struct FeedbackView: View {
             .background(self.fieldSurface(focused: self.messageFocused))
 
             HStack(alignment: .firstTextBaseline) {
-                Text(self.overLimit ? "Please shorten your message before sending." : "Leave out passwords and private information.")
+                Text(PichiLocalization.text(self.overLimit ? "Please shorten your message before sending." : "Leave out passwords and private information."))
                     .foregroundStyle(self.overLimit ? self.theme.palette.warning : self.theme.palette.tertiaryText)
                 Spacer(minLength: self.theme.metrics.spacing.sm)
                 if self.nearLimit {
@@ -177,7 +177,7 @@ struct FeedbackView: View {
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .frame(height: 38)
                 .background(self.fieldSurface(focused: false))
-                .accessibilityLabel("Your email, optional")
+                .accessibilityLabel(PichiLocalization.text("Your email, optional"))
             if self.emailLooksWrong {
                 Text("That doesn’t look like an email address.")
                     .font(self.theme.typography.caption)
@@ -230,7 +230,7 @@ struct FeedbackView: View {
                 .foregroundStyle(self.theme.palette.warning)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
-            Text(self.sending ? "Sending…" : AppBrand.text("Goes straight to the FluidVoice team."))
+            Text(self.sending ? PichiLocalization.text("Sending…") : AppBrand.text("Goes straight to the FluidVoice team."))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.tertiaryText)
         }
@@ -240,7 +240,7 @@ struct FeedbackView: View {
         Button { Task { await self.submit() } } label: {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 if self.sending { ProgressView().controlSize(.small) }
-                Text(self.error == nil ? "Send feedback" : "Try again")
+                Text(PichiLocalization.text(self.error == nil ? "Send feedback" : "Try again"))
             }
         }
         .fluidGlassAction(prominent: true)

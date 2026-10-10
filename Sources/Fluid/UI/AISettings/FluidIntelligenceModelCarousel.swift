@@ -74,8 +74,8 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Show \(self.title(for: id))")
-                    .accessibilityValue(self.displayedPreviewID == id ? "Current page" : "")
+                    .accessibilityLabel(PichiLocalization.format("Show %@", self.title(for: id)))
+                    .accessibilityValue(self.displayedPreviewID == id ? PichiLocalization.text("Current page") : "")
                 }
             }
         }
@@ -111,7 +111,7 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
                 .contentShape(Circle())
         }
         .fluidGlassAction(circular: true)
-        .accessibilityLabel(forward ? "Next model" : "Previous model")
+        .accessibilityLabel(PichiLocalization.text(forward ? "Next model" : "Previous model"))
         .disabled(self.itemIDs.count < 2)
     }
 
@@ -150,7 +150,7 @@ struct FluidIntelligenceModelCarousel<Controls: View>: View {
             .contentShape(RoundedRectangle(cornerRadius: AppTheme.Metrics.Showcase.cardRadius))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Preview \(model.title), coming soon")
-        .accessibilityHint("Preview only. This model cannot be activated or downloaded.")
+        .accessibilityLabel(PichiLocalization.format("Preview %@, coming soon", model.title))
+        .accessibilityHint(PichiLocalization.text("Preview only. This model cannot be activated or downloaded."))
     }
 }

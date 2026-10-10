@@ -7,14 +7,15 @@ struct StatsTodayHero: View {
     let streak: Int
     let activity: [(date: Date, words: Int)]
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
 
     private var milestone: StatsDailyMilestone { StatsDailyMilestone(words: self.words) }
     private var nextTarget: Int? { self.milestone.nextTarget }
     private var progress: Double { self.milestone.progress }
     private var savedTime: String {
-        if self.savedMinutes < 1 { return "< 1 min" }
-        if self.savedMinutes < 60 { return "\(Int(self.savedMinutes)) min" }
-        return "\(Int(self.savedMinutes) / 60)h \(Int(self.savedMinutes) % 60)m"
+        if self.savedMinutes < 1 { return PichiLocalization.text("< 1 min") }
+        if self.savedMinutes < 60 { return PichiLocalization.format("%lld min", Int(self.savedMinutes)) }
+        return PichiLocalization.format("%lldh %lldm", Int(self.savedMinutes) / 60, Int(self.savedMinutes) % 60)
     }
 
     var body: some View {
@@ -46,10 +47,10 @@ struct StatsTodayHero: View {
                 Text("back in your day.")
                     .font(self.theme.typography.title)
             } else {
-                Text(self.words == 0 ? "Great ideas\nstart with a word." : "Look at you go.")
+                Text(PichiLocalization.text(self.words == 0 ? "Great ideas\nstart with a word." : "Look at you go."))
                     .font(self.theme.typography.displayTitle)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(self.words == 0 ? "Make a little space for your next big thought." : "\(self.words.formatted()) words captured, without the typing.")
+                Text(self.words == 0 ? PichiLocalization.text("Make a little space for your next big thought.") : PichiLocalization.format("%@ words captured, without the typing.", self.words.formatted()))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(.secondary)
             }
@@ -69,7 +70,7 @@ struct StatsTodayHero: View {
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(.secondary)
             }
-            Text(self.streak == 0 ? "Your next streak starts with today." : "One day at a time. Look how far you've come.")
+            Text(PichiLocalization.text(self.streak == 0 ? "Your next streak starts with today." : "One day at a time. Look how far you've come."))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -87,11 +88,11 @@ struct StatsTodayHero: View {
 
     private var nextStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(self.nextTarget.map { "You're \(($0 - self.words).formatted()) words from your next win." } ?? "Look how far your voice has taken you today.")
+            Text(self.nextTarget.map { PichiLocalization.format("You're %@ words from your next win.", ($0 - self.words).formatted()) } ?? PichiLocalization.text("Look how far your voice has taken you today."))
                 .font(.fluidSystem(size: 30, weight: .semibold, design: .rounded))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(alignment: .firstTextBaseline) {
-                Text(self.nextTarget.map { "\(self.words.formatted()) spoken. Let's make it \($0.formatted())." } ?? "\(self.words.formatted()) words spoken. Keep your ideas coming.")
+                Text(self.nextTarget.map { PichiLocalization.format("%@ spoken. Let's make it %@.", self.words.formatted(), $0.formatted()) } ?? PichiLocalization.format("%@ words spoken. Keep your ideas coming.", self.words.formatted()))
                     .font(self.theme.typography.statement)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
@@ -109,8 +110,8 @@ struct StatsTodayHero: View {
                 }
             }
             .frame(height: 14)
-            .accessibilityLabel("Today's word milestone")
-            .accessibilityValue("\(Int(self.progress * 100)) percent")
+            .accessibilityLabel(PichiLocalization.text("Today's word milestone"))
+            .accessibilityValue(PichiLocalization.format("%lld percent", Int(self.progress * 100)))
             Label("\(self.sessions.formatted()) dictations", systemImage: "waveform")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(.secondary)
@@ -125,6 +126,7 @@ private struct StatsStreakDay: View {
     let words: Int
     let tooltipAlignment: Alignment
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @State private var isHovered = false
 
     var body: some View {
@@ -134,7 +136,7 @@ private struct StatsStreakDay: View {
                 .foregroundStyle(self.words > 0 ? self.theme.palette.accent : self.theme.palette.secondaryText)
                 .frame(width: 24, height: 24)
                 .background(self.theme.palette.accent.opacity(self.words > 0 ? 0.15 : 0.04), in: Circle())
-            Text(self.date.formatted(.dateTime.weekday(.narrow)))
+            Text(self.date.formatted(.dateTime.weekday(.narrow).locale(self.interfaceLocale)))
                 .font(self.theme.typography.captionSmall)
                 .foregroundStyle(.secondary)
         }
@@ -142,7 +144,7 @@ private struct StatsStreakDay: View {
         .overlay(alignment: self.tooltipAlignment) {
             if self.isHovered {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(self.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()))
+                    Text(self.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().locale(self.interfaceLocale)))
                         .foregroundStyle(.secondary)
                     Text("\(self.words.formatted()) words")
                         .font(self.theme.typography.captionStrong)
@@ -160,6 +162,6 @@ private struct StatsStreakDay: View {
         .zIndex(self.isHovered ? 1 : 0)
         .onHover { self.isHovered = $0 }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(self.date.formatted(date: .complete, time: .omitted)), \(self.words) words")
+        .accessibilityLabel(PichiLocalization.format("%@, %lld words", self.date.formatted(Date.FormatStyle(date: .complete, time: .omitted).locale(self.interfaceLocale)), self.words))
     }
 }

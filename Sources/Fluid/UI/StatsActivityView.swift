@@ -5,6 +5,7 @@ import SwiftUI
 struct StatsActivityView: View {
     let snapshot: StatsSnapshot
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @State private var days = 180
     @State private var selectedDate: Date?
     @State private var hoveredDate: Date?
@@ -12,7 +13,9 @@ struct StatsActivityView: View {
     @State private var pinnedWeekday: String?
 
     private var period: StatsActivityPeriod {
-        StatsActivityPeriod(activity: self.snapshot.dailyWordCounts(days: self.days), calendar: .current)
+        var calendar = Calendar.current
+        calendar.locale = self.interfaceLocale
+        return StatsActivityPeriod(activity: self.snapshot.dailyWordCounts(days: self.days), calendar: calendar)
     }
 
     var body: some View {
@@ -64,11 +67,11 @@ struct StatsActivityView: View {
                         }
                         .pickerStyle(.inline)
                     } label: {
-                        Text(self.days == 180 ? "6 months" : (self.days == 90 ? "3 months" : "\(self.days) days"))
+                        Text(self.days == 180 ? PichiLocalization.text("6 months") : (self.days == 90 ? PichiLocalization.text("3 months") : PichiLocalization.format("%lld days", self.days)))
                     }
                     .fluidDropdownStyle(fillsWidth: true)
                     .frame(width: 112)
-                    .accessibilityLabel("Activity period")
+                    .accessibilityLabel(PichiLocalization.text("Activity period"))
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(period.totalWords.formatted())
@@ -130,16 +133,16 @@ struct StatsActivityView: View {
 
     private func dailyChart(_ period: StatsActivityPeriod) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(self.selectedDay(period).map { "\($0.date.formatted(.dateTime.month(.abbreviated).day())) · \($0.words.formatted()) words" } ?? "Day by day · hover to explore")
+            Text(self.selectedDay(period).map { PichiLocalization.format("%@ · %@ words", $0.date.formatted(.dateTime.month(.abbreviated).day().locale(self.interfaceLocale)), $0.words.formatted()) } ?? PichiLocalization.text("Day by day · hover to explore"))
                 .font(self.theme.typography.captionStrong)
                 .foregroundStyle(.secondary)
             Chart(period.days) { day in
-                BarMark(x: .value("Date", day.date, unit: .day), y: .value("Words", day.words))
+                BarMark(x: .value(PichiLocalization.text("Date"), day.date, unit: .day), y: .value(PichiLocalization.text("Words"), day.words))
                     .foregroundStyle(self.theme.palette.accent.opacity(0.7))
                     .cornerRadius(2)
                     .opacity(self.hoveredDate == nil && self.selectedDate == nil || day.date == (self.hoveredDate ?? self.selectedDate) ? 1 : 0.35)
             }
-            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day().locale(self.interfaceLocale)) } }
             .chartYAxis(.hidden)
             .statsChartInteraction(onInspect: { x, proxy, pin in self.inspectDate(x, proxy: proxy, pin: pin) }, onExit: { self.hoveredDate = nil })
             .frame(height: 124)
@@ -148,7 +151,7 @@ struct StatsActivityView: View {
 
     private func periodMetric(_ title: String, words: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
+            Text(PichiLocalization.text(title))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(.secondary)
             Text(words.formatted())
@@ -184,21 +187,21 @@ struct StatsActivityView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Chart(period.days) { day in
-                    AreaMark(x: .value("Date", day.date), y: .value("Words", day.cumulativeWords))
+                    AreaMark(x: .value(PichiLocalization.text("Date"), day.date), y: .value(PichiLocalization.text("Words"), day.cumulativeWords))
                         .foregroundStyle(LinearGradient(colors: [self.theme.palette.accent.opacity(0.24), self.theme.palette.accent.opacity(0.01)], startPoint: .top, endPoint: .bottom))
-                    LineMark(x: .value("Date", day.date), y: .value("Words", day.cumulativeWords))
+                    LineMark(x: .value(PichiLocalization.text("Date"), day.date), y: .value(PichiLocalization.text("Words"), day.cumulativeWords))
                         .foregroundStyle(self.theme.palette.accent)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                     if selected?.date == day.date {
-                        RuleMark(x: .value("Date", day.date))
+                        RuleMark(x: .value(PichiLocalization.text("Date"), day.date))
                             .foregroundStyle(self.theme.palette.secondaryText.opacity(0.4))
-                        PointMark(x: .value("Date", day.date), y: .value("Words", day.cumulativeWords))
+                        PointMark(x: .value(PichiLocalization.text("Date"), day.date), y: .value(PichiLocalization.text("Words"), day.cumulativeWords))
                             .foregroundStyle(self.theme.palette.accent)
                     }
                 }
                 .statsChartInteraction(onInspect: { x, proxy, pin in self.inspectDate(x, proxy: proxy, pin: pin) }, onExit: { self.hoveredDate = nil })
                 .chartYScale(domain: 0...max(1, period.totalWords))
-                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day().locale(self.interfaceLocale)) } }
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
                 .frame(height: 150)
                 Text("Cumulative words · selected period")
@@ -215,16 +218,16 @@ struct StatsActivityView: View {
 
     private func growthCaption(_ period: StatsActivityPeriod) -> String {
         if let day = self.selectedDay(period) {
-            return "\(day.date.formatted(.dateTime.month(.abbreviated).day())) · \(day.cumulativeWords.formatted()) words so far"
+            return PichiLocalization.format("%@ · %@ words so far", day.date.formatted(.dateTime.month(.abbreviated).day().locale(self.interfaceLocale)), day.cumulativeWords.formatted())
         }
-        return "Hover along the curve · click to pin a day"
+        return PichiLocalization.text("Hover along the curve · click to pin a day")
     }
 
     private func weekdayCaption(_ period: StatsActivityPeriod) -> String {
         if let day = period.weekdays.first(where: { $0.label == (self.hoveredWeekday ?? self.pinnedWeekday) }) {
-            return "\(day.fullLabel) · \(Int(day.averageWords.rounded()).formatted()) words per day on average"
+            return PichiLocalization.format("%@ · %@ words per day on average", day.fullLabel, Int(day.averageWords.rounded()).formatted())
         }
-        return "Hover a bar to discover your weekly rhythm"
+        return PichiLocalization.text("Hover a bar to discover your weekly rhythm")
     }
 
     private func rhythmCard(_ period: StatsActivityPeriod) -> some View {
@@ -236,12 +239,12 @@ struct StatsActivityView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Chart(period.weekdays) { day in
-                    BarMark(x: .value("Weekday", day.label), y: .value("Average words", day.averageWords))
+                    BarMark(x: .value(PichiLocalization.text("Weekday"), day.label), y: .value(PichiLocalization.text("Average words"), day.averageWords))
                         .foregroundStyle(self.theme.palette.accent.opacity(day.averageWords == period.peakWeekdayAverage ? 1 : 0.35))
                         .cornerRadius(4)
                         .opacity(self.hoveredWeekday == nil && self.pinnedWeekday == nil || day.label == (self.hoveredWeekday ?? self.pinnedWeekday) ? 1 : 0.4)
                         .accessibilityLabel(day.fullLabel)
-                        .accessibilityValue("\(Int(day.averageWords.rounded())) words per day on average")
+                        .accessibilityValue(PichiLocalization.format("%lld words per day on average", Int(day.averageWords.rounded())))
                 }
                 .statsChartInteraction(onInspect: { x, proxy, pin in
                     guard let label: String = proxy.value(atX: x) else { return }

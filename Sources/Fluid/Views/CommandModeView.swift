@@ -69,7 +69,7 @@ struct CommandModeView: View {
                             self.theme.palette.windowBackground.opacity(0.65)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Close session history")
+                        .accessibilityLabel(PichiLocalization.text("Close session history"))
                     }
                     if dockedHistory || overlayHistory {
                         CommandSessionSidebar(
@@ -168,15 +168,15 @@ struct CommandModeView: View {
                     }
                 }
                 .disabled(!self.canChangeSession)
-                .help(self.sessionBlockingReason ?? "New session")
-                .accessibilityLabel("New session")
+                .help(self.sessionBlockingReason ?? PichiLocalization.text("New session"))
+                .accessibilityLabel(PichiLocalization.text("New session"))
             }
             Button { self.toggleHistory(isWide: isWide) } label: {
                 Label("Sessions", systemImage: historyVisible ? "rectangle.righthalf.inset.filled" : "sidebar.right")
                     .foregroundStyle(historyVisible ? self.theme.palette.accent : self.theme.palette.primaryText)
             }
-            .help(historyVisible ? "Hide sessions" : "Show sessions")
-            .accessibilityLabel(historyVisible ? "Hide sessions" : "Show sessions")
+            .help(PichiLocalization.text(historyVisible ? "Hide sessions" : "Show sessions"))
+            .accessibilityLabel(PichiLocalization.text(historyVisible ? "Hide sessions" : "Show sessions"))
         }
     }
 
@@ -276,14 +276,14 @@ struct CommandModeView: View {
             self.inputText.wrappedValue = text
             self.composerFocused = true
         } label: {
-            Label(text, systemImage: icon)
+            Label(PichiLocalization.text(text), systemImage: icon)
                 .font(self.theme.typography.bodySmall)
                 .multilineTextAlignment(.leading)
                 .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
         .foregroundStyle(self.theme.palette.secondaryText)
-        .help("Add this example to your message")
+        .help(PichiLocalization.text("Add this example to your message"))
     }
 
     private var processingIndicator: some View {
@@ -319,13 +319,13 @@ struct CommandModeView: View {
     }
 
     private var currentStepLabel: String {
-        guard let step = self.service.currentStep else { return "Working…" }
+        guard let step = self.service.currentStep else { return PichiLocalization.text("Working…") }
         switch step {
-        case .thinking: return self.service.streamingText.isEmpty ? "Thinking…" : "Writing…"
-        case let .checking(command): return "Checking · \(command.prefix(90))"
-        case let .executing(command): return "Running · \(command.prefix(90))"
-        case .verifying: return "Verifying…"
-        case let .completed(success): return success ? "Done" : "Stopped"
+        case .thinking: return PichiLocalization.text(self.service.streamingText.isEmpty ? "Thinking…" : "Writing…")
+        case let .checking(command): return PichiLocalization.format("Checking · %@", String(command.prefix(90)))
+        case let .executing(command): return PichiLocalization.format("Running · %@", String(command.prefix(90)))
+        case .verifying: return PichiLocalization.text("Verifying…")
+        case let .completed(success): return PichiLocalization.text(success ? "Done" : "Stopped")
         }
     }
 
@@ -397,7 +397,7 @@ struct CommandModeView: View {
                     .lineLimit(3...8)
                     .focused(self.$composerFocused)
                     .onSubmit { self.submitCommand() }
-                    .accessibilityLabel("Message")
+                    .accessibilityLabel(PichiLocalization.text("Message"))
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) {
                         self.approvalMenu
@@ -431,9 +431,9 @@ struct CommandModeView: View {
             Label(self.settings.commandModeConfirmBeforeExecute ? "Ask first" : "Run directly", systemImage: self.settings.commandModeConfirmBeforeExecute ? "checkmark.shield" : "exclamationmark.shield")
         }
         .fluidDropdownStyle(appearance: .inline, tone: self.settings.commandModeConfirmBeforeExecute ? self.theme.palette.secondaryText : self.theme.palette.warning)
-        .accessibilityLabel("Command approval")
-        .accessibilityValue(self.settings.commandModeConfirmBeforeExecute ? "Ask before risky commands" : "Run without asking")
-        .help("Choose whether potentially destructive commands require your approval")
+        .accessibilityLabel(PichiLocalization.text("Command approval"))
+        .accessibilityValue(PichiLocalization.text(self.settings.commandModeConfirmBeforeExecute ? "Ask before risky commands" : "Run without asking"))
+        .help(PichiLocalization.text("Choose whether potentially destructive commands require your approval"))
     }
 
     private var composerActions: some View {
@@ -449,8 +449,8 @@ struct CommandModeView: View {
                     }
                     .fluidGlassAction(circular: true, quiet: true)
                     .disabled(self.isSubmissionPending || self.service.isProcessing || self.service.pendingCommand != nil || self.isASRStartPending || self.isASRStopPending || (self.asr.isRunning && !self.ownsASRRecording))
-                    .help(self.ownsASRRecording ? "Stop recording and send" : "Speak a command")
-                    .accessibilityLabel(self.ownsASRRecording ? "Stop recording and send" : "Speak a command")
+                    .help(PichiLocalization.text(self.ownsASRRecording ? "Stop recording and send" : "Speak a command"))
+                    .accessibilityLabel(PichiLocalization.text(self.ownsASRRecording ? "Stop recording and send" : "Speak a command"))
                     Button {
                         if self.ownsASRRecording { self.toggleRecording() } else { self.submitCommand() }
                     } label: {
@@ -461,8 +461,8 @@ struct CommandModeView: View {
                     }
                     .fluidGlassAction(prominent: true, circular: true, tone: self.theme.palette.primaryText)
                     .disabled(self.ownsASRRecording ? self.isASRStopPending : !self.canSubmitCommand)
-                    .help(self.ownsASRRecording ? "Stop recording and send" : "Send message")
-                    .accessibilityLabel(self.ownsASRRecording ? "Stop recording and send" : "Send message")
+                    .help(PichiLocalization.text(self.ownsASRRecording ? "Stop recording and send" : "Send message"))
+                    .accessibilityLabel(PichiLocalization.text(self.ownsASRRecording ? "Stop recording and send" : "Send message"))
                 }
             }
         }
@@ -474,7 +474,7 @@ struct CommandModeView: View {
             self.showModelPicker.toggle()
         } label: {
             HStack(spacing: 8) {
-                Text(self.selectedModelID.isEmpty ? "Choose model" : ModelDisplayName.forID(self.selectedModelID))
+                Text(self.selectedModelID.isEmpty ? PichiLocalization.text("Choose model") : ModelDisplayName.forID(self.selectedModelID))
                     .lineLimit(1).truncationMode(.middle)
                 FluidDropdownChevron()
             }
@@ -486,8 +486,8 @@ struct CommandModeView: View {
         }
         .buttonStyle(.plain)
         .disabled(!self.canChangeSession)
-        .help(self.sessionBlockingReason ?? "Search models across verified providers")
-        .accessibilityLabel("Choose model")
+        .help(self.sessionBlockingReason ?? PichiLocalization.text("Search models across verified providers"))
+        .accessibilityLabel(PichiLocalization.text("Choose model"))
         .popover(isPresented: self.$showModelPicker, arrowEdge: .top) {
             CommandModelPicker(
                 options: self.modelOptions,
@@ -502,10 +502,10 @@ struct CommandModeView: View {
     // MARK: - Actions
 
     private var sessionBlockingReason: String? {
-        if self.service.pendingCommand != nil { return "Run or cancel the pending command before switching sessions." }
-        if self.service.isProcessing { return "You can switch sessions when this command finishes." }
-        if self.isSubmissionPending { return "Sending your message…" }
-        if self.asr.isRunning || self.isASRStartPending || self.isASRStopPending { return "Finish recording before switching sessions." }
+        if self.service.pendingCommand != nil { return PichiLocalization.text("Run or cancel the pending command before switching sessions.") }
+        if self.service.isProcessing { return PichiLocalization.text("You can switch sessions when this command finishes.") }
+        if self.isSubmissionPending { return PichiLocalization.text("Sending your message…") }
+        if self.asr.isRunning || self.isASRStartPending || self.isASRStopPending { return PichiLocalization.text("Finish recording before switching sessions.") }
         return nil
     }
 

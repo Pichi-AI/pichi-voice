@@ -61,7 +61,8 @@ struct DashboardView: View {
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var statsOwner = UUID()
-    @State private var greeting = "Welcome back."
+    @State private var greeting = "Welcome back"
+    @State private var greetingName = ""
     @State private var statisticsHovered = false
     @FocusState private var statisticsFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -101,7 +102,8 @@ struct DashboardView: View {
             let hour = Calendar.current.component(.hour, from: Date())
             let salutation = hour < 12 ? "Good morning" : (hour < 18 ? "Good afternoon" : "Good evening")
             let name = NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
-            self.greeting = name.isEmpty ? "\(salutation)." : "\(salutation), \(name)."
+            self.greeting = salutation
+            self.greetingName = name
         }
         .onDisappear { self.stats.deactivate(self.statsOwner) }
         .onChange(of: self.stats.snapshot?.hasFluidIntelligenceUse, initial: true) { _, hasUsed in
@@ -110,7 +112,9 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        Text(self.greeting)
+        Text(self.greetingName.isEmpty
+            ? PichiLocalization.text(self.greeting) + "."
+            : PichiLocalization.text(self.greeting) + ", " + self.greetingName + ".")
             .font(.fluidSystem(size: 34, weight: .regular, design: .serif))
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
@@ -137,8 +141,8 @@ struct DashboardView: View {
         return Button { self.selectedSidebarItem = .stats } label: {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 20, alignment: .leading), count: layout.statisticColumns(count: fixed > 0 ? 4 : 3)), alignment: .leading, spacing: 20) {
                 self.stat("Today", value: today.words.formatted(), detail: "words dictated")
-                self.stat("Time saved", value: today.words == 0 ? "0m" : today.formattedTimeSaved(typingWPM: self.settings.userTypingWPM), detail: "estimated today")
-                self.stat("Streak", value: streak.map { "\($0) \($0 == 1 ? "day" : "days")" } ?? "—", detail: "keep it going")
+                self.stat("Time saved", value: today.words == 0 ? PichiLocalization.text("0m") : today.formattedTimeSaved(typingWPM: self.settings.userTypingWPM), detail: "estimated today")
+                self.stat("Streak", value: streak.map { PichiLocalization.format($0 == 1 ? "%lld day" : "%lld days", $0) } ?? "—", detail: "keep it going")
                 // Quiet proof that Smart mode earns its keep; absent until it has fixed something.
                 if fixed > 0 {
                     self.stat(AppBrand.text("Fluid Intelligence"), value: fixed.formatted(), detail: "words fixed for you")
@@ -155,16 +159,16 @@ struct DashboardView: View {
         .disabled(self.busy)
         .onHover { self.statisticsHovered = $0 && !self.busy }
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.statisticsHovered)
-        .help("Open your full stats")
-        .accessibilityHint("Opens the Stats page")
+        .help(PichiLocalization.text("Open your full stats"))
+        .accessibilityHint(PichiLocalization.text("Opens the Stats page"))
     }
 
     private func stat(_ title: String, value: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.caption).foregroundStyle(.secondary)
             Text(value).font(.fluidSystem(size: 27, weight: .semibold)).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.7)
-            Text(detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            Text(PichiLocalization.text(detail)).font(self.theme.typography.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
@@ -317,7 +321,7 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(AppBrand.text("Dismiss Fluid Intelligence invitation"))
-                .help("Hide this invitation. You can still try it from Help.")
+                .help(PichiLocalization.text("Hide this invitation. You can still try it from Help."))
             }
             Button("Try it", systemImage: "arrow.up.right", action: self.openFluidIntelligenceDemo)
                 .fluidGlassAction(prominent: true)
@@ -332,7 +336,7 @@ struct DashboardView: View {
     @ViewBuilder
     private var shortcutKey: some View {
         let button = Button(action: self.openShortcutSettings) {
-            Text(self.settings.primaryDictationShortcuts.first?.displayString ?? "Off")
+            Text(self.settings.primaryDictationShortcuts.first?.displayString ?? PichiLocalization.text("Off"))
                 .font(.fluidSystem(size: 25, weight: .medium))
                 .lineLimit(2).minimumScaleFactor(0.5)
                 .multilineTextAlignment(.center)
@@ -341,8 +345,8 @@ struct DashboardView: View {
                 .contentShape(RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(.plain)
-        .help("\(self.shortcut) — Change your dictation shortcuts")
-        .accessibilityLabel("Dictation shortcuts: \(self.shortcut)")
+        .help(PichiLocalization.format("%@ — Change your dictation shortcuts", self.shortcut))
+        .accessibilityLabel(PichiLocalization.format("Dictation shortcuts: %@", self.shortcut))
         if #available(macOS 26, *), !self.reduceTransparency {
             button.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
         } else {
@@ -373,7 +377,7 @@ private struct DashboardRecentRow: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(self.entry.previewText).font(self.theme.typography.bodySmall).lineLimit(2)
                     HStack(spacing: 6) {
-                        Text(self.entry.appName.isEmpty ? "Unknown app" : self.entry.appName)
+                        Text(self.entry.appName.isEmpty ? PichiLocalization.text("Unknown app") : self.entry.appName)
                         Text("·")
                         Text(self.entry.timestamp, style: .date)
                     }
@@ -394,8 +398,8 @@ private struct DashboardRecentRow: View {
         .buttonStyle(.plain)
         .disabled(self.entry.clipboardText == nil)
         .onHover { self.hovered = $0 && self.entry.clipboardText != nil }
-        .help(self.copied ? "Copied" : "Click anywhere to copy dictation")
-        .accessibilityLabel(self.copied ? "Copied dictation" : "Copy dictation")
+        .help(PichiLocalization.text(self.copied ? "Copied" : "Click anywhere to copy dictation"))
+        .accessibilityLabel(PichiLocalization.text(self.copied ? "Copied dictation" : "Copy dictation"))
         .accessibilityValue(self.entry.previewText)
         .task(id: self.copyRevision) {
             guard self.copyRevision > 0 else { return }
@@ -423,8 +427,8 @@ private struct DashboardQuickAction: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(self.title).font(self.theme.typography.bodySmallStrong).lineLimit(1)
-                    Text(self.detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text(PichiLocalization.text(self.title)).font(self.theme.typography.bodySmallStrong).lineLimit(1)
+                    Text(PichiLocalization.text(self.detail)).font(self.theme.typography.caption).foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -459,8 +463,8 @@ private struct DashboardSetupCard: View {
             HStack(spacing: 12) {
                 FluidIconTile(icon: self.icon, tint: self.theme.palette.accent)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(self.title).font(self.theme.typography.bodySmallStrong).lineLimit(1)
-                    Text(self.detail).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text(PichiLocalization.text(self.title)).font(self.theme.typography.bodySmallStrong).lineLimit(1)
+                    Text(PichiLocalization.text(self.detail)).font(self.theme.typography.caption).foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -475,7 +479,7 @@ private struct DashboardSetupCard: View {
         .buttonStyle(.plain)
         .onHover { self.hovered = $0 && self.isEnabled }
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.hovered)
-        .accessibilityLabel("\(self.title), \(self.detail)")
+        .accessibilityLabel("\(PichiLocalization.text(self.title)), \(PichiLocalization.text(self.detail))")
     }
 }
 

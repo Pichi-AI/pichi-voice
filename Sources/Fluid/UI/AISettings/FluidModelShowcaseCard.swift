@@ -27,12 +27,12 @@ struct FluidModelShowcaseCard: View {
                 Color.clear.frame(height: 20)
                     .overlay(alignment: .leading) {
                         if self.isRecommended {
-                            Text(self.compact ? "Recommended" : "Recommended for your Mac")
+                            Text(PichiLocalization.text(self.compact ? "Recommended" : "Recommended for your Mac"))
                                 .font(self.theme.typography.captionStrong)
                                 .foregroundStyle(FluidBrandColors.blue)
                                 .lineLimit(1).minimumScaleFactor(0.8)
                                 .padding(.trailing, 24)
-                                .help("Based on your Mac’s RAM. You can choose either model.")
+                                .help(PichiLocalization.text("Based on your Mac’s RAM. You can choose either model."))
                         }
                     }
                 HStack(spacing: 8) {
@@ -44,7 +44,7 @@ struct FluidModelShowcaseCard: View {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.fluidSystem(size: 18, weight: .semibold))
                             .foregroundStyle(FluidBrandColors.blue)
-                            .accessibilityLabel("Selected")
+                            .accessibilityLabel(PichiLocalization.text("Selected"))
                     }
                 }
                 ZStack(alignment: .topLeading) {
@@ -101,9 +101,9 @@ struct FluidModelShowcaseCard: View {
         .buttonStyle(.plain)
         .onHover { self.hovered = $0 }
         .animation(self.reduceMotion ? nil : .easeOut(duration: 0.12), value: self.hovered)
-        .accessibilityLabel("Preview \(self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1"))")
-        .accessibilityValue([self.isPreview ? "Previewed" : "", self.isRecommended ? "Recommended for your Mac" : ""].filter { !$0.isEmpty }.joined(separator: ", "))
-        .accessibilityHint(self.showsInfo ? self.infoAccessibilityDescription : "\(presentation.summary). \(presentation.useCase) Browse without changing the selected model.")
+        .accessibilityLabel(PichiLocalization.format("Preview %@", self.model.displayName.replacingOccurrences(of: "Fluid-1", with: "Fluid 1")))
+        .accessibilityValue([self.isPreview ? PichiLocalization.text("Previewed") : "", self.isRecommended ? PichiLocalization.text("Recommended for your Mac") : ""].filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityHint(self.showsInfo ? self.infoAccessibilityDescription : PichiLocalization.format("%@. %@ Browse without changing the selected model.", PichiLocalization.text(presentation.summary), PichiLocalization.text(presentation.useCase)))
         .overlay(alignment: .topTrailing) {
             // Sibling to the browse button: opening details never selects or activates a model.
             Button { self.showsInfo.toggle() } label: {
@@ -114,18 +114,18 @@ struct FluidModelShowcaseCard: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .help(self.showsInfo ? "Close model information" : "About \(self.model.displayName)")
-            .accessibilityLabel(self.showsInfo ? "Close information for \(self.model.displayName)" : "About \(self.model.displayName)")
-            .accessibilityValue(self.showsInfo ? "Expanded" : "Collapsed")
+            .help(self.showsInfo ? PichiLocalization.text("Close model information") : PichiLocalization.format("About %@", self.model.displayName))
+            .accessibilityLabel(PichiLocalization.format(self.showsInfo ? "Close information for %@" : "About %@", self.model.displayName))
+            .accessibilityValue(PichiLocalization.text(self.showsInfo ? "Expanded" : "Collapsed"))
             .padding(14)
         }
     }
 
     private func infoRow(_ title: String, value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: self.theme.metrics.spacing.sm) {
-            Text(title).foregroundStyle(self.theme.palette.secondaryText)
+            Text(PichiLocalization.text(title)).foregroundStyle(self.theme.palette.secondaryText)
             Spacer(minLength: 0)
-            Text(value).foregroundStyle(self.theme.palette.primaryText)
+            Text(PichiLocalization.text(value)).foregroundStyle(self.theme.palette.primaryText)
                 .multilineTextAlignment(.trailing)
         }
         .font(self.theme.typography.caption)
@@ -134,8 +134,8 @@ struct FluidModelShowcaseCard: View {
 
     private var infoAccessibilityDescription: String {
         let language = PrivateAIModelPresentation.forModel(id: self.model.id).language
-        guard let bytes = self.model.artifact.byteCount, bytes > 0 else { return "Languages: \(language)" }
-        return "Languages: \(language). Download size: approximately \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))."
+        guard let bytes = self.model.artifact.byteCount, bytes > 0 else { return PichiLocalization.format("Languages: %@", PichiLocalization.text(language)) }
+        return PichiLocalization.format("Languages: %@. Download size: approximately %@.", PichiLocalization.text(language), ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
     }
 }
 
@@ -151,7 +151,7 @@ struct FluidModelMetrics: View {
                 FluidModelMetric(label: "Speed", value: speed, tint: .teal, compact: true)
             }
             .frame(width: AppTheme.Metrics.Showcase.compactMetricWidth)
-            .help("Illustrative design preview — not benchmark scores")
+            .help(PichiLocalization.text("Illustrative design preview — not benchmark scores"))
         }
     }
 }
@@ -166,7 +166,7 @@ private struct FluidModelMetric: View {
 
     var body: some View {
         HStack(spacing: self.theme.metrics.spacing.xs) {
-            Text(self.label)
+            Text(PichiLocalization.text(self.label))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .lineLimit(1)
@@ -183,6 +183,6 @@ private struct FluidModelMetric: View {
         }
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(self.label): illustrative level \(self.value) of 5, not a benchmark score")
+        .accessibilityLabel(PichiLocalization.format("%@: illustrative level %lld of 5, not a benchmark score", PichiLocalization.text(self.label), self.value))
     }
 }

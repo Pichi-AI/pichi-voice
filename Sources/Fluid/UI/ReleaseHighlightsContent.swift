@@ -29,7 +29,7 @@ struct ReleaseHighlightsContent {
                 Feature(
                     id: "fluidmeet",
                     preview: .meeting,
-                    eyebrow: "MEETINGS, MEET FLUID",
+                    eyebrow: "YOUR MEETINGS, ORGANIZED",
                     title: AppBrand.text("Introducing FluidMeet"),
                     detail: "Stay in the conversation. Local recording, live captions, and AI summaries.",
                     action: AppBrand.text("Open FluidMeet"),

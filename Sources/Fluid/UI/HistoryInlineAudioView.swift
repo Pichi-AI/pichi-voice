@@ -17,7 +17,7 @@ struct HistoryInlineAudioView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Recording").font(self.theme.typography.bodyStrong).foregroundStyle(.secondary)
             if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle")
+                Label(PichiLocalization.text(errorMessage), systemImage: "exclamationmark.triangle")
                     .font(.fluidSystem(.callout)).foregroundStyle(.secondary)
             } else if let player {
                 HStack(spacing: 12) {
@@ -37,7 +37,7 @@ struct HistoryInlineAudioView: View {
                         Image(systemName: self.isPlaying ? "pause.fill" : "play.fill")
                     }
                     .fluidGlassAction(circular: true)
-                    .accessibilityLabel(self.isPlaying ? "Pause recording" : "Play recording")
+                    .accessibilityLabel(PichiLocalization.text(self.isPlaying ? "Pause recording" : "Play recording"))
                     Text(Self.timeLabel(self.elapsed)).monospacedDigit().frame(width: 42)
                     Slider(value: self.$elapsed, in: 0...max(self.duration, 0.01)) { editing in
                         self.isSeeking = editing
@@ -46,7 +46,7 @@ struct HistoryInlineAudioView: View {
                         }
                     }
                     .tint(self.theme.palette.accent)
-                    .accessibilityLabel("Recording position")
+                    .accessibilityLabel(PichiLocalization.text("Recording position"))
                     Text(Self.timeLabel(self.duration)).monospacedDigit().frame(width: 42)
                 }
                 .font(self.theme.typography.caption)
