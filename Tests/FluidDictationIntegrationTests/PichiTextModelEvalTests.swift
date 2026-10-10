@@ -81,19 +81,19 @@ final class PichiTextModelEvalTests: XCTestCase {
                             config.timeoutSeconds = 120
                             await audit.begin(config)
                             let response = try await LLMClient.shared.call(config)
-                            // Do not persist or use response.thinking as quality evidence.
-                            await audit.finish(response.content)
-                            guard !response.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                                throw EvaluationInputError.emptyEnhancement
-                            }
+                            // The existing client can fall back to raw content when a
+                            // response contains only thought tags. The eval boundary
+                            // must reject that fallback before persistence or judgment.
+                            let answer = try self.enhancementAnswer(response.content)
+                            await audit.finish(answer)
                             guard self.formattingFlags() == report.enhancementFormattingFlags else {
                                 throw EvaluationInputError.changedFormatting
                             }
-                            let cleaned = ASRService.applyGAAVFormatting(response.content)
-                            result.rawEnhancement = response.content
+                            let cleaned = ASRService.applyGAAVFormatting(answer)
+                            result.rawEnhancement = answer
                             result.enhancement = cleaned
                             result.structuralStatus = "accepted"
-                            result.checks = fixture.rules.map { $0.evaluate(text: response.content) }
+                            result.checks = fixture.rules.map { $0.evaluate(text: answer) }
                         }
                     } catch {
                         if error is CancellationError || Task.isCancelled { cancelled = error }
@@ -145,6 +145,30 @@ final class PichiTextModelEvalTests: XCTestCase {
         let entities = EvaluationRule(id: "names", kind: "contains", section: "all", values: ["Алёна", "PX-17"])
         XCTAssertTrue(entities.evaluate(text: "Алёна, проверь PX-17.").passed)
         XCTAssertFalse(entities.evaluate(text: "Алена, проверь PX-18.").passed)
+    }
+
+    func testEnhancementEvalRejectsThoughtOnlyClientFallback() {
+        for content in ["<think>Synthetic reasoning only.</think>", "Synthetic reasoning only.</thinking>"] {
+            XCTAssertThrowsError(try self.enhancementAnswer(content)) { error in
+                guard let error = error as? LLMError, case .invalidResponse = error else {
+                    return XCTFail("Thought-only content must be rejected as an invalid response")
+                }
+            }
+        }
+    }
+
+    func testEnhancementEvalUsesOnlyAnswerAfterThoughtTags() throws {
+        let answer = try self.enhancementAnswer("<think>Synthetic reasoning only.</think>Материалы пока не отправляй.")
+        XCTAssertEqual(answer, "Материалы пока не отправляй.")
+        XCTAssertFalse(answer.contains("Synthetic reasoning"))
+        XCTAssertTrue(EvaluationRule(id: "negation", kind: "contains", section: "all", values: ["не отправляй"])
+            .evaluate(text: answer).passed)
+    }
+
+    private func enhancementAnswer(_ content: String) throws -> String {
+        let answer = LLMClient.shared.stripThinkingTags(content).content
+        guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LLMError.invalidResponse }
+        return answer
     }
 
     private func formattingFlags() -> [String: Bool] {
@@ -247,7 +271,7 @@ final class PichiTextModelEvalTests: XCTestCase {
 }
 
 private enum EvaluationInputError: Error {
-    case invalidPlan, invalidCorpus, changedSource, changedFormatting, emptyEnhancement, aliasDigestMismatch, isolationCleanupFailed
+    case invalidPlan, invalidCorpus, changedSource, changedFormatting, aliasDigestMismatch, isolationCleanupFailed
 }
 
 private struct EvaluationPlan: Decodable {
