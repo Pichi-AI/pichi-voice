@@ -234,7 +234,7 @@ struct SettingsView: View {
                             self.settingsToggleRow(
                                 title: "Launch at startup",
                                 description: AppBrand.text("Automatically start FluidVoice when you log in"),
-                                footnote: self.settings.launchAtStartupStatusMessage,
+                                footnote: AppBrand.text(self.settings.launchAtStartupStatusMessage),
                                 errorMessage: self.settings.launchAtStartupErrorMessage,
                                 isOn: self.launchAtStartupBinding
                             )
@@ -359,7 +359,7 @@ struct SettingsView: View {
 
                                 Spacer()
 
-                                FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
+                                FluidDropdownPicker("Transcription sound", selectedTitle: PichiLocalization.text(SettingsStore.shared.transcriptionStartSound.displayName), selection: Binding(
                                     get: { SettingsStore.shared.transcriptionStartSound },
                                     set: { newValue in
                                         SettingsStore.shared.transcriptionStartSound = newValue

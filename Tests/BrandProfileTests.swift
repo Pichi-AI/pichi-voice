@@ -131,6 +131,10 @@ struct BrandProfileTests {
             precondition(AppBrand.format("FluidMeet + Fluid Intelligence: %lld%%", profile: imported, language: .english, arguments: [25]) == name + " Meet + " + name + " AI: 25%")
             precondition(AppBrand.substitutingProductNames(in: "FluidVoice", profile: imported) == name, "Plain text must not double percent characters")
         }
+        precondition(AppBrand.filenamePrefix(for: "Сбер/Голос:Demo\\Preview") == "Сбер_Голос_Demo_Preview")
+        precondition(AppBrand.filenamePrefix(for: "100%@ Voice") == "100%@ Voice")
+        precondition(AppBrand.filenamePrefix(for: "..") == "Voice")
+        precondition(AppBrand.filenamePrefix(for: String(repeating: "🗣", count: 120)).utf8.count <= 120)
         precondition(AppBrand.releaseBundleIdentifier(from: "ai.pichi.voice.debug") == "ai.pichi.voice")
         precondition(AppBrand.releaseBundleIdentifier(from: "com.partner.debug.voice") == "com.partner.debug.voice")
         precondition(AppBrand.keychainService.hasPrefix(AppBrand.bundleIdentifier))

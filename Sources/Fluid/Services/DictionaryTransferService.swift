@@ -223,7 +223,7 @@ enum DictionaryTransferServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidJSON:
-            return "The selected file is not a valid FluidVoice dictionary file."
+            return AppBrand.text("The selected file is not a valid FluidVoice dictionary file.")
         }
     }
 }
@@ -282,7 +282,7 @@ final class DictionaryTransferService {
     func suggestedFilename(for date: Date = Date()) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm"
-        return "FluidVoice_Dictionary_\(formatter.string(from: date)).json"
+        return "\(AppBrand.filenamePrefix)_Dictionary_\(formatter.string(from: date)).json"
     }
 
     static func importState(

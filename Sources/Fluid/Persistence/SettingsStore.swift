@@ -2605,11 +2605,11 @@ final class SettingsStore: ObservableObject {
         var displayName: String {
             switch self {
             case .none: return "None"
-            case .fluidSfx0: return "Fluid SFX 0"
-            case .fluidSfx1: return "Fluid SFX 1"
-            case .fluidSfx2: return "Fluid SFX 2"
-            case .fluidSfx3: return "Fluid SFX 3"
-            case .fluidSfx4: return "Fluid SFX 4"
+            case .fluidSfx0: return PichiLocalization.format("Sound %lld", 0)
+            case .fluidSfx1: return PichiLocalization.format("Sound %lld", 1)
+            case .fluidSfx2: return PichiLocalization.format("Sound %lld", 2)
+            case .fluidSfx3: return PichiLocalization.format("Sound %lld", 3)
+            case .fluidSfx4: return PichiLocalization.format("Sound %lld", 4)
             }
         }
 

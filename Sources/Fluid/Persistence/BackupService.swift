@@ -170,7 +170,7 @@ enum BackupServiceError: LocalizedError {
         case let .unsupportedSchemaVersion(version):
             return "This backup uses an unsupported schema version (\(version.major).\(version.minor))."
         case .invalidJSON:
-            return "The selected backup file is not a valid FluidVoice backup."
+            return AppBrand.text("The selected backup file is not a valid FluidVoice backup.")
         case .operationInProgress:
             return "A backup import or export is already running. Wait for it to finish, then try again."
         }
@@ -274,7 +274,7 @@ final class BackupService {
     func suggestedFilename(for date: Date = Date()) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm"
-        return "FluidVoice_Backup_\(formatter.string(from: date)).json"
+        return "\(AppBrand.filenamePrefix)_Backup_\(formatter.string(from: date)).json"
     }
 
     private func validate(_ document: AppBackupDocument) throws {

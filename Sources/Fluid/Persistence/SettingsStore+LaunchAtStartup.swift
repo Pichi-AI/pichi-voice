@@ -78,8 +78,8 @@ extension SettingsStore {
 
             if self.launchAtStartupEnabled != enabled {
                 let mismatchMessage = enabled
-                    ? "macOS did not enable FluidVoice in Login Items. Check System Settings > General > Login Items."
-                    : "macOS still shows FluidVoice in Login Items. Check System Settings > General > Login Items."
+                    ? AppBrand.text("macOS did not enable FluidVoice in Login Items. Check System Settings > General > Login Items.")
+                    : AppBrand.text("macOS still shows FluidVoice in Login Items. Check System Settings > General > Login Items.")
                 self.applyLaunchAtStartupErrorMessage(mismatchMessage)
                 DebugLogger.shared.warning(mismatchMessage, source: "SettingsStore")
             }
@@ -119,23 +119,28 @@ extension SettingsStore {
 
     private func launchAtStartupFailureMessage(for error: Error, enabling: Bool) -> String {
         let nsError = error as NSError
-        let action = enabling ? "enable" : "disable"
         let lowercasedDescription = nsError.localizedDescription.lowercased()
 
         if lowercasedDescription.contains("developer") ||
             lowercasedDescription.contains("sign") ||
             lowercasedDescription.contains("entitlement")
         {
-            return "FluidVoice could not \(action) launch at startup. This build may not be signed correctly for macOS Login Items."
+            return AppBrand.text(enabling
+                ? "FluidVoice could not enable launch at startup. This build may not be signed correctly for macOS Login Items."
+                : "FluidVoice could not disable launch at startup. This build may not be signed correctly for macOS Login Items.")
         }
 
         if lowercasedDescription.contains("approval") ||
             lowercasedDescription.contains("authorize")
         {
-            return "macOS needs approval before FluidVoice can \(action) launch at startup. Check System Settings > General > Login Items."
+            return AppBrand.text(enabling
+                ? "macOS needs approval before FluidVoice can enable launch at startup. Check System Settings > General > Login Items."
+                : "macOS needs approval before FluidVoice can disable launch at startup. Check System Settings > General > Login Items.")
         }
 
-        return "FluidVoice could not \(action) launch at startup. macOS reported: \(nsError.localizedDescription)"
+        return AppBrand.format(enabling
+            ? "FluidVoice could not enable launch at startup. macOS reported: %@"
+            : "FluidVoice could not disable launch at startup. macOS reported: %@", nsError.localizedDescription)
     }
 
     private func cleanupLegacyCompatibilityLoginItemAfterDisable() {

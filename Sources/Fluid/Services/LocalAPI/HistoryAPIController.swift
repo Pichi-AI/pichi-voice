@@ -33,7 +33,7 @@ struct HistoryAPIController: LocalAPIRouteHandler {
         do {
             try await TranscriptionHistoryStore.shared.waitUntilLoaded()
         } catch {
-            return LocalAPI.error("History is unavailable. Retry from History in FluidVoice.", status: 503)
+            return LocalAPI.error(AppBrand.text("History is unavailable. Retry from History in FluidVoice."), status: 503)
         }
         let items = TranscriptionHistoryStore.shared.entries
             .prefix(limit)

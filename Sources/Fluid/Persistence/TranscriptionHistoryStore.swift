@@ -657,7 +657,7 @@ final class TranscriptionHistoryStore: ObservableObject {
         self.writer.write(upserts: upserts, deletes: deletes, replacing: replacing) { error in
             guard let error else { return }
             Task { @MainActor in
-                self.persistenceError = "History could not be saved. Keep FluidVoice open and retry. \(error.localizedDescription)"
+                self.persistenceError = AppBrand.format("History could not be saved. Keep FluidVoice open and retry. %@", error.localizedDescription)
             }
         }
         DebugLogger.shared.debug(
@@ -695,7 +695,7 @@ final class TranscriptionHistoryStore: ObservableObject {
     func finishPendingWrites() async {
         await self.loadTask?.value
         if let error = await self.writer.drain() {
-            self.persistenceError = "History could not be saved. Keep FluidVoice open and retry. \(error.localizedDescription)"
+            self.persistenceError = AppBrand.format("History could not be saved. Keep FluidVoice open and retry. %@", error.localizedDescription)
         }
     }
 

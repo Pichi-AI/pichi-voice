@@ -98,6 +98,19 @@ nonisolated enum AppBrand {
     static var appName: String { self.profile.appName }
     static var meetingName: String { self.profile.meetingName }
     static var assistantName: String { self.profile.assistantName }
+    static var filenamePrefix: String { self.filenamePrefix(for: self.appName) }
+    static func filenamePrefix(for name: String) -> String {
+        let unsafe = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/:\\"))
+        let value = name.components(separatedBy: unsafe).joined(separator: "_")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var bounded = ""
+        for character in value {
+            let next = String(character)
+            guard bounded.utf8.count + next.utf8.count <= 120 else { break }
+            bounded += next
+        }
+        return bounded.isEmpty || bounded == "." || bounded == ".." ? "Voice" : bounded
+    }
     static var tagline: String {
         // Imported copy is user data, even when it matches a String Catalog key.
         !BrandPackageStore.shared.hasOverride && self.distribution.localizePackagedTagline

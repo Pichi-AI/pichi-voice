@@ -212,11 +212,11 @@ final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
     }
 
     func suggestedAudioExportFilename(for date: Date = Date()) -> String {
-        "FluidVoice_Audio_\(Self.fileTimestampFormatter.string(from: date)).zip"
+        "\(AppBrand.filenamePrefix)_Audio_\(Self.fileTimestampFormatter.string(from: date)).zip"
     }
 
     func suggestedPairExportFilename(for entry: TranscriptionHistoryEntry) -> String {
-        "FluidVoice_Pair_\(Self.fileTimestampFormatter.string(from: entry.timestamp))_\(entry.id.uuidString.prefix(8)).zip"
+        "\(AppBrand.filenamePrefix)_Pair_\(Self.fileTimestampFormatter.string(from: entry.timestamp))_\(entry.id.uuidString.prefix(8)).zip"
     }
 
     static func formattedGigabytes(_ bytes: Int64) -> String {

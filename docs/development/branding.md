@@ -31,6 +31,8 @@ The active decoded package is cached. A revision counter invalidates decoded NSI
 
 Imported names and taglines are user data. They are not translated or recursively substituted. Interface language is an independent preference; adding languages uses the String Catalog, without editing brand files.
 
+Suggested dictionary, backup and audio archive filenames use a sanitized current-brand prefix, bounded by UTF-8 bytes for filesystem compatibility. Transfer schema identifiers stay unchanged. The factory Parakeet vocabulary resolves its product placeholder only when creating a missing dictionary or requesting factory defaults. Existing dictionaries, explicit user words, transcripts and genuine model-author attribution are never rewritten on brand import.
+
 ## Separate installation identity
 
 A runtime import cannot rename an installed `.app`, change its signed bundle identifier, Finder icon, macOS permission identity, data namespace or Keychain service. A separately installed Sber/Alfa/Pichi distribution consumes the **same appearance package** at build time and supplies its own unique installation identity.
