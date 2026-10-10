@@ -1621,11 +1621,11 @@ struct ContentView: View {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
                             Image(systemName: section.systemImage)
                                 .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                                 .frame(width: 18)
 
                             Text(section.title)
-                                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
                         }
                         .font(self.theme.typography.sidebarItem)
                     }
@@ -1791,12 +1791,12 @@ struct ContentView: View {
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
 
                 Text(item.title)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.vertical, self.theme.metrics.spacing.xs / 2)
