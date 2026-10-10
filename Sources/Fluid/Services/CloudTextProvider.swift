@@ -14,6 +14,9 @@ nonisolated struct CloudTextProvider: Sendable {
         case apiKey(scheme: String)
         case oauth(tokenURL: URL)
     }
+    enum StructuredResponse: Sendable {
+        case namedSchema, inlineSchema
+    }
     let id: String
     let name: String
     let baseURL: String
@@ -24,6 +27,7 @@ nonisolated struct CloudTextProvider: Sendable {
     let authorization: Authorization
     let projectHeader: String?
     let supportsTools: Bool
+    let structuredResponse: StructuredResponse
 
     static let registered: [Self] = [
         .init(id: "gigachat", name: "GigaChat", baseURL: "https://api.giga.chat/v1",
@@ -32,12 +36,25 @@ nonisolated struct CloudTextProvider: Sendable {
               credentialTitle: "Authorization key", fields: [
                   .init(id: "scope", title: "API scope", choices: ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"], defaultValue: "GIGACHAT_API_PERS"),
               ], authorization: .oauth(tokenURL: URL(string: "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")!),
-              projectHeader: nil, supportsTools: false),
+              projectHeader: nil, supportsTools: false, structuredResponse: .inlineSchema),
         .init(id: "yandex", name: "Yandex AI Studio", baseURL: "https://ai.api.cloud.yandex.net/v1",
               hosts: ["ai.api.cloud.yandex.net"], website: "https://aistudio.yandex.ru/ru/docs/ai-studio/quickstart/",
               credentialTitle: "API key", fields: [.init(id: "project", title: "Folder ID", choices: [], defaultValue: "")],
-              authorization: .apiKey(scheme: "Api-Key"), projectHeader: "OpenAI-Project", supportsTools: true),
+              authorization: .apiKey(scheme: "Api-Key"), projectHeader: "OpenAI-Project", supportsTools: true,
+              structuredResponse: .namedSchema),
     ]
+
+    /// Preserve the caller's schema while encoding the registered API's envelope.
+    /// The inference pipeline always supplies the existing named-schema contract.
+    func responseFormat(_ format: [String: Any]) -> [String: Any] {
+        guard case .inlineSchema = self.structuredResponse,
+              format["type"] as? String == "json_schema",
+              let named = format["json_schema"] as? [String: Any], let schema = named["schema"]
+        else { return format }
+        var result: [String: Any] = ["type": "json_schema", "schema": schema]
+        if let strict = named["strict"] { result["strict"] = strict }
+        return result
+    }
 
     /// The existing verification fingerprint remains byte-compatible when no
     /// connection metadata exists. Additional fields are encoded unambiguously.

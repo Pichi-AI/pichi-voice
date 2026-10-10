@@ -19,6 +19,8 @@ All text calls continue through `LLMClient`. Enhancement, rewrite, configured-pr
 
 GigaChat is only partially OpenAI-compatible. Plain text enhancement and summary requests use the supported message shape. Its native function format differs from this app's existing tool contract, so tool requests are explicitly rejected before authentication instead of claiming command-mode support. Yandex uses the existing compatible tool transport.
 
+GigaChat's structured response format puts `schema` and `strict` directly inside `response_format`; the OpenAI shape nests them under `json_schema`. The registered transport descriptor encodes this envelope before sending a chat-completions request, preserving the original schema and leaving the generator, source indices, prompt and validation unchanged. This protocol difference is documented in the official [structured output guide](https://developers.sber.ru/docs/ru/gigachat/guides/structured-output). Yandex and local compatible endpoints keep the existing named-schema envelope.
+
 ## TLS and verification limits
 
 The registered services and OAuth use ephemeral sessions with redirects disabled and normal macOS TLS validation. The app never disables certificate validation or installs a global trust certificate. GigaChat documents the Ministry of Digital Development CA requirement. If that CA is absent from the system's approved trust configuration, the direct connection fails with a TLS error. An organization can instead expose its approved OpenAI-compatible gateway through the existing custom-provider form. Gateway deployment and certificate enrollment remain the organization's configuration work.

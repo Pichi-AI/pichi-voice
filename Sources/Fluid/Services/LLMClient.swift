@@ -397,6 +397,11 @@ final nonisolated class LLMClient: @unchecked Sendable {
             body[key] = value
         }
 
+        if let provider = CloudTextProvider.descriptor(forEndpoint: config.baseURL),
+           let format = body["response_format"] as? [String: Any] {
+            body["response_format"] = provider.responseFormat(format)
+        }
+
         // Final Layer: Common parameters with model-specific keys
         if let tokens = config.maxTokens {
             if Self.usesReasoningCompletionTokenParameter(config.model) {

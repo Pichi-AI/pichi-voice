@@ -89,6 +89,24 @@ final class CloudTextProviderTests: XCTestCase {
         }
     }
 
+    func testStructuredSchemaUsesTheRegisteredProtocolEnvelopeWithoutChangingSources() throws {
+        let schema: [String: Any] = ["type": "object", "required": ["sourceIndex"],
+                                   "properties": ["sourceIndex": ["type": "integer", "enum": [0, 1]]]]
+        let format: [String: Any] = ["type": "json_schema",
+                                    "json_schema": ["name": "synthetic_sources", "strict": true, "schema": schema]]
+        for id in ["gigachat", "yandex", "ollama"] {
+            var config = LLMClient.Config(messages: [["role": "user", "content": "Synthetic test."]],
+                                          model: "synthetic-model", baseURL: ModelRepository.shared.defaultBaseURL(for: id),
+                                          apiKey: "", streaming: false, extraParameters: ["response_format": format])
+            config.providerOptions = [:]
+            let encoded = try XCTUnwrap(LLMClient.shared.buildChatCompletionsBody(config)["response_format"] as? [String: Any])
+            let expected: [String: Any] = id == "gigachat" ? ["type": "json_schema", "schema": schema, "strict": true] : format
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: encoded, options: .sortedKeys),
+                           try JSONSerialization.data(withJSONObject: expected, options: .sortedKeys))
+            XCTAssertNotNil((config.extraParameters["response_format"] as? [String: Any])?["json_schema"])
+        }
+    }
+
     func testOAuthExchangeCacheExpiryAndScopes() async throws {
         let session = self.session()
         defer { session.invalidateAndCancel() }
