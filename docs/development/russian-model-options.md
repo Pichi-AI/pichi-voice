@@ -1,6 +1,6 @@
 # Russian local model options
 
-Reviewed October 9, 2026. Model cards and artifact sizes below are publisher evidence, not measurements on an 8 GB Mac. A weight file's size does not include the KV cache, runtime, audio buffers or macOS.
+Reviewed October 9-10, 2026. Model cards and artifact sizes below are publisher evidence, not measurements on an 8 GB Mac. A weight file's size does not include the KV cache, runtime, audio buffers or macOS.
 
 ## Speech recognition
 
@@ -24,7 +24,7 @@ No official downloadable Yandex local ASR checkpoint was verified in this invest
 
 Artifact sources: [T-lite](https://huggingface.co/t-tech/T-lite-it-2.1-GGUF/tree/main), [YandexGPT](https://huggingface.co/yandex/YandexGPT-5-Lite-8B-instruct-GGUF/tree/main), [GigaChat](https://huggingface.co/ai-sage/GigaChat3.1-10B-A1.8B-GGUF/tree/main).
 
-T-lite's publisher reports ruIFeval 75.9 and Ru Arena Hard 83.9, compared with 74.0 and 57.2 for Qwen3-8B without thinking under its evaluation. This supports evaluating T-lite, but says nothing directly about faithful meeting summaries or our smaller Qwen model. [Model card and benchmark protocol](https://huggingface.co/t-tech/T-lite-it-2.1)
+T-lite's publisher reports ruIFeval 75.9 and Ru Arena Hard 83.9 for the original BF16 model, compared with 74.0 and 57.2 for Qwen3-8B without thinking under its evaluation. The separate GGUF evaluation reports Ru Arena Hard 71.7 and ruIFeval 75.9 for Q4_K_M. Do not attribute the BF16 83.9 score to the 5.03 GB quantized artifact above. These scores support evaluating T-lite but do not measure faithful meeting summaries or compare directly with our smaller Qwen model. [Original model card and benchmark protocol](https://huggingface.co/t-tech/T-lite-it-2.1), [publisher quantization benchmarks](https://huggingface.co/t-tech/T-lite-it-2.1-GGUF#-benchmarks).
 
 YandexGPT uses its own conversation template and a custom license. Review its terms for the intended distribution before selecting it. [Model card](https://huggingface.co/yandex/YandexGPT-5-Lite-8B-instruct), [license](https://huggingface.co/yandex/YandexGPT-5-Lite-8B-instruct/blob/main/LICENSE).
 
