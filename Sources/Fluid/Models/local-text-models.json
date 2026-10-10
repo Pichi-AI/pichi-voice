@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "qwen3.5-2b",
+      "title": "Qwen3.5 2B",
+      "providerID": "ollama",
+      "aliases": [
+        "qwen3.5:2b-q4_K_M",
+        "qwen3.5:2b"
+      ],
+      "sourceURL": "https://ollama.com/library/qwen3.5:2b-q4_K_M"
+    },
+    {
+      "id": "qwen3.5-4b",
+      "title": "Qwen3.5 4B",
+      "providerID": "ollama",
+      "aliases": [
+        "qwen3.5:4b"
+      ],
+      "sourceURL": "https://ollama.com/library/qwen3.5:4b"
+    },
+    {
+      "id": "qwen3.5-9b",
+      "title": "Qwen3.5 9B",
+      "providerID": "ollama",
+      "aliases": [
+        "qwen3.5:9b"
+      ],
+      "sourceURL": "https://ollama.com/library/qwen3.5:9b"
+    },
+    {
+      "id": "t-lite-it-2.1",
+      "title": "T-lite-it 2.1",
+      "providerID": "ollama",
+      "aliases": [
+        "pichi-eval-t-lite-it-2.1-q4km:20261010"
+      ],
+      "sourceURL": "https://huggingface.co/t-tech/T-lite-it-2.1-GGUF"
+    },
+    {
+      "id": "gemma4-e2b",
+      "title": "Gemma 4 E2B",
+      "providerID": "ollama",
+      "aliases": [
+        "gemma4:e2b-it-qat"
+      ],
+      "sourceURL": "https://ollama.com/library/gemma4:e2b-it-qat"
+    },
+    {
+      "id": "gemma4-31b",
+      "title": "Gemma 4 31B",
+      "providerID": "ollama",
+      "aliases": [
+        "gemma4:31b"
+      ],
+      "sourceURL": "https://ollama.com/library/gemma4:31b"
+    },
+    {
+      "id": "gpt-oss-20b",
+      "title": "gpt-oss 20B",
+      "providerID": "ollama",
+      "aliases": [
+        "gpt-oss:20b"
+      ],
+      "sourceURL": "https://ollama.com/library/gpt-oss:20b"
+    },
+    {
+      "id": "qwen3-30b-a3b",
+      "title": "Qwen3 30B A3B",
+      "providerID": "ollama",
+      "aliases": [
+        "qwen3:30b-a3b"
+      ],
+      "sourceURL": "https://ollama.com/library/qwen3:30b-a3b"
+    }
+  ]
+}

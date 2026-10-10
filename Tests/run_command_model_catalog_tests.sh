@@ -14,6 +14,7 @@ sed '/^    \/\/ MARK: - Fetch Models from API/,$d' Sources/Fluid/Services/ModelR
 echo '}' >> "$task_test_dir/ModelRepository.swift"
 xcrun swiftc -parse-as-library \
     "$task_test_dir/ModelRepository.swift" \
+    Sources/Fluid/Services/LocalTextModelCatalog.swift \
     Sources/Fluid/UI/ModelDisplayName.swift \
     Sources/Fluid/Views/CommandModelCatalog.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \

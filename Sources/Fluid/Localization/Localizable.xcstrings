@@ -45222,6 +45222,142 @@
           }
         }
       }
+    },
+    "Install models separately, then refresh the model list.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install models separately, then refresh the model list."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установите модели отдельно, затем обновите список."
+          }
+        }
+      }
+    },
+    "Installation does not confirm output quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installation does not confirm output quality"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установка не подтверждает качество результата"
+          }
+        }
+      }
+    },
+    "Local model library": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model library"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Библиотека локальных моделей"
+          }
+        }
+      }
+    },
+    "Not listed by this server": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not listed by this server"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет в списке моделей этого сервера"
+          }
+        }
+      }
+    },
+    "Publisher and installation instructions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Publisher and installation instructions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автор модели и инструкции по установке"
+          }
+        }
+      }
+    },
+    "Select installed model: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select installed model: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать установленную модель: %@"
+          }
+        }
+      }
+    },
+    "Start an OpenAI-compatible local server in Ollama or LM Studio. Install models separately, refresh the list, and choose the model to use. Model availability does not confirm summary quality.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start an OpenAI-compatible local server in Ollama or LM Studio. Install models separately, refresh the list, and choose the model to use. Model availability does not confirm summary quality."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запустите локальный сервер с OpenAI-совместимым API в Ollama или LM Studio. Установите модели отдельно, обновите список и выберите нужную модель. Доступность модели не подтверждает качество итогов встречи."
+          }
+        }
+      }
+    },
+    "Summary and text cleanup candidate": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary and text cleanup candidate"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кандидат для итогов встреч и обработки текста"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

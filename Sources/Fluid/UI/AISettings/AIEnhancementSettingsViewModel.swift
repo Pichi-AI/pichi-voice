@@ -203,7 +203,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             // Use ModelRepository to correctly identify ALL built-in providers
             let newKey: String = ModelRepository.shared.isBuiltIn(lower) ? lower :
                 (key.hasPrefix("custom:") ? key : "custom:\(key)")
-            if let list = normalized[newKey], list.contains(model) { normalizedSel[newKey] = model }
+            let endpoint = self.savedProviders.first(where: { self.providerKey(for: $0.id) == newKey })?.baseURL
+                ?? ModelRepository.shared.defaultBaseURL(for: newKey)
+            if self.isLocalEndpoint(endpoint) || normalized[newKey]?.contains(model) == true {
+                normalizedSel[newKey] = model
+            }
         }
         self.selectedModelByProvider = normalizedSel
         self.settings.selectedModelByProvider = normalizedSel
@@ -1249,7 +1253,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func fetchModelsForCurrentProvider() async {
         guard !self.isFetchingModels, !self.isTestingConnection else { return }
-        self.refreshingProviderID = self.selectedProviderID
+        let providerID = self.selectedProviderID
+        self.refreshingProviderID = providerID
         self.isFetchingModels = true
         self.fetchModelsError = nil
         defer {
@@ -1258,23 +1263,25 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         let baseURL = self.openAIBaseURL
-        let key = self.providerKey(for: self.selectedProviderID)
-        let shouldPersistKey = self.hasProviderAPIKeyDraft(for: self.selectedProviderID)
-        if shouldPersistKey, !self.saveProviderAPIKeys(invalidating: self.selectedProviderID) {
+        let key = self.providerKey(for: providerID)
+        let shouldPersistKey = self.hasProviderAPIKeyDraft(for: providerID)
+        if shouldPersistKey, !self.saveProviderAPIKeys(invalidating: providerID) {
             self.fetchModelsError = "Could not save API key to Keychain. Grant access and try again."
             return
         }
-        let apiKey = self.providerAPIKey(for: self.selectedProviderID)
+        let apiKey = self.providerAPIKey(for: providerID)
 
         do {
             let models = try await ModelRepository.shared.fetchModels(
-                for: self.selectedProviderID,
+                for: providerID,
                 baseURL: baseURL,
                 apiKey: apiKey
             )
 
             // Update state on main thread
             await MainActor.run {
+                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey else { return }
                 if models.isEmpty {
                     // Keep existing models if fetch returned empty
                     self.fetchModelsError = "No models returned from API"
@@ -1284,7 +1291,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                     self.settings.availableModelsByProvider = self.availableModelsByProvider
                     self.fetchedModelsProviders.insert(key)
 
-                    if let providerIndex = self.savedProviders.firstIndex(where: { $0.id == self.selectedProviderID }) {
+                    if let providerIndex = self.savedProviders.firstIndex(where: { $0.id == providerID }) {
                         let updatedProvider = SettingsStore.SavedProvider(
                             id: self.savedProviders[providerIndex].id,
                             name: self.savedProviders[providerIndex].name,
@@ -1295,16 +1302,19 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                         self.saveSavedProviders()
                     }
 
-                    // Select first model if current selection not in list
-                    if !models.contains(self.selectedModel) {
-                        self.selectedModel = models.first ?? ""
-                        self.selectedModelByProvider[key] = self.selectedModel
+                    let selection = ModelRepository.selectionAfterRefresh(
+                        preferred: self.selectedModel, models: models, isLocal: self.isLocalEndpoint(baseURL)
+                    )
+                    if selection != self.selectedModel {
+                        self.selectedModel = selection
+                        self.selectedModelByProvider[key] = selection
                         self.settings.selectedModelByProvider = self.selectedModelByProvider
                     }
                 }
             }
         } catch {
             await MainActor.run {
+                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL else { return }
                 self.fetchModelsError = error.localizedDescription
             }
         }
@@ -1355,6 +1365,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func fetchModels(for providerID: String) async {
+        guard !self.isFetchingModels, !self.isTestingConnection else { return }
         let baseURL = self.providerBaseURL(for: providerID)
         let key = self.providerKey(for: providerID)
         let shouldPersistKey = self.hasProviderAPIKeyDraft(for: providerID)
@@ -1382,6 +1393,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             )
 
             await MainActor.run {
+                guard self.providerBaseURL(for: providerID) == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey else { return }
                 guard !models.isEmpty else {
                     self.fetchModelsError = "No models returned from API"
                     return
@@ -1393,14 +1406,17 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
                 if providerID == self.selectedProviderID {
                     self.availableModels = models
-                    if !models.contains(self.selectedModel) {
-                        self.selectedModel = models.first ?? ""
-                    }
+                    self.selectedModel = ModelRepository.selectionAfterRefresh(
+                        preferred: self.selectedModel, models: models, isLocal: self.isLocalEndpoint(baseURL)
+                    )
                 }
 
                 let selectedForProvider = self.selectedModelByProvider[key] ?? ""
-                if !models.contains(selectedForProvider), let first = models.first {
-                    self.selectedModelByProvider[key] = first
+                let selection = ModelRepository.selectionAfterRefresh(
+                    preferred: selectedForProvider, models: models, isLocal: self.isLocalEndpoint(baseURL)
+                )
+                if selection != selectedForProvider {
+                    self.selectedModelByProvider[key] = selection
                     self.settings.selectedModelByProvider = self.selectedModelByProvider
                 }
 

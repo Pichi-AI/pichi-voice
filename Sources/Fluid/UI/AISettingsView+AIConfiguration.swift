@@ -1232,6 +1232,11 @@ extension AIEnhancementSettingsView {
                     }
                 }
 
+                if let catalogProviderID = ModelRepository.shared.localTextModelProvider(for: baseURL) {
+                    LocalTextModelLibraryMenu(providerID: catalogProviderID, installedModels: models,
+                                              selectedModel: self.modelBinding(for: item.id))
+                }
+
                 if managementLayout, self.viewModel.showingAddModel {
                     self.addModelSection
                 }

@@ -157,7 +157,11 @@ struct PichiMeetingSummaryView: View {
                     .meetingGlassAction()
                     .disabled(self.preferences.discovering)
                 }
-                Text("Start an OpenAI-compatible local server in Ollama or LM Studio. Recommended compact model: qwen3.5:4b; qwen3.5:2b uses less memory. Models must be installed separately.")
+                if let providerID = ModelRepository.shared.localTextModelProvider(for: self.preferences.baseURL) {
+                    LocalTextModelLibraryMenu(providerID: providerID, installedModels: self.preferences.models,
+                                              selectedModel: self.$preferences.modelID)
+                }
+                Text("Start an OpenAI-compatible local server in Ollama or LM Studio. Install models separately, refresh the list, and choose the model to use. Model availability does not confirm summary quality.")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)

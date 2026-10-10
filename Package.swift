@@ -42,6 +42,7 @@ let package = Package(
             resources: [
                 .copy("Resources/speech-model-check.pcm"),
                 .copy("Resources/Notices"),
+                .copy("Models/local-text-models.json"),
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),

@@ -14,6 +14,27 @@ final class ModelRepository {
 
     private init() {}
 
+    lazy var localTextModels = LocalTextModelCatalog.load(
+        from: Bundle.main.url(forResource: "local-text-models", withExtension: "json")
+    )
+
+    /// Local model tags are endpoint-specific; discovery never chooses a model
+    /// or replaces an explicit selection that is temporarily unavailable.
+    static func selectionAfterRefresh(preferred: String, models: [String], isLocal: Bool) -> String {
+        if isLocal || models.contains(preferred) { return preferred }
+        return models.first ?? ""
+    }
+
+    /// Catalog tags describe a provider's local protocol, not a server's readiness.
+    func localTextModelProvider(for baseURL: String) -> String? {
+        guard self.isLocalEndpoint(baseURL), let url = URL(string: baseURL) else { return nil }
+        return Self.builtInProviderIDs.first { providerID in
+            guard !self.localTextModels.models(for: providerID).isEmpty,
+                  let defaultURL = URL(string: self.defaultBaseURL(for: providerID)) else { return false }
+            return url.port == defaultURL.port
+        }
+    }
+
     /// All built-in provider IDs (not including custom/saved providers)
     static var builtInProviderIDs: [String] {
         var providers = [
@@ -238,7 +259,7 @@ final class ModelRepository {
     ///   - baseURL: The base URL for the API (e.g., "https://api.openai.com/v1")
     ///   - apiKey: Optional API key for authentication
     /// - Returns: Array of model IDs sorted alphabetically
-    func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
+    func fetchModels(for providerID: String, baseURL: String, apiKey: String?, session: URLSession = .shared) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
         }
@@ -278,8 +299,10 @@ final class ModelRepository {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await session.data(for: request)
+            try Task.checkCancellation()
         } catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
             let errorDetails = self.detailedNetworkError(error)
             DebugLogger.shared.error(
                 "fetchModels: Network error for '\(providerID)': \(errorDetails)",

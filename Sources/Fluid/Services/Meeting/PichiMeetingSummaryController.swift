@@ -73,18 +73,18 @@ final class PichiMeetingSummarySettings: ObservableObject {
                   ["http", "https"].contains(base.scheme), base.user == nil, base.password == nil,
                   base.query == nil, base.fragment == nil
             else { throw PichiMeetingSummaryError.localEndpointRequired }
-            struct Models: Decodable { struct Model: Decodable { let id: String }; let data: [Model] }
-            var request = URLRequest(url: base.appendingPathComponent("models"))
-            request.timeoutInterval = 10
-            let (data, response) = try await PichiMeetingSummaryTransport.session.data(for: request)
+            let models = try await ModelRepository.shared.fetchModels(
+                for: "local", baseURL: base.absoluteString, apiKey: nil,
+                session: PichiMeetingSummaryTransport.session
+            )
             try Task.checkCancellation()
             guard endpoint == self.baseURL.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw LLMError.invalidResponse }
-            self.models = try JSONDecoder().decode(Models.self, from: data).data.map(\.id).sorted()
+            self.models = models
             if self.models.isEmpty { self.discoveryIssue = .noInstalledModels }
         } catch is CancellationError {
             self.discoveryIssue = nil
         } catch {
+            guard endpoint == self.baseURL.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
             self.models = []
             self.discoveryIssue = .localServerUnavailable
         }
