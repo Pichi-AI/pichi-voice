@@ -16681,6 +16681,23 @@
         }
       }
     },
+    "Hide Others": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide Others"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрыть остальные"
+          }
+        }
+      }
+    },
     "Hide details": {
       "extractionState": "manual",
       "localizations": {
@@ -31455,6 +31472,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показать %@"
+          }
+        }
+      }
+    },
+    "Show All": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show All"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показать все"
           }
         }
       }
