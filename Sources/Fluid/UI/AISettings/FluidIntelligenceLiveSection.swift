@@ -41,7 +41,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Fluid Intelligence").font(self.theme.typography.title).fontWeight(.semibold)
+                    Text(AppBrand.text("Fluid Intelligence")).font(self.theme.typography.title).fontWeight(.semibold)
                     Text("Polish your words. Privately, on your Mac.")
                         .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -102,8 +102,8 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
         }
         .sheet(isPresented: self.$showsManagement) {
             FluidManagementSheet(
-                title: "Manage Fluid Intelligence",
-                subtitle: "These settings apply to all Fluid Intelligence models.",
+                title: AppBrand.text("Manage Fluid Intelligence"),
+                subtitle: AppBrand.text("These settings apply to all Fluid Intelligence models."),
                 symbol: "slider.horizontal.3",
                 close: { self.showsManagement = false }
             ) {

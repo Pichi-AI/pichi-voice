@@ -245,9 +245,6 @@ struct FluidOnboardingCompactProgress: View {
 }
 
 struct FluidOnboardingCompactAppIconMark: View {
-    private static let appIconImage: NSImage = NSApplication.shared.applicationIconImage
-        ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-
     let size: CGFloat
 
     init(size: CGFloat = 66) {
@@ -255,7 +252,7 @@ struct FluidOnboardingCompactAppIconMark: View {
     }
 
     var body: some View {
-        Image(nsImage: Self.appIconImage)
+        Image(nsImage: PichiBrandMark.appIcon)
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
@@ -478,9 +475,6 @@ private final class LandingPrimaryNSButton: NSButton {
 }
 
 private struct FluidOnboardingAppIconMark: View {
-    private static let appIconImage: NSImage = NSApplication.shared.applicationIconImage
-        ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-
     var body: some View {
         ZStack {
             Circle()
@@ -492,7 +486,7 @@ private struct FluidOnboardingAppIconMark: View {
             FluidOnboardingPortalGlow()
                 .offset(y: 58)
 
-            Image(nsImage: Self.appIconImage)
+            Image(nsImage: PichiBrandMark.appIcon)
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
@@ -538,7 +532,7 @@ private struct FluidOnboardingPortalGlow: View {
 }
 
 enum FluidOnboardingLandingColors {
-    static let blue = FluidBrandColors.blue
+    static var blue: Color { FluidBrandColors.blue }
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {

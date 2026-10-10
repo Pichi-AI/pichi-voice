@@ -40,7 +40,7 @@ struct FeedbackSubmission: Encodable {
     static var appDetails: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
-        return "FluidVoice \(version) (\(build))\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)"
+        return AppBrand.text("FluidVoice \(version) (\(build))\nmacOS: \(ProcessInfo.processInfo.operatingSystemVersionString)")
     }
 
     static func isValidEmail(_ value: String) -> Bool {
@@ -77,11 +77,17 @@ struct FeedbackSubmission: Encodable {
 }
 
 struct FeedbackClient {
-    var session: URLSession = .shared
+    let session: URLSession
+    private let endpoint: URL?
+
+    init(session: URLSession = .shared, endpoint: URL? = AppBrand.feedbackEndpoint) {
+        self.session = session
+        self.endpoint = endpoint
+    }
 
     func send(_ submission: FeedbackSubmission) async throws {
         guard submission.isValid else { throw Failure.invalid }
-        guard let url = URL(string: "https://altic.dev/api/fluid/feedback") else { throw Failure.invalid }
+        guard let url = self.endpoint else { throw Failure.notConfigured }
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -110,10 +116,11 @@ struct FeedbackClient {
     private struct Receipt: Decodable { let message: String }
 
     enum Failure: LocalizedError {
-        case invalid, rateLimited, rejected, server, connection, unconfirmed
+        case notConfigured, invalid, rateLimited, rejected, server, connection, unconfirmed
 
         var errorDescription: String? {
             switch self {
+            case .notConfigured: "Use the support link for this distribution."
             case .invalid: "Add a valid email and a message within the character limit."
             case .rateLimited: "Too many messages at once. Please wait a minute, then try again. Your draft is still here."
             case .rejected: "The server couldn’t accept this message. Check your email and message length. Your draft is still here."

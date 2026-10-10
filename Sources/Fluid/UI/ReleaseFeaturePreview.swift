@@ -67,7 +67,7 @@ struct ReleaseFeaturePreview: View {
             }
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
-                Text("Search across FluidVoice")
+                Text(AppBrand.text("Search across FluidVoice"))
                 Spacer(minLength: 0)
             }
             .font(.system(size: 9))
@@ -88,7 +88,7 @@ struct ReleaseFeaturePreview: View {
 
     private var models: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(PrivateAIProviderFeature.shared.isAvailable ? "Fluid Intelligence" : "AI Providers", systemImage: "sparkles")
+            Label(PrivateAIProviderFeature.shared.isAvailable ? AppBrand.text("Fluid Intelligence") : "AI Providers", systemImage: "sparkles")
                 .font(.system(size: 11, weight: .semibold))
             if PrivateAIProviderFeature.shared.isAvailable {
                 self.model("Fluid-1 Pico", detail: "Light & quick", symbol: "bolt")

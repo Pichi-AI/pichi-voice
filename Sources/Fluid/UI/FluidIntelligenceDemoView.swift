@@ -54,7 +54,7 @@ struct FluidIntelligenceDemoView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Fluid Intelligence", systemImage: "sparkles").font(self.theme.typography.captionStrong).foregroundStyle(self.theme.palette.accent)
+                    Label(AppBrand.text("Fluid Intelligence"), systemImage: "sparkles").font(self.theme.typography.captionStrong).foregroundStyle(self.theme.palette.accent)
                     Text("Your words, ready to use.").font(.fluidSystem(size: 30, weight: .regular, design: .serif))
                 }
                 Spacer()
@@ -105,11 +105,11 @@ struct FluidIntelligenceDemoView: View {
                         .disabled(self.runningSample || self.stoppingVoice || self.overlay.isProcessing || self.sandbox.isProcessing || self.asr.isStarting || !self.asr.isAsrReady || self.asr
                             .micStatus != .authorized)
                     } else {
-                        Button("Set up Fluid Intelligence", action: self.onSetup).fluidGlassAction(prominent: true)
+                        Button(AppBrand.text("Set up Fluid Intelligence"), action: self.onSetup).fluidGlassAction(prominent: true)
                     }
                 }
             }
-            Text(self.modelID == nil ? "A local Fluid Intelligence model is needed to try these examples." : "Practice stays here. Nothing is typed into another app or saved to history.")
+            Text(self.modelID == nil ? AppBrand.text("A local Fluid Intelligence model is needed to try these examples.") : "Practice stays here. Nothing is typed into another app or saved to history.")
                 .font(self.theme.typography.caption).foregroundStyle(.secondary)
             if self.modelID != nil, !self.asr.isAsrReady || self.asr.micStatus != .authorized {
                 Text("Voice practice needs a ready Voice Engine model and microphone access. You can still try the written examples.")

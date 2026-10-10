@@ -95,7 +95,7 @@ nonisolated struct ExternalCoreMLASRModelSpec: Sendable {
     }
 
     var defaultCacheDirectory: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+        AppBrand.cachesDirectory
             .appendingPathComponent(self.artifactFolderHint, isDirectory: true)
     }
 

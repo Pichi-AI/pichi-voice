@@ -119,7 +119,7 @@ final class PermissionDragGuideController {
     private func returnToApp() {
         self.dismiss()
         NSApp.activate(ignoringOtherApps: true)
-        (NSApp.windows.first { $0.isVisible && $0.title == "FluidVoice" } ?? NSApp.keyWindow)?
+        (NSApp.windows.first { $0.isVisible && $0.title == AppBrand.text("FluidVoice") } ?? NSApp.keyWindow)?
             .makeKeyAndOrderFront(nil)
     }
 
@@ -145,7 +145,7 @@ final class PermissionDragGuideController {
         {
             return runningAppURL
         }
-        let installedURL = URL(fileURLWithPath: "/Applications/FluidVoice.app")
+        let installedURL = URL(fileURLWithPath: "/Applications/\(Bundle.main.fluidAppDisplayName).app")
         if FileManager.default.fileExists(atPath: installedURL.path) {
             return installedURL
         }

@@ -1,0 +1,10 @@
+{
+  "appName": "Pichi Voice",
+  "meetingName": "Pichi Meet",
+  "assistantName": "Pichi AI",
+  "tagline": "Your voice. Your ideas. Your Mac.",
+  "accentLight": "#6749C1",
+  "accentDark": "#A78FFF",
+  "website": "https://pichi.ai",
+  "support": "https://github.com/Pichi-AI/pichi-voice/issues"
+}

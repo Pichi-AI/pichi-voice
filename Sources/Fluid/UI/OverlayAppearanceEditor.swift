@@ -245,7 +245,7 @@ struct OverlayAppearanceEditor: View {
 }
 
 private struct OverlayAppearanceSample: View {
-    private static let appIcon = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage ?? NSImage(size: NSSize(width: 32, height: 32))
+    private static let appIcon = PichiBrandMark.appIcon
     let size: SettingsStore.OverlaySize
     let appearance: BottomOverlayAppearance
 
@@ -266,7 +266,7 @@ private struct OverlayAppearanceSample: View {
                     .interpolation(.high)
                     .scaledToFit()
                     .frame(width: self.layout.iconSize, height: self.layout.iconSize)
-                    .accessibilityLabel("FluidVoice")
+                    .accessibilityLabel(AppBrand.text("FluidVoice"))
                 Spacer(minLength: 4)
                 HStack(spacing: self.layout.barSpacing) {
                     ForEach(0..<self.layout.barCount, id: \.self) { index in

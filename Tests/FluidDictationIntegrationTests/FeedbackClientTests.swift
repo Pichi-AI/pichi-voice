@@ -31,7 +31,7 @@ final class FeedbackClientTests: XCTestCase {
 
     func testSuccessRequiresReceiptAndUsesExpectedRequest() async throws {
         let client = self.client { request in
-            XCTAssertEqual(request.url?.absoluteString, "https://altic.dev/api/fluid/feedback")
+            XCTAssertEqual(request.url?.absoluteString, "https://example.invalid/feedback")
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.timeoutInterval, 30)
@@ -86,11 +86,25 @@ final class FeedbackClientTests: XCTestCase {
         }
     }
 
+    func testDistributionWithoutEndpointNeverHitsNetwork() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [FeedbackURLProtocol.self]
+        FeedbackURLProtocol.handler = { _ in XCTFail("Disabled feedback must not upload"); return (200, "{}") }
+        let client = FeedbackClient(session: URLSession(configuration: config))
+        defer { client.session.invalidateAndCancel() }
+        do {
+            try await client.send(self.draft)
+            XCTFail("Expected unavailable endpoint")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, FeedbackClient.Failure.notConfigured.localizedDescription)
+        }
+    }
+
     private func client(_ handler: @escaping (URLRequest) throws -> (Int, String)) -> FeedbackClient {
         FeedbackURLProtocol.handler = handler
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [FeedbackURLProtocol.self]
-        return FeedbackClient(session: URLSession(configuration: config))
+        return FeedbackClient(session: URLSession(configuration: config), endpoint: URL(string: "https://example.invalid/feedback"))
     }
 }
 

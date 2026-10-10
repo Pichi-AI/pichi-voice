@@ -101,12 +101,12 @@ struct OnboardingCleanupExampleCarousel: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 56)
                     .accessibilityAddTraits(.isHeader)
-                self.mode(title: "Basic · Without Fluid Intelligence", text: example.spoken, enhanced: false)
+                self.mode(title: AppBrand.text("Basic · Without Fluid Intelligence"), text: example.spoken, enhanced: false)
                     .frame(minHeight: 76, alignment: .topLeading)
                 Rectangle()
                     .fill(.white.opacity(0.12))
                     .frame(height: 1)
-                self.mode(title: "Smart · With Fluid Intelligence", text: example.cleaned, enhanced: true)
+                self.mode(title: AppBrand.text("Smart · With Fluid Intelligence"), text: example.cleaned, enhanced: true)
             }
         }
         // Keep text at its final reading width while the glass surface slides and narrows.

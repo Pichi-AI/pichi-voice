@@ -75,7 +75,7 @@ actor DictionaryNegativeExampleStore {
 
     init(
         url: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("FluidVoice/dictionary-negative-examples-v1.plist"),
+            .appendingPathComponent("\(AppBrand.storageNamespace)/dictionary-negative-examples-v1.plist"),
         collectionEnabled: @escaping @Sendable () -> Bool = { DictionaryMatcherExperiment.collectNegatives }
     ) {
         self.url = url

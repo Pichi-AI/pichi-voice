@@ -2533,6 +2533,7 @@ final class SettingsStore: ObservableObject {
     // MARK: - Preferences Settings
 
     enum AccentColorOption: String, CaseIterable, Identifiable, Codable {
+        case brand = "Brand"
         case cyan = "Cyan"
         case green = "Green"
         case blue = "Blue"
@@ -2545,6 +2546,7 @@ final class SettingsStore: ObservableObject {
 
         var hex: String {
             switch self {
+            case .brand: return AppBrand.profile.accentLight
             case .cyan: return "#3AC8C6"
             case .green: return "#22C55E"
             case .blue: return "#3B82F6"
@@ -2635,7 +2637,7 @@ final class SettingsStore: ObservableObject {
             guard let raw = self.defaults.string(forKey: Keys.accentColorOption),
                   let option = AccentColorOption(rawValue: raw)
             else {
-                return .cyan
+                return .brand
             }
             return option
         }
@@ -2646,7 +2648,7 @@ final class SettingsStore: ObservableObject {
     }
 
     var accentColor: Color {
-        Color(hex: self.accentColorOption.hex) ?? Color(red: 0.227, green: 0.784, blue: 0.776)
+        Color(hex: self.accentColorOption.hex) ?? Color(red: 0.404, green: 0.286, blue: 0.757)
     }
 
     var themePreference: ThemePreference {
@@ -5656,7 +5658,7 @@ final class SettingsStore: ObservableObject {
                 default:
                     hint = "nemotron-3.5-asr-streaming320-int8-CoreML"
                 }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+                let directory: URL? = AppBrand.cachesDirectory
                     .appendingPathComponent(hint, isDirectory: true)
                 #if arch(arm64)
                 return directory.map { NemotronProvider.artifactsAreComplete(at: $0) } ?? false
@@ -5666,7 +5668,7 @@ final class SettingsStore: ObservableObject {
             default:
                 // Whisper models
                 guard let whisperFile = self.whisperModelFile else { return false }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+                let directory: URL? = AppBrand.cachesDirectory
                     .appendingPathComponent("WhisperModels")
                 let modelURL = directory?.appendingPathComponent(whisperFile)
                 guard
@@ -5683,13 +5685,13 @@ final class SettingsStore: ObservableObject {
 
         #if canImport(FluidAudio)
         private static func parakeetModelsExist(descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
-            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let modelsDirectory = AppBrand.modelsDirectory
             let directory = descriptor.cacheDirectory(in: modelsDirectory)
             return descriptor.artifactsAreComplete(at: directory)
         }
 
         private static func parakeetRealtimeModelsExist() -> Bool {
-            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let modelsDirectory = AppBrand.modelsDirectory
             let modelDirectory = modelsDirectory
                 .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
                 .appendingPathComponent(Repo.parakeetEou160.folderName, isDirectory: true)
@@ -6385,7 +6387,7 @@ extension SettingsStore {
             return URL(fileURLWithPath: storedPath, isDirectory: true)
         }
 
-        let cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        let cachesDirectory: URL? = AppBrand.cachesDirectory
         let fallback = cachesDirectory?.appendingPathComponent(spec.artifactFolderHint, isDirectory: true)
         guard let fallback else { return nil }
         if FileManager.default.fileExists(atPath: fallback.path) {

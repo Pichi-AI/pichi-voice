@@ -33,7 +33,7 @@ struct AddProviderSheet<Logo: View>: View {
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         Text(self.isEditing ? self.draft.name : "Add a provider").font(self.theme.typography.title)
-                        Text(self.isEditing ? "Add connection details to get started." : "Your preferred models. Connected to FluidVoice.")
+                        Text(self.isEditing ? "Add connection details to get started." : AppBrand.text("Your preferred models. Connected to FluidVoice."))
                             .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
                     }
                     Spacer()

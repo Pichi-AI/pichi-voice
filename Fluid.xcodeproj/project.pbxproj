@@ -180,6 +180,7 @@
 /* Begin PBXFileReference section */
 		C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiGigaAMIntegrationTests.swift; sourceTree = "<group>"; };
 		F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryTests.swift; sourceTree = "<group>"; };
+		B12A00000000000000000001 /* PichiBrand.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration/PichiBrand.xcconfig; sourceTree = SOURCE_ROOT; };
 		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
 		7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechModelInstallationSnapshotTests.swift; sourceTree = "<group>"; };
 		70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveFileDownloaderTests.swift; sourceTree = "<group>"; };
@@ -918,6 +919,7 @@
 /* Begin XCBuildConfiguration section */
 		7C078D982E3B339300FB7CAC /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B12A00000000000000000001 /* PichiBrand.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
@@ -984,6 +986,7 @@
 		};
 		7C078D992E3B339300FB7CAC /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B12A00000000000000000001 /* PichiBrand.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
@@ -1045,7 +1048,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Fluid.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -1080,8 +1083,9 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = "1.6.10-beta.8";
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app.debug;
-				PRODUCT_NAME = "FluidVoice Debug";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER).debug";
+				PRODUCT_MODULE_NAME = FluidVoice_Debug;
+				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME) Debug";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1100,7 +1104,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Fluid.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -1135,8 +1139,9 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = "1.6.10-beta.8";
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
-				PRODUCT_NAME = FluidVoice;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = FluidVoice;
+				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -1156,7 +1161,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME) Debug.app/Contents/MacOS/$(PICHI_PRODUCT_NAME) Debug";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1172,7 +1177,7 @@
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME) Debug.app/Contents/MacOS/$(PICHI_PRODUCT_NAME) Debug";
 			};
 			name = Debug;
 		};
@@ -1181,7 +1186,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME).app/Contents/MacOS/$(PICHI_PRODUCT_NAME)";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1196,7 +1201,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidDictationIntegrationTests;
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME).app/Contents/MacOS/$(PICHI_PRODUCT_NAME)";
 			};
 			name = Release;
 		};
@@ -1204,7 +1209,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -1245,7 +1250,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";

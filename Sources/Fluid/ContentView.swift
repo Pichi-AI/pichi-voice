@@ -506,11 +506,11 @@ struct ContentView: View {
                 self.hotkeyManager?.updatePromptShortcutAssignments(SettingsStore.shared.dictationPromptShortcutAssignments())
             }
             // Local UI diagnostics, same defaults gate as GlobalHotkeyManager+DebugTrigger.
-            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.toggleSidebar"))) { _ in
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("\(AppBrand.bundleIdentifier).debug.toggleSidebar"))) { _ in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
                 self.toggleSidebar()
             }
-            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.openSettings"))) { _ in
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("\(AppBrand.bundleIdentifier).debug.openSettings"))) { _ in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
                 self.menuBarManager.openPreferencesFromUI()
             }
@@ -1399,12 +1399,12 @@ struct ContentView: View {
     }
 
     private func openIssueReportingPage() {
-        guard let url = URL(string: "https://github.com/altic-dev/Fluid-oss/issues/new/choose") else { return }
+        guard let url = URL(string: AppBrand.supportURL.absoluteString) else { return }
         NSWorkspace.shared.open(url)
     }
 
     private func openHelpDocumentation() {
-        guard let url = URL(string: "https://docs.altic.dev/") else { return }
+        guard let url = URL(string: AppBrand.websiteURL.absoluteString) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1498,7 +1498,7 @@ struct ContentView: View {
                 self.sidebarNavigationLink(.fileTranscription, title: "File Transcription", systemImage: "doc.text.fill")
                 self.sidebarNavigationLink(
                     .meetingTranscription,
-                    title: "FluidMeet",
+                    title: AppBrand.text("FluidMeet"),
                     systemImage: "person.2.fill"
                 )
             } header: {
@@ -1590,8 +1590,8 @@ struct ContentView: View {
                 reduceMotion: self.accessibilityReduceMotion
             ))
             .onHover { self.isSettingsBackHovered = $0 }
-            .help("Back to FluidVoice")
-            .accessibilityLabel("Back to FluidVoice")
+            .help(AppBrand.text("Back to FluidVoice"))
+            .accessibilityLabel(AppBrand.text("Back to FluidVoice"))
 
             SidebarSearchField(
                 text: Binding(
@@ -1723,7 +1723,7 @@ struct ContentView: View {
             Button("What’s new", systemImage: "gift") { self.showsReleaseHighlights = true }
                 .disabled(self.asr.isRunningOrStarting || self.asr.activeExclusiveActivity != nil || NotchContentState.shared.isProcessing)
             if PrivateAIProviderFeature.shared.isAvailable {
-                Button("Try Fluid Intelligence", systemImage: "sparkles") { self.showsFluidIntelligenceDemo = true }
+                Button(AppBrand.text("Try Fluid Intelligence"), systemImage: "sparkles") { self.showsFluidIntelligenceDemo = true }
                     .disabled(self.asr.isRunningOrStarting || NotchContentState.shared.isProcessing || DictationPromptTestCoordinator.shared.isActive)
             }
             Button("Replay onboarding", systemImage: "arrow.counterclockwise") {
@@ -1759,9 +1759,9 @@ struct ContentView: View {
             reduceMotion: self.accessibilityReduceMotion
         ))
         .onHover { self.isHelpEntryHovered = $0 }
-        .help("Open FluidVoice Help")
+        .help(AppBrand.text("Open FluidVoice Help"))
         .accessibilityLabel("Help")
-        .accessibilityHint("What’s new, documentation, Fluid Intelligence demo, and replay onboarding")
+        .accessibilityHint(AppBrand.text("What’s new, documentation, Fluid Intelligence demo, and replay onboarding"))
     }
 
     private var modeTransitionAnimation: Animation {
@@ -2152,8 +2152,8 @@ struct ContentView: View {
                     self.instructionStep(number: "2", text: "Choose **Allow** in the system dialog")
                 } else if self.asr.micStatus == .denied {
                     self.instructionStep(number: "1", text: "Click **Open Settings** above")
-                    self.instructionStep(number: "2", text: "Find **FluidVoice** in the microphone list")
-                    self.instructionStep(number: "3", text: "Toggle **FluidVoice ON** to allow access")
+                    self.instructionStep(number: "2", text: AppBrand.text("Find **FluidVoice** in the microphone list"))
+                    self.instructionStep(number: "3", text: AppBrand.text("Toggle **FluidVoice ON** to allow access"))
                 }
             }
             .padding(.leading, 4)
@@ -5645,7 +5645,7 @@ extension ContentView {
     private func positionWindowBesideSystemSettings(requestID: UUID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             guard self.accessibilityGuideRequestID == requestID else { return }
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "FluidVoice" }) ?? NSApp.keyWindow else {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == AppBrand.text("FluidVoice") }) ?? NSApp.keyWindow else {
                 return
             }
 
@@ -5814,7 +5814,7 @@ extension ContentView {
     private func cancelAccessibilityPermissionFlow() {
         self.finishAccessibilityPermissionFlow()
         NSApp.activate(ignoringOtherApps: true)
-        (NSApp.windows.first { $0.isVisible && $0.title == "FluidVoice" } ?? NSApp.keyWindow)?
+        (NSApp.windows.first { $0.isVisible && $0.title == AppBrand.text("FluidVoice") } ?? NSApp.keyWindow)?
             .makeKeyAndOrderFront(nil)
     }
 
@@ -5879,7 +5879,7 @@ extension ContentView {
             return runningAppURL
         }
 
-        let installedURL = URL(fileURLWithPath: "/Applications/FluidVoice.app")
+        let installedURL = URL(fileURLWithPath: "/Applications/\(Bundle.main.fluidAppDisplayName).app")
         if FileManager.default.fileExists(atPath: installedURL.path) {
             return installedURL
         }

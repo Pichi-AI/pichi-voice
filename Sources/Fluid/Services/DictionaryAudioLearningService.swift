@@ -157,7 +157,7 @@ actor OriginalAudioEmbeddingExtractor {
             throw PronunciationDictionaryStoreError.inconsistentEnrollment
         }
         let version = descriptor.asrModelVersion
-        let directory = AsrModels.defaultCacheDirectory(for: version)
+        let directory = AppModelPaths.parakeet(for: version)
         guard descriptor.installationRevisionMatches(at: directory),
               descriptor.variant == .v2 || descriptor.variant == .v3 || descriptor.installedArchiveSHA256(at: directory) == descriptor.archiveSHA256
         else {

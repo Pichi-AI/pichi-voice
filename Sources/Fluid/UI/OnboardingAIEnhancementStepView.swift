@@ -158,7 +158,7 @@ struct OnboardingAIEnhancementStepView: View {
                 VStack(spacing: 0) {
                     self.hero.padding(.bottom, 16)
                     OnboardingCleanupExampleCarousel(autoplay: self.carouselAutoplay)
-                    Text("You can choose a different model or turn off Fluid Intelligence anytime in Settings.")
+                    Text(AppBrand.text("You can choose a different model or turn off Fluid Intelligence anytime in Settings."))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(.white.opacity(0.46))
                         .multilineTextAlignment(.center)
@@ -177,19 +177,19 @@ struct OnboardingAIEnhancementStepView: View {
         VStack(spacing: 10) {
             FluidOnboardingCompactAppIconMark(size: 40)
                 .padding(.bottom, 4)
-            Text("Meet Fluid Intelligence")
+            Text(AppBrand.text("Meet Fluid Intelligence"))
                 .font(.fluidSystem(size: 28, weight: .semibold))
                 .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
-            Text("Exclusive to FluidVoice. Optimized for your Mac. It turns your spoken words into clear, formatted text. Entirely on your device.")
+            Text("Choose a local AI model to turn spoken words into clear, formatted text on your Mac.")
                 .font(.fluidSystem(size: 15, weight: .medium))
                 .foregroundStyle(.white.opacity(0.64))
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
                 .frame(maxWidth: 540)
             if !self.isReady {
-                Text("Fluid Intelligence can…")
+                Text(AppBrand.text("Fluid Intelligence can…"))
                     .font(.fluidSystem(size: 20, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.8))
                     .padding(.top, 4)
@@ -214,7 +214,7 @@ struct OnboardingAIEnhancementStepView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if self.setup.phase == .unavailable {
-                Text("Fluid Intelligence isn't available right now. You can finish setup and try again later.")
+                Text(AppBrand.text("Fluid Intelligence isn't available right now. You can finish setup and try again later."))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(.white.opacity(0.64))
                     .multilineTextAlignment(.center)
@@ -326,7 +326,7 @@ struct OnboardingAIEnhancementStepView: View {
         switch self.setup.phase {
         case .loading: "Preparing the model for your Mac. This can take a little while."
         case .cancelling: "Cancelling setup… You can go back or set this up later."
-        default: "Preparing Fluid Intelligence…"
+        default: AppBrand.text("Preparing Fluid Intelligence…")
         }
     }
 
@@ -376,14 +376,14 @@ struct OnboardingAIEnhancementStepView: View {
             HStack(alignment: .top, spacing: 24) {
                 self.modeSummary(
                     name: "Basic",
-                    subtitle: "Without Fluid Intelligence",
+                    subtitle: AppBrand.text("Without Fluid Intelligence"),
                     detail: "Keeps your words as spoken, including mistakes.",
                     smart: false
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 self.modeSummary(
                     name: SettingsStore.DictationModeLabels.smart,
-                    subtitle: "With Fluid Intelligence",
+                    subtitle: AppBrand.text("With Fluid Intelligence"),
                     detail: "Removes rambling, fixes mistakes, and formats your text.",
                     smart: true
                 )

@@ -44,7 +44,7 @@ enum DictationAudioHistoryError: LocalizedError {
 final nonisolated class DictationAudioHistoryStore: @unchecked Sendable {
     static let shared = DictationAudioHistoryStore()
 
-    private let appSupportFolder = "FluidVoice"
+    private let appSupportFolder = AppBrand.storageNamespace
     private let audioFolder = "DictationAudioHistory"
     private let fileManager = FileManager.default
     private let pendingSaveLock = NSLock()

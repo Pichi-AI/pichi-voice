@@ -200,9 +200,8 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         var hashes: [String: String] = [:]
         var manifests: [String: String] = [:]
         let fm = FileManager.default
-        let caches = cachesDirectory ?? fm.urls(for: .cachesDirectory, in: .userDomainMask).first
-        let models = modelsDirectory ?? fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("FluidAudio/Models", isDirectory: true)
+        let caches: URL? = cachesDirectory ?? AppBrand.cachesDirectory
+        let models: URL? = modelsDirectory ?? AppBrand.modelsDirectory
         for probe in probes {
             try Task.checkCancellation()
             let exists: Bool

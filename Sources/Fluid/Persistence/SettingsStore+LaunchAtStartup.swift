@@ -166,7 +166,7 @@ extension SettingsStore {
     }
 
     private var compatibilityLoginItemName: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "FluidVoice"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? AppBrand.appName
     }
 
     private func appleScriptEscaped(_ value: String) -> String {

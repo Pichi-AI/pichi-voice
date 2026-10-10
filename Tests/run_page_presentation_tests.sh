@@ -9,6 +9,7 @@ trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
 # Compile the production dashboard geometry without app/service dependencies.
 sed '/^struct DashboardSetupStatus/,$d' Sources/Fluid/UI/DashboardView.swift > "$task_test_dir/DashboardLayout.swift"
 xcrun swiftc -parse-as-library \
+    Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/UI/AppNavigationState.swift \
     Sources/Fluid/Theme/Components/FluidPageLayout.swift \
     "$task_test_dir/DashboardLayout.swift" \

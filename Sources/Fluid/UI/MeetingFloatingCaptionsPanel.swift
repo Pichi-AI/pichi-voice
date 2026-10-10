@@ -207,7 +207,7 @@ struct MeetingFloatingCaptionsContent: View {
     @Environment(\.theme) private var theme
     @State private var isStopping = false
 
-    private static let fluidVoiceIcon: NSImage = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage
+    private static let fluidVoiceIcon: NSImage = PichiBrandMark.appIcon
 
     private var rows: [MeetingLiveBubbleComposer.Row] {
         MeetingLiveBubbleComposer.rows(for: self.coordinator.liveTranscript)

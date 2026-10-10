@@ -102,11 +102,11 @@ struct DictionaryWordWizard: View {
     private var spelling: some View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
             DictionaryLearningRing(progress: 0, active: false, symbol: "waveform")
-            Text("Which word does FluidVoice keep getting wrong?")
+            Text(AppBrand.text("Which word does FluidVoice keep getting wrong?"))
                 .font(self.theme.typography.sectionTitle)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            TextField("For example, FluidVoice", text: Binding(get: { self.word }, set: { value in
+            TextField(AppBrand.text("For example, FluidVoice"), text: Binding(get: { self.word }, set: { value in
                 if self.count >= 1, value != self.word {
                     self.pendingWord = value
                     self.confirmingWordChange = true
@@ -236,7 +236,7 @@ struct DictionaryWordWizard: View {
             Text(self.step == .review ? "Your word, your way" : "For best results")
                 .font(self.theme.typography.title)
             if self.step == .review {
-                Text(self.alreadyCorrect ? "FluidVoice recognised your word in each recording." : "Your recordings are ready. Save this word to use it in future dictations.")
+                Text(self.alreadyCorrect ? AppBrand.text("FluidVoice recognised your word in each recording.") : "Your recordings are ready. Save this word to use it in future dictations.")
                     .font(self.theme.typography.statement)
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Divider()

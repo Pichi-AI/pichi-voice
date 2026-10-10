@@ -250,6 +250,7 @@ builds/
 /docs/development/*
 !/docs/development/codex.md
 !/docs/development/upstream.md
+!/docs/development/branding.md
 !/scripts/
 /scripts/*
 !/scripts/dev/

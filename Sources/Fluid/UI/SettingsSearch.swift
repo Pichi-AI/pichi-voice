@@ -232,7 +232,7 @@ enum SettingsSearchIndex {
         .init(
             target: .launchAtStartup,
             title: "Launch at startup",
-            terms: ["Automatically start FluidVoice when you log in", "login startup boot open"]
+            terms: [AppBrand.text("Automatically start FluidVoice when you log in"), "login startup boot open"]
         ),
         .init(
             target: .showWindowAtLogin,
@@ -267,7 +267,7 @@ enum SettingsSearchIndex {
             title: "Microphone Permission",
             terms: ["mic access authorization privacy grant denied system settings"]
         ),
-        .init(target: .shortcuts, title: "Shortcuts", terms: ["keyboard hotkeys Smart Fluid Intelligence"]),
+        .init(target: .shortcuts, title: "Shortcuts", terms: [AppBrand.text("keyboard hotkeys Smart Fluid Intelligence")]),
         .init(target: .globalHotkey, title: "Global Hotkey", terms: ["keyboard shortcut activation accessibility"]),
         .init(
             target: .primaryDictationShortcuts,
@@ -448,7 +448,7 @@ enum SettingsSearchIndex {
         .init(
             target: .historyPerformance,
             title: "Show Performance in History",
-            terms: ["timing speed tokens per second ASR cleanup Fluid Intelligence"]
+            terms: [AppBrand.text("timing speed tokens per second ASR cleanup Fluid Intelligence")]
         ),
     ]
 

@@ -16,7 +16,7 @@ struct FluidApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        WindowGroup(AppBrand.appName, id: "main") {
             #if DEBUG
             if MeetingExternalReferenceTrialAGate.autorunEnabled(environment: ProcessInfo.processInfo.environment)
                 || MeetingSCKPairedDiagnosticGate.autorunEnabled()

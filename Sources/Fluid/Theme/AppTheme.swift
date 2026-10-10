@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Shared product accents. Onboarding and feature surfaces use the same source of truth.
 enum FluidBrandColors {
-    static let blue = Color(red: 0.10, green: 0.46, blue: 1.0)
+    static var blue: Color { Color(hex: AppBrand.profile.accentLight) ?? .purple }
 }
 
 /// Central theme definition for the Fluid app. All colors, spacings and materials
@@ -336,12 +336,12 @@ struct AppTheme {
     static func dark(accent: Color) -> AppTheme {
         AppTheme(
             palette: Palette(
-                windowBackground: Color(red: 0.07, green: 0.07, blue: 0.07),
-                contentBackground: Color(red: 0.09, green: 0.09, blue: 0.09),
-                sidebarBackground: Color(red: 0.06, green: 0.06, blue: 0.06),
-                cardBackground: Color(red: 0.08, green: 0.08, blue: 0.08),
-                elevatedCardBackground: Color(red: 0.11, green: 0.11, blue: 0.11),
-                toolbarBackground: Color(red: 0.06, green: 0.06, blue: 0.06),
+                windowBackground: Color(red: 0.055, green: 0.047, blue: 0.039),
+                contentBackground: Color(red: 0.102, green: 0.090, blue: 0.082),
+                sidebarBackground: Color(red: 0.055, green: 0.047, blue: 0.039),
+                cardBackground: Color(red: 0.118, green: 0.102, blue: 0.090),
+                elevatedCardBackground: Color(red: 0.180, green: 0.157, blue: 0.141),
+                toolbarBackground: Color(red: 0.055, green: 0.047, blue: 0.039),
 
                 cardBorder: Color.white.opacity(0.10),
                 separator: Color.white.opacity(0.16),

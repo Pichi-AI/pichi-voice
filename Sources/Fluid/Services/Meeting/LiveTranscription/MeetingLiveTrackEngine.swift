@@ -18,7 +18,7 @@ nonisolated protocol MeetingLiveRecognizer: Sendable {
 }
 
 extension StreamingEouAsrManager: MeetingLiveRecognizer {
-    func prepareModels() async throws { try await self.loadModelsFromHuggingFace() }
+    func prepareModels() async throws { try await self.loadModelsFromHuggingFace(to: AppBrand.modelsDirectory.appendingPathComponent("parakeet-eou-streaming", isDirectory: true)) }
 }
 
 /// Numeric wrapper observations, not speech truth, token counts, or a recovery verdict.

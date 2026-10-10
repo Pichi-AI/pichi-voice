@@ -141,7 +141,7 @@ struct DashboardView: View {
                 self.stat("Streak", value: streak.map { "\($0) \($0 == 1 ? "day" : "days")" } ?? "—", detail: "keep it going")
                 // Quiet proof that Smart mode earns its keep; absent until it has fixed something.
                 if fixed > 0 {
-                    self.stat("Fluid Intelligence", value: fixed.formatted(), detail: "words fixed for you")
+                    self.stat(AppBrand.text("Fluid Intelligence"), value: fixed.formatted(), detail: "words fixed for you")
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
@@ -305,7 +305,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Try Fluid Intelligence", systemImage: "sparkles")
+                    Label(AppBrand.text("Try Fluid Intelligence"), systemImage: "sparkles")
                         .font(self.theme.typography.sectionTitle)
                     Text("Turn spoken thoughts into lists, emails, and polished paragraphs.")
                         .font(self.theme.typography.bodySmall).foregroundStyle(.secondary)
@@ -316,7 +316,7 @@ struct DashboardView: View {
                     Image(systemName: "xmark").frame(width: 28, height: 28).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Dismiss Fluid Intelligence invitation")
+                .accessibilityLabel(AppBrand.text("Dismiss Fluid Intelligence invitation"))
                 .help("Hide this invitation. You can still try it from Help.")
             }
             Button("Try it", systemImage: "arrow.up.right", action: self.openFluidIntelligenceDemo)

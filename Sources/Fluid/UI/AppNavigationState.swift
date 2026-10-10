@@ -29,7 +29,7 @@ enum SidebarItem: Hashable {
         case .aiEnhancements: "AI Providers"
         case .cleanupStyles: "Cleanup Styles"
         case .fileTranscription: "File Transcription"
-        case .meetingTranscription: "FluidMeet"
+        case .meetingTranscription: AppBrand.text("FluidMeet")
         case .customDictionary: "Custom Dictionary"
         case .stats: "Stats"
         case .history: "History"

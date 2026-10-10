@@ -85,7 +85,7 @@ final class ParakeetVocabularyStore {
     }
 
     private let fileName = "parakeet_custom_vocabulary.json"
-    private let appSupportFolder = "FluidVoice"
+    private let appSupportFolder = AppBrand.storageNamespace
 
     private init() {}
 
@@ -151,7 +151,7 @@ final class ParakeetVocabularyStore {
     /// Search reads a bounded snapshot without creating files or blocking the UI.
     @concurrent nonisolated static func readSearchTerms() async throws -> [VocabularyConfig.Term] {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
-        let url = base.appendingPathComponent("FluidVoice/parakeet_custom_vocabulary.json")
+        let url = base.appendingPathComponent("\(AppBrand.storageNamespace)/parakeet_custom_vocabulary.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }

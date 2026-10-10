@@ -64,7 +64,7 @@ actor SpeakerDiarizationService {
                     source: "SpeakerDiarizationService"
                 )
             }
-            try await self.manager.prepareModels()
+            try await self.manager.prepareModels(directory: AppBrand.modelsDirectory.appendingPathComponent(OfflineDiarizerModels.defaultModelsDirectory().lastPathComponent, isDirectory: true))
             self.modelsReady = true
         }
 

@@ -42,9 +42,13 @@ struct AdaptiveAppTheme<Content: View>: View {
     var body: some View {
         let preferredScheme = self.settings.themePreference.preferredColorScheme
         let activeScheme = preferredScheme ?? self.colorScheme
+        let activeAccent = self.settings.accentColorOption == .brand
+            ? (Color(hex: activeScheme == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? self.accent)
+            : self.accent
 
         self.content
-            .appTheme(AppTheme.adaptive(accent: self.accent, colorScheme: activeScheme))
+            .appTheme(AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme))
+            .tint(activeAccent)
             .preferredColorScheme(preferredScheme)
     }
 }

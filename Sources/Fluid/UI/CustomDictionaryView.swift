@@ -592,7 +592,7 @@ struct CustomDictionaryView: View {
                         Label("Back", systemImage: "chevron.left")
                     }.fluidGlassAction()
                     Text("Add a correction").font(self.theme.typography.sectionTitle)
-                    Text("When FluidVoice types the wrong version, we’ll change it to your word.")
+                    Text(AppBrand.text("When FluidVoice types the wrong version, we’ll change it to your word."))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
                     self.manualReplacementComposer
@@ -699,7 +699,7 @@ struct CustomDictionaryView: View {
 
     private var trainReplacementComposer: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            TextField("Type the correct text, e.g. FluidVoice", text: self.$trainingReplacement)
+            TextField(AppBrand.text("Type the correct text, e.g. FluidVoice"), text: self.$trainingReplacement)
                 .dictionaryInputChrome()
                 .disabled(self.isTrainingRecording || self.isTrainingProcessing)
                 .onChange(of: self.trainingReplacement) { oldValue, newValue in
@@ -818,7 +818,7 @@ struct CustomDictionaryView: View {
 
     private var manualTriggerField: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            Text("What FluidVoice types wrong")
+            Text(AppBrand.text("What FluidVoice types wrong"))
                 .font(self.theme.typography.captionStrong)
 
             TextField("fluid voice, fluid boys", text: self.$manualTriggerDraft)
@@ -835,7 +835,7 @@ struct CustomDictionaryView: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             Text("Correct word")
                 .font(self.theme.typography.captionStrong)
-            TextField("FluidVoice", text: self.$manualReplacement)
+            TextField(AppBrand.text("FluidVoice"), text: self.$manualReplacement)
                 .dictionaryInputChrome()
                 .onSubmit { self.addManualReplacementIfValid() }
             Text("The spelling you want in your transcription.")
@@ -859,7 +859,7 @@ struct CustomDictionaryView: View {
 
     private var trainingRecorderPanel: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-            Text("Teach FluidVoice your pronunciation")
+            Text(AppBrand.text("Teach FluidVoice your pronunciation"))
                 .font(self.theme.typography.bodySmallStrong)
 
             if self.trainingAlreadyCorrectWithoutReplacement {
@@ -887,7 +887,7 @@ struct CustomDictionaryView: View {
                     )
                     self.trainingInstruction(
                         number: 3,
-                        text: "Say \(self.trainingTargetReference) naturally, then pause. FluidVoice records and listens again automatically."
+                        text: AppBrand.text("Say \(self.trainingTargetReference) naturally, then pause. FluidVoice records and listens again automatically.")
                     )
                     self.trainingInstruction(
                         number: 4,
@@ -1075,7 +1075,7 @@ struct CustomDictionaryView: View {
                                 .foregroundStyle(self.theme.palette.tertiaryText)
                         }
                     }
-                    Text("Words and phrases FluidVoice will correct automatically.")
+                    Text(AppBrand.text("Words and phrases FluidVoice will correct automatically."))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -1187,7 +1187,7 @@ struct CustomDictionaryView: View {
                     Text("Your Dictionary")
                         .font(self.theme.typography.sectionTitle)
 
-                    Text("FluidVoice automatically corrects these words and phrases.")
+                    Text(AppBrand.text("FluidVoice automatically corrects these words and phrases."))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -1344,7 +1344,7 @@ struct CustomDictionaryView: View {
                 Text("Use cautiously")
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.primaryText)
-                Text("FluidVoice may sometimes use these words when you meant something similar.")
+                Text(AppBrand.text("FluidVoice may sometimes use these words when you meant something similar."))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1420,7 +1420,7 @@ struct CustomDictionaryView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Word or Phrase")
                     .font(self.theme.typography.captionStrong)
-                TextField("FluidVoice", text: self.$boostTermText)
+                TextField(AppBrand.text("FluidVoice"), text: self.$boostTermText)
                     .font(self.theme.typography.bodySmall)
                     .dictionaryInputChrome()
                     .onSubmit { self.saveBoostTermIfValid() }
@@ -1547,7 +1547,7 @@ struct CustomDictionaryView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Try Saying")
                                 .font(self.theme.typography.captionStrong)
-                            Text("Examples of what FluidVoice will type.")
+                            Text(AppBrand.text("Examples of what FluidVoice will type."))
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                             self.punctuationTrySayingPreview
@@ -1683,7 +1683,7 @@ struct CustomDictionaryView: View {
             if self.punctuationRules.isEmpty {
                 self.dictionaryEmptyState(
                     title: "No punctuation rules",
-                    detail: "Add what you say and what FluidVoice should type."
+                    detail: AppBrand.text("Add what you say and what FluidVoice should type.")
                 )
             } else {
                 LazyVStack(spacing: self.theme.metrics.spacing.sm) {
@@ -2846,7 +2846,7 @@ private struct VoiceMatchingSettingsRow: View {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "flask.fill")
                         .foregroundStyle(self.theme.palette.accent)
-                    Text("Research Preview: Compares how your voice sounds instead of only the words FluidVoice hears. Results may vary.")
+                    Text(AppBrand.text("Research Preview: Compares how your voice sounds instead of only the words FluidVoice hears. Results may vary."))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -3884,7 +3884,7 @@ struct AddDictionaryEntrySheet: View {
                         Text("This is what will appear in the final transcription.")
                             .font(.fluidSystem(.caption))
                             .foregroundStyle(.secondary)
-                        TextField("FluidVoice", text: self.$replacement)
+                        TextField(AppBrand.text("FluidVoice"), text: self.$replacement)
                             .dictionaryInputChrome()
                             .onSubmit { self.saveIfValid() }
                     }
@@ -4064,7 +4064,7 @@ struct EditDictionaryEntrySheet: View {
                         Text("This is what will appear in the final transcription.")
                             .font(.fluidSystem(.caption))
                             .foregroundStyle(.secondary)
-                        TextField("FluidVoice", text: self.$replacement)
+                        TextField(AppBrand.text("FluidVoice"), text: self.$replacement)
                             .dictionaryInputChrome()
                             .onSubmit { self.saveIfValid() }
                     }

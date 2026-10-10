@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor
 final class UpdatePromptIntegrationTests: XCTestCase {
+    func testUnconfiguredDistributionRejectsUpdateOperations() async {
+        let updater = SimpleUpdater()
+        do {
+            _ = try await updater.checkForUpdate(owner: "example", repo: "unused")
+            XCTFail("No distribution feed is configured")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, SimpleUpdateError.distributionNotConfigured.localizedDescription)
+        }
+        do {
+            try await updater.checkAndUpdate(owner: "example", repo: "unused")
+            XCTFail("Unconfigured distribution must not install updates")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, SimpleUpdateError.distributionNotConfigured.localizedDescription)
+        }
+        XCTAssertFalse(updater.isUpdateInProgress)
+    }
+
     func testPopupPreferenceBackupDecodesFalseAndMissingLegacyField() throws {
         var payload = SettingsStore.shared.makeBackupPayload()
         payload.showUpdatePopups = false
@@ -51,6 +68,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testOfferWithQueuedFailureTransitionsToOnlyInstallStatus() async throws {
         let presenter = UpdatePromptPresenter.shared
         let updater = SimpleUpdater()
+        updater.updatesEnabledForTesting = true
         presenter.dismissAll()
         defer {
             presenter.dismissAll()
@@ -118,6 +136,7 @@ final class UpdatePromptIntegrationTests: XCTestCase {
     func testDirectInstallStatusInvalidatesOutstandingOfferAndQueue() throws {
         let presenter = UpdatePromptPresenter.shared
         let updater = SimpleUpdater()
+        updater.updatesEnabledForTesting = true
         presenter.dismissAll()
         defer {
             presenter.dismissAll()
@@ -577,6 +596,7 @@ private final class UpdateTestContext {
         self.session = URLSession(configuration: configuration)
         UpdateFixtureURLProtocol.register(self.fixture, token: self.token)
         self.updater = SimpleUpdater(session: self.session, defaults: self.defaults, promptPresenter: self.presenter)
+        self.updater.updatesEnabledForTesting = true
         self.updater.simulationInstallHandler = {}
     }
 

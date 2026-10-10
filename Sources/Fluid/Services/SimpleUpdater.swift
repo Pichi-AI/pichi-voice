@@ -5,6 +5,7 @@ import PromiseKit
 
 enum SimpleUpdateError: Error, LocalizedError {
     case invalidURL
+    case distributionNotConfigured
     case invalidResponse
     case jsonDecoding
     case noSuitableRelease
@@ -23,6 +24,7 @@ enum SimpleUpdateError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "Invalid URL."
+        case .distributionNotConfigured: return "Signed app updates are not configured for this distribution. Install a reviewed build manually."
         case .invalidResponse: return "Invalid HTTP response from GitHub."
         case .jsonDecoding: return "The data couldn’t be read because it isn’t in the correct format."
         case .noSuitableRelease: return "No suitable release found."
@@ -34,7 +36,7 @@ enum SimpleUpdateError: Error, LocalizedError {
         case .notAnAppBundle: return "Extracted content does not contain an app bundle."
         case .codesignMismatch: return "Downloaded app’s code signature does not match current app."
         case .backupFailed: return "The current app could not be backed up. Nothing was replaced."
-        case .installedAppChanged: return "The installed app changed. Restart FluidVoice before trying the update again."
+        case .installedAppChanged: return AppBrand.text("The installed app changed. Restart FluidVoice before trying the update again.")
         case .rollbackUnavailable: return "No rollback backup is available."
         case .rollbackRestoreFailed: return "Failed to restore a previous version."
         }
@@ -156,7 +158,17 @@ final class SimpleUpdater: ObservableObject {
     #if DEBUG
     var simulationInstallHandler: (@MainActor () async throws -> Void)?
     var simulationHasUpdate = true
+    // URLProtocol fixtures can verify upstream update UI without enabling a distribution feed.
+    var updatesEnabledForTesting = false
     #endif
+
+    private var appUpdatesEnabled: Bool {
+        #if DEBUG
+        AppBrand.updatesEnabled || self.updatesEnabledForTesting
+        #else
+        AppBrand.updatesEnabled
+        #endif
+    }
 
     private var betaChannel: Bool {
         self.updateDefaults.bool(forKey: SettingsStore.UpdateKeys.betaReleasesEnabled)
@@ -294,11 +306,8 @@ final class SimpleUpdater: ObservableObject {
     }
 
     // Allowed Apple Developer Team IDs for code-sign validation
-    // Restrict update transitions to FluidVoice's approved signing teams.
-    private nonisolated static let allowedTeamIDs: Set<String> = [
-        "V4J43B279J",
-        "537RRRT57V",
-    ]
+    // No additional signing teams are approved for this downstream distribution.
+    private nonisolated static let allowedTeamIDs: Set<String> = []
 
     private static let githubDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -351,6 +360,7 @@ final class SimpleUpdater: ObservableObject {
         repo: String,
         includePrerelease: Bool = false
     ) async throws -> (hasUpdate: Bool, latestVersion: String) {
+        guard self.appUpdatesEnabled else { throw SimpleUpdateError.distributionNotConfigured }
         guard !self.isUpdateInProgress else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
@@ -387,6 +397,7 @@ final class SimpleUpdater: ObservableObject {
     }
 
     func checkForUpdatesAutomatically() {
+        guard self.appUpdatesEnabled else { return }
         guard self.updateDefaults.object(forKey: SettingsStore.UpdateKeys.autoUpdateCheckEnabled) as? Bool ?? true else { return }
         self.startUpdateCheck(explicit: false)
     }
@@ -440,7 +451,7 @@ final class SimpleUpdater: ObservableObject {
                 if self.checkID == requestID { self.cancelUpdateCheck() }
             }
             do {
-                let result = try await self.checkForUpdate(owner: "altic-dev", repo: "Fluid-oss", includePrerelease: channel)
+                let result = try await self.checkForUpdate(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, includePrerelease: channel)
                 guard self.checkID == requestID, self.channelRevision == channelRevision, !self.isUpdateInProgress else { return }
                 self.recordUpdateCheckDate()
                 self.availableChannelRevision = channelRevision
@@ -457,7 +468,7 @@ final class SimpleUpdater: ObservableObject {
                 } else {
                     self.updatePrompts.dismissUpdateOffers()
                     if self.checkIsExplicit {
-                        self.showUpdateCheckResult(title: channel ? "No Beta Updates" : "No Updates", message: "You're already running the latest available version of FluidVoice.")
+                        self.showUpdateCheckResult(title: channel ? "No Beta Updates" : "No Updates", message: AppBrand.text("You're already running the latest available version of FluidVoice."))
                     }
                 }
             } catch {
@@ -502,7 +513,7 @@ final class SimpleUpdater: ObservableObject {
         let revision = self.channelRevision
         self.updatePrompts.presentFloatingPrompt(
             title: "Update Available",
-            message: "FluidVoice \(version) is now available. The app will restart automatically after installation.",
+            message: AppBrand.text("FluidVoice \(version) is now available. The app will restart automatically after installation."),
             actions: [
                 FloatingPromptAction(title: "Install Now") { [weak self] in
                     guard let self, self.availableUpdateVersion == version, self.channelRevision == revision, !self.isUpdateInProgress else { return }
@@ -524,7 +535,7 @@ final class SimpleUpdater: ObservableObject {
     private func installApprovedUpdate(version: String, channel: Bool) {
         Task {
             do {
-                try await self.checkAndUpdate(owner: "altic-dev", repo: "Fluid-oss", includePrerelease: channel, expectedVersion: version)
+                try await self.checkAndUpdate(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName, includePrerelease: channel, expectedVersion: version)
             } catch SimpleUpdateError.releaseChanged {
                 if self.availableUpdateVersion != nil, self.availableChannelRevision == self.channelRevision {
                     self.showAvailableUpdate()
@@ -537,7 +548,7 @@ final class SimpleUpdater: ObservableObject {
                 let cancelled = (error as? PMKError)?.isCancelled == true
                 self.showUpdateCheckResult(
                     title: cancelled ? "No Updates" : "Update Failed",
-                    message: cancelled ? "You're already running the latest available version of FluidVoice."
+                    message: cancelled ? AppBrand.text("You're already running the latest available version of FluidVoice.")
                         : "Unable to install the update. Please try again later.\n\nError: \(error.localizedDescription)"
                 )
             }
@@ -554,6 +565,7 @@ final class SimpleUpdater: ObservableObject {
         includePrerelease: Bool = false,
         expectedVersion: String? = nil
     ) async throws {
+        guard self.appUpdatesEnabled else { throw SimpleUpdateError.distributionNotConfigured }
         guard self.updateOperationGate.begin() else {
             throw SimpleUpdateError.updateAlreadyInProgress
         }
@@ -695,7 +707,7 @@ final class SimpleUpdater: ObservableObject {
             backing: .buffered,
             defer: false
         )
-        panel.title = "Installing FluidVoice \(version)"
+        panel.title = AppBrand.text("Installing FluidVoice \(version)")
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         panel.isOpaque = false
@@ -719,12 +731,12 @@ final class SimpleUpdater: ObservableObject {
         icon.imageScaling = .scaleProportionallyUpOrDown
         content.addSubview(icon)
 
-        let title = NSTextField(labelWithString: "Installing FluidVoice \(version)")
+        let title = NSTextField(labelWithString: AppBrand.text("Installing FluidVoice \(version)"))
         title.frame = NSRect(x: 92, y: 76, width: 304, height: 24)
         title.font = .fluidSystemFont(ofSize: 16, weight: .semibold)
         content.addSubview(title)
 
-        let detail = NSTextField(wrappingLabelWithString: "Downloading the update. FluidVoice will restart automatically.")
+        let detail = NSTextField(wrappingLabelWithString: AppBrand.text("Downloading the update. FluidVoice will restart automatically."))
         detail.frame = NSRect(x: 92, y: 42, width: 304, height: 34)
         detail.font = .fluidSystemFont(ofSize: 13)
         detail.textColor = .secondaryLabelColor

@@ -21,22 +21,22 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>FluidVoice needs Accessibility permission to listen for global hotkeys and type text into other apps when you stop recording.</string>
+	<string>$(PICHI_PRODUCT_NAME) needs Accessibility permission to listen for global hotkeys and type text into other apps when you stop recording.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>FluidVoice needs microphone access to record your voice for speech-to-text transcription. Your audio is processed locally and never sent to external servers.</string>
+	<string>$(PICHI_PRODUCT_NAME) needs microphone access to record your voice for speech-to-text transcription. Speech recognition runs on this Mac. AI enhancement may use a provider you configure.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>FluidVoice needs system audio access to record the meeting application you explicitly select. Meeting audio stays on this Mac.</string>
+	<string>$(PICHI_PRODUCT_NAME) needs system audio access to record the meeting application you explicitly select. Meeting audio stays on this Mac.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>FluidVoice needs Screen &amp; System Audio access to record audio from the meeting application you explicitly select.</string>
+	<string>$(PICHI_PRODUCT_NAME) needs Screen &amp; System Audio access to record audio from the meeting application you explicitly select.</string>
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>FluidVoice needs permission to control system events for managing launch at startup settings.</string>
+	<string>$(PICHI_PRODUCT_NAME) needs permission to control system events for managing launch at startup settings.</string>
 	<key>POSTHOG_API_KEY</key>
-	<string>phc_coNu37345O2bgaAeQMD3tezkg1rDCbDS9Y3pOVvp2VM</string>
+	<string></string>
 	<key>POSTHOG_HOST</key>
 	<string>https://eu.i.posthog.com</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>FluidVoice uses on-device speech recognition to transcribe your voice commands and text quickly and privately.</string>
+	<string>$(PICHI_PRODUCT_NAME) uses on-device speech recognition to transcribe your voice commands and text quickly and privately.</string>
 </dict>
 </plist>

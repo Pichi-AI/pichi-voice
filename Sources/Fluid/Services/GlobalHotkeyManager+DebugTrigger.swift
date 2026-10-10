@@ -8,7 +8,7 @@ extension GlobalHotkeyManager {
     func registerDebugToggleTriggerIfEnabled() {
         guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.FluidApp.debug.toggleRecording"),
+            forName: Notification.Name("\(AppBrand.bundleIdentifier).debug.toggleRecording"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -18,7 +18,7 @@ extension GlobalHotkeyManager {
             }
         }
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.FluidApp.debug.pasteLastTranscript"),
+            forName: Notification.Name("\(AppBrand.bundleIdentifier).debug.pasteLastTranscript"),
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -28,7 +28,7 @@ extension GlobalHotkeyManager {
             }
         }
         DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.FluidApp.debug.showPasteFailure"),
+            forName: Notification.Name("\(AppBrand.bundleIdentifier).debug.showPasteFailure"),
             object: nil,
             queue: .main
         ) { _ in

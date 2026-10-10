@@ -205,7 +205,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.cancelSuppressionRetry()
         self.request = request
         let resolved = NSWorkspace.shared.urlForApplication(withBundleIdentifier: request.bundleIdentifier)
-        self.appIcon = NSImage(named: "AppIcon") ?? NSApp.applicationIconImage
+        self.appIcon = PichiBrandMark.appIcon
         let appName = resolved.flatMap {
             FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "")
         } ?? "Meeting"

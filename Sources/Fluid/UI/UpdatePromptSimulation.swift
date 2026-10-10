@@ -9,7 +9,7 @@ enum UpdatePromptSimulation {
     static func register(_ delegate: AppDelegate) -> NSObjectProtocol? {
         guard self.isEnabled else { return nil }
         return DistributedNotificationCenter.default().addObserver(
-            forName: Notification.Name("com.FluidApp.debug.updateUI"),
+            forName: Notification.Name("\(AppBrand.bundleIdentifier).debug.updateUI"),
             object: String(ProcessInfo.processInfo.processIdentifier),
             queue: .main
         ) { [weak delegate] notification in

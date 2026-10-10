@@ -3223,6 +3223,7 @@ final class AudioBudgetMeasurementGateTests: XCTestCase {
 final class SimpleUpdaterTests: XCTestCase {
     func testInstallStatusClosesWithoutTerminatingTheOldApp() throws {
         let updater = SimpleUpdater()
+        updater.updatesEnabledForTesting = true
         let version = "status-test-\(UUID().uuidString)"
         updater.showUpdateInstallStatus(version: version)
         defer { updater.dismissUpdateInstallStatus() }

@@ -433,9 +433,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         let asrModelVersion = descriptor.asrModelVersion
         let modelVersion = descriptor.variant.rawValue
         #if DEBUG
-        let cacheDirectory = self.modelCacheRootForTesting ?? AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let cacheDirectory = self.modelCacheRootForTesting ?? AppBrand.modelsDirectory
         #else
-        let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let cacheDirectory = AppBrand.modelsDirectory
         #endif
         let modelCacheDirectory = descriptor.cacheDirectory(in: cacheDirectory)
         DebugLogger.shared.info(
@@ -534,6 +534,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
             } else {
                 models = try await AsrModels.downloadAndLoad(
+                    to: modelCacheDirectory,
                     version: asrModelVersion,
                     progressHandler: fluidAudioProgressHandler
                 )
@@ -1731,9 +1732,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
         #if DEBUG
         let directory = self.modelCacheRootForTesting.map { descriptor.cacheDirectory(in: $0) }
-            ?? AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+            ?? descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
         #else
-        let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+        let directory = descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
         #endif
         try await Task.detached(priority: .userInitiated) {
             if FileManager.default.fileExists(atPath: directory.path) {
