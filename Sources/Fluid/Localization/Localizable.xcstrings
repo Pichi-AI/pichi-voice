@@ -16664,6 +16664,23 @@
         }
       }
     },
+    "Hide %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hide %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скрыть %@"
+          }
+        }
+      }
+    },
     "Hide details": {
       "extractionState": "manual",
       "localizations": {
@@ -26699,6 +26716,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Тишиной считается уровень ниже -45 dBFS. Тихая речь тоже может попасть в эту категорию. Шумоподавление не применяется."
+          }
+        }
+      }
+    },
+    "Quit %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quit %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершить %@"
           }
         }
       }
