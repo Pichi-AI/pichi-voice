@@ -120,6 +120,17 @@ struct BrandProfileTests {
             }
         }
         precondition(AppBrand.substitutingProductNames(in: "FluidVoice FluidMeet", profile: BrandProfile(appName: "FluidMeet Partner", meetingName: "Other", assistantName: "AI", tagline: "Voice", accentLight: "#123456", accentDark: "#ABCDEF", website: "https://example.com", support: "https://example.com")) == "FluidMeet Partner Other", "Imported names are data and must never be replaced recursively")
+        // Imported product names may legitimately contain printf punctuation.
+        // They must stay literal, consume no arguments and never transform argument data.
+        for name in ["%@", "%lld", "100%", "100%@ Voice"] {
+            let profile = BrandProfile(appName: name, meetingName: name + " Meet", assistantName: name + " AI", tagline: "Speech", accentLight: "#123456", accentDark: "#ABCDEF", website: "https://example.com", support: "https://example.com")
+            let imported = try BrandPackage.decode(BrandPackage(profile: profile).encoded()).profile
+            precondition(AppBrand.format("FluidVoice %@", profile: imported, language: .english, arguments: ["FluidVoice version %@ %lld 100%"]) == name + " FluidVoice version %@ %lld 100%")
+            precondition(AppBrand.format("FLUIDVOICE %@", profile: imported, language: .english, arguments: ["1.6.10"]) == name.uppercased() + " 1.6.10")
+            precondition(AppBrand.format("Rolled back to %@. FluidVoice will relaunch shortly.", profile: imported, language: .english, arguments: ["FluidVoice %@"]) == "Rolled back to FluidVoice %@. " + name + " will relaunch shortly.")
+            precondition(AppBrand.format("FluidMeet + Fluid Intelligence: %lld%%", profile: imported, language: .english, arguments: [25]) == name + " Meet + " + name + " AI: 25%")
+            precondition(AppBrand.substitutingProductNames(in: "FluidVoice", profile: imported) == name, "Plain text must not double percent characters")
+        }
         precondition(AppBrand.releaseBundleIdentifier(from: "ai.pichi.voice.debug") == "ai.pichi.voice")
         precondition(AppBrand.releaseBundleIdentifier(from: "com.partner.debug.voice") == "com.partner.debug.voice")
         precondition(AppBrand.keychainService.hasPrefix(AppBrand.bundleIdentifier))

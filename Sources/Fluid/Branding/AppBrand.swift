@@ -122,7 +122,19 @@ nonisolated enum AppBrand {
         self.substitutingProductNames(in: PichiLocalization.text(source, language: language, bundle: bundle), profile: profile)
     }
 
-    static func substitutingProductNames(in source: String, profile: BrandProfile) -> String {
+    /// Localize a trusted template before inserting brand data. Only inserted names are escaped;
+    /// format arguments remain verbatim data and never pass through brand substitution.
+    static func format(_ source: String, _ arguments: CVarArg...) -> String {
+        self.format(source, profile: self.profile, language: PichiLocalization.language, arguments: arguments)
+    }
+
+    static func format(_ source: String, profile: BrandProfile, language: PichiInterfaceLanguage, bundle: Bundle = .main, arguments: [CVarArg]) -> String {
+        let localized = PichiLocalization.text(source, language: language, bundle: bundle)
+        let template = self.substitutingProductNames(in: localized, profile: profile, escapingFormatSpecifiers: true)
+        return String(format: template, locale: language.locale, arguments: arguments)
+    }
+
+    static func substitutingProductNames(in source: String, profile: BrandProfile, escapingFormatSpecifiers: Bool = false) -> String {
         let names = [
             "fluidvoice": profile.appName, "fluid voice": profile.appName,
             "fluidmeet": profile.meetingName, "fluid meet": profile.meetingName,
@@ -138,7 +150,9 @@ nonisolated enum AppBrand {
             guard let originalRange = Range(match.range, in: source), let resultRange = Range(match.range, in: result) else { continue }
             let original = String(source[originalRange])
             guard let replacement = names[original.lowercased()] else { continue }
-            result.replaceSubrange(resultRange, with: original == original.uppercased() ? replacement.uppercased() : replacement)
+            let displayedName = original == original.uppercased() ? replacement.uppercased() : replacement
+            result.replaceSubrange(resultRange, with: escapingFormatSpecifiers
+                ? displayedName.replacingOccurrences(of: "%", with: "%%") : displayedName)
         }
         return result
     }

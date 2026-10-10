@@ -10,7 +10,7 @@ struct ReleaseHighlightsView: View {
         VStack(alignment: .leading, spacing: 28) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(PichiLocalization.format(AppBrand.text("FLUIDVOICE %@"), self.content.release))
+                    Text(AppBrand.format("FLUIDVOICE %@", self.content.release))
                         .font(self.theme.typography.captionStrong)
                         .tracking(2)
                         .foregroundStyle(self.theme.palette.secondaryText)

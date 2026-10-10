@@ -1306,7 +1306,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                 try await SimpleUpdater.shared.rollbackToLatestBackup()
                 let success = NSAlert()
                 success.messageText = PichiLocalization.text("Rollback Successful")
-                success.informativeText = PichiLocalization.format(AppBrand.text("Rolled back to %@. FluidVoice will relaunch shortly."), availableVersion)
+                success.informativeText = AppBrand.format("Rolled back to %@. FluidVoice will relaunch shortly.", availableVersion)
                 success.alertStyle = .informational
                 success.addButton(withTitle: PichiLocalization.text("Report Bug"))
                 success.addButton(withTitle: PichiLocalization.text("OK"))
