@@ -80,7 +80,7 @@ nonisolated enum PichiMeetingSummaryTransport {
         return request
     }
 
-    static func schema(ledger: Bool, sourceIndexes: [Int]? = nil) -> [String: Any] {
+    static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil) -> [String: Any] {
         var evidence: [String: Any] = [
             "type": "object", "additionalProperties": false, "required": ["segmentID", "quote"],
             "properties": ["segmentID": ["type": "string"], "quote": ["type": "string", "minLength": 1, "maxLength": 500]],
@@ -93,10 +93,19 @@ nonisolated enum PichiMeetingSummaryTransport {
         let citationItem: [String: Any] = definitions.isEmpty ? evidence : ["$ref": "#/$defs/evidence"]
         let citations: [String: Any] = ["type": "array", "items": citationItem, "minItems": 1, "maxItems": 8]
         if ledger {
-            return definitions.merging(["type": "object", "additionalProperties": false, "required": ["updates"], "properties": [
-                "updates": ["type": "array", "items": ["type": "object", "additionalProperties": false,
-                            "required": ["index", "evidence"], "properties": ["index": ["type": "integer", "minimum": 0], "evidence": citations]]],
-            ]]) { _, new in new }
+            var index: [String: Any] = ["type": "integer", "minimum": 0]
+            var updates: [String: Any] = ["type": "array"]
+            if let candidateIndexes {
+                let choices = Array(Set(candidateIndexes)).sorted()
+                // An empty batch permits only empty updates; an empty enum is not
+                // supported by every structured-output provider.
+                if !choices.isEmpty { index["enum"] = choices }
+                updates["maxItems"] = choices.count
+            }
+            updates["items"] = ["type": "object", "additionalProperties": false,
+                                "required": ["index", "evidence"], "properties": ["index": index, "evidence": citations]]
+            return definitions.merging(["type": "object", "additionalProperties": false, "required": ["updates"],
+                                        "properties": ["updates": updates]]) { _, new in new }
         }
         let properties: [String: Any] = ["text": ["type": "string", "minLength": 1, "maxLength": 2000], "evidence": citations]
         let item: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["text", "evidence"], "properties": properties]
@@ -109,7 +118,7 @@ nonisolated enum PichiMeetingSummaryTransport {
         var fields: [String: Any] = [:]
         for name in ["summary", "decisions", "actions", "openQuestions", "changes", "answers"] {
             fields[name] = ["type": "array", "items": name == "actions" ? action : item,
-                            "minItems": name == "summary" ? 1 : 0, "maxItems": name == "summary" ? 5 : 30]
+                            "minItems": name == "summary" ? 1 : 0, "maxItems": name == "summary" ? 8 : 30]
         }
         return definitions.merging(["type": "object", "additionalProperties": false, "required": Array(fields.keys).sorted(), "properties": fields]) { _, new in new }
     }

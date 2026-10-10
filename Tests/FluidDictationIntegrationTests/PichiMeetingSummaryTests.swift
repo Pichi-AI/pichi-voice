@@ -75,6 +75,77 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(pieces.map(\.quote.count), [160, 160, 160, 30], "Repeated passages and the final tail must remain in their original order")
     }
 
+    func testLedgerSchemaRestrictsSparseCandidateIDsAndEmptyBatches() throws {
+        for candidates in [[4, 11, 27], []] {
+            let schema = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [2, 9], candidateIndexes: candidates)
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let updates = try XCTUnwrap(properties["updates"] as? [String: Any])
+            XCTAssertEqual(updates["maxItems"] as? Int, candidates.count)
+            let item = try XCTUnwrap(updates["items"] as? [String: Any])
+            let fields = try XCTUnwrap(item["properties"] as? [String: Any])
+            let index = try XCTUnwrap(fields["index"] as? [String: Any])
+            if candidates.isEmpty {
+                XCTAssertNil(index["enum"], "No invalid empty enum; maxItems zero prevents updates")
+            } else {
+                XCTAssertEqual(index["enum"] as? [Int], candidates, "Candidate IDs are not batch positions")
+            }
+        }
+    }
+
+    func testAbsentDeadlineCannotLeakFromPromptOrModelAndRepairUsesSameSources() async throws {
+        var session = self.session()
+        session.transcriptSegments[0].text = "Иван подготовит отчёт. Срок пока не назначили."
+        let evidence = PichiMeetingSummaryEvidence(segmentID: self.id, quote: session.transcriptSegments[0].text)
+        let valid = PichiMeetingSummaryDocument(summary: [.init(text: "Отчёт подготовят, срок не назначен.", evidence: [evidence])],
+                                               decisions: [], actions: [.init(text: "Подготовить отчёт.", evidence: [evidence], owner: "Иван")],
+                                               openQuestions: [])
+        var contaminated = valid
+        contaminated.actions[0].deadline = "к среде"
+        let transport = RepairTransport(responses: [try self.json(contaminated), try self.json(valid)])
+        let output = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertNil(output.actions[0].deadline)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2, "A copied but unsupported example must never reach the published document")
+        XCTAssertEqual(requests[0].messages[1]["content"] as? String, requests[1].messages[1]["content"] as? String)
+        for request in requests {
+            let prompt = try XCTUnwrap(request.messages[0]["content"] as? String)
+            XCTAssertFalse(prompt.contains("к среде"), "Instruction text must not supply a tempting concrete deadline")
+            XCTAssertFalse(prompt.contains("Иван"), "A concrete owner belongs only to source data")
+        }
+    }
+
+    func testLedgerRejectsUnknownAndDuplicateCandidateIDsEvenWhenProviderIgnoresSchema() async throws {
+        let fixture = self.evidenceBudgetFixture(count: 1)
+        let update: [String: Any] = ["index": 0, "evidence": [["segmentID": fixture.correction.segmentID.uuidString,
+                                                            "quote": fixture.correction.quote]]]
+        var unknown = update
+        unknown["index"] = 7
+        for updates in [[unknown], [update, update]] {
+            let raw = String(decoding: try JSONSerialization.data(withJSONObject: ["updates": updates]), as: UTF8.self)
+            let transport = RepairTransport(responses: [try self.json(fixture.document), raw])
+            do {
+                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: fixture.session, configuration: self.configuration())
+                XCTFail("Out-of-batch or duplicate updates must be rejected")
+            } catch PichiMeetingSummaryError.invalidEvidence {
+            } catch PichiMeetingSummaryError.invalidOutput {
+                XCTAssertEqual(updates.count, 2, "Duplicate updates exceed the actual candidate count")
+            }
+            let requests = await transport.requests
+            XCTAssertEqual(requests.count, 2, "A ledger violation must not be repaired or published")
+            let nativeRequest = try PichiMeetingSummaryTransport.ollamaRequest(requests[1])
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(nativeRequest.httpBody)) as? [String: Any])
+            let schema = try XCTUnwrap(body["format"] as? [String: Any])
+            let fields = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let array = try XCTUnwrap(fields["updates"] as? [String: Any])
+            XCTAssertEqual(array["maxItems"] as? Int, 1)
+            let item = try XCTUnwrap(array["items"] as? [String: Any])
+            let itemFields = try XCTUnwrap(item["properties"] as? [String: Any])
+            XCTAssertEqual((itemFields["index"] as? [String: Any])?["enum"] as? [Int], [0])
+        }
+    }
+
     func testExistingChunkBudgetPreservesManyShortTurnsAndDifficultWordBoundaries() {
         let shortTurns = (0..<2000).map { index in
             PichiMeetingSummaryTurn(id: UUID(), seconds: Double(index), speaker: "", text: "да")
