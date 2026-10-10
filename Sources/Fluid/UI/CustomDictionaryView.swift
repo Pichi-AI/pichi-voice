@@ -165,7 +165,7 @@ struct CustomDictionaryView: View {
     }
 
     private var trainingFinalOutputText: String {
-        guard !self.lastTrainingOutput.isEmpty else { return "Record to check" }
+        guard !self.lastTrainingOutput.isEmpty else { return PichiLocalization.text("Record to check") }
         return self.trainingOutputIsCovered ? self.normalizedTrainingReplacement : self.lastTrainingOutput
     }
 
@@ -425,8 +425,8 @@ struct CustomDictionaryView: View {
                 .foregroundStyle(self.isWordDrawerPresented ? self.theme.palette.accent : self.theme.palette.primaryText)
         }
 
-        .accessibilityLabel(self.isWordDrawerPresented ? "Collapse your dictionary" : "Expand your dictionary")
-        .help(self.isWordDrawerPresented ? "Collapse your dictionary" : "Expand your dictionary")
+        .accessibilityLabel(PichiLocalization.text(self.isWordDrawerPresented ? "Collapse your dictionary" : "Expand your dictionary"))
+        .help(PichiLocalization.text(self.isWordDrawerPresented ? "Collapse your dictionary" : "Expand your dictionary"))
     }
 
     private var drawerEntries: [SettingsStore.CustomDictionaryEntry] {
@@ -523,7 +523,7 @@ struct CustomDictionaryView: View {
                         Divider().opacity(0.3)
                     }
                     if self.drawerEntries.isEmpty {
-                        Text(self.wordSearch.isEmpty ? "Add a word to see it here." : "No matching words.")
+                        Text(PichiLocalization.text(self.wordSearch.isEmpty ? "Add a word to see it here." : "No matching words."))
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.theme.palette.secondaryText)
                             .padding(.vertical, self.theme.metrics.spacing.lg)
@@ -667,7 +667,7 @@ struct CustomDictionaryView: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
             self.dictionaryComposerModeSegmented
 
-            Text(self.composerModeDetail)
+            Text(PichiLocalization.text(self.composerModeDetail))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -724,7 +724,7 @@ struct CustomDictionaryView: View {
                 Task { await self.addTrainedReplacement() }
             } label: {
                 Label(
-                    self.trainedReplacementButtonTitle,
+                    PichiLocalization.text(self.trainedReplacementButtonTitle),
                     systemImage: self.shouldEmphasizeTrainedReplacementButton
                         ? "sparkles"
                         : (self.trainingAlreadyCorrectWithoutReplacement ? "checkmark" : "plus")
@@ -845,9 +845,9 @@ struct CustomDictionaryView: View {
     }
 
     private var voiceMatchingSettingsRow: some View {
-        Text(self.pronunciationEnabled
+        Text(PichiLocalization.text(self.pronunciationEnabled
             ? "Pronunciation dictionary is on. Voice training uses the fast sound-order matcher."
-            : "Voice training is off. Enable “Learn from your pronunciation” in Settings → Experimental.")
+            : "Voice training is off. Enable “Learn from your pronunciation” in Settings → Experimental."))
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
@@ -869,8 +869,8 @@ struct CustomDictionaryView: View {
             } else if self.trainingFinalOutputIsReady {
                 Label(
                     self.activePronunciationMatching
-                        ? "Voice profile for \(self.trainingTargetReference) captured 3 times."
-                        : "The last 3 recordings are covered by this correction.",
+                        ? PichiLocalization.format("Voice profile for %@ captured 3 times.", self.trainingTargetReference)
+                        : PichiLocalization.text("The last 3 recordings are covered by this correction."),
                     systemImage: "checkmark.circle.fill"
                 )
                 .font(self.theme.typography.captionStrong)
@@ -887,7 +887,7 @@ struct CustomDictionaryView: View {
                     )
                     self.trainingInstruction(
                         number: 3,
-                        text: AppBrand.text("Say \(self.trainingTargetReference) naturally, then pause. FluidVoice records and listens again automatically.")
+                        text: AppBrand.text(PichiLocalization.format("Say %@ naturally, then pause. FluidVoice records and listens again automatically.", self.trainingTargetReference))
                     )
                     self.trainingInstruction(
                         number: 4,
@@ -921,7 +921,7 @@ struct CustomDictionaryView: View {
                     Task { await self.toggleAutomaticTraining() }
                 } label: {
                     Label(
-                        self.trainingRecorderButtonTitle,
+                        PichiLocalization.text(self.trainingRecorderButtonTitle),
                         systemImage: self.trainingRecorderIsStop ? "stop.fill" : "mic.fill"
                     )
                 }
@@ -998,7 +998,7 @@ struct CustomDictionaryView: View {
     private var trainingFinalOutputPanel: some View {
         HStack(alignment: .center, spacing: self.theme.metrics.spacing.md) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(self.activePronunciationMatching ? "Spelling to save" : "Final output")
+                Text(PichiLocalization.text(self.activePronunciationMatching ? "Spelling to save" : "Final output"))
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.secondaryText)
 
@@ -1037,7 +1037,7 @@ struct CustomDictionaryView: View {
         if self.trainingHasError || self.isTrainingActive || !self.trainingVariants.isEmpty {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 if self.trainingHasError {
-                    Label(self.trainingStatusMessage, systemImage: "exclamationmark.triangle.fill")
+                    Label(PichiLocalization.text(self.trainingStatusMessage), systemImage: "exclamationmark.triangle.fill")
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.warning)
                 }
@@ -1294,7 +1294,7 @@ struct CustomDictionaryView: View {
             .fluidGlassAction()
             .disabled(!self.vocabBoostingEnabled)
             .opacity(self.vocabBoostingEnabled ? 1 : 0.45)
-            .help(self.vocabBoostingEnabled ? "Modify custom words" : "Turn on Boosting to modify custom words.")
+            .help(PichiLocalization.text(self.vocabBoostingEnabled ? "Modify custom words" : "Turn on Boosting to modify custom words."))
             .popover(isPresented: self.$isCustomWordsPresented, arrowEdge: .top) {
                 self.customWordsPopover
             }
@@ -1400,7 +1400,7 @@ struct CustomDictionaryView: View {
             }
 
             if self.boostHasError {
-                Label(self.boostStatusMessage, systemImage: "exclamationmark.triangle.fill")
+                Label(PichiLocalization.text(self.boostStatusMessage), systemImage: "exclamationmark.triangle.fill")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.warning)
             }
@@ -1414,7 +1414,7 @@ struct CustomDictionaryView: View {
 
     private var boostWordEditor: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-            Text(self.boostEditorTitle)
+            Text(PichiLocalization.text(self.boostEditorTitle))
                 .font(self.theme.typography.captionStrong)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -1431,11 +1431,11 @@ struct CustomDictionaryView: View {
                     .font(self.theme.typography.captionStrong)
                 Picker("Word Priority", selection: self.$boostTermStrength) {
                     ForEach(BoostStrengthPreset.allCases) { preset in
-                        Text(preset.rawValue).tag(preset)
+                        Text(PichiLocalization.text(preset.rawValue)).tag(preset)
                     }
                 }
                 .pickerStyle(.segmented)
-                Text(self.boostTermStrength.hint)
+                Text(PichiLocalization.text(self.boostTermStrength.hint))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -1598,13 +1598,13 @@ struct CustomDictionaryView: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(self.punctuationAutoConvertEnabled ? "Spoken Formatting is On" : "Spoken Formatting is Off")
+                Text(PichiLocalization.text(self.punctuationAutoConvertEnabled ? "Spoken Formatting is On" : "Spoken Formatting is Off"))
                     .font(self.theme.typography.bodySmallStrong)
-                Text(
+                Text(PichiLocalization.text(
                     self.punctuationAutoConvertEnabled
                         ? "Formatting actions and punctuation will run after the start word."
                         : "Your rules stay saved, but they will not change dictated text."
-                )
+                ))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -1712,9 +1712,9 @@ struct CustomDictionaryView: View {
                 )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(action.title)
+                Text(PichiLocalization.text(action.title))
                     .font(self.theme.typography.bodySmallStrong)
-                Text(rule.aliases.isEmpty ? "No spoken phrases set" : rule.aliases.joined(separator: ", "))
+                Text(rule.aliases.isEmpty ? PichiLocalization.text("No spoken phrases set") : rule.aliases.joined(separator: ", "))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
@@ -1732,7 +1732,7 @@ struct CustomDictionaryView: View {
                 .toggleStyle(.switch)
                 .tint(self.theme.palette.accent)
                 .disabled(rule.aliases.isEmpty)
-                .help(rule.aliases.isEmpty ? "Add a spoken phrase before enabling this action." : "Enable \(action.title)")
+                .help(rule.aliases.isEmpty ? PichiLocalization.text("Add a spoken phrase before enabling this action.") : PichiLocalization.format("Enable %@", PichiLocalization.text(action.title)))
         }
         .padding(.horizontal, self.theme.metrics.spacing.md)
         .padding(.vertical, 8)
@@ -1748,7 +1748,7 @@ struct CustomDictionaryView: View {
 
     private func formattingActionEditor(_ action: SettingsStore.SpokenFormattingAction) -> some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-            Text("Edit \(action.title) Phrases")
+            Text(PichiLocalization.format("Edit %@ Phrases", PichiLocalization.text(action.title)))
                 .font(self.theme.typography.captionStrong)
             Text("Enter one phrase per line. Clearing every phrase disables this action.")
                 .font(self.theme.typography.caption)
@@ -1759,7 +1759,7 @@ struct CustomDictionaryView: View {
                 .frame(minHeight: 68, maxHeight: 92)
                 .scrollContentBackground(.hidden)
                 .dictionaryInputChrome(minHeight: 68)
-                .accessibilityLabel("Spoken phrases for \(action.title)")
+                .accessibilityLabel(PichiLocalization.format("Spoken phrases for %@", PichiLocalization.text(action.title)))
 
             HStack {
                 Spacer()
@@ -1815,7 +1815,7 @@ struct CustomDictionaryView: View {
             )
             self.punctuationExampleText(
                 spoken: "\(self.punctuationPreviewPrefix) next line",
-                typed: "New Line"
+                typed: PichiLocalization.text("New Line")
             )
         }
         .font(self.theme.typography.caption)
@@ -1846,7 +1846,7 @@ struct CustomDictionaryView: View {
 
     private var punctuationRuleEditor: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-            Text(self.punctuationEditorTitle)
+            Text(PichiLocalization.text(self.punctuationEditorTitle))
                 .font(self.theme.typography.captionStrong)
 
             ViewThatFits(in: .horizontal) {
@@ -1936,9 +1936,9 @@ struct CustomDictionaryView: View {
                 .foregroundStyle(self.theme.palette.tertiaryText)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodySmallStrong)
-                Text(detail)
+                Text(PichiLocalization.text(detail))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -2328,7 +2328,7 @@ struct CustomDictionaryView: View {
         guard !CustomDictionaryTrainingMerge.isOversizedResponse(transcript, intendedReplacement: self.normalizedTrainingReplacement) else {
             self.isAutomaticTrainingEnabled = false
             self.trainingHasError = true
-            self.trainingStatusMessage = "That was longer than expected. Say only “\(self.normalizedTrainingReplacement)”, then pause. This try wasn’t saved."
+            self.trainingStatusMessage = PichiLocalization.format("That was longer than expected. Say only “%@”, then pause. This try wasn’t saved.", self.normalizedTrainingReplacement)
             return
         }
         if self.activePronunciationMatching,
@@ -2584,7 +2584,7 @@ struct CustomDictionaryView: View {
         } else if self.trainingVariants.isEmpty {
             self.trainingStatusMessage = ""
         } else {
-            self.trainingStatusMessage = "Loaded \(self.trainingVariants.count) saved \(self.trainingVariants.count == 1 ? "capture" : "captures")."
+            self.trainingStatusMessage = PichiLocalization.format(self.trainingVariants.count == 1 ? "Loaded %lld saved capture." : "Loaded %lld saved captures.", self.trainingVariants.count)
         }
         self.trainingHasError = false
     }
@@ -2639,11 +2639,11 @@ struct CustomDictionaryView: View {
     private func loadBoostTerms() {
         do {
             self.boostTerms = try ParakeetVocabularyStore.shared.loadUserBoostTerms()
-            self.boostStatusMessage = "Loaded \(self.boostTerms.count) custom words."
+            self.boostStatusMessage = PichiLocalization.format("Loaded %lld custom words.", self.boostTerms.count)
             self.boostHasError = false
         } catch {
             self.boostTerms = []
-            self.boostStatusMessage = "Couldn't load custom words: \(error.localizedDescription)"
+            self.boostStatusMessage = PichiLocalization.format("Couldn't load custom words: %@", error.localizedDescription)
             self.boostHasError = true
         }
     }
@@ -2651,10 +2651,10 @@ struct CustomDictionaryView: View {
     private func saveBoostTerms() {
         do {
             try ParakeetVocabularyStore.shared.saveUserBoostTerms(self.boostTerms)
-            self.boostStatusMessage = "Saved \(self.boostTerms.count) custom words."
+            self.boostStatusMessage = PichiLocalization.format("Saved %lld custom words.", self.boostTerms.count)
             self.boostHasError = false
         } catch {
-            self.boostStatusMessage = "Couldn't save custom words: \(error.localizedDescription)"
+            self.boostStatusMessage = PichiLocalization.format("Couldn't save custom words: %@", error.localizedDescription)
             self.boostHasError = true
         }
     }
@@ -2674,7 +2674,7 @@ struct CustomDictionaryView: View {
 
             self.presentInfoAlert(
                 title: "Dictionary Exported",
-                message: "Saved \(document.replacements.count) replacement rules and \(document.customWords.count) custom words."
+                message: PichiLocalization.format("Saved %lld replacement rules and %lld custom words.", document.replacements.count, document.customWords.count)
             )
         } catch {
             self.presentErrorAlert(title: "Dictionary Export Failed", message: error.localizedDescription)
@@ -2701,7 +2701,7 @@ struct CustomDictionaryView: View {
 
             self.presentInfoAlert(
                 title: "Dictionary Imported",
-                message: "Now using \(summary.replacementCount) replacement rules and \(summary.customWordCount) custom words."
+                message: PichiLocalization.format("Now using %lld replacement rules and %lld custom words.", summary.replacementCount, summary.customWordCount)
             )
         } catch {
             self.presentErrorAlert(title: "Dictionary Import Failed", message: error.localizedDescription)
@@ -2710,16 +2710,12 @@ struct CustomDictionaryView: View {
 
     private func confirmDictionaryImport(_ document: DictionaryTransferDocument) -> DictionaryTransferImportMode? {
         let confirm = NSAlert()
-        confirm.messageText = "Import this dictionary?"
-        confirm.informativeText = """
-        Found \(document.replacements.count) replacement rules and \(document.customWords.count) custom words.
-
-        Merge adds them to your current dictionary. Replace clears the current dictionary first.
-        """
+        confirm.messageText = PichiLocalization.text("Import this dictionary?")
+        confirm.informativeText = PichiLocalization.format("Found %lld replacement rules and %lld custom words.\n\nMerge adds them to your current dictionary. Replace clears the current dictionary first.", document.replacements.count, document.customWords.count)
         confirm.alertStyle = .warning
-        confirm.addButton(withTitle: "Merge")
-        confirm.addButton(withTitle: "Replace")
-        confirm.addButton(withTitle: "Cancel")
+        confirm.addButton(withTitle: PichiLocalization.text("Merge"))
+        confirm.addButton(withTitle: PichiLocalization.text("Replace"))
+        confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
 
         switch confirm.runModal() {
         case .alertFirstButtonReturn:
@@ -2733,16 +2729,16 @@ struct CustomDictionaryView: View {
 
     private func presentInfoAlert(title: String, message: String) {
         let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
+        alert.messageText = PichiLocalization.text(title)
+        alert.informativeText = PichiLocalization.text(message)
         alert.alertStyle = .informational
         alert.runModal()
     }
 
     private func presentErrorAlert(title: String, message: String) {
         let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
+        alert.messageText = PichiLocalization.text(title)
+        alert.informativeText = PichiLocalization.text(message)
         alert.alertStyle = .critical
         alert.runModal()
     }
@@ -2805,7 +2801,7 @@ private extension CustomDictionaryView {
                 .foregroundStyle(self.theme.palette.accent)
                 .frame(width: 16, alignment: .center)
 
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }
@@ -2885,7 +2881,7 @@ private struct VoiceMatchingSettingsRow: View {
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: systemImage)
-                Text(title)
+                Text(PichiLocalization.text(title))
                 if isResearchPreview {
                     Text("Research Preview")
                         .font(self.theme.typography.captionSmall)
@@ -3044,11 +3040,11 @@ private struct DictionaryFocusDismissMonitor: NSViewRepresentable {
 
 private enum DictionaryTrainingCopy {
     static func target(for normalizedTarget: String) -> String {
-        normalizedTarget.isEmpty ? "the word" : "“\(normalizedTarget)”"
+        normalizedTarget.isEmpty ? PichiLocalization.text("the word") : "“\(normalizedTarget)”"
     }
 
     static func composerDetail(mode: DictionaryComposerMode, target: String) -> String {
-        mode == .train && target != "the word" ? "Teach \(target) by speaking it." : mode.detail
+        mode == .train && target != PichiLocalization.text("the word") ? PichiLocalization.format("Teach %@ by speaking it.", target) : PichiLocalization.text(mode.detail)
     }
 
     static func readinessCaption(
@@ -3058,16 +3054,16 @@ private enum DictionaryTrainingCopy {
         usesVoiceMatching: Bool
     ) -> String {
         if isAlreadyCorrect {
-            return "No replacement is needed for \(target)."
+            return PichiLocalization.format("No replacement is needed for %@.", target)
         }
         if isReady {
             return usesVoiceMatching
-                ? "3 samples captured for \(target). Save, then try it in a sentence."
-                : "Ready. The last 3 recordings are covered by this correction."
+                ? PichiLocalization.format("3 samples captured for %@. Save, then try it in a sentence.", target)
+                : PichiLocalization.text("Ready. The last 3 recordings are covered by this correction.")
         }
         return usesVoiceMatching
-            ? "Say \(target) 3 times to capture pronunciation samples."
-            : "Repeat until 3 recordings in a row need no new corrections."
+            ? PichiLocalization.format("Say %@ 3 times to capture pronunciation samples.", target)
+            : PichiLocalization.text("Repeat until 3 recordings in a row need no new corrections.")
     }
 }
 
@@ -3120,7 +3116,7 @@ private struct DictionaryComposerModeTab: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: self.mode.systemImage)
                     .font(.fluidSystem(size: 12, weight: .semibold))
-                Text(self.mode.title)
+                Text(PichiLocalization.text(self.mode.title))
                     .font(self.theme.typography.bodySmallStrong)
             }
             .foregroundStyle(self.foreground)
@@ -3242,8 +3238,8 @@ nonisolated enum DictionaryPronunciationRevisionPolicy {
         let labels = Array(Set(outdated.map(\.label))).sorted()
         guard !labels.isEmpty else { return nil }
         let words = labels.prefix(3).joined(separator: ", ")
-        let additional = labels.count > 3 ? " and \(labels.count - 3) more" : ""
-        return "Pronunciation recordings for \(words)\(additional) need retraining for the updated \(descriptor.displayName). Your custom words and text corrections remain saved."
+        let additional = labels.count > 3 ? PichiLocalization.format(" and %lld more", labels.count - 3) : ""
+        return PichiLocalization.format("Pronunciation recordings for %@%@ need retraining for the updated %@. Your custom words and text corrections remain saved.", words, additional, descriptor.displayName)
     }
 }
 
@@ -3274,11 +3270,11 @@ struct DictionaryTrainingProgress {
         let count = min(self.pronunciationCount, CustomDictionaryTrainingMerge.readyCoveredCount)
         if self.spellingReady, !self.pronunciationReady {
             if self.spellingCount >= CustomDictionaryTrainingMerge.maxSamples {
-                return "Spelling examples are ready. Pronunciation needs more voice examples. Save spelling corrections only, or redo recordings to try voice learning again."
+                return PichiLocalization.text("Spelling examples are ready. Pronunciation needs more voice examples. Save spelling corrections only, or redo recordings to try voice learning again.")
             }
-            return "Spelling examples are ready. Pronunciation has \(count) of 3 voice examples. Record more to finish voice learning, or save spelling corrections only."
+            return PichiLocalization.format("Spelling examples are ready. Pronunciation has %lld of 3 voice examples. Record more to finish voice learning, or save spelling corrections only.", count)
         }
-        return "Pronunciation: \(count) of 3 voice examples"
+        return PichiLocalization.format("Pronunciation: %lld of 3 voice examples", count)
     }
 }
 
@@ -3444,10 +3440,10 @@ private struct ReplacementConfirmationToast: View {
             }
 
             VStack(spacing: 3) {
-                Text(self.confirmation.title)
+                Text(PichiLocalization.text(self.confirmation.title))
                     .font(self.theme.typography.sectionTitle)
                     .foregroundStyle(self.theme.palette.primaryText)
-                Text(self.confirmation.detail)
+                Text(PichiLocalization.text(self.confirmation.detail))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .multilineTextAlignment(.center)
@@ -3512,7 +3508,7 @@ private struct DictionaryTrainingReadinessRing: View {
                     .foregroundStyle(self.isReady ? self.theme.palette.accent : self.theme.palette.primaryText)
                     .monospacedDigit()
 
-                Text(self.usesVoiceMatching ? "samples" : "covered")
+                Text(PichiLocalization.text(self.usesVoiceMatching ? "samples" : "covered"))
                     .font(self.theme.typography.captionSmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -3522,7 +3518,7 @@ private struct DictionaryTrainingReadinessRing: View {
         .animation(.easeOut(duration: 0.24), value: self.progress)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Training progress")
-        .accessibilityValue("\(self.progress) of \(self.total) \(self.usesVoiceMatching ? "samples captured" : "recordings covered")")
+        .accessibilityValue(PichiLocalization.format("%lld of %lld %@", self.progress, self.total, PichiLocalization.text(self.usesVoiceMatching ? "samples captured" : "recordings covered")))
     }
 }
 
@@ -3644,7 +3640,7 @@ struct BoostTermRow: View {
 
             if let weight = self.term.weight {
                 let strength = BoostStrengthPreset.nearest(for: weight)
-                Text(strength.rawValue)
+                Text(PichiLocalization.text(strength.rawValue))
                     .font(self.theme.typography.bodySmallStrong)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)

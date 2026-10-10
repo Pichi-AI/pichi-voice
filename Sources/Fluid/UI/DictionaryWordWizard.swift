@@ -67,7 +67,7 @@ struct DictionaryWordWizard: View {
             }
             .frame(minHeight: 32)
             .overlay {
-                Text(self.step == .saved ? "Word saved" : "Step \(self.step.position) of 3")
+                Text(self.step == .saved ? PichiLocalization.text("Word saved") : PichiLocalization.format("Step %lld of 3", self.step.position))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .allowsHitTesting(false)
@@ -163,7 +163,7 @@ struct DictionaryWordWizard: View {
 
     private var captureStage: some View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
-            Text(self.step == .review ? (self.pronunciationIncomplete ? "Your spellings are ready" : "Your word is ready") : "Let’s hear your word")
+            Text(PichiLocalization.text(self.step == .review ? (self.pronunciationIncomplete ? "Your spellings are ready" : "Your word is ready") : "Let’s hear your word"))
                 .font(self.theme.typography.body)
                 .foregroundStyle(self.theme.palette.accent)
             Text("“\(self.word)”")
@@ -179,8 +179,8 @@ struct DictionaryWordWizard: View {
                 audioLevels: self.audioLevels
             )
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(DictionaryLearningEncouragement.messages(for: self.count)[0])
-            .accessibilityValue(self.processing ? "Processing recording" : (self.recording ? "Listening" : ""))
+            .accessibilityLabel(PichiLocalization.text(DictionaryLearningEncouragement.messages(for: self.count)[0]))
+            .accessibilityValue(PichiLocalization.text(self.processing ? "Processing recording" : (self.recording ? "Listening" : "")))
             .accessibilityHidden(false)
             self.captureControls
         }
@@ -215,7 +215,7 @@ struct DictionaryWordWizard: View {
             }
         }
         .fluidGlassAction(prominent: !self.hasViewedTips || self.showingRecordingTips, tone: self.theme.palette.accent)
-        .accessibilityValue(self.showingRecordingTips ? "Expanded" : "Collapsed")
+        .accessibilityValue(PichiLocalization.text(self.showingRecordingTips ? "Expanded" : "Collapsed"))
         .accessibilityHint("Shows or hides guidance beside the learning area")
     }
 
@@ -233,10 +233,10 @@ struct DictionaryWordWizard: View {
 
     private var captureGuidance: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
-            Text(self.step == .review ? "Your word, your way" : "For best results")
+            Text(PichiLocalization.text(self.step == .review ? "Your word, your way" : "For best results"))
                 .font(self.theme.typography.title)
             if self.step == .review {
-                Text(self.alreadyCorrect ? AppBrand.text("FluidVoice recognised your word in each recording.") : "Your recordings are ready. Save this word to use it in future dictations.")
+                Text(self.alreadyCorrect ? AppBrand.text("FluidVoice recognised your word in each recording.") : PichiLocalization.text("Your recordings are ready. Save this word to use it in future dictations."))
                     .font(self.theme.typography.statement)
                     .foregroundStyle(self.theme.palette.secondaryText)
                 Divider()
@@ -276,8 +276,8 @@ struct DictionaryWordWizard: View {
                 .background(self.theme.palette.accent.opacity(0.1), in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                Text(title).font(self.theme.typography.sectionTitle)
-                Text(detail).font(self.theme.typography.body)
+                Text(PichiLocalization.text(title)).font(self.theme.typography.sectionTitle)
+                Text(PichiLocalization.text(detail)).font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
@@ -296,7 +296,7 @@ struct DictionaryWordWizard: View {
 
     private var captureControls: some View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
-            self.stableInstruction("Say only “\(self.word)” once, then wait.", review: "Ready to add “\(self.word)”")
+            self.stableInstruction(PichiLocalization.format("Say only “%@” once, then wait.", self.word), review: PichiLocalization.format("Ready to add “%@”", self.word))
                 .font(self.theme.typography.title)
                 .foregroundStyle(self.theme.palette.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -324,9 +324,9 @@ struct DictionaryWordWizard: View {
 
     private func stableInstruction(_ recording: String, review: String) -> some View {
         ZStack {
-            Text(recording).hidden().accessibilityHidden(true)
-            Text(review).hidden().accessibilityHidden(true)
-            Text(self.step == .review ? review : recording)
+            Text(PichiLocalization.text(recording)).hidden().accessibilityHidden(true)
+            Text(PichiLocalization.text(review)).hidden().accessibilityHidden(true)
+            Text(PichiLocalization.text(self.step == .review ? review : recording))
         }
     }
 
@@ -335,7 +335,7 @@ struct DictionaryWordWizard: View {
             Button(action: self.onRecord) {
                 ZStack {
                     Text("Stop recording").hidden()
-                    Text(DictionaryCaptureAction.title(active: self.captureActive, failed: self.error != nil, count: self.count))
+                    Text(PichiLocalization.text(DictionaryCaptureAction.title(active: self.captureActive, failed: self.error != nil, count: self.count)))
                 }
             }
             .buttonStyle(FluidRecordInvitationStyle(inviting: !self.captureActive && self.count < 1, recording: self.captureActive))
@@ -381,7 +381,7 @@ struct DictionaryWordWizard: View {
         Button(action: self.onSave) {
             ZStack {
                 Text("Add “\(self.word)” to dictionary").hidden().accessibilityHidden(true)
-                Text(self.busy ? "Saving…" : (self.pronunciationIncomplete ? "Save spelling corrections" : "Add “\(self.word)” to dictionary"))
+                Text(self.busy ? PichiLocalization.text("Saving…") : (self.pronunciationIncomplete ? PichiLocalization.text("Save spelling corrections") : PichiLocalization.format("Add “%@” to dictionary", self.word)))
             }
         }
         .buttonStyle(FluidRecordInvitationStyle(inviting: self.step == .review && !self.busy, recording: false, fillsWidth: true))
@@ -391,7 +391,7 @@ struct DictionaryWordWizard: View {
                 Button("Record more", action: self.onRecord)
                     .buttonStyle(FluidRecordInvitationStyle(inviting: false, recording: false, prominent: false, fillsWidth: true))
                     .disabled(self.busy)
-                Text(self.pronunciationIncomplete ? "Needed to finish pronunciation learning" : "Optional · Recommended for tricky words")
+                Text(PichiLocalization.text(self.pronunciationIncomplete ? "Needed to finish pronunciation learning" : "Optional · Recommended for tricky words"))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(maxWidth: 190)
@@ -436,8 +436,8 @@ struct DictionaryWordWizard: View {
 
     private func heading(_ title: String, detail: String) -> some View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
-            Text(title).font(self.theme.typography.sectionTitle)
-            Text(detail).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.sectionTitle)
+            Text(PichiLocalization.text(detail)).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
         }
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
@@ -445,7 +445,7 @@ struct DictionaryWordWizard: View {
 
     private func primary(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
+            Text(PichiLocalization.text(title))
         }
         .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
     }
@@ -559,7 +559,7 @@ private struct DictionaryLearningRing: View {
             }
             if let count {
                 ZStack {
-                    Text(DictionaryLearningEncouragement.messages(for: count)[0])
+                    Text(PichiLocalization.text(DictionaryLearningEncouragement.messages(for: count)[0]))
                         .font(self.theme.typography.bodyStrong)
                         .foregroundStyle(self.highlightsProgress ? self.learningBlue : self.theme.palette.primaryText)
                         .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.9), value: self.highlightsProgress)
@@ -791,7 +791,7 @@ struct DictionaryWordPlayground: View {
 
     private var shortcut: String {
         let value = SettingsStore.shared.primaryDictationShortcutDisplayString
-        return value.isEmpty ? "your dictation shortcut" : value
+        return value.isEmpty ? PichiLocalization.text("your dictation shortcut") : value
     }
 
     var body: some View {
@@ -806,7 +806,7 @@ struct DictionaryWordPlayground: View {
                     .padding(10)
                     .accessibilityLabel("Dictionary test text")
                 if self.test.text.isEmpty {
-                    Text(self.test.phase == .recording ? "Listening…" : (self.test.phase == .processing ? "Checking…" : "Use \(self.shortcut) and say something with “\(self.word)”."))
+                    Text(self.test.phase == .recording ? PichiLocalization.text("Listening…") : (self.test.phase == .processing ? PichiLocalization.text("Checking…") : PichiLocalization.format("Use %@ and say something with “%@”.", self.shortcut, self.word)))
                         .font(self.theme.typography.body)
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .padding(15)
@@ -822,7 +822,7 @@ struct DictionaryWordPlayground: View {
             }
             switch self.test.result {
             case .recognized:
-                Text("“\(self.word)” recognized" + (self.test.successes > 1 ? " · \(self.test.successes) times" : ""))
+                Text(PichiLocalization.format("“%@” recognized", self.word) + (self.test.successes > 1 ? PichiLocalization.format(" · %lld times", self.test.successes) : ""))
                     .font(self.theme.typography.bodyStrong)
                     .foregroundStyle(self.theme.palette.accent)
             case .missed:

@@ -32,7 +32,7 @@ struct DictionaryMatchDiagnosticsView: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             HStack {
-                Text(self.running ? "Checking this recording…" : "Pronunciation match")
+                Text(PichiLocalization.text(self.running ? "Checking this recording…" : "Pronunciation match"))
                     .font(self.theme.typography.bodyStrong)
                 Spacer()
                 if self.running { ProgressView().controlSize(.small) }
@@ -54,7 +54,7 @@ struct DictionaryMatchDiagnosticsView: View {
                     }
                 }
             }
-            Text(self.report?.inspection != nil && self.inspectionExpanded ? "Automatic search: \(self.status)" : self.status)
+            Text(self.report?.inspection != nil && self.inspectionExpanded ? PichiLocalization.format("Automatic search: %@", self.status) : self.status)
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,11 +78,11 @@ struct DictionaryMatchDiagnosticsView: View {
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
             }
-            Text(self.saving ? "Saving…" : "Applies to “\(self.word)” on your next dictation.")
+            Text(self.saving ? PichiLocalization.text("Saving…") : PichiLocalization.format("Applies to “%@” on your next dictation.", self.word))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
             if let error = self.error {
-                Text(error).font(self.theme.typography.caption).foregroundStyle(.red)
+                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(.red)
             }
             if let report = self.report, report.inspection != nil {
                 Divider()
@@ -174,13 +174,13 @@ struct DictionaryMatchDiagnosticsView: View {
 
     private var status: String {
         guard let candidate = self.candidate, let score = candidate.score else {
-            return self.recordingBusy ? "Listening to your current test." : "Dictate in the textbox to see how closely it matches “\(self.word)”."
+            return self.recordingBusy ? PichiLocalization.text("Listening to your current test.") : PichiLocalization.format("Dictate in the textbox to see how closely it matches “%@”.", self.word)
         }
-        guard candidate.eligible else { return "Add more recordings for this word to enable matching." }
-        if score < Float(self.threshold) { return "No recording clears your match level. Closest is \(String(format: "%.3f", Float(self.threshold) - score)) below." }
-        if candidate.heard.isEmpty { return "Similar sound, but no clear word boundary was found." }
-        if let competitor = candidate.competingScore, competitor > score - 0.05 { return "Similar, but too close to another saved word." }
-        return "At least one recording clears your match level · “\(candidate.heard)”"
+        guard candidate.eligible else { return PichiLocalization.text("Add more recordings for this word to enable matching.") }
+        if score < Float(self.threshold) { return PichiLocalization.format("No recording clears your match level. Closest is %@ below.", String(format: "%.3f", Float(self.threshold) - score)) }
+        if candidate.heard.isEmpty { return PichiLocalization.text("Similar sound, but no clear word boundary was found.") }
+        if let competitor = candidate.competingScore, competitor > score - 0.05 { return PichiLocalization.text("Similar, but too close to another saved word.") }
+        return PichiLocalization.format("At least one recording clears your match level · “%@”", candidate.heard)
     }
 
     private func refreshHistory() {
