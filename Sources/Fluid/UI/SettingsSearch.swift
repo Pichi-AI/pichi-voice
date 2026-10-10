@@ -654,6 +654,7 @@ enum SettingsSearchIndex {
 /// is active.
 struct SidebarSearchField: View {
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @Binding var text: String
     let placeholder: String
     let isActive: Bool
@@ -667,7 +668,7 @@ struct SidebarSearchField: View {
                 .accessibilityHidden(true)
             SidebarSearchInput(
                 text: self.$text,
-                placeholder: PichiLocalization.text(self.placeholder),
+                placeholder: PichiLocalization.text(self.placeholder, locale: self.interfaceLocale),
                 isActive: self.isActive,
                 onCommand: self.onCommand,
                 isFocused: self.$isFocused
@@ -754,8 +755,9 @@ private struct SidebarSearchInput: NSViewRepresentable {
 
     func updateNSView(_ searchField: NSSearchField, context: Context) {
         context.coordinator.parent = self
-        searchField.placeholderString = PichiLocalization.text(self.placeholder)
-        searchField.setAccessibilityLabel(PichiLocalization.text(self.placeholder))
+        // The host resolved this known UI key using its selected locale. Keep it verbatim here.
+        searchField.placeholderString = self.placeholder
+        searchField.setAccessibilityLabel(self.placeholder)
         if searchField.stringValue != self.text {
             searchField.stringValue = self.text
         }

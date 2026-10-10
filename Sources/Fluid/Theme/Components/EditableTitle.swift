@@ -15,6 +15,7 @@ private struct EditableTitleModifier: ViewModifier {
     @State private var restingHeight: CGFloat = 0
     @FocusState private var focused: Bool
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.locale) private var interfaceLocale
 
     func body(content: Content) -> some View {
         Group {
@@ -49,7 +50,7 @@ private struct EditableTitleModifier: ViewModifier {
                 }
             }
         }
-        .help(self.enabled ? (self.doubleClickEnabled ? "Double-click to rename. Enter saves; Escape cancels." : "Right-click for Rename. Enter saves; Escape cancels.") : self.title)
+        .help(self.enabled ? PichiLocalization.text(self.doubleClickEnabled ? "Double-click to rename. Enter saves; Escape cancels." : "Right-click for Rename. Enter saves; Escape cancels.", locale: self.interfaceLocale) : self.title)
         .contextMenu {
             Button("Rename…", systemImage: "pencil", action: self.begin)
                 .disabled(!self.enabled)

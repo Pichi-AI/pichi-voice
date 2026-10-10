@@ -35,7 +35,7 @@ final class FileTranscriptScrollView: NSScrollView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 4
         self.transcriptView.defaultParagraphStyle = paragraph
-        self.transcriptView.setAccessibilityLabel("Transcript")
+        self.transcriptView.setAccessibilityLabel(PichiLocalization.text("Transcript"))
         self.documentView = self.transcriptView
     }
 

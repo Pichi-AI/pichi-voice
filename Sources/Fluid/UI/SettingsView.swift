@@ -327,8 +327,8 @@ struct SettingsView: View {
                                                     .padding(4)
                                             }
                                             .buttonStyle(.plain)
-                                            .accessibilityLabel(option.rawValue)
-                                            .help(option.rawValue)
+                                            .accessibilityLabel(PichiLocalization.text(option.rawValue))
+                                            .help(PichiLocalization.text(option.rawValue))
                                         }
                                     }
                                     .padding(.horizontal, 6)

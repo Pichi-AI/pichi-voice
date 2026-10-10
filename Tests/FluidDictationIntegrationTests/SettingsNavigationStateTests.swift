@@ -1,4 +1,6 @@
 import AppKit
+import Combine
+import SwiftUI
 @testable import FluidVoice_Debug
 import XCTest
 
@@ -79,6 +81,113 @@ final class SettingsNavigationStateTests: XCTestCase {
         SidebarSearchField.resignFocusIfNeeded(from: searchField, isActive: false)
 
         XCTAssertNil(searchField.currentEditor())
+    }
+
+    func testNativeSidebarSearchUpdatesLocaleWithoutReplacingFieldEditorOrQuery() async throws {
+        for (source, russian) in [("Search", "Поиск"), ("Search Settings", "Поиск по настройкам")] {
+            let state = SearchLocaleFixture()
+            let host = NSHostingView(rootView: SearchLocaleHost(state: state, source: source))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer { window.close() }
+            let found = try await self.waitForSearch(in: host, placeholder: source, query: state.query)
+            let field = try XCTUnwrap(found)
+            XCTAssertEqual(field.identifier?.rawValue, "FluidVoice.SidebarSearchField")
+            XCTAssertTrue(window.makeFirstResponder(field))
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            editor.setSelectedRange(NSRange(location: 2, length: 3))
+            let selection = editor.selectedRange()
+            state.locale = Locale(identifier: "ru")
+            let updatedField = try await self.waitForSearch(in: host, placeholder: russian, query: state.query)
+            let updated = try XCTUnwrap(updatedField)
+            XCTAssertTrue(updated === field, "A locale change must update the same native field")
+            XCTAssertTrue(updated.currentEditor() === editor)
+            XCTAssertEqual(editor.selectedRange(), selection)
+            XCTAssertEqual(updated.accessibilityLabel(), russian)
+            XCTAssertEqual(updated.stringValue, "Settings Иван")
+            XCTAssertEqual(state.query, "Settings Иван", "The query is user data, not a localization key")
+            state.locale = Locale(identifier: "en")
+            let restoredField = try await self.waitForSearch(in: host, placeholder: source, query: state.query)
+            let restored = try XCTUnwrap(restoredField)
+            XCTAssertTrue(restored === field)
+            XCTAssertEqual(restored.accessibilityLabel(), source)
+            XCTAssertEqual(restored.stringValue, "Settings Иван")
+        }
+    }
+
+    func testNativeTranscriptLocaleChangesOnlyAccessibilityChrome() async throws {
+        let state = SearchLocaleFixture()
+        let entryID = UUID()
+        let text = "Settings. Личная расшифровка остаётся дословной."
+        let host = NSHostingView(rootView: TranscriptLocaleHost(state: state, entryID: entryID, text: text))
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 180)
+        let found = try await self.waitForTranscript(in: host, label: "Transcript")
+        let scroll = try XCTUnwrap(found)
+        let editor = try XCTUnwrap(scroll.documentView as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 10, length: 6))
+        let selection = editor.selectedRange()
+        let offset = scroll.contentView.bounds.origin
+        state.locale = Locale(identifier: "ru")
+        let updatedScroll = try await self.waitForTranscript(in: host, label: "Расшифровка")
+        let updated = try XCTUnwrap(updatedScroll)
+        XCTAssertTrue(updated === scroll)
+        XCTAssertTrue(updated.documentView === editor)
+        XCTAssertEqual(editor.string, text)
+        XCTAssertEqual(editor.selectedRange(), selection)
+        XCTAssertEqual(updated.contentView.bounds.origin, offset)
+    }
+
+    private final class SearchLocaleFixture: ObservableObject {
+        @Published var locale = Locale(identifier: "en")
+        @Published var query = "Settings Иван"
+    }
+
+    private struct SearchLocaleHost: View {
+        @ObservedObject var state: SearchLocaleFixture
+        let source: String
+        var body: some View {
+            SidebarSearchField(text: self.$state.query, placeholder: self.source, isActive: true)
+                .environment(\.locale, self.state.locale)
+        }
+    }
+
+    private struct TranscriptLocaleHost: View {
+        @ObservedObject var state: SearchLocaleFixture
+        let entryID: UUID
+        let text: String
+        var body: some View {
+            FileTranscriptTextView(entryID: self.entryID, text: self.text)
+                .environment(\.locale, self.state.locale)
+        }
+    }
+
+    private func descendants<T: NSView>(of type: T.Type, in root: NSView) -> [T] {
+        var result = (root as? T).map { [$0] } ?? []
+        for child in root.subviews { result += self.descendants(of: type, in: child) }
+        return result
+    }
+
+    private func waitForSearch(in root: NSView, placeholder: String, query: String) async throws -> NSSearchField? {
+        for _ in 0..<100 {
+            root.layoutSubtreeIfNeeded()
+            if let field = self.descendants(of: NSSearchField.self, in: root).first(where: { $0.placeholderString == placeholder && $0.stringValue == query }) {
+                return field
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return nil
+    }
+
+    private func waitForTranscript(in root: NSView, label: String) async throws -> FileTranscriptScrollView? {
+        for _ in 0..<100 {
+            root.layoutSubtreeIfNeeded()
+            if let scroll = self.descendants(of: FileTranscriptScrollView.self, in: root).first(where: { $0.documentView?.accessibilityLabel() == label }) {
+                return scroll
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return nil
     }
 
     func testCommandModeOnlyOwnsRecordingItStarted() {

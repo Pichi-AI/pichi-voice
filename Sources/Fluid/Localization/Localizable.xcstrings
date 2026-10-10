@@ -4987,6 +4987,24 @@
         }
       }
     },
+    "Apple ASR Legacy": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple ASR Legacy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Классическое распознавание Apple"
+          }
+        }
+      }
+    },
     "Apple Silicon": {
       "extractionState": "manual",
       "localizations": {
@@ -5000,6 +5018,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Apple Silicon"
+          }
+        }
+      }
+    },
+    "Apple Speech - macOS 26+": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Speech - macOS 26+"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание Apple - macOS 26+"
           }
         }
       }
@@ -6132,6 +6168,24 @@
         }
       }
     },
+    "Balanced Speed & Accuracy": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Balanced Speed & Accuracy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Баланс скорости и точности"
+          }
+        }
+      }
+    },
     "Base URL": {
       "extractionState": "manual",
       "localizations": {
@@ -6559,6 +6613,60 @@
           "stringUnit": {
             "state": "translated",
             "value": "Лучший день"
+          }
+        }
+      }
+    },
+    "Blazing Fast - English": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blazing Fast - English"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очень быстро - английский язык"
+          }
+        }
+      }
+    },
+    "Blazing Fast - Multilingual": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blazing Fast - Multilingual"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очень быстро - несколько языков"
+          }
+        }
+      }
+    },
+    "Blue": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blue"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синий"
           }
         }
       }
@@ -9235,6 +9343,24 @@
         }
       }
     },
+    "Cohere - High Accuracy": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cohere - High Accuracy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cohere - высокая точность"
+          }
+        }
+      }
+    },
     "Collapse your dictionary": {
       "extractionState": "manual",
       "localizations": {
@@ -11141,6 +11267,24 @@
         }
       }
     },
+    "Cyan": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cyan"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Бирюзовый"
+          }
+        }
+      }
+    },
     "Daily activity and optional detailed analytics": {
       "extractionState": "manual",
       "localizations": {
@@ -12567,6 +12711,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Дважды нажмите, чтобы скопировать итоговый текст"
+          }
+        }
+      }
+    },
+    "Double-click to rename. Enter saves; Escape cancels.": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Double-click to rename. Enter saves; Escape cancels."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите дважды для переименования. Enter сохраняет, Escape отменяет."
           }
         }
       }
@@ -14548,6 +14710,24 @@
         }
       }
     },
+    "Fast & Light": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fast & Light"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстро и компактно"
+          }
+        }
+      }
+    },
     "Fast and lightweight.\nGreat for everyday use.": {
       "extractionState": "manual",
       "localizations": {
@@ -15226,6 +15406,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Фиксированные невидимые действия с голосовыми фразами, которые можно изменить."
+          }
+        }
+      }
+    },
+    "Flash Dictation": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flash Dictation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мгновенная диктовка"
           }
         }
       }
@@ -16289,6 +16487,24 @@
         }
       }
     },
+    "GigaAM - Russian": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM - Russian"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM - русский язык"
+          }
+        }
+      }
+    },
     "GigaAM and speaker model installed": {
       "extractionState": "manual",
       "localizations": {
@@ -16524,6 +16740,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Большие идеи\nначинаются со слова."
+          }
+        }
+      }
+    },
+    "Green": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Green"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зелёный"
           }
         }
       }
@@ -16847,6 +17081,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Точное многоязычное распознавание. Для лучшего результата выберите язык вручную перед диктовкой."
+          }
+        }
+      }
+    },
+    "Higher Quality but Faster": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Higher Quality but Faster"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Высокое качество и скорость"
           }
         }
       }
@@ -20163,6 +20415,24 @@
         }
       }
     },
+    "Maximum Accuracy": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maximum Accuracy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Максимальная точность"
+          }
+        }
+      }
+    },
     "Maximum samples reached.": {
       "extractionState": "manual",
       "localizations": {
@@ -20176,6 +20446,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Достигнуто максимальное число примеров."
+          }
+        }
+      }
+    },
+    "Medium Quality": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medium Quality"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Среднее качество"
           }
         }
       }
@@ -21937,6 +22225,60 @@
         }
       }
     },
+    "Nemotron 3.5 Multilingual": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nemotron 3.5 Multilingual"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nemotron 3.5 - несколько языков"
+          }
+        }
+      }
+    },
+    "Nemotron Speech 3.5 - Streaming Capable": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nemotron Speech 3.5 - Streaming Capable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nemotron Speech 3.5 - поддержка потокового распознавания"
+          }
+        }
+      }
+    },
+    "Nemotron Speech 3.5 - Ultra Fast Low Latency": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nemotron Speech 3.5 - Ultra Fast Low Latency"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nemotron Speech 3.5 - очень быстро с низкой задержкой"
+          }
+        }
+      }
+    },
     "Never": {
       "extractionState": "manual",
       "localizations": {
@@ -23654,6 +23996,24 @@
         }
       }
     },
+    "Note: May require app restart to take effect.": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Note: May require app restart to take effect."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для применения может потребоваться перезапуск приложения."
+          }
+        }
+      }
+    },
     "Nothing heard. Try again.": {
       "extractionState": "manual",
       "localizations": {
@@ -24726,6 +25086,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Или сначала выделите текст, чтобы переписать его."
+          }
+        }
+      }
+    },
+    "Orange": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Orange"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оранжевый"
           }
         }
       }
@@ -26635,6 +27013,24 @@
         }
       }
     },
+    "Purple": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Purple"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фиолетовый"
+          }
+        }
+      }
+    },
     "Putting the transcript and speaker labels together.": {
       "extractionState": "manual",
       "localizations": {
@@ -26771,6 +27167,24 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "Qwen3 - Multilingual": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 - Multilingual"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qwen3 - несколько языков"
+          }
+        }
+      }
     },
     "Qwen3 multilingual ASR via FluidAudio. Higher quality, heavier memory footprint.": {
       "extractionState": "manual",
@@ -29068,6 +29482,24 @@
         }
       }
     },
+    "Right-click for Rename. Enter saves; Escape cancels.": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Right-click for Rename. Enter saves; Escape cancels."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите правой кнопкой для переименования. Enter сохраняет, Escape отменяет."
+          }
+        }
+      }
+    },
     "Rollback": {
       "extractionState": "manual",
       "localizations": {
@@ -30180,6 +30612,24 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "Search": {
+      "comment": "Sidebar search placeholder and accessibility label; update the existing native field using the inherited interface locale.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск"
+          }
+        }
+      }
     },
     "Search Settings": {
       "extractionState": "manual",
@@ -32856,6 +33306,24 @@
         }
       }
     },
+    "Standard Choice": {
+      "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standard Choice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стандартный вариант"
+          }
+        }
+      }
+    },
     "Standard Geometric F": {
       "extractionState": "manual",
       "localizations": {
@@ -33753,6 +34221,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "Поддержать разработку"
+          }
+        }
+      }
+    },
+    "Supported: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, and more": {
+      "comment": "Supported file-format tooltip. Preserve the literal extension names.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Supported: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, and more"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддерживаются WAV, MP3, M4A, OGG, OPUS, MP4, MOV и другие форматы"
           }
         }
       }
@@ -36304,6 +36790,24 @@
           "stringUnit": {
             "state": "translated",
             "value": "ID провайдеров и моделей распознавания и ИИ, учтённые как суточные суммы."
+          }
+        }
+      }
+    },
+    "Transcription sound": {
+      "comment": "Trusted application UI copy. Saved preset IDs, document titles and transcript text are data and remain unchanged.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription sound"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звук записи"
           }
         }
       }

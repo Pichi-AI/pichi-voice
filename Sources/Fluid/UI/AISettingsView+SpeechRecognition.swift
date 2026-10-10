@@ -144,7 +144,7 @@ extension VoiceEngineSettingsView {
                 VStack(alignment: .leading, spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text(model.humanReadableName)
+                            Text(LocalizedStringKey(model.humanReadableName))
                                 .font(.fluidSystem(size: 16, weight: .bold))
                                 .foregroundStyle(self.theme.palette.primaryText)
 
@@ -161,7 +161,7 @@ extension VoiceEngineSettingsView {
                             Spacer()
                         }
 
-                        Text(PichiLocalization.text(model.cardDescription))
+                        Text(LocalizedStringKey(model.cardDescription))
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
@@ -188,7 +188,7 @@ extension VoiceEngineSettingsView {
                                 .foregroundStyle(self.theme.palette.accent)
                         }
 
-                        Text(PichiLocalization.text(model.languageSupport))
+                        Text(LocalizedStringKey(model.languageSupport))
                             .font(self.theme.typography.bodySmallStrong)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -276,10 +276,10 @@ extension VoiceEngineSettingsView {
                 .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.humanReadableName)
+                Text(LocalizedStringKey(model.humanReadableName))
                     .font(self.theme.typography.bodyStrong)
                     .foregroundStyle(self.voiceEngineTitleText)
-                Text(self.speechModelSubtitle(for: model))
+                self.speechModelSubtitle(for: model)
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.voiceEngineSecondaryText)
 
@@ -690,15 +690,18 @@ extension VoiceEngineSettingsView {
         .fluidDropdownSurface()
     }
 
-    private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> String {
+    @ViewBuilder
+    private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> some View {
         if model == .fluidParakeetMini || model == .fluidParakeetPico {
-            return model.languageSupport
-        }
-        switch model {
-        case .nemotronStreaming, .nemotronStreaming320:
-            return "Nemotron Speech 3.5 - Streaming Capable"
-        default:
-            return model.displayName
+            // Declared language-support copy is a UI key; Text observes the inherited locale.
+            Text(LocalizedStringKey(model.languageSupport))
+        } else {
+            switch model {
+            case .nemotronStreaming, .nemotronStreaming320:
+                Text("Nemotron Speech 3.5 - Streaming Capable")
+            default:
+                Text(model.displayName)
+            }
         }
     }
 

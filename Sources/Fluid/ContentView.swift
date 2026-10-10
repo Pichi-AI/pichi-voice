@@ -1597,7 +1597,7 @@ struct ContentView: View {
                     get: { self.settingsSearchQuery },
                     set: { self.updateSettingsSearchQuery($0) }
                 ),
-                placeholder: PichiLocalization.text("Search Settings"),
+                placeholder: "Search Settings",
                 isActive: self.settingsNavigation.isPresented
             )
             .padding(.horizontal, self.theme.metrics.spacing.md)

@@ -16,7 +16,8 @@ struct BrandSettingsSection: View {
                 Spacer()
                 Picker("Theme", selection: Binding(get: { self.settings.themePreference }, set: { self.settings.themePreference = $0 })) {
                     ForEach(SettingsStore.ThemePreference.allCases) { preference in
-                        Text(PichiLocalization.text(preference.displayName)).tag(preference)
+                        // Let the native Text resolve its trusted UI key on every inherited locale change.
+                        Text(LocalizedStringKey(preference.displayName)).tag(preference)
                     }
                 }
                 .labelsHidden().pickerStyle(.segmented).frame(width: 240)

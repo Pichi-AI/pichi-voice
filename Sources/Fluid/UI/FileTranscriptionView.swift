@@ -370,7 +370,7 @@ struct FileTranscriptionView: View {
                 .frame(maxWidth: .infinity)
                 .padding(self.theme.metrics.spacing.lg)
                 .contentShape(Rectangle())
-                .help(FileTranscriptionService.supportedFormatsDescription)
+                .help(PichiLocalization.text(FileTranscriptionService.supportedFormatsDescription))
                 .background(
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
                         .fill(self.theme.palette.cardBackground)
