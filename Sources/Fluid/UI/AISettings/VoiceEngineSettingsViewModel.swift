@@ -190,6 +190,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             guard let self else { return }
             defer { self.isImportingGigaAM = false }
             do {
+                let lease = try self.asr.acquireExclusiveActivity(.modelMaintenance)
+                defer { self.asr.releaseExclusiveActivity(lease) }
+                let operation = try MeetingModelResidencyCoordinator.shared.beginOperation(owner: "speech", modelID: SettingsStore.SpeechModel.gigaam.id)
+                defer { MeetingModelResidencyCoordinator.shared.endOperation(operation) }
                 try await PichiGigaAMModelStore.shared.importModel(from: directory)
                 self.installations.refresh()
             } catch {
