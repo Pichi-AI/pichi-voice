@@ -39,6 +39,10 @@ nonisolated enum PichiMeetingSummaryTransport {
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse }
         guard http.statusCode == 200 else { throw LLMError.httpError(http.statusCode, "Local summary request failed.") }
+        return try self.ollamaContent(data)
+    }
+
+    static func ollamaContent(_ data: Data) throws -> String {
         struct Response: Decodable {
             struct Message: Decodable { let content: String }
             let message: Message
@@ -46,9 +50,9 @@ nonisolated enum PichiMeetingSummaryTransport {
             let done_reason: String?
         }
         let result = try JSONDecoder().decode(Response.self, from: data)
-        guard result.done, result.done_reason != "length", !result.message.content.isEmpty else {
-            throw LLMError.invalidRequest("The local model could not complete its structured result within the output limit. The transcript is safe.")
-        }
+        guard result.done else { throw LLMError.invalidResponse }
+        if result.done_reason == "length" { throw PichiMeetingSummaryError.outputLimit }
+        guard !result.message.content.isEmpty else { throw LLMError.invalidResponse }
         return result.message.content
     }
 

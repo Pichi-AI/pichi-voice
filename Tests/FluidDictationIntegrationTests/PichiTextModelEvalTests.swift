@@ -257,6 +257,7 @@ final class PichiTextModelEvalTests: XCTestCase {
 
     private func safeFailure(_ error: Error) -> String {
         if let error = error as? PichiMeetingSummaryValidationIssue { return "evidence:\(error)" }
+        if case PichiMeetingSummaryError.outputLimit = error { return "output-limit" }
         if error is PichiMeetingSummaryError { return "summary-validation-rejected" }
         if let llmError = error as? LLMError {
             switch llmError {

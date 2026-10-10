@@ -242,7 +242,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
 }
 
 nonisolated enum PichiMeetingSummaryError: LocalizedError {
-    case notConfigured, localEndpointRequired, insecureEndpoint, unsupportedProvider, emptyTranscript, invalidOutput, invalidEvidence, tooManyChunks
+    case notConfigured, localEndpointRequired, insecureEndpoint, unsupportedProvider, emptyTranscript, invalidOutput, invalidEvidence, tooManyChunks, outputLimit
     var errorDescription: String? {
         switch self {
         case .notConfigured: PichiLocalization.text("Choose an installed model and configure its API endpoint before generating a summary.")
@@ -250,7 +250,7 @@ nonisolated enum PichiMeetingSummaryError: LocalizedError {
         case .insecureEndpoint: PichiLocalization.text("Remote summaries require an HTTPS endpoint.")
         case .unsupportedProvider: PichiLocalization.text("Choose an OpenAI-compatible provider in AI Enhancement settings, such as Ollama, LM Studio or OpenRouter.")
         case .emptyTranscript: PichiLocalization.text("This meeting has no completed transcript to summarize.")
-        case .invalidOutput: PichiLocalization.text("The model did not return a valid structured summary. Try a different model. The transcript is safe.")
+        case .invalidOutput, .outputLimit: PichiLocalization.text("The model did not return a valid structured summary. Try a different model. The transcript is safe.")
         case .invalidEvidence: PichiLocalization.text("The model returned an unsupported source, owner or date. The result was rejected. The transcript is safe.")
         case .tooManyChunks: PichiLocalization.text("This transcript is too large to summarize in one operation.")
         }
@@ -273,23 +273,24 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         let chunks = PichiMeetingSummaryInput.chunks(turns)
         guard chunks.count <= 256 else { throw PichiMeetingSummaryError.tooManyChunks }
         var documents: [PichiMeetingSummaryDocument] = []
+        var remainingRequests = 256
         for (index, chunk) in chunks.enumerated() {
             try Task.checkCancellation()
             await progress(index + 1, chunks.count)
             let context = "Meeting: \(session.title)\nPart \(index + 1) of \(chunks.count).\nTranscript gaps: \((session.transcriptCoverageGaps ?? []).count). Do not infer what was said in gaps.\n"
-            let document = try await self.request(context, configuration: configuration, turns: chunk, reducing: false)
-            documents.append(document)
+            documents += try await self.request(context, configuration: configuration, turns: chunk, reducing: false,
+                                                remainingRequests: &remainingRequests)
         }
         // Keep every task/decision. Later corrections can mark an earlier entry superseded,
         // with a second, verified source. No reconciliation is allowed to erase an entry.
         let changes = PichiMeetingSummaryDocument.unique(documents.flatMap { $0.changes ?? [] }, preserveOccurrences: true)
         let decisions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.decisions), preserveOccurrences: true),
-                                                 changes: changes, turns: turns, configuration: configuration)
+                                                 changes: changes, turns: turns, configuration: configuration, remainingRequests: &remainingRequests)
         let actions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.actions), preserveOccurrences: true),
-                                               changes: changes, turns: turns, configuration: configuration)
+                                               changes: changes, turns: turns, configuration: configuration, remainingRequests: &remainingRequests)
         let answers = PichiMeetingSummaryDocument.unique(documents.flatMap { $0.answers ?? [] }, preserveOccurrences: true)
         let questions = try await self.reconcile(PichiMeetingSummaryDocument.unique(documents.flatMap(\.openQuestions), preserveOccurrences: true),
-                                                 changes: answers, turns: turns, configuration: configuration, resolvingQuestions: true)
+                                                 changes: answers, turns: turns, configuration: configuration, remainingRequests: &remainingRequests, resolvingQuestions: true)
         var recap = documents.flatMap(\.summary)
         var needsReduction = documents.count > 1
         while needsReduction {
@@ -297,8 +298,9 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             let batches = self.recapBatches(recap)
             var reduced: [PichiMeetingSummaryItem] = []
             for batch in batches {
-                let result = try await self.request(try self.encoded(batch), configuration: configuration, turns: turns, reducing: true)
-                reduced += result.summary
+                let result = try await self.request(try self.encoded(batch), configuration: configuration, turns: turns, reducing: true,
+                                                    remainingRequests: &remainingRequests)
+                reduced += result.flatMap(\.summary)
             }
             let didShrink = reduced.count < recap.count
             recap = reduced
@@ -335,7 +337,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
     }
 
     private func request(_ input: String, configuration: PichiMeetingSummaryConfiguration,
-                         turns: [PichiMeetingSummaryTurn], reducing: Bool) async throws -> PichiMeetingSummaryDocument {
+                         turns: [PichiMeetingSummaryTurn], reducing: Bool, remainingRequests: inout Int,
+                         recoveryDepth: Int = 0) async throws -> [PichiMeetingSummaryDocument] {
         let language = configuration.language == "ru" ? "Russian" : configuration.language == "en" ? "English" : configuration.language
         let prompt = """
         Summarize a meeting in \(language). Return only valid JSON, no markdown or thinking.
@@ -357,11 +360,32 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             : PichiMeetingSummaryInput.evidenceChoices(turns)
         let sources = try self.sources(evidence, turns: turns)
         let prepared = try self.preparedInput(reducing ? ["recap": JSONSerialization.jsonObject(with: Data(input.utf8))] : ["context": input], sources: sources)
-        let response = try await self.complete(self.config(prompt: prompt, input: prepared, configuration: configuration, sources: sources))
+        let response: String
+        do {
+            response = try await self.completion(self.config(prompt: prompt, input: prepared, configuration: configuration, sources: sources),
+                                                 remainingRequests: &remainingRequests)
+        } catch PichiMeetingSummaryError.outputLimit {
+            // Retry only an explicitly truncated first response, never evidence/schema
+            // rejection, incomplete transport, or a truncated validation regeneration.
+            try Task.checkCancellation()
+            // A recap or ledger combines earlier claims and later corrections.
+            // Splitting it could publish contradictory isolated facts, so fail closed.
+            guard !reducing, recoveryDepth < 3 else { throw PichiMeetingSummaryError.outputLimit }
+            let size = turns.reduce(0) { $0 + $1.text.count + $1.speaker.count + 160 }
+            guard size > 1000 else { throw PichiMeetingSummaryError.outputLimit }
+            let parts = PichiMeetingSummaryInput.chunks(turns, maximumCharacters: max(1000, size / 2))
+            guard parts.count > 1 else { throw PichiMeetingSummaryError.outputLimit }
+            var results: [PichiMeetingSummaryDocument] = []
+            for part in parts {
+                results += try await self.request(input, configuration: configuration, turns: part, reducing: false,
+                                                  remainingRequests: &remainingRequests, recoveryDepth: recoveryDepth + 1)
+            }
+            return results
+        }
         try Task.checkCancellation()
         let repairInstruction: String
         do {
-            return try PichiMeetingSummaryDocument.decode(self.resolvedResponse(response, sources: sources), turns: turns)
+            return [try PichiMeetingSummaryDocument.decode(self.resolvedResponse(response, sources: sources), turns: turns)]
         } catch let issue as PichiMeetingSummaryValidationIssue {
             repairInstruction = issue.repairInstruction
         } catch PichiMeetingSummaryError.invalidOutput {
@@ -371,13 +395,23 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         // changing provider/model selection or doubling context with invalid output.
         // Transport failures and cancellation are not a reason to regenerate.
         try Task.checkCancellation()
-        let repaired = try await self.complete(self.config(
+        let repaired = try await self.completion(self.config(
             prompt: prompt + "\nThe previous result was rejected by validation. " + repairInstruction
                 + " Regenerate the complete result from the same supplied input. Every claim still requires valid evidence.",
             input: prepared, configuration: configuration, sources: sources
-        ))
+        ), remainingRequests: &remainingRequests)
         try Task.checkCancellation()
-        return try PichiMeetingSummaryDocument.decode(self.resolvedResponse(repaired, sources: sources), turns: turns)
+        return [try PichiMeetingSummaryDocument.decode(self.resolvedResponse(repaired, sources: sources), turns: turns)]
+    }
+
+    /// One immutable attempt owns all extraction, repair, reduction and ledger calls.
+    private func completion(_ config: LLMClient.Config, remainingRequests: inout Int) async throws -> String {
+        try Task.checkCancellation()
+        guard remainingRequests > 0 else { throw PichiMeetingSummaryError.tooManyChunks }
+        remainingRequests -= 1
+        let result = try await self.complete(config)
+        try Task.checkCancellation()
+        return result
     }
 
     private func config(prompt: String, input: String, configuration: PichiMeetingSummaryConfiguration,
@@ -475,7 +509,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
 
     private func reconcile(_ items: [PichiMeetingSummaryItem], changes: [PichiMeetingSummaryItem],
                            turns: [PichiMeetingSummaryTurn], configuration: PichiMeetingSummaryConfiguration,
-                           resolvingQuestions: Bool = false) async throws -> [PichiMeetingSummaryItem] {
+                           remainingRequests: inout Int, resolvingQuestions: Bool = false) async throws -> [PichiMeetingSummaryItem] {
         guard !items.isEmpty, !changes.isEmpty else { return items }
         let times = Dictionary(uniqueKeysWithValues: turns.map { ($0.id, $0.seconds) })
         let events = changes.map { LedgerChange(sourceSeconds: $0.evidence.compactMap { times[$0.segmentID] }.max() ?? 0, item: $0) }
@@ -522,8 +556,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                 guard let original = try JSONSerialization.jsonObject(with: Data(self.encoded(LedgerRequest(candidates: candidates, changes: events)).utf8)) as? [String: Any]
                 else { throw PichiMeetingSummaryError.invalidOutput }
                 let input = try self.preparedInput(original, sources: catalog)
-                let raw = try await self.complete(self.config(prompt: prompt, input: input, configuration: configuration,
-                                                            sources: catalog))
+                let raw = try await self.completion(self.config(prompt: prompt, input: input, configuration: configuration,
+                                                              sources: catalog), remainingRequests: &remainingRequests)
                 try Task.checkCancellation()
                 guard let data = try self.resolvedResponse(raw, sources: catalog).data(using: .utf8), data.count <= 100_000,
                       let updates = try? JSONDecoder().decode(LedgerUpdates.self, from: data), updates.updates.count <= candidates.count

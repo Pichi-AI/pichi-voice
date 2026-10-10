@@ -660,6 +660,241 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
     }
 
+    func testNativeOutputLimitClassificationExcludesIncompleteAndEmptyResponses() throws {
+        func response(done: Bool, reason: String?, content: String) throws -> Data {
+            var fields: [String: Any] = ["done": done, "message": ["content": content]]
+            if let reason { fields["done_reason"] = reason }
+            return try JSONSerialization.data(withJSONObject: fields)
+        }
+        for content in ["", "partial"] {
+            XCTAssertThrowsError(try PichiMeetingSummaryTransport.ollamaContent(response(done: true, reason: "length", content: content))) {
+                guard case PichiMeetingSummaryError.outputLimit = $0 else { return XCTFail("Only explicit length must classify as output-limit") }
+            }
+        }
+        for (done, reason, content) in [(false, "length", "partial"), (true, "stop", ""), (false, "stop", "partial")] {
+            XCTAssertThrowsError(try PichiMeetingSummaryTransport.ollamaContent(response(done: done, reason: reason, content: content))) {
+                guard case LLMError.invalidResponse = $0 else { return XCTFail("Incomplete or empty output is not a budget exhaustion") }
+            }
+        }
+        XCTAssertEqual(try PichiMeetingSummaryTransport.ollamaContent(response(done: true, reason: nil, content: "{}")), "{}")
+    }
+
+    func testOutputLimitRecoveryVisitsEverySourceInChronologicalOrderAndKeepsConfiguration() async throws {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = (0..<12).map { index in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 1000), timescale: 1000)
+            segment.text = "Пункт \(index). " + String(repeating: "Русская речь с Ё и ё. ", count: 25)
+            return segment
+        }
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 1800)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        let successful = await transport.successfulExtractionSources
+        let sources = PichiMeetingSummaryInput.turns(for: session)
+        for source in sources {
+            let excerpts = successful.filter { $0.id == source.id }
+            XCTAssertEqual(PichiMeetingSummaryInput.normalized(excerpts.map(\.text).joined(separator: " ")),
+                           PichiMeetingSummaryInput.normalized(source.text))
+            XCTAssertTrue(excerpts.allSatisfy { $0.seconds == source.seconds && $0.speaker == source.speaker })
+        }
+        XCTAssertEqual(successful.map(\.seconds), successful.map(\.seconds).sorted())
+        let truncations = await transport.truncations
+        XCTAssertGreaterThan(truncations, 1, "Exercise multiple extraction retries")
+        let requests = await transport.requests
+        XCTAssertTrue(requests.allSatisfy { $0.model == "fixture-model" && $0.baseURL == self.configuration().baseURL })
+        for request in requests {
+            let native = try PichiMeetingSummaryTransport.ollamaRequest(request)
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(native.httpBody)) as? [String: Any])
+            XCTAssertEqual((body["options"] as? [String: Int])?["num_ctx"], 8192)
+            XCTAssertEqual((body["options"] as? [String: Int])?["num_predict"], 3000)
+        }
+        XCTAssertNoThrow(try result.validated(against: sources))
+    }
+
+    func testRecapOutputLimitFailsClosedInsteadOfIsolatingEarlierCommitmentFromCancellation() async throws {
+        // The two original extraction documents are independently valid. A recap
+        // must see both together; splitting would repeat a stale earlier commitment.
+        let source = self.cancellationSession()
+        let transport = FixtureTransport(cancellationMode: true)
+        let calls = OutputBudgetTransport(maximumSourceCharacters: Int.max)
+        let generator = PichiMeetingSummaryGenerator { config in
+            let input = config.messages.last?["content"] as? String ?? ""
+            let fields = try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any]
+            if fields?["recap"] != nil {
+                _ = try await calls.complete(config)
+                throw PichiMeetingSummaryError.outputLimit
+            }
+            return try await transport.complete(config)
+        }
+        do {
+            _ = try await generator.generate(session: source, configuration: self.configuration())
+            XCTFail("A recap cannot split away the later correction")
+        } catch { guard case PichiMeetingSummaryError.outputLimit = error else { return XCTFail("Expected typed reduction rejection") } }
+        let reductionRequests = await calls.requests.count
+        XCTAssertEqual(reductionRequests, 1, "No independent child recaps can be published after combined reduction exhaustion")
+    }
+
+    func testOutputLimitRecoveryStopsAtFloorAndDepth() async throws {
+        for count in [10, 20000] {
+            var session = self.session()
+            session.transcriptSegments[0].text = String(repeating: "Ж", count: count)
+            let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+            do {
+                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: session, configuration: self.configuration())
+                XCTFail("A model that always exhausts output must remain rejected")
+            } catch { guard case PichiMeetingSummaryError.outputLimit = error else { return XCTFail("Expected typed exhaustion") } }
+            let count = await transport.requests.count
+            XCTAssertLessThanOrEqual(count, 4)
+        }
+    }
+
+    func testOutputLimitOnValidationRegenerationDoesNotSplitRejectedEvidence() async throws {
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 0, invalidFirst: true)
+        do {
+            _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: self.session(), configuration: self.configuration())
+            XCTFail("Regeneration exhaustion must reject rather than hide an evidence/schema rejection")
+        } catch { guard case PichiMeetingSummaryError.outputLimit = error else { return XCTFail("Expected typed exhaustion") } }
+        let count = await transport.requests.count
+        XCTAssertEqual(count, 2)
+    }
+
+    func testAllCompletionStagesShareTheAttemptRequestBudget() async throws {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = (0..<129).map { index in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 1000), timescale: 1000)
+            segment.text = String(repeating: "Ж", count: 7000)
+            return segment
+        }
+        let transport = OutputBudgetTransport(maximumSourceCharacters: Int.max, invalidFirst: true, alternateInvalid: true)
+        do {
+            _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            XCTFail("Repairs must also consume the 256-call operation budget")
+        } catch { guard case PichiMeetingSummaryError.tooManyChunks = error else { return XCTFail("Expected operation budget rejection") } }
+        let count = await transport.requests.count
+        XCTAssertEqual(count, 256)
+    }
+
+    @MainActor
+    func testOutputLimitCancellationJoinsInferenceBeforeRestorationAndStartsNoChildren() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let resources = SummaryResidentResources(owner: owner)
+        let asr = ASRService(meetingModelResidency: owner)
+        asr.meetingModelParticipantsForTesting = resources.participants
+        let entered = expectation(description: "Budget-limited inference entered")
+        let drain = SummaryInferenceDrain()
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+        let controller = PichiMeetingSummaryController(generator: .init { config in
+            await resources.observeGeneration()
+            entered.fulfill()
+            await drain.wait()
+            await resources.observeInferenceReturn()
+            return try await transport.complete(config)
+        })
+        var session = self.session()
+        session.transcriptSegments[0].text = String(repeating: "Русская речь. ", count: 500)
+        let task = Task { try await controller.generate(session: session, configuration: self.configuration(), asr: asr) }
+        await fulfillment(of: [entered], timeout: 5)
+        task.cancel()
+        XCTAssertTrue(owner.isExclusive)
+        XCTAssertFalse(resources.events.contains { $0.hasPrefix("restore:") })
+        drain.release()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        resources.assertRestored()
+        let count = await transport.requests.count
+        XCTAssertEqual(count, 1)
+        XCTAssertNil(controller.document, "Rejected recovery must never publish a partial document")
+    }
+
+    @MainActor
+    func testExhaustedRecoveryRetainsThePriorSavedSummaryAndRestoresResources() async throws {
+        // The controller owns publication/storage. A unique synthetic session exercises
+        // its existing shared-store contract without replacing any personal recording.
+        let session = self.session()
+        let configuration = self.configuration()
+        let store = MeetingSessionStore.shared
+        try await store.create(session)
+        do {
+            let existingDirectory = try await store.existingSessionDirectory(for: session.id)
+            let directory = try XCTUnwrap(existingDirectory)
+            let artifactURL = directory.appendingPathComponent("pichi-meeting-summary.json")
+            let prior = self.document()
+            let bytes = try JSONEncoder().encode(PichiMeetingSummaryArtifact(version: 5,
+                transcriptHash: PichiMeetingSummaryInput.fingerprint(session), configurationIdentity: configuration.cacheIdentity,
+                generatedAt: Date(), document: prior))
+            try bytes.write(to: artifactURL, options: .atomic)
+            let owner = MeetingModelResidencyCoordinator()
+            let resources = SummaryResidentResources(owner: owner)
+            let asr = ASRService(meetingModelResidency: owner)
+            asr.meetingModelParticipantsForTesting = resources.participants
+            let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+            let controller = PichiMeetingSummaryController(generator: .init { try await transport.complete($0) })
+            await controller.refresh(session: session, configuration: configuration)
+            XCTAssertEqual(controller.document, prior)
+            controller.summarize(session: session, configuration: configuration, asr: asr)
+            for _ in 0..<100 {
+                if !controller.generating { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertFalse(controller.generating, "Exhausted operation must settle within the bounded fixture wait")
+            XCTAssertNotNil(controller.error)
+            XCTAssertEqual(controller.document, prior)
+            XCTAssertEqual(try Data(contentsOf: artifactURL), bytes)
+            resources.assertRestored()
+            XCTAssertFalse(owner.isExclusive)
+        } catch {
+            try await store.delete(id: session.id)
+            throw error
+        }
+        try await store.delete(id: session.id)
+    }
+
+    private actor OutputBudgetTransport {
+        var requests: [LLMClient.Config] = []
+        var successfulExtractionSources: [PichiMeetingSummarySource] = []
+        var truncations = 0
+        let maximumSourceCharacters: Int
+        var truncateFirstReduction: Bool
+        let invalidFirst: Bool
+        let alternateInvalid: Bool
+
+        init(maximumSourceCharacters: Int, truncateFirstReduction: Bool = false,
+             invalidFirst: Bool = false, alternateInvalid: Bool = false) {
+            self.maximumSourceCharacters = maximumSourceCharacters
+            self.truncateFirstReduction = truncateFirstReduction
+            self.invalidFirst = invalidFirst
+            self.alternateInvalid = alternateInvalid
+        }
+
+        func complete(_ config: LLMClient.Config) throws -> String {
+            self.requests.append(config)
+            if self.invalidFirst, self.requests.count == 1 || (self.alternateInvalid && self.requests.count % 2 == 1) { return "{}" }
+            let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let data = try JSONSerialization.data(withJSONObject: XCTUnwrap(fields["sources"]))
+            let sources = try JSONDecoder().decode([PichiMeetingSummarySource].self, from: data)
+            let reducing = fields["recap"] != nil
+            if sources.reduce(0, { $0 + $1.text.count }) > self.maximumSourceCharacters || (reducing && self.truncateFirstReduction) {
+                self.truncations += 1
+                self.truncateFirstReduction = false
+                throw PichiMeetingSummaryError.outputLimit
+            }
+            if !reducing { self.successfulExtractionSources += sources }
+            let response: [String: Any] = ["summary": [["text": "Обсудили пункт.", "evidence": [["sourceIndex": 0]]]],
+                                           "decisions": [], "actions": [], "openQuestions": [], "changes": [], "answers": []]
+            return String(decoding: try JSONSerialization.data(withJSONObject: response), as: UTF8.self)
+        }
+    }
+
     private func json(_ document: PichiMeetingSummaryDocument) throws -> String {
         String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
     }
