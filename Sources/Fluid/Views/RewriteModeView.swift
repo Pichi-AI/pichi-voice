@@ -203,9 +203,9 @@ struct RewriteModeView: View {
 
                 // Input field (flexible)
                 TextField(
-                    self.service.originalText.isEmpty
+                    PichiLocalization.text(self.service.originalText.isEmpty
                         ? "Ask me to write or edit..."
-                        : "How should I edit this?",
+                        : "How should I edit this?"),
                     text: self.$inputText
                 )
                 .textFieldStyle(.roundedBorder)

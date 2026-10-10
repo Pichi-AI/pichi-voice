@@ -419,7 +419,7 @@ struct FileTranscriptionView: View {
                     .controlSize(.small)
                     .fixedSize()
 
-                Text(self.transcriptionService.currentStatus)
+                Text(PichiLocalization.text(self.transcriptionService.currentStatus))
                     .font(self.theme.typography.bodySmall)
                     .foregroundColor(.secondary)
             }

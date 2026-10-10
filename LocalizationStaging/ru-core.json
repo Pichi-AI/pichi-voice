@@ -208,7 +208,7 @@
   "%@ words": "Слов: %@",
   "Delete transcript?": "Удалить расшифровку?",
   "Clear all transcripts?": "Очистить все расшифровки?",
-  "File transcription is paused while %@ is active.": "Расшифровка файлов приостановлена, пока активно %@.",
+  "File transcription is paused while %@ is active.": "Расшифровка файлов приостановлена. Текущая операция: %@.",
   "File transcription unavailable. Wait for the active %@ to finish.": "Расшифровка файлов недоступна. Дождитесь завершения %@.",
   "Copied!": "Скопировано!",
   "This deletes the saved transcript. Your original audio or video file is kept.": "Будет удалена сохранённая расшифровка. Исходное аудио или видео сохранится.",
@@ -443,5 +443,17 @@
   "Try again": "Повторить",
   "Remove": "Убрать",
   "Text (.txt)": "Текст (.txt)",
-  "JSON (.json)": "JSON (.json)"
+  "JSON (.json)": "JSON (.json)",
+  "Preparing ASR models...": "Подготовка моделей распознавания…",
+  "Models ready": "Модели готовы",
+  "Analyzing audio file...": "Анализ аудиофайла…",
+  "Transcribing audio...": "Распознавание аудио…",
+  "Complete!": "Готово!",
+  "Identifying speakers...": "Определение говорящих…",
+  "dictation": "Диктовка",
+  "file transcription": "Расшифровка файла",
+  "local API transcription": "Расшифровка через локальный API",
+  "meeting transcription": "Расшифровка встречи",
+  "voice model maintenance": "Обслуживание модели распознавания",
+  "settings import": "Импорт настроек"
 }

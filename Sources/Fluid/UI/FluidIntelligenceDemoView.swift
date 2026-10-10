@@ -73,12 +73,12 @@ struct FluidIntelligenceDemoView: View {
                     self.textPanel(self.result.isEmpty ? "Example result" : "Your result", text: self.result.isEmpty ? Self.examples[self.selected].expected : self.result, accented: true)
                     Text("Illustrative examples. Run one to see your model’s actual output.")
                         .font(self.theme.typography.caption).foregroundStyle(.secondary)
-                    if !self.error.isEmpty { Text(self.error).font(self.theme.typography.bodySmall).foregroundStyle(.red) }
+                    if !self.error.isEmpty { Text(PichiLocalization.text(self.error)).font(self.theme.typography.bodySmall).foregroundStyle(.red) }
                 }
                 .id(self.selected)
             }
             if self.busy {
-                Label(self.asr.isRunning ? "Listening — stop when you’re finished" : "Preparing your result…", systemImage: self.asr.isRunning ? "waveform" : "sparkles")
+                Label(PichiLocalization.text(self.asr.isRunning ? "Listening — stop when you’re finished" : "Preparing your result…"), systemImage: self.asr.isRunning ? "waveform" : "sparkles")
                     .font(self.theme.typography.bodySmall)
             }
             FluidGlassControlGroup {
@@ -89,7 +89,7 @@ struct FluidIntelligenceDemoView: View {
                         ProgressView("Checking model…").controlSize(.small)
                     } else if let modelID {
                         Button("Try example") { self.tryExample(modelID: modelID) }.fluidGlassAction().disabled(self.busy)
-                        Button(self.asr.isRunning ? "Stop and polish" : "Try with your voice", systemImage: self.asr.isRunning ? "stop.fill" : "mic") {
+                        Button(PichiLocalization.text(self.asr.isRunning ? "Stop and polish" : "Try with your voice"), systemImage: self.asr.isRunning ? "stop.fill" : "mic") {
                             if self.asr.isRunning {
                                 self.stoppingVoice = true
                                 Task {
