@@ -74,7 +74,6 @@ struct BrandSettingsSection: View {
     }
 
     private func performImport(_ read: @escaping @Sendable () throws -> Data) {
-        let previous = AppBrand.profile
         self.importing = true
         Task {
             do {
@@ -85,7 +84,7 @@ struct BrandSettingsSection: View {
                 if let appearance = package.style?.defaultAppearance {
                     self.settings.themePreference = SettingsStore.ThemePreference(rawValue: appearance.rawValue) ?? .system
                 }
-                BrandAppearanceController.apply(previous: previous)
+                BrandAppearanceController.apply()
                 self.errorMessage = nil
             } catch { self.errorMessage = error.localizedDescription }
             self.importing = false
@@ -104,12 +103,11 @@ struct BrandSettingsSection: View {
     }
 
     private func reset() {
-        let previous = AppBrand.profile
         do { try BrandPackageStore.shared.reset() }
         catch { self.errorMessage = error.localizedDescription; return }
         self.settings.accentColorOption = .brand
         self.settings.themePreference = SettingsStore.ThemePreference(rawValue: AppBrand.package.style?.defaultAppearance.rawValue ?? "system") ?? .system
-        BrandAppearanceController.apply(previous: previous)
+        BrandAppearanceController.apply()
         self.errorMessage = nil
     }
 }
