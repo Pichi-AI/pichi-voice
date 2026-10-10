@@ -125,7 +125,7 @@ final class AppServices: ObservableObject {
             // The speaker model is only needed after Stop, so a missing model never blocks
             // recording; final processing waits for `MeetingDiarizationModelStore` instead.
             validateRecordingModels: {
-                guard CPUArchitecture.isAppleSilicon else {
+                guard CPUArchitecture.isAppleSilicon || SettingsStore.shared.selectedSpeechModel == .gigaam else {
                     throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
                 }
             }
