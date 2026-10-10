@@ -1,6 +1,6 @@
 # Russian meetings and summaries
 
-New meeting setups default to Russian. Saved language choices remain unchanged. The upstream Parakeet v3 final meeting backend already accepts Russian; its English-only live backend still has a separate language restriction.
+New meeting setups default to Russian. Saved language choices remain unchanged. The upstream Parakeet v3 final meeting backend already accepts Russian; Pichi adds buffered Russian live captions using Parakeet v3 on Apple Silicon, or the selected GigaAM model on either Mac architecture. English captions keep their existing streaming path. GigaAM live and final processing share a pinned export identity; without an installed speaker model, the final transcript keeps source tracks without claiming individual speaker identities.
 
 The meeting Summary tab uses a Pichi provider based on the public `LLMClient`, independent of the private Fluid Intelligence runtime. Its default destination is Ollama on `http://127.0.0.1:11434/v1`, with `qwen3.5:4b` selected. Ollama and model weights must be installed separately. Refresh models to discover installed IDs, or enter a model served by LM Studio's compatible local API. `qwen3.5:2b` is an alternative when memory is limited. Actual memory and speed depend on the server's context configuration and require measurement on the target Mac.
 

@@ -1,6 +1,10 @@
 # Pichi Voice
 
-Private development downstream of [FluidVoice](https://github.com/altic-dev/FluidVoice). The initial application code is unchanged. See [development setup](docs/development/codex.md), [upstream strategy](docs/development/upstream.md), and [agent instructions](AGENTS.md).
+Private development downstream of [FluidVoice](https://github.com/altic-dev/FluidVoice). Pichi adds configurable branding and themes, Russian meeting captions and grounded summaries, and native optimized GigaAM recognition while retaining upstream audio and persistence contracts. See [development setup](docs/development/codex.md), [upstream strategy](docs/development/upstream.md), and [agent instructions](AGENTS.md).
+
+- [Branding and white-label configuration](docs/development/branding.md)
+- [Russian meetings and local summaries](docs/development/russian-meetings.md)
+- [Native GigaAM model import and verification](Vendor/PichiGigaAM/README.md)
 
 The upstream README follows for reference. Its install commands, release links, branding, and contribution rules describe FluidVoice.
 

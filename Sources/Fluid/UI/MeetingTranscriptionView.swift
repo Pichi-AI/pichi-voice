@@ -1255,7 +1255,7 @@ struct MeetingTranscriptionView: View {
     private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat, includeEchoes: Bool) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.title)).\(format.fileExtension)"
-        panel.message = "Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."
+        panel.message = AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         self.actionErrorMessage = nil
         do {
@@ -1533,7 +1533,7 @@ private struct MeetingTranscriptionHeader: View {
 
             MeetingHeaderIconButton(
                 systemImage: "gearshape",
-                label: "FluidMeet settings",
+                label: AppBrand.text("FluidMeet settings"),
                 action: self.onOpenMeetingSettings
             )
             .disabled(!self.canEditSetup)
