@@ -86,8 +86,9 @@ enum PichiMeetingProviderFactory {
         return try FluidAudioProvider(meetingConfiguration: configuration)
     }
 
-    static func selectedBackendID(languageCode: String) -> MeetingBackendID {
-        if let registration = self.registrations[SettingsStore.shared.selectedSpeechModel.rawValue] {
+    static func selectedBackendID(languageCode: String, selectedModelID: String? = nil) -> MeetingBackendID {
+        let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
+        if let registration = self.registrations[modelID] {
             return registration.descriptor.id
         }
         let saved = SettingsStore.shared.meetingTranscriptionBackendID

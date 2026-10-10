@@ -410,6 +410,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
 
         let lease = try await self.audioArbiter.acquireMeetingCapture()
+        let recordingModelID: String
+        let recordingBackendID: MeetingBackendID
+        let recordingASRConfiguration: MeetingFinalProcessingConfiguration
         do {
             try Task.checkCancellation()
             guard self.startReservation == reservation,
@@ -419,6 +422,18 @@ final class MeetingSessionCoordinator: ObservableObject {
             else {
                 throw CancellationError()
             }
+            // Permission prompts deliberately run without an ASR lease. Resolve and validate
+            // the actual recording snapshot only once admission closes model/artifact changes.
+            recordingModelID = SettingsStore.shared.selectedSpeechModel.rawValue
+            recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(
+                languageCode: configuration.languageCode,
+                selectedModelID: recordingModelID
+            )
+            recordingASRConfiguration = PichiMeetingProviderFactory.configuration(
+                backendID: recordingBackendID,
+                languageCode: configuration.languageCode
+            )
+            _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
         } catch {
             await self.audioArbiter.release(lease)
             throw error
@@ -436,13 +451,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         let timebase = Self.makeTimebase()
         var session = MeetingSession(configuration: configuration, timebase: timebase)
-        let recordingModelID = SettingsStore.shared.selectedSpeechModel.rawValue
-        let recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode)
         session.recordingBackendID = recordingBackendID.rawValue
-        session.recordingASRArtifactFingerprint = PichiMeetingProviderFactory.configuration(
-            backendID: recordingBackendID,
-            languageCode: configuration.languageCode
-        ).asrArtifactFingerprint
+        session.recordingASRArtifactFingerprint = recordingASRConfiguration.asrArtifactFingerprint
         session.retention.retainAudioUntil = SettingsStore.shared.meetingAudioRetentionPolicy
             .retainUntil(startedAt: session.startedAt)
         self.activeSession = session
