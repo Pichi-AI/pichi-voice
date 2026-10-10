@@ -107,6 +107,12 @@ struct PichiMeetingSummaryView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let document = self.controller.document {
+                if self.controller.documentIsHistorical {
+                    Label("Saved summary. The local server is unavailable, so the current model version could not be checked.", systemImage: "clock.arrow.circlepath")
+                        .font(self.theme.typography.caption)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if !(self.session?.transcriptCoverageGaps ?? []).isEmpty {
                     Label("The transcript has gaps. Conclusions cover only the captured speech.", systemImage: "exclamationmark.circle")
                         .font(self.theme.typography.caption)

@@ -52,16 +52,18 @@ final class PichiTextModelEvalTests: XCTestCase {
                         if fixture.task == "summary" {
                             let session = fixture.session()
                             let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
-                            let generator = PichiMeetingSummaryGenerator { config in
+                            let generator = PichiMeetingSummaryGenerator(complete: { config in
                                 await audit.begin(config)
                                 let content = try await PichiMeetingSummaryTransport.complete(config)
                                 await audit.finish(content)
                                 return content
-                            }
-                            let document = try await generator.generate(session: session, configuration: .init(
+                            }, prepare: { try await PichiMeetingSummaryTransport.snapshot($0) })
+                            let generation = try await generator.generateWithProvenance(session: session, configuration: .init(
                                 providerID: "local-evaluation", modelID: model.id,
                                 baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru",
                                 execution: try model.summaryExecution()))
+                            let document = generation.document
+                            result.modelArtifactID = generation.configuration.modelArtifactID
                             _ = try document.validated(against: PichiMeetingSummaryInput.turns(for: session))
                             guard fingerprint == PichiMeetingSummaryInput.fingerprint(session) else {
                                 throw EvaluationInputError.changedSource
@@ -483,6 +485,7 @@ private struct EvaluationResult: Codable {
     var enhancement: String? = nil
     var rawEnhancement: String? = nil
     var failure: String? = nil
+    var modelArtifactID: String? = nil
 }
 
 private struct EvaluationReport: Codable {

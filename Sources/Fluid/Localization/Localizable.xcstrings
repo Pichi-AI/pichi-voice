@@ -905,13 +905,13 @@
         }
       }
     },
-    "%@ \u2014 Change your dictation shortcuts": {
+    "%@ — Change your dictation shortcuts": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ \u2014 Change your dictation shortcuts"
+            "value": "%@ — Change your dictation shortcuts"
           }
         },
         "ru": {
@@ -3062,13 +3062,13 @@
         }
       }
     },
-    "AI enhancement failed\u2014raw transcription was used": {
+    "AI enhancement failed—raw transcription was used": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI enhancement failed\u2014raw transcription was used"
+            "value": "AI enhancement failed—raw transcription was used"
           }
         },
         "ru": {
@@ -3079,13 +3079,13 @@
         }
       }
     },
-    "AI generation speed, in tokens per second\u2014not total processing time": {
+    "AI generation speed, in tokens per second—not total processing time": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "AI generation speed, in tokens per second\u2014not total processing time"
+            "value": "AI generation speed, in tokens per second—not total processing time"
           }
         },
         "ru": {
@@ -6731,13 +6731,13 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
-    "Basic \u2014 No cleanup": {
+    "Basic — No cleanup": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Basic \u2014 No cleanup"
+            "value": "Basic — No cleanup"
           }
         },
         "ru": {
@@ -11881,13 +11881,13 @@
         }
       }
     },
-    "Daily aggregated insertion timing statistics\u2014including toggle-stop-to-paste-dispatch\u2014split by delivery path and outcome.": {
+    "Daily aggregated insertion timing statistics—including toggle-stop-to-paste-dispatch—split by delivery path and outcome.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Daily aggregated insertion timing statistics\u2014including toggle-stop-to-paste-dispatch\u2014split by delivery path and outcome."
+            "value": "Daily aggregated insertion timing statistics—including toggle-stop-to-paste-dispatch—split by delivery path and outcome."
           }
         },
         "ru": {
@@ -14370,13 +14370,13 @@
         }
       }
     },
-    "Enable %@ MCP link \u2014 coming soon": {
+    "Enable %@ MCP link — coming soon": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Enable %@ MCP link \u2014 coming soon"
+            "value": "Enable %@ MCP link — coming soon"
           }
         },
         "ru": {
@@ -17171,13 +17171,13 @@
         }
       }
     },
-    "Full %.2f s · trained section %.2f\u2013%.2f s": {
+    "Full %.2f s · trained section %.2f–%.2f s": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Full %.2f s · trained section %.2f\u2013%.2f s"
+            "value": "Full %.2f s · trained section %.2f–%.2f s"
           }
         },
         "ru": {
@@ -18470,13 +18470,13 @@
         }
       }
     },
-    "Illustrative design preview \u2014 not benchmark scores": {
+    "Illustrative design preview — not benchmark scores": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Illustrative design preview \u2014 not benchmark scores"
+            "value": "Illustrative design preview — not benchmark scores"
           }
         },
         "ru": {
@@ -20039,13 +20039,13 @@
         }
       }
     },
-    "Listening \u2014 stop when you’re finished": {
+    "Listening — stop when you’re finished": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Listening \u2014 stop when you’re finished"
+            "value": "Listening — stop when you’re finished"
           }
         },
         "ru": {
@@ -25413,13 +25413,13 @@
         }
       }
     },
-    "One more\u2014you’ve got this": {
+    "One more—you’ve got this": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "One more\u2014you’ve got this"
+            "value": "One more—you’ve got this"
           }
         },
         "ru": {
@@ -36792,13 +36792,13 @@
         }
       }
     },
-    "The recap, the decisions, and the follow-ups\u2014without rereading the transcript.": {
+    "The recap, the decisions, and the follow-ups—without rereading the transcript.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The recap, the decisions, and the follow-ups\u2014without rereading the transcript."
+            "value": "The recap, the decisions, and the follow-ups—without rereading the transcript."
           }
         },
         "ru": {
@@ -36931,13 +36931,13 @@
         }
       }
     },
-    "The small details count. Share what’s working\u2014or what isn’t.": {
+    "The small details count. Share what’s working—or what isn’t.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The small details count. Share what’s working\u2014or what isn’t."
+            "value": "The small details count. Share what’s working—or what isn’t."
           }
         },
         "ru": {
@@ -45729,6 +45729,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Получить API-ключ"
+          }
+        }
+      }
+    },
+    "Saved summary. The local server is unavailable, so the current model version could not be checked.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved summary. The local server is unavailable, so the current model version could not be checked."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранённое саммари. Локальный сервер недоступен, поэтому текущую версию модели проверить не удалось."
+          }
+        }
+      }
+    },
+    "Could not release temporary summary resources: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not release temporary summary resources: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось освободить временные ресурсы саммари: %@"
           }
         }
       }

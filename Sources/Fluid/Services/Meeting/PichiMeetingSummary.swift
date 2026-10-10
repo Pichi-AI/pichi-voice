@@ -749,5 +749,7 @@ nonisolated struct PichiMeetingSummaryCleanupError: LocalizedError {
         self.underlying = (underlying as? Self)?.underlying ?? underlying
     }
 
-    var errorDescription: String? { self.underlying.localizedDescription }
+    var errorDescription: String? {
+        PichiLocalization.format("Could not release temporary summary resources: %@", self.underlying.localizedDescription)
+    }
 }
