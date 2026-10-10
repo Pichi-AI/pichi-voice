@@ -34718,6 +34718,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "The selected meeting model requires Apple Silicon.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting model requires Apple Silicon."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для выбранной модели встреч нужен Apple Silicon."
+          }
+        }
+      }
+    },
     "The selected model does not support live captions in this meeting language.": {
       "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
       "extractionState": "manual",
