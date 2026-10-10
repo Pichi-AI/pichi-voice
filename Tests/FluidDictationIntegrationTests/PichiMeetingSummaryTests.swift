@@ -50,6 +50,52 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertTrue(chunks.allSatisfy { $0.reduce(0) { $0 + $1.text.count + $1.speaker.count + 160 } <= 1000 })
     }
 
+    func testLiteralEvidenceChoicesKeepUnicodeSourceCoverageAndBoundSchema() throws {
+        let text = (0..<310).map { "Ёж \($0) сказал: \"съешь ещё\".\n" }.joined()
+        let turns = [PichiMeetingSummaryTurn(id: self.id, seconds: 3, speaker: "Иван", text: text)]
+        for chunk in PichiMeetingSummaryInput.chunks(turns) {
+            let choices = PichiMeetingSummaryInput.evidenceChoices(chunk)
+            XCTAssertLessThanOrEqual(choices.count, 128)
+            XCTAssertTrue(choices.allSatisfy { $0.segmentID == self.id && !$0.quote.isEmpty && $0.quote.count <= 160 && text.contains($0.quote) })
+            XCTAssertEqual(PichiMeetingSummaryInput.normalized(choices.map(\.quote).joined(separator: " ")),
+                           PichiMeetingSummaryInput.normalized(chunk.map(\.text).joined()))
+            XCTAssertTrue(choices.contains { $0.quote.contains("Ёж") })
+            let indexes = Array(choices.indices)
+            let schema = PichiMeetingSummaryTransport.schema(ledger: false, sourceIndexes: indexes)
+            XCTAssertLessThanOrEqual(try JSONSerialization.data(withJSONObject: schema).count, 64_000)
+            let definitions = try XCTUnwrap(schema["$defs"] as? [String: Any])
+            let evidence = try XCTUnwrap(definitions["evidence"] as? [String: Any])
+            let fields = try XCTUnwrap(evidence["properties"] as? [String: Any])
+            XCTAssertEqual((fields["sourceIndex"] as? [String: Any])?["enum"] as? [Int], indexes)
+            XCTAssertNil(fields["quote"], "The model selects a source, never rewrites its quote")
+            XCTAssertNil(fields["segmentID"])
+        }
+        let longWord = PichiMeetingSummaryTurn(id: self.id, seconds: 0, speaker: "Иван", text: String(repeating: "Ж", count: 510))
+        let pieces = PichiMeetingSummaryInput.evidenceChoices([longWord])
+        XCTAssertEqual(pieces.map(\.quote.count), [160, 160, 160, 30], "Repeated passages and the final tail must remain in their original order")
+    }
+
+    func testRepeatedSourcePassagesRemainInOrderInCompactInput() async throws {
+        var session = self.session()
+        let agreement = "Решили выпустить релиз в пятницу. " + String(repeating: "А", count: 125) + " "
+        let cancellation = "Отменяем выпуск. " + String(repeating: "Б", count: 142) + " "
+        XCTAssertEqual(agreement.count, 160)
+        XCTAssertEqual(cancellation.count, 160)
+        session.transcriptSegments[0].text = agreement + cancellation + agreement
+        let transport = RepairTransport(responses: [try self.referenceResponse(2)])
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        _ = try await generator.generate(session: session, configuration: self.configuration())
+        let requests = await transport.requests
+        let request = try XCTUnwrap(requests.first)
+        let content = try XCTUnwrap(request.messages[1]["content"] as? String)
+        let input = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any])
+        let sources = try XCTUnwrap(input["sources"] as? [[String: Any]])
+        XCTAssertEqual(sources.count, 3)
+        XCTAssertEqual(sources[0]["text"] as? String, sources[2]["text"] as? String)
+        XCTAssertNotEqual(sources[0]["text"] as? String, sources[1]["text"] as? String)
+        XCTAssertEqual(sources.compactMap { $0["sourceIndex"] as? Int }, [0, 1, 2])
+    }
+
     func testFingerprintChangesForCorrectionsSpeakersLanguageAndGaps() {
         var session = self.session()
         let original = PichiMeetingSummaryInput.fingerprint(session)
@@ -162,6 +208,136 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertTrue((requests[0].messages[0]["content"] as? String ?? "").contains("in Russian"))
         XCTAssertFalse(requests[0].streaming)
         XCTAssertEqual(requests[0].maxRetries, 1)
+        XCTAssertNotNil(requests[0].extraParameters["response_format"])
+    }
+
+    func testOtherCompatibleEndpointsKeepTheirExistingRequestFormat() async throws {
+        let transport = FixtureTransport()
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        _ = try await generator.generate(session: self.session(), configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+        let requests = await transport.requests
+        XCTAssertNil(requests[0].extraParameters["response_format"])
+    }
+
+    func testRewrittenASRQuoteRegeneratesOnceWithSamePrivateInput() async throws {
+        var session = self.session()
+        session.transcriptSegments[0].text = "мы так и не получили согласования на перенос"
+        let evidence = PichiMeetingSummaryEvidence(segmentID: self.id, quote: session.transcriptSegments[0].text)
+        let valid = PichiMeetingSummaryDocument(summary: [.init(text: "Согласование переноса не получено.", evidence: [evidence])],
+                                               decisions: [], actions: [], openQuestions: [])
+        var invalid = valid
+        invalid.summary[0].evidence = [.init(segmentID: self.id, quote: "мы так и не получили разрешения на перенос")]
+        let transport = RepairTransport(responses: [try self.json(invalid), try self.json(valid)])
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await generator.generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result, valid)
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].messages[1]["content"] as? String, requests[1].messages[1]["content"] as? String)
+        XCTAssertEqual(requests[0].model, requests[1].model)
+        XCTAssertEqual(requests[0].baseURL, requests[1].baseURL)
+        XCTAssertEqual(requests[0].maxTokens, requests[1].maxTokens)
+        let repair = requests[1].messages[0]["content"] as? String ?? ""
+        XCTAssertTrue(repair.contains("SHORT contiguous excerpt"))
+        XCTAssertFalse(repair.contains(invalid.summary[0].evidence[0].quote), "Do not double the context with rejected private output")
+    }
+
+    func testSecondInvalidResultRemainsRejectedWithoutFurtherCompletion() async throws {
+        let invalid = try self.json(self.document(quote: "Иван подготовит отчет к пятнице."))
+        let transport = RepairTransport(responses: [invalid, invalid])
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        do {
+            _ = try await generator.generate(session: self.session(), configuration: self.configuration())
+            XCTFail("A changed source spelling must remain invalid after the repair attempt")
+        } catch {
+            XCTAssertEqual(error as? PichiMeetingSummaryValidationIssue, .nonliteralQuote)
+            XCTAssertEqual(error.localizedDescription, PichiMeetingSummaryError.invalidEvidence.localizedDescription)
+        }
+        let count = await transport.requests.count
+        XCTAssertEqual(count, 2)
+    }
+
+    func testCancellationAfterInvalidResultNeverStartsRepair() async throws {
+        let invalid = try self.json(self.document(quote: "Изменённая цитата"))
+        let transport = RepairTransport(responses: [invalid])
+        let generator = PichiMeetingSummaryGenerator { config in
+            let output = try await transport.complete(config)
+            withUnsafeCurrentTask { $0?.cancel() }
+            return output
+        }
+        let task = Task { try await generator.generate(session: self.session(), configuration: self.configuration()) }
+        do { _ = try await task.value; XCTFail("Cancellation must stop before repair") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let count = await transport.requests.count
+        XCTAssertEqual(count, 1)
+    }
+
+    func testTransportFailureDoesNotStartValidationRepair() async {
+        let transport = RepairTransport(responses: [], failTransport: true)
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        do { _ = try await generator.generate(session: self.session(), configuration: self.configuration()); XCTFail("Transport error must propagate") }
+        catch { XCTAssertEqual((error as? URLError)?.code, .cannotConnectToHost) }
+        let count = await transport.requests.count
+        XCTAssertEqual(count, 1)
+    }
+
+    func testMalformedOutputAndUnsupportedAttributionHaveBoundedSpecificRepair() async throws {
+        for (invalid, expected) in [
+            ("{}", "JSON structure"),
+            (try self.json(self.document(evidenceID: UUID())), "unknown source"),
+            (try self.json(self.document(owner: "Мария")), "action owner"),
+            (try self.json(self.document(deadline: "пятница")), "action deadline"),
+        ] {
+            let transport = RepairTransport(responses: [invalid, try self.json(self.document())])
+            let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            let result = try await generator.generate(session: self.session(), configuration: self.configuration())
+            XCTAssertEqual(result, self.document())
+            let requests = await transport.requests
+            XCTAssertEqual(requests.count, 2)
+            XCTAssertTrue((requests[1].messages[0]["content"] as? String ?? "").contains(expected))
+        }
+    }
+
+    func testCompactCitationResolvesFromImmutableCatalogWithoutChangingSavedDocumentFormat() async throws {
+        let response = try self.referenceResponse(0)
+        let transport = RepairTransport(responses: [response])
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        let result = try await generator.generate(session: self.session(), configuration: self.configuration())
+        XCTAssertEqual(result.summary[0].evidence, [.init(segmentID: self.id, quote: self.turns[0].text)])
+        let canonical = try JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any]
+        let summary = try XCTUnwrap(canonical?["summary"] as? [[String: Any]])
+        let evidence = try XCTUnwrap(summary[0]["evidence"] as? [[String: Any]])
+        XCTAssertEqual(evidence[0]["segmentID"] as? String, self.id.uuidString)
+        XCTAssertEqual(evidence[0]["quote"] as? String, self.turns[0].text)
+        XCTAssertNil(evidence[0]["sourceIndex"], "Compact indices are request-local and must never reach persisted documents")
+    }
+
+    func testUnknownBooleanAndAugmentedCompactCitationsRemainRejected() async throws {
+        for reference: Any in [999, true, "0", -1, 0.5] {
+            let invalid = try self.referenceResponse(reference)
+            let transport = RepairTransport(responses: [invalid, invalid])
+            let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            do { _ = try await generator.generate(session: self.session(), configuration: self.configuration()); XCTFail("Invalid source choice must remain rejected") }
+            catch { XCTAssertEqual(error as? PichiMeetingSummaryValidationIssue, .unknownSource) }
+            let count = await transport.requests.count
+            XCTAssertEqual(count, 2)
+        }
+        let invalid = try self.referenceResponse(0, additionalQuote: "Подменённая цитата")
+        let transport = RepairTransport(responses: [invalid, invalid])
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        do { _ = try await generator.generate(session: self.session(), configuration: self.configuration()); XCTFail("Compact choices must not carry an extra model-written quote") }
+        catch { XCTAssertEqual(error as? PichiMeetingSummaryValidationIssue, .unknownSource) }
+    }
+
+    private func referenceResponse(_ index: Any, additionalQuote: String? = nil) throws -> String {
+        var evidence: [String: Any] = ["sourceIndex": index]
+        if let additionalQuote { evidence["quote"] = additionalQuote }
+        return String(decoding: try JSONSerialization.data(withJSONObject: [
+            "summary": [["text": "Обсудили отчёт.", "evidence": [evidence]]],
+            "decisions": [], "actions": [], "openQuestions": [], "changes": [], "answers": [],
+        ]), as: UTF8.self)
     }
 
     func testGeneratorProcessesAllChunksAndReducesRecap() async throws {
@@ -364,6 +540,44 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
     }
 
+    func testLiveSavedSessionSummaryWhenExplicitlyEnabled() async throws {
+        let path = ProcessInfo.processInfo.environment["PICHI_MEETING_SUMMARY_LIVE_SESSION_PATH"] ?? ""
+        try XCTSkipIf(path.isEmpty, "Opt-in local verification of an explicitly authorized private saved session.")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let session = try decoder.decode(MeetingSession.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await PichiMeetingSummaryGenerator().generate(session: session, configuration: .init(
+            providerID: "pichi-local", modelID: "qwen3.5:4b", baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru"
+        ))
+        XCTAssertFalse(result.summary.isEmpty)
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
+    private func json(_ document: PichiMeetingSummaryDocument) throws -> String {
+        String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
+    }
+
+    private actor RepairTransport {
+        var requests: [LLMClient.Config] = []
+        let responses: [String]
+        let failTransport: Bool
+
+        init(responses: [String], failTransport: Bool = false) {
+            self.responses = responses
+            self.failTransport = failTransport
+        }
+
+        func complete(_ config: LLMClient.Config) throws -> String {
+            self.requests.append(config)
+            if self.failTransport { throw URLError(.cannotConnectToHost) }
+            let index = self.requests.count - 1
+            guard self.responses.indices.contains(index) else { throw URLError(.badServerResponse) }
+            return self.responses[index]
+        }
+    }
+
     private func configuration(endpoint: String = "http://127.0.0.1:11434/v1") -> PichiMeetingSummaryConfiguration {
         .init(providerID: "fixture", modelID: "fixture-model", baseURL: endpoint, apiKey: "", language: "ru")
     }
@@ -505,14 +719,27 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 }
                 return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": updates]), as: UTF8.self)
             }
-            let start = try XCTUnwrap(text.firstIndex(of: "["))
-            let data = Data(text[start...].utf8)
+            let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            let sourceObjects = try XCTUnwrap(request["sources"] as? [[String: Any]])
+            let sources = try JSONDecoder().decode([PichiMeetingSummarySource].self, from: JSONSerialization.data(withJSONObject: sourceObjects))
             let item: PichiMeetingSummaryItem
             if prompt.contains("Condense") {
-                let items = try JSONDecoder().decode([PichiMeetingSummaryItem].self, from: data)
+                let wireItems = try XCTUnwrap(request["recap"] as? [[String: Any]])
+                let canonical = try wireItems.map { fields -> [String: Any] in
+                    var copy = fields
+                    let citations = try XCTUnwrap(fields["evidence"] as? [[String: Any]])
+                    copy["evidence"] = try citations.map { citation -> [String: Any] in
+                        let index = try XCTUnwrap(citation["sourceIndex"] as? Int)
+                        let source = try XCTUnwrap(sources.first { $0.sourceIndex == index })
+                        return ["segmentID": source.id.uuidString, "quote": source.text]
+                    }
+                    return copy
+                }
+                let items = try JSONDecoder().decode([PichiMeetingSummaryItem].self, from: JSONSerialization.data(withJSONObject: canonical))
                 item = try XCTUnwrap(self.cancellationMode || self.answerMode ? items.last : items.first)
             } else {
-                let turn = try XCTUnwrap(JSONDecoder().decode([PichiMeetingSummaryTurn].self, from: data).first)
+                let source = try XCTUnwrap(sources.first)
+                let turn = PichiMeetingSummaryTurn(id: source.id, seconds: source.seconds, speaker: source.speaker, text: source.text)
                 item = .init(text: "Резюме \(turn.id)", evidence: [.init(segmentID: turn.id, quote: String(turn.text.prefix(100)))])
                 if self.answerMode {
                     let questioning = turn.text.hasPrefix("Когда")

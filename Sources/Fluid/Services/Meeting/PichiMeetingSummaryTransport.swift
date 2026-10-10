@@ -59,9 +59,12 @@ nonisolated enum PichiMeetingSummaryTransport {
         components.path = "/api/chat"
         guard let url = components.url else { throw LLMError.invalidURL }
         let ledger = (config.messages.first?["content"] as? String ?? "").contains("Reconcile meeting")
+        let responseFormat = config.extraParameters["response_format"] as? [String: Any]
+        let structured = responseFormat?["json_schema"] as? [String: Any]
+        let schema = structured?["schema"] as? [String: Any] ?? self.schema(ledger: ledger)
         let body: [String: Any] = [
             "model": config.model, "messages": config.messages, "stream": false,
-            "think": false, "keep_alive": 0, "format": self.schema(ledger: ledger),
+            "think": false, "keep_alive": 0, "format": schema,
             "options": ["num_ctx": self.ollamaContextTokens, "num_predict": self.ollamaOutputTokens, "temperature": 0],
         ]
         var request = URLRequest(url: url)
@@ -73,23 +76,30 @@ nonisolated enum PichiMeetingSummaryTransport {
         return request
     }
 
-    private static func schema(ledger: Bool) -> [String: Any] {
-        let evidence: [String: Any] = [
+    static func schema(ledger: Bool, sourceIndexes: [Int]? = nil) -> [String: Any] {
+        var evidence: [String: Any] = [
             "type": "object", "additionalProperties": false, "required": ["segmentID", "quote"],
             "properties": ["segmentID": ["type": "string"], "quote": ["type": "string", "minLength": 1, "maxLength": 500]],
         ]
-        let citations: [String: Any] = ["type": "array", "items": evidence, "minItems": 1, "maxItems": 8]
+        if let sourceIndexes, !sourceIndexes.isEmpty {
+            evidence = ["type": "object", "additionalProperties": false, "required": ["sourceIndex"],
+                        "properties": ["sourceIndex": ["type": "integer", "enum": sourceIndexes]]]
+        }
+        let definitions: [String: Any] = sourceIndexes?.isEmpty == false ? ["$defs": ["evidence": evidence]] : [:]
+        let citationItem: [String: Any] = definitions.isEmpty ? evidence : ["$ref": "#/$defs/evidence"]
+        let citations: [String: Any] = ["type": "array", "items": citationItem, "minItems": 1, "maxItems": 8]
         if ledger {
-            return ["type": "object", "additionalProperties": false, "required": ["updates"], "properties": [
+            return definitions.merging(["type": "object", "additionalProperties": false, "required": ["updates"], "properties": [
                 "updates": ["type": "array", "items": ["type": "object", "additionalProperties": false,
                             "required": ["index", "evidence"], "properties": ["index": ["type": "integer", "minimum": 0], "evidence": citations]]],
-            ]]
+            ]]) { _, new in new }
         }
         let properties: [String: Any] = ["text": ["type": "string", "minLength": 1, "maxLength": 2000], "evidence": citations]
         let item: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["text", "evidence"], "properties": properties]
         var actionProperties = properties
-        actionProperties["owner"] = ["type": ["string", "null"], "description": "Exact original speaker name, or null when unspecified."]
-        actionProperties["deadline"] = ["type": ["string", "null"], "description": "Exact substring of source speech including prepositions and grammatical case. Never normalize; use null if unspecified."]
+        let nullableText: [[String: Any]] = [["type": "null"], ["type": "string", "minLength": 1, "maxLength": 200]]
+        actionProperties["owner"] = ["anyOf": nullableText, "description": "Exact original name, or JSON null without quotes when unspecified."]
+        actionProperties["deadline"] = ["anyOf": nullableText, "description": "Exact source speech substring including prepositions and grammatical case. Never normalize; use JSON null without quotes if unspecified."]
         let action: [String: Any] = ["type": "object", "additionalProperties": false,
                                      "required": ["text", "evidence", "owner", "deadline"], "properties": actionProperties]
         var fields: [String: Any] = [:]
@@ -97,6 +107,6 @@ nonisolated enum PichiMeetingSummaryTransport {
             fields[name] = ["type": "array", "items": name == "actions" ? action : item,
                             "minItems": name == "summary" ? 1 : 0, "maxItems": name == "summary" ? 5 : 30]
         }
-        return ["type": "object", "additionalProperties": false, "required": Array(fields.keys).sorted(), "properties": fields]
+        return definitions.merging(["type": "object", "additionalProperties": false, "required": Array(fields.keys).sorted(), "properties": fields]) { _, new in new }
     }
 }
