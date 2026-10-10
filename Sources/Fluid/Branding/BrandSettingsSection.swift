@@ -7,6 +7,7 @@ struct BrandSettingsSection: View {
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
     @State private var errorMessage: String?
+    @State private var importing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -22,15 +23,18 @@ struct BrandSettingsSection: View {
             }
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Brand profile").font(self.theme.typography.bodyStrong)
+                    Text(PichiLocalization.text("Brand package")).font(self.theme.typography.bodyStrong)
                     Text(AppBrand.appName).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 Spacer()
-                Button("Import JSON", action: self.importProfile).controlSize(.small)
+                if self.importing { ProgressView().controlSize(.small) }
+                Button(PichiLocalization.text("Import brand"), action: self.importPackage).controlSize(.small)
+                Button(PichiLocalization.text("Export brand"), action: self.exportPackage).controlSize(.small)
                 Button("Import logo", action: self.importLogo).controlSize(.small)
                 Button("Reset", action: self.reset).controlSize(.small)
             }
-            Text("Brand names, links and colors apply throughout the app. Restart to refresh window titles and menus. Installation identity and updates are configured when building the app.")
+            .disabled(self.importing)
+            Text(PichiLocalization.text("One JSON file contains names, logos, light and dark palettes, style and links. Import applies them immediately. Installation identity and network policy belong to the signed distribution."))
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if let errorMessage {
                 Text(PichiLocalization.text(errorMessage)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
@@ -38,23 +42,18 @@ struct BrandSettingsSection: View {
         }
     }
 
-    private func importProfile() {
+    private func importPackage() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
+        self.performImport {
             let attributes = try url.resourceValues(forKeys: [.fileSizeKey])
-            guard (attributes.fileSize ?? Int.max) <= 32_768 else {
-                throw BrandProfile.ValidationError.invalid("Profile is larger than 32 KB.")
+            guard (attributes.fileSize ?? Int.max) <= BrandPackage.maximumBytes else {
+                throw BrandProfile.ValidationError.invalid("Brand package is larger than 17 MB.")
             }
-            let data = try Data(contentsOf: url)
-            let profile = try BrandProfile.decode(data)
-            UserDefaults.standard.set(try JSONEncoder().encode(profile), forKey: AppBrand.profileDefaultsKey)
-            self.settings.accentColorOption = .brand
-            NotificationCenter.default.post(name: AppBrand.appearanceChanged, object: nil)
-            self.errorMessage = nil
-        } catch { self.errorMessage = error.localizedDescription }
+            return try Data(contentsOf: url)
+        }
     }
 
     private func importLogo() {
@@ -62,31 +61,55 @@ struct BrandSettingsSection: View {
         panel.allowedContentTypes = [.png, .jpeg]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
+        self.performImport {
             let attributes = try url.resourceValues(forKeys: [.fileSizeKey])
-            guard (attributes.fileSize ?? Int.max) <= 4_194_304 else {
+            guard (attributes.fileSize ?? Int.max) <= BrandLogo.maximumBytes else {
                 throw BrandProfile.ValidationError.invalid("Logo must be no larger than 4 MB.")
             }
-            let data = try Data(contentsOf: url)
-            guard let image = NSImage(data: data), image.size.width > 0, image.size.height > 0,
-                  image.size.width <= 4096, image.size.height <= 4096
-            else { throw BrandProfile.ValidationError.invalid("Choose a valid PNG or JPEG logo up to 4096 pixels per side.") }
-            UserDefaults.standard.set(data, forKey: "PichiBrandLogo")
-            PichiBrandMark.customImage = image
-            NSApplication.shared.applicationIconImage = image
-            self.settings.objectWillChange.send()
-            NotificationCenter.default.post(name: AppBrand.appearanceChanged, object: nil)
+            let logo = try BrandLogo(data: Data(contentsOf: url))
+            var package = BrandPackageStore.shared.current()
+            package.logos = BrandLogos(primary: logo)
+            return try package.encoded()
+        }
+    }
+
+    private func performImport(_ read: @escaping @Sendable () throws -> Data) {
+        let previous = AppBrand.profile
+        self.importing = true
+        Task {
+            do {
+                let package = try await Task.detached(priority: .userInitiated) {
+                    try BrandPackageStore.shared.importData(read())
+                }.value
+                self.settings.accentColorOption = .brand
+                if let appearance = package.style?.defaultAppearance {
+                    self.settings.themePreference = SettingsStore.ThemePreference(rawValue: appearance.rawValue) ?? .system
+                }
+                BrandAppearanceController.apply(previous: previous)
+                self.errorMessage = nil
+            } catch { self.errorMessage = error.localizedDescription }
+            self.importing = false
+        }
+    }
+
+    private func exportPackage() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "brand.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try BrandPackageStore.shared.exportData().write(to: url, options: .atomic)
             self.errorMessage = nil
         } catch { self.errorMessage = error.localizedDescription }
     }
 
     private func reset() {
-        UserDefaults.standard.removeObject(forKey: AppBrand.profileDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: "PichiBrandLogo")
-        PichiBrandMark.customImage = nil
-        NSApplication.shared.applicationIconImage = PichiBrandMark.packagedIcon
+        let previous = AppBrand.profile
+        do { try BrandPackageStore.shared.reset() }
+        catch { self.errorMessage = error.localizedDescription; return }
         self.settings.accentColorOption = .brand
-        NotificationCenter.default.post(name: AppBrand.appearanceChanged, object: nil)
+        self.settings.themePreference = SettingsStore.ThemePreference(rawValue: AppBrand.package.style?.defaultAppearance.rawValue ?? "system") ?? .system
+        BrandAppearanceController.apply(previous: previous)
         self.errorMessage = nil
     }
 }

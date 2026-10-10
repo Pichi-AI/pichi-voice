@@ -2,6 +2,7 @@ import SwiftUI
 
 /// A bounded, static glass surface for onboarding, with an opaque accessibility fallback.
 struct OnboardingGlassSurface: ViewModifier {
+    @Environment(\.theme) private var theme
     let selected: Bool
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
@@ -15,7 +16,7 @@ struct OnboardingGlassSurface: ViewModifier {
             .overlay {
                 if !self.reduceTransparency {
                     self.shape.fill(LinearGradient(
-                        colors: [.white.opacity(self.selected ? 0.08 : 0.025), .clear, FluidBrandColors.blue.opacity(self.selected ? 0.055 : 0.015)],
+                        colors: [.white.opacity(self.selected ? 0.08 : 0.025), .clear, self.theme.palette.accent.opacity(self.selected ? 0.055 : 0.015)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ))
@@ -42,10 +43,10 @@ struct OnboardingGlassSurface: ViewModifier {
 
     @ViewBuilder private func material(content: Content) -> some View {
         if self.reduceTransparency {
-            content.background(self.shape.fill(Color(red: 0.065, green: 0.075, blue: 0.11)))
+            content.background(self.shape.fill(self.theme.palette.cardBackground))
         } else if #available(macOS 26, *) {
             content
-                .glassEffect(.regular.tint(FluidBrandColors.blue.opacity(self.selected ? 0.08 : 0.025)), in: self.shape)
+                .glassEffect(.regular.tint(self.theme.palette.accent.opacity(self.selected ? 0.08 : 0.025)), in: self.shape)
         } else {
             content.background(.ultraThinMaterial, in: self.shape)
         }

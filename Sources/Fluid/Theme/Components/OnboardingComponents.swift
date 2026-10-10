@@ -7,19 +7,20 @@ enum FluidOnboardingLayout {
 }
 
 struct OnboardingModelInfoTooltip: View {
+    @Environment(\.theme) private var theme
     let text: String
     let font: Font
 
     var body: some View {
         Text(self.text)
             .font(self.font)
-            .foregroundStyle(.white.opacity(0.92))
+            .foregroundStyle(self.theme.palette.primaryText.opacity(0.92))
             .fixedSize(horizontal: false, vertical: true)
             .padding(12)
             .frame(width: 260, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(red: 0.075, green: 0.085, blue: 0.11))
+                    .fill(self.theme.palette.elevatedCardBackground)
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.16), lineWidth: 1))
             )
             .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
@@ -72,7 +73,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
             VStack(spacing: 4) {
                 Text(PichiLocalization.text(self.title, locale: self.locale))
                     .font(.fluidSystem(size: 52, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(self.theme.palette.primaryText)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.82)
 
@@ -92,7 +93,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                 Text(PichiLocalization.text(self.secondDetail, locale: self.locale))
             }
             .font(.fluidSystem(size: 22, weight: .medium))
-            .foregroundStyle(Color.white.opacity(0.70))
+            .foregroundStyle(self.theme.palette.secondaryText)
             .multilineTextAlignment(.center)
             .lineLimit(1)
             .minimumScaleFactor(0.82)
@@ -106,6 +107,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
 }
 
 struct FluidOnboardingLandingBackdrop: View {
+    @Environment(\.theme) private var theme
     let glowCenter: UnitPoint
 
     init(glowCenter: UnitPoint = UnitPoint(x: 0.5, y: 0.18)) {
@@ -117,13 +119,13 @@ struct FluidOnboardingLandingBackdrop: View {
             Rectangle()
                 .fill(.ultraThinMaterial)
 
-            Color(red: 0.012, green: 0.019, blue: 0.031)
+            self.theme.palette.windowBackground
                 .opacity(0.88)
 
             RadialGradient(
                 colors: [
                     FluidOnboardingLandingColors.blue.opacity(0.18),
-                    Color(red: 0.014, green: 0.032, blue: 0.068).opacity(0.30),
+                    self.theme.palette.cardBackground.opacity(0.30),
                     .clear,
                 ],
                 center: self.glowCenter,
@@ -454,7 +456,7 @@ private final class LandingPrimaryNSButton: NSButton {
             string: title,
             attributes: [
                 .font: NSFont.fluidSystemFont(ofSize: 18, weight: .semibold),
-                .foregroundColor: NSColor.white,
+                .foregroundColor: NSColor(FluidOnboardingLandingColors.foreground),
             ]
         )
         self.alignment = .center
@@ -534,7 +536,15 @@ private struct FluidOnboardingPortalGlow: View {
 }
 
 enum FluidOnboardingLandingColors {
-    static var blue: Color { Color(hex: AppBrand.profile.accentDark) ?? FluidBrandColors.blue }
+    private static var dark: Bool {
+        SettingsStore.shared.themePreference == .dark || (SettingsStore.shared.themePreference == .system
+            && NSApplication.shared.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+    }
+    static var blue: Color { Color(hex: self.dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? FluidBrandColors.blue }
+    static var foreground: Color {
+        let accent = self.dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight
+        return BrandPalette.luminance(accent) > 0.179 ? .black : .white
+    }
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {

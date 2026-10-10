@@ -11,11 +11,13 @@ nonisolated struct BrandProfile: Codable, Equatable, Sendable {
     let website: String
     let support: String
 
-    static let pichi = BrandProfile(
-        appName: "Pichi Voice", meetingName: "Pichi Meet", assistantName: "Pichi AI",
+    // Neutral fail-closed copy is only used when a distribution resource is missing or corrupt.
+    // Product-specific defaults live in brand-package.json, including Pichi's initial profile.
+    static let neutral = BrandProfile(
+        appName: "Voice", meetingName: "Meet", assistantName: "AI",
         tagline: "Your voice. Your ideas. Your Mac.",
-        accentLight: "#6749C1", accentDark: "#A78FFF",
-        website: "https://pichi.ai", support: "https://github.com/Pichi-AI/pichi-voice/issues"
+        accentLight: "#555555", accentDark: "#AAAAAA",
+        website: "https://example.invalid", support: "https://example.invalid"
     )
 
     static func decode(_ data: Data) throws -> BrandProfile {
@@ -29,16 +31,27 @@ nonisolated struct BrandProfile: Codable, Equatable, Sendable {
         for (label, value) in [("App name", self.appName), ("Meeting name", self.meetingName), ("AI name", self.assistantName), ("Tagline", self.tagline)] {
             guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   value.count <= 120, value.rangeOfCharacter(from: .controlCharacters) == nil
-            else { throw ValidationError.invalid("\(label) must contain 1 to 120 printable characters.") }
+            else { throw ValidationError.invalid(PichiLocalization.format("%@ must contain 1 to 120 printable characters.", PichiLocalization.text(label))) }
         }
         for color in [self.accentLight, self.accentDark] {
-            guard color.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil
-            else { throw ValidationError.invalid("Accent colors must use #RRGGBB.") }
+            try Self.validateColor(color)
         }
         for value in [self.website, self.support] {
-            guard value.count <= 2_048, let url = URL(string: value), url.scheme == "https",
-                  url.host?.isEmpty == false, url.user == nil, url.password == nil
-            else { throw ValidationError.invalid("Website and support links must be HTTPS URLs without credentials.") }
+            try Self.validateHTTPS(value)
+        }
+    }
+
+    static func validateColor(_ value: String) throws {
+        guard value.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil else {
+            throw ValidationError.invalid("Accent colors must use #RRGGBB.")
+        }
+    }
+
+    static func validateHTTPS(_ value: String) throws {
+        guard value.count <= 2_048, let url = URL(string: value), url.scheme == "https",
+              url.host?.isEmpty == false, url.user == nil, url.password == nil,
+              value.rangeOfCharacter(from: .controlCharacters) == nil else {
+            throw ValidationError.invalid("Website and support links must be HTTPS URLs without credentials.")
         }
     }
 
@@ -52,7 +65,7 @@ nonisolated struct BrandProfile: Codable, Equatable, Sendable {
 nonisolated enum AppBrand {
     static let appearanceChanged = Notification.Name("PichiBrandAppearanceChanged")
     static let profileDefaultsKey = "PichiBrandProfile"
-    static var bundleIdentifier: String { Bundle.main.bundleIdentifier ?? "ai.pichi.voice" }
+    static var bundleIdentifier: String { Bundle.main.bundleIdentifier ?? "local.voice.unbundled" }
     static var releaseBundleIdentifier: String { self.releaseBundleIdentifier(from: self.bundleIdentifier) }
     static func releaseBundleIdentifier(from identifier: String) -> String {
         identifier.hasSuffix(".debug") ? String(identifier.dropLast(".debug".count)) : identifier
@@ -72,36 +85,33 @@ nonisolated enum AppBrand {
     static var keychainService: String { self.bundleIdentifier + ".provider-api-keys" }
     static let keychainAccount = "providerApiKeys"
 
-    static let packagedProfile: BrandProfile = {
-        guard let url = Bundle.main.url(forResource: "pichi-brand", withExtension: "json"),
-              let data = try? Data(contentsOf: url), let profile = try? BrandProfile.decode(data)
-        else { return .pichi }
-        return profile
+    static let packagedPackage: BrandPackage = {
+        guard let url = Bundle.main.url(forResource: "brand-package", withExtension: "json"),
+              let data = try? Data(contentsOf: url), let package = try? BrandPackage.decode(data)
+        else { return BrandPackage(profile: .neutral) }
+        return package
     }()
 
-    static var profile: BrandProfile {
-        guard let data = UserDefaults.standard.data(forKey: self.profileDefaultsKey),
-              let profile = try? BrandProfile.decode(data)
-        else { return self.packagedProfile }
-        return profile
-    }
-
+    static var package: BrandPackage { BrandPackageStore.shared.current() }
+    static var packagedProfile: BrandProfile { self.packagedPackage.profile }
+    static var profile: BrandProfile { self.package.profile }
     static var appName: String { self.profile.appName }
     static var meetingName: String { self.profile.meetingName }
     static var assistantName: String { self.profile.assistantName }
     static var tagline: String {
-        // Imported white-label copy is user content, even when it matches a UI key.
-        UserDefaults.standard.data(forKey: self.profileDefaultsKey) == nil && self.packagedProfile == .pichi
-            ? PichiLocalization.text(self.packagedProfile.tagline) : self.profile.tagline
+        // Imported copy is user data, even when it matches a String Catalog key.
+        !BrandPackageStore.shared.hasOverride && self.distribution.localizePackagedTagline
+            ? PichiLocalization.text(self.profile.tagline) : self.profile.tagline
     }
     static var supportURL: URL { URL(string: self.profile.support)! }
     static var websiteURL: URL { URL(string: self.profile.website)! }
-    static let repositoryOwner = "Pichi-AI"
-    static let repositoryName = "pichi-voice"
-    static let repositoryURL = URL(string: "https://github.com/Pichi-AI/pichi-voice")!
-    // Pichi has no signed distribution feed yet. Runtime branding cannot enable updates.
-    static let updatesEnabled = false
-    static let feedbackEndpoint: URL? = nil
+    static let distribution = BrandDistribution.load(bundle: .main)
+    // Update checks use trusted bundle configuration, never an imported visual package.
+    static var repositoryOwner: String { self.distribution.repositoryOwner }
+    static var repositoryName: String { self.distribution.repositoryName }
+    static var repositoryURL: URL { URL(string: self.package.links?.repository ?? self.profile.website)! }
+    static let updatesEnabled = AppBrand.distribution.updatesAllowedForCurrentSignature
+    static var feedbackEndpoint: URL? { self.distribution.feedbackEndpoint.flatMap(URL.init(string:)) }
 
     static func text(_ source: String) -> String {
         let profile = self.profile
@@ -114,20 +124,21 @@ nonisolated enum AppBrand {
 
     static func substitutingProductNames(in source: String, profile: BrandProfile) -> String {
         let names = [
-            "FluidVoice": profile.appName, "Fluid Voice": profile.appName,
-            "FLUIDVOICE": profile.appName.uppercased(), "FLUID VOICE": profile.appName.uppercased(),
-            "FluidMeet": profile.meetingName, "Fluid Meet": profile.meetingName,
-            "FLUIDMEET": profile.meetingName.uppercased(), "FLUID MEET": profile.meetingName.uppercased(),
-            "Fluid Intelligence": profile.assistantName, "FLUID INTELLIGENCE": profile.assistantName.uppercased(),
+            "fluidvoice": profile.appName, "fluid voice": profile.appName,
+            "fluidmeet": profile.meetingName, "fluid meet": profile.meetingName,
+            "fluid intelligence": profile.assistantName,
         ]
         // Replace original matches only, so a custom brand name is never processed twice.
-        let expression = try! NSRegularExpression(pattern: names.keys.sorted().map(NSRegularExpression.escapedPattern).joined(separator: "|"))
+        let expression = try! NSRegularExpression(
+            pattern: names.keys.sorted().map(NSRegularExpression.escapedPattern).joined(separator: "|"),
+            options: [.caseInsensitive]
+        )
         var result = source
         for match in expression.matches(in: source, range: NSRange(source.startIndex..., in: source)).reversed() {
-            guard let originalRange = Range(match.range, in: source),
-                  let resultRange = Range(match.range, in: result),
-                  let replacement = names[String(source[originalRange])] else { continue }
-            result.replaceSubrange(resultRange, with: replacement)
+            guard let originalRange = Range(match.range, in: source), let resultRange = Range(match.range, in: result) else { continue }
+            let original = String(source[originalRange])
+            guard let replacement = names[original.lowercased()] else { continue }
+            result.replaceSubrange(resultRange, with: original == original.uppercased() ? replacement.uppercased() : replacement)
         }
         return result
     }

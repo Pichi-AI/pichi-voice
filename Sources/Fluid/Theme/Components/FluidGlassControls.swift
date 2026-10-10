@@ -19,7 +19,7 @@ struct FluidRecordInvitationStyle: ButtonStyle {
         let highlighted = self.hovered && self.isEnabled
         configuration.label
             .font(self.theme.typography.bodyStrong)
-            .foregroundStyle(self.prominent ? Color.white : self.theme.palette.primaryText)
+            .foregroundStyle(self.prominent ? (self.recording ? Color.white : self.theme.palette.accentForeground) : self.theme.palette.primaryText)
             .padding(.horizontal, 22)
             .frame(minWidth: 144, maxWidth: self.fillsWidth ? .infinity : nil, minHeight: FluidButtonSize.large.controlHeight)
             .background {
@@ -59,6 +59,7 @@ private struct FluidRecordInvitationSurface: View {
     let animate: Bool
     let recording: Bool
     let reduceTransparency: Bool
+    @Environment(\.theme) private var theme
 
     var body: some View {
         ZStack {
@@ -66,7 +67,7 @@ private struct FluidRecordInvitationSurface: View {
                 Color.red
             } else {
                 LinearGradient(
-                    colors: [Color(red: 0.09, green: 0.34, blue: 0.78), Color(red: 0.15, green: 0.49, blue: 0.94), Color(red: 0.07, green: 0.35, blue: 0.82)],
+                    colors: [self.theme.palette.accent, self.theme.palette.accent, self.theme.palette.accent],
                     startPoint: .leading,
                     endPoint: .trailing
                 )

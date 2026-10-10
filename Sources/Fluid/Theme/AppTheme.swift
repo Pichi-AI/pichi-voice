@@ -23,6 +23,16 @@ struct AppTheme {
         let accent: Color
         let warning: Color
         let success: Color
+        var accentForegroundOverride: Color? = nil
+        var accentForeground: Color {
+            if let accentForegroundOverride { return accentForegroundOverride }
+            guard let rgb = NSColor(self.accent).usingColorSpace(.deviceRGB) else { return .white }
+            func channel(_ value: CGFloat) -> Double {
+                value <= 0.04045 ? Double(value / 12.92) : pow(Double((value + 0.055) / 1.055), 2.4)
+            }
+            let light = channel(rgb.redComponent) * 0.2126 + channel(rgb.greenComponent) * 0.7152 + channel(rgb.blueComponent) * 0.0722
+            return light > 0.179 ? .black : .white
+        }
     }
 
     struct Typography {
@@ -278,15 +288,47 @@ struct AppTheme {
     let metrics: Metrics
     let materials: Materials
 
-    static func adaptive(accent: Color, colorScheme: ColorScheme) -> AppTheme {
-        switch colorScheme {
-        case .light:
-            return .light(accent: accent)
-        case .dark:
-            return .dark(accent: accent)
-        @unknown default:
-            return .dark(accent: accent)
+    static func adaptive(accent: Color, colorScheme: ColorScheme, package: BrandPackage = AppBrand.package) -> AppTheme {
+        let base = colorScheme == .light ? Self.light(accent: accent) : Self.dark(accent: accent)
+        let palette = colorScheme == .light ? package.theme?.light : package.theme?.dark
+        return base.applying(palette: palette, style: package.style, brandAccent: colorScheme == .light ? package.profile.accentLight : package.profile.accentDark)
+    }
+
+    private func applying(palette branded: BrandPalette?, style: BrandStyle?, brandAccent: String) -> AppTheme {
+        func color(_ key: String, _ fallback: Color) -> Color {
+            branded?.colors[key].flatMap(Color.init(hex:)) ?? fallback
         }
+        let palette = Palette(
+            windowBackground: color("windowBackground", self.palette.windowBackground),
+            contentBackground: color("contentBackground", self.palette.contentBackground),
+            sidebarBackground: color("sidebarBackground", self.palette.sidebarBackground),
+            cardBackground: color("cardBackground", self.palette.cardBackground),
+            elevatedCardBackground: color("elevatedCardBackground", self.palette.elevatedCardBackground),
+            toolbarBackground: color("toolbarBackground", self.palette.toolbarBackground),
+            cardBorder: color("cardBorder", self.palette.cardBorder),
+            separator: color("separator", self.palette.separator),
+            primaryText: color("primaryText", self.palette.primaryText),
+            secondaryText: color("secondaryText", self.palette.secondaryText),
+            tertiaryText: color("tertiaryText", self.palette.tertiaryText),
+            accent: self.palette.accent,
+            warning: color("warning", self.palette.warning),
+            success: color("success", self.palette.success),
+            accentForegroundOverride: self.palette.accent == Color(hex: brandAccent)
+                ? branded?.colors["accentForeground"].flatMap(Color.init(hex:)) : nil
+        )
+        let scale = CGFloat(style?.spacingScale ?? 1)
+        let radius = CGFloat(style?.cornerRadiusScale ?? 1)
+        let metrics = Metrics(
+            spacing: Metrics.Spacing(xs: self.metrics.spacing.xs * scale, sm: self.metrics.spacing.sm * scale,
+                md: self.metrics.spacing.md * scale, lg: self.metrics.spacing.lg * scale,
+                xl: self.metrics.spacing.xl * scale, xxl: self.metrics.spacing.xxl * scale),
+            corners: Metrics.CornerRadius(sm: self.metrics.corners.sm * radius, md: self.metrics.corners.md * radius,
+                lg: self.metrics.corners.lg * radius, pill: self.metrics.corners.pill),
+            formRow: self.metrics.formRow, pickerControl: self.metrics.pickerControl,
+            cardSurface: self.metrics.cardSurface, onboardingSurface: self.metrics.onboardingSurface,
+            window: self.metrics.window, cardShadow: self.metrics.cardShadow, elevatedCardShadow: self.metrics.elevatedCardShadow
+        )
+        return AppTheme(palette: palette, typography: self.typography, metrics: metrics, materials: self.materials)
     }
 
     /// Light theme using system colors so macOS accessibility contrast settings stay in control.
