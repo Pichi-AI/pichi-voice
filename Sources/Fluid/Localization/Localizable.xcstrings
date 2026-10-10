@@ -26772,6 +26772,23 @@
         }
       }
     },
+    "Ratings unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ratings unavailable"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет сопоставимой оценки"
+          }
+        }
+      }
+    },
     "Raw Text": {
       "extractionState": "manual",
       "localizations": {
