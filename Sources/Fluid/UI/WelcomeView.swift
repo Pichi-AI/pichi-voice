@@ -1442,7 +1442,8 @@ struct OnboardingFlowView: View {
 
     private func onboardingModelActionButtonTitle(isPreparing: Bool, isDownloaded: Bool, isReady: Bool) -> String {
         if isPreparing {
-            if self.settings.selectedSpeechModel == .gigaam, !self.asr.isLoadingModel { return "Importing..." }
+            if self.preparingModelRouteID?.contains(SettingsStore.SpeechModel.gigaam.id) == true,
+               !self.asr.isLoadingModel { return "Importing..." }
             return self.asr.isLoadingModel ? "Loading..." : "Downloading..."
         }
         if isReady {
@@ -1471,7 +1472,6 @@ struct OnboardingFlowView: View {
 
         self.modelPreparationTask?.cancel()
         self.preparingModelRouteID = route.id
-        self.selectOnboardingRoute(route)
 
         self.modelPreparationTask = Task { @MainActor in
             defer {
@@ -1488,6 +1488,7 @@ struct OnboardingFlowView: View {
                     try await PichiGigaAMModelStore.shared.importModel(from: directory)
                     self.installations.refresh()
                 }
+                self.selectOnboardingRoute(route)
                 try await self.asr.ensureAsrReady(source: .onboarding)
             } catch is CancellationError {
                 DebugLogger.shared.info("Cancelled onboarding voice model setup for \(route.model.displayName)", source: "OnboardingFlowView")
