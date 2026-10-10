@@ -714,6 +714,67 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNoThrow(try result.validated(against: sources))
     }
 
+    func testRecoveryCannotSeparateCommitmentAndCancellationWithinOneSourceOrTiedTime() async throws {
+        let text = "Решили выпустить релиз. " + String(repeating: "Подробности. ", count: 90) + " Отменяем выпуск релиза."
+        for tiedTurns in [false, true] {
+            var session = self.session()
+            session.transcriptSegments[0].text = text
+            if tiedTurns {
+                var second = session.transcriptSegments[0]
+                second.id = UUID()
+                second.text = "Отменяем выпуск релиза. " + String(repeating: "Другие подробности. ", count: 70)
+                session.transcriptSegments.append(second) // Different ID, same original time.
+            }
+            let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+            do {
+                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: session, configuration: self.configuration())
+                XCTFail("Unsafe source partition must stay rejected")
+            } catch { guard case PichiMeetingSummaryError.outputLimit = error else { return XCTFail("Expected typed exhaustion") } }
+            let count = await transport.requests.count
+            XCTAssertEqual(count, 1, "An atomic source or tied-time group must not create children")
+        }
+    }
+
+    func testRecoveryKeepsTiedTimeAndRepeatedIDGroupsOnOneSideOfEveryCut() throws {
+        let repeated = UUID()
+        let turns: [PichiMeetingSummaryTurn] = [
+            .init(id: UUID(), seconds: 0, speaker: "Иван", text: String(repeating: "А", count: 800)),
+            .init(id: repeated, seconds: 1, speaker: "Иван", text: String(repeating: "Б", count: 800)),
+            .init(id: UUID(), seconds: 1, speaker: "Иван", text: String(repeating: "В", count: 800)),
+            .init(id: repeated, seconds: 2, speaker: "Иван", text: String(repeating: "Г", count: 800)),
+        ]
+        let parts = try XCTUnwrap(PichiMeetingSummaryInput.recoveryParts(turns))
+        XCTAssertEqual(parts.flatMap { $0 }, turns)
+        XCTAssertEqual(parts.map(\.count), [1, 3], "Only the boundary before the entire tied-time/repeated-ID group is safe")
+        XCTAssertNil(PichiMeetingSummaryInput.recoveryParts(Array(turns.dropFirst())))
+    }
+
+    func testTwoDistinctChronologicalSourcesRecoverWithoutNewTurnFragments() async throws {
+        var session = self.session()
+        session.transcriptSegments[0].text = String(repeating: "Первый пункт. ", count: 110)
+        var second = session.transcriptSegments[0]
+        second.id = UUID()
+        second.start = .init(value: 1000, timescale: 1000)
+        second.text = String(repeating: "Второй пункт. ", count: 110)
+        session.transcriptSegments.append(second)
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 2000)
+        _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        let visited = await transport.successfulExtractionSources
+        for turn in PichiMeetingSummaryInput.turns(for: session) {
+            XCTAssertEqual(PichiMeetingSummaryInput.normalized(visited.filter { $0.id == turn.id }.map(\.text).joined(separator: " ")),
+                           PichiMeetingSummaryInput.normalized(turn.text))
+        }
+        let requests = await transport.requests
+        let extractionInputs = try requests.compactMap { config -> [String: Any]? in
+            let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            return fields["context"] != nil ? fields : nil
+        }
+        XCTAssertEqual(extractionInputs.count, 3, "One exhausted parent followed by two chronological intact children")
+    }
+
     func testRecapOutputLimitFailsClosedInsteadOfIsolatingEarlierCommitmentFromCancellation() async throws {
         // The two original extraction documents are independently valid. A recap
         // must see both together; splitting would repeat a stale earlier commitment.
@@ -750,6 +811,26 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let count = await transport.requests.count
             XCTAssertLessThanOrEqual(count, 4)
         }
+    }
+
+    func testRecoveryDepthRemainsBoundedAcrossManyDistinctSources() async throws {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = (0..<16).map { index in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 1000), timescale: 1000)
+            segment.text = String(repeating: "Ж", count: 300)
+            return segment
+        }
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+        do {
+            _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            XCTFail("Repeated subdivision remains bounded")
+        } catch { guard case PichiMeetingSummaryError.outputLimit = error else { return XCTFail("Expected typed exhaustion") } }
+        let count = await transport.requests.count
+        XCTAssertEqual(count, 4, "Only the original request and three subdivision levels may run before rejection")
     }
 
     func testOutputLimitOnValidationRegenerationDoesNotSplitRejectedEvidence() async throws {

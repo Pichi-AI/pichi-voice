@@ -187,6 +187,29 @@ nonisolated enum PichiMeetingSummaryInput {
         return chunks
     }
 
+    /// Recovery must not create new fragments with the same source identity/time.
+    /// Ledger reconciliation accepts only strictly later sources, so tied-time and
+    /// repeated-ID groups remain atomic. Choose the safe cut nearest half the cost.
+    static func recoveryParts(_ turns: [PichiMeetingSummaryTurn]) -> [[PichiMeetingSummaryTurn]]? {
+        guard turns.count > 1 else { return nil }
+        let costs = turns.map { $0.text.count + $0.speaker.count + 160 }
+        let size = costs.reduce(0, +)
+        guard size > 1000 else { return nil }
+        var prefixCost = 0
+        var bestCut: Int?
+        var bestDistance = Int.max
+        for cut in 1..<turns.count {
+            prefixCost += costs[cut - 1]
+            guard turns[cut - 1].seconds < turns[cut].seconds,
+                  Set(turns[..<cut].map(\.id)).isDisjoint(with: Set(turns[cut...].map(\.id)))
+            else { continue }
+            let distance = abs(size - 2 * prefixCost)
+            if distance < bestDistance { bestCut = cut; bestDistance = distance }
+        }
+        guard let cut = bestCut else { return nil }
+        return [Array(turns[..<cut]), Array(turns[cut...])]
+    }
+
     /// Bound structured citation choices to short, literal excerpts. Splitting at
     /// word boundaries preserves every source character without rewriting speech.
     static func evidenceChoices(_ turns: [PichiMeetingSummaryTurn], maximumCharacters: Int = 160) -> [PichiMeetingSummaryEvidence] {
@@ -371,10 +394,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             // A recap or ledger combines earlier claims and later corrections.
             // Splitting it could publish contradictory isolated facts, so fail closed.
             guard !reducing, recoveryDepth < 3 else { throw PichiMeetingSummaryError.outputLimit }
-            let size = turns.reduce(0) { $0 + $1.text.count + $1.speaker.count + 160 }
-            guard size > 1000 else { throw PichiMeetingSummaryError.outputLimit }
-            let parts = PichiMeetingSummaryInput.chunks(turns, maximumCharacters: max(1000, size / 2))
-            guard parts.count > 1 else { throw PichiMeetingSummaryError.outputLimit }
+            guard let parts = PichiMeetingSummaryInput.recoveryParts(turns)
+            else { throw PichiMeetingSummaryError.outputLimit }
             var results: [PichiMeetingSummaryDocument] = []
             for part in parts {
                 results += try await self.request(input, configuration: configuration, turns: part, reducing: false,
