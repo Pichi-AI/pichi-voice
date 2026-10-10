@@ -196,8 +196,8 @@ final class PichiMeetingSummaryController: ObservableObject {
     var sourceSession: MeetingSession? { self.activeSourceSession ?? self.documentSourceSession }
     private var activeConfiguration: PichiMeetingSummaryConfiguration?
     private var activeSourceSession: MeetingSession?
-    private var documentConfiguration: PichiMeetingSummaryConfiguration?
-    private var documentSourceSession: MeetingSession?
+    private(set) var documentConfiguration: PichiMeetingSummaryConfiguration?
+    private(set) var documentSourceSession: MeetingSession?
     private var operation: Task<Void, Never>?
     private var generationID = UUID()
     private let generator: PichiMeetingSummaryGenerator
@@ -205,6 +205,12 @@ final class PichiMeetingSummaryController: ObservableObject {
     init(sessionID: UUID? = nil, generator: PichiMeetingSummaryGenerator = .init()) {
         self.sessionID = sessionID
         self.generator = generator
+    }
+
+    /// Destination disclosure and the next action must use the same configuration.
+    /// A saved document's provenance never authorizes a new request to its old endpoint.
+    func requestConfiguration(current: PichiMeetingSummaryConfiguration?) -> PichiMeetingSummaryConfiguration? {
+        self.generating ? self.activeConfiguration : current
     }
 
     func refresh(session: MeetingSession?, configuration: PichiMeetingSummaryConfiguration?) async {

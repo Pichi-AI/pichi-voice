@@ -93,6 +93,51 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
     }
 
     @MainActor
+    func testCompletedBackgroundSummaryDisclosesTheNextDestinationWithoutChangingDocumentProvenance() async throws {
+        let session = self.session()
+        let local = self.configuration()
+        let remote = PichiMeetingSummaryConfiguration(providerID: "remote-fixture", modelID: "remote-model",
+            baseURL: "https://summary.example.invalid/v1", apiKey: "synthetic-key", language: "en")
+        let segment = try XCTUnwrap(session.transcriptSegments.first)
+        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили отчёт.",
+            evidence: [.init(segmentID: segment.id, quote: segment.text)])], decisions: [], actions: [], openQuestions: [])
+        let response = String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        asr.meetingModelParticipantsForTesting = []
+        let entered = expectation(description: "Local generation entered")
+        let settled = expectation(description: "Local document published and saved")
+        let drain = InferenceDrain()
+        let controller = PichiMeetingSummaryController(sessionID: session.id, generator: .init { _ in
+            entered.fulfill()
+            await drain.wait()
+            return response
+        })
+        controller.generationStateChanged = { controller in
+            if !controller.generating { settled.fulfill() }
+        }
+        try await MeetingSessionStore.shared.create(session)
+        controller.summarize(session: session, configuration: local, asr: asr)
+        await fulfillment(of: [entered], timeout: 5)
+        // Settings changed elsewhere while navigation detached this view. Refresh
+        // must preserve the active attempt, but cannot hide the next destination.
+        await controller.refresh(session: session, configuration: remote)
+        XCTAssertEqual(controller.requestConfiguration(current: remote)?.cacheIdentity, local.cacheIdentity)
+        XCTAssertEqual(controller.requestConfiguration(current: nil)?.cacheIdentity, local.cacheIdentity)
+        drain.release()
+        await fulfillment(of: [settled], timeout: 5)
+        XCTAssertFalse(controller.generating)
+        XCTAssertNil(controller.error)
+        XCTAssertEqual(controller.document, document)
+        XCTAssertEqual(controller.requestConfiguration(current: remote)?.cacheIdentity, remote.cacheIdentity)
+        XCTAssertFalse(controller.requestConfiguration(current: remote)?.isOnDevice ?? true)
+        XCTAssertNil(controller.requestConfiguration(current: nil), "Old document metadata must not enable an unconfigured request")
+        XCTAssertEqual(controller.documentConfiguration?.cacheIdentity, local.cacheIdentity)
+        XCTAssertEqual(controller.documentConfiguration?.language, "ru", "Copy uses the saved document's language")
+        XCTAssertEqual(controller.documentSourceSession, session)
+        try await MeetingSessionStore.shared.delete(id: session.id)
+    }
+
+    @MainActor
     func testBoundControllerCannotDisplayOrGenerateAnotherMeeting() async {
         let session = self.session()
         let controller = PichiMeetingSummaryController(sessionID: session.id)
