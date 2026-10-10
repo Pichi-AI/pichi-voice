@@ -14,9 +14,14 @@ final class ModelRepository {
 
     private init() {}
 
-    lazy var localTextModels = LocalTextModelCatalog.load(
-        from: Bundle.main.url(forResource: "local-text-models", withExtension: "json")
-    )
+    lazy var localTextModels: LocalTextModelCatalog = {
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle.main
+        #endif
+        return LocalTextModelCatalog.load(from: bundle.url(forResource: "local-text-models", withExtension: "json"))
+    }()
 
     /// Local model tags are endpoint-specific; discovery never chooses a model
     /// or replaces an explicit selection that is temporarily unavailable.

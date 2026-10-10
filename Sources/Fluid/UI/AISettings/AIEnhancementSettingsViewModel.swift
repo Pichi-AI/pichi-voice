@@ -36,6 +36,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var refreshingProviderID: String? = nil
     @Published var fetchModelsError: String? = nil
 
+    private struct ModelDiscoverySnapshot {
+        let fingerprint: String
+        let models: [String]
+    }
+    // Editable and persisted model lists are not proof of server availability.
+    @Published private var modelDiscoveryByProvider: [String: ModelDiscoverySnapshot] = [:]
+
     // Reasoning Configuration
     @Published var showingReasoningConfig: Bool = false
     @Published var editingReasoningParamName: String = "reasoning_effort"
@@ -1282,6 +1289,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             await MainActor.run {
                 guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
                       self.providerAPIKey(for: providerID) == apiKey else { return }
+                self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
                 if models.isEmpty {
                     // Keep existing models if fetch returned empty
                     self.fetchModelsError = "No models returned from API"
@@ -1314,7 +1322,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
         } catch {
             await MainActor.run {
-                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL else { return }
+                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey else { return }
+                self.modelDiscoveryByProvider.removeValue(forKey: key)
                 self.fetchModelsError = error.localizedDescription
             }
         }
@@ -1332,6 +1342,21 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return ModelRepository.shared.defaultModels(for: providerID)
         }
         return []
+    }
+
+    /// Only a successful discovery for this exact endpoint/API context can
+    /// enable a library entry. Manually added IDs stay in the normal picker.
+    func discoveredModels(for providerID: String) -> [String] {
+        let key = self.providerKey(for: providerID)
+        guard let snapshot = self.modelDiscoveryByProvider[key],
+              snapshot.fingerprint == self.fingerprint(baseURL: self.providerBaseURL(for: providerID),
+                                                       apiKey: self.providerAPIKey(for: providerID)) else { return [] }
+        return snapshot.models
+    }
+
+    private func recordModelDiscovery(_ models: [String], for providerID: String, baseURL: String, apiKey: String) {
+        guard let fingerprint = self.fingerprint(baseURL: baseURL, apiKey: apiKey) else { return }
+        self.modelDiscoveryByProvider[self.providerKey(for: providerID)] = .init(fingerprint: fingerprint, models: models)
     }
 
     func selectedModel(for providerID: String) -> String {
@@ -1395,6 +1420,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             await MainActor.run {
                 guard self.providerBaseURL(for: providerID) == baseURL,
                       self.providerAPIKey(for: providerID) == apiKey else { return }
+                self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
                 guard !models.isEmpty else {
                     self.fetchModelsError = "No models returned from API"
                     return
@@ -1433,6 +1459,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
         } catch {
             await MainActor.run {
+                guard self.providerBaseURL(for: providerID) == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey else { return }
+                self.modelDiscoveryByProvider.removeValue(forKey: key)
                 self.fetchModelsError = error.localizedDescription
             }
         }

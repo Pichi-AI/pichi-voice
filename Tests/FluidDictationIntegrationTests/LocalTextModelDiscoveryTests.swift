@@ -43,6 +43,16 @@ final class LocalTextModelDiscoveryTests: XCTestCase {
         XCTAssertEqual(catalog.displayName(for: "private-import", providerID: "ollama"), "private-import")
     }
 
+    func testEditableCachedIDsAndOldFetchFlagDoNotProveServerAvailability() {
+        let viewModel = AIEnhancementSettingsViewModel(settings: .shared, menuBarManager: MenuBarManager(),
+                                                      promptTest: DictationPromptTestCoordinator())
+        viewModel.availableModelsByProvider["ollama"] = ["qwen3.5:9b"]
+        viewModel.fetchedModelsProviders.insert("ollama")
+        XCTAssertEqual(viewModel.models(for: "ollama"), ["qwen3.5:9b"], "Keep the editable normal picker")
+        XCTAssertTrue(viewModel.discoveredModels(for: "ollama").isEmpty,
+                      "The library needs successful discovery for the current endpoint/API context")
+    }
+
     func testLocalRefreshPreservesExplicitUnavailableChoiceAndRemoteBehavior() {
         let models = ["large-first", "compact-second"]
         XCTAssertEqual(ModelRepository.selectionAfterRefresh(preferred: "previous-local", models: models, isLocal: true), "previous-local")
