@@ -18,6 +18,14 @@ EXPLICIT = re.compile(r'\b(?:PichiLocalization\.(?:text|format)|AppBrand\.(?:tex
 # to these presentation sources; generic title/model/user-data fields elsewhere are not UI keys.
 ONBOARDING_NAMED_COPY = re.compile(r'\b(?:skipTitle|continueTitle|title)\s*:\s*("(?:[^"\\]|\\.)*")')
 
+# These settings presentation files declare row labels and descriptions as trusted UI copy.
+# Do not apply this to stored model/provider/prompt descriptors, whose fields are user data.
+SETTINGS_NAMED_COPY = re.compile(r'\b(?:title|description|footnote)\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+def settings_copy_source(path):
+    return path.name in {'SettingsView.swift', 'AISettingsView+AdvancedSettings.swift'}
+
 
 def onboarding_copy_source(path):
     return path.name in {
@@ -114,6 +122,8 @@ def missing_literal_keys(strings, source_root=None):
         patterns = [EXPLICIT]
         if onboarding_copy_source(path):
             patterns.append(ONBOARDING_NAMED_COPY)
+        if settings_copy_source(path):
+            patterns.append(SETTINGS_NAMED_COPY)
         for match in (match for pattern in patterns for match in pattern.finditer(source)):
             try:
                 # Swift interpolation and multiline/raw literals require Xcode's compiler extraction.

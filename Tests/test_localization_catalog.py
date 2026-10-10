@@ -56,6 +56,18 @@ class LocalizationCatalogValidationTests(unittest.TestCase):
         self.assertEqual(check.signature('15% faster'), {})
         self.assertEqual(check.signature('Progress: %lld%%'), {1: 'lld'})
 
+    def testMissingSettingsRowCopyIsCaughtWithoutScanningProviderDataFields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'SettingsView.swift').write_text('optionToggleRow(title: "Copy to Clipboard", description: "Keep a local copy.")\nsettingsToggleRow(title: "Return to Starting Field", description: "Use the first field.", footnote: "Off by default.")\n')
+            (root / 'AISettingsView+AdvancedSettings.swift').write_text('promptEditorConfigRow(title: "AI provider", description: "Verified providers only.")\n')
+            (root / 'ProviderDescriptor.swift').write_text('ProviderDescriptor(title: "Private model", description: "Private provider text", footnote: "Private notes")\n')
+            translated = {key: {} for key in ['Copy to Clipboard', 'Return to Starting Field', 'AI provider', 'Use the first field.']}
+            missing = check.missing_literal_keys(translated, source_root=root)
+            self.assertEqual(set(missing), {'Keep a local copy.', 'Off by default.', 'Verified providers only.'})
+            translated.update({key: {} for key in missing})
+            self.assertEqual(check.missing_literal_keys(translated, source_root=root), {})
+
 
 if __name__ == '__main__':
     unittest.main()

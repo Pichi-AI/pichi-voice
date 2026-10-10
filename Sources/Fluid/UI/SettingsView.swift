@@ -839,7 +839,7 @@ struct SettingsView: View {
                                                 Text("Activation Mode")
                                                     .font(self.theme.typography.bodyStrong)
                                                     .foregroundStyle(self.settingsTitleText)
-                                                Text(self.hotkeyMode.description)
+                                                Text(PichiLocalization.text(self.hotkeyMode.description))
                                                     .font(self.theme.typography.bodySmall)
                                                     .foregroundStyle(self.settingsSecondaryText)
                                                     .fixedSize(horizontal: false, vertical: true)
@@ -877,14 +877,14 @@ struct SettingsView: View {
                                                 Text("Text Insertion Mode")
                                                     .font(self.theme.typography.bodyStrong)
                                                     .foregroundStyle(self.settingsTitleText)
-                                                Text(SettingsStore.shared.textInsertionMode.description)
+                                                Text(PichiLocalization.text(SettingsStore.shared.textInsertionMode.description))
                                                     .font(self.theme.typography.bodySmall)
                                                     .foregroundStyle(self.settingsSecondaryText)
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                                            FluidDropdownPicker("Text insertion", selectedTitle: SettingsStore.shared.textInsertionMode.displayName, selection: Binding(
+                                            FluidDropdownPicker("Text insertion", selectedTitle: PichiLocalization.text(SettingsStore.shared.textInsertionMode.displayName), selection: Binding(
                                                 get: { SettingsStore.shared.textInsertionMode },
                                                 set: { SettingsStore.shared.textInsertionMode = $0 }
                                             )) {
@@ -1867,7 +1867,7 @@ struct SettingsView: View {
 
     private func presentInfoAlert(title: String, message: String) {
         let alert = NSAlert()
-        alert.messageText = title
+        alert.messageText = PichiLocalization.text(title)
         alert.informativeText = message
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
@@ -1876,7 +1876,7 @@ struct SettingsView: View {
 
     private func presentErrorAlert(title: String, message: String) {
         let alert = NSAlert()
-        alert.messageText = title
+        alert.messageText = PichiLocalization.text(title)
         alert.informativeText = message
         alert.alertStyle = .critical
         alert.addButton(withTitle: "OK")
@@ -3118,7 +3118,7 @@ private struct DictionarySuggestionsSettingsRow: View {
 
                     FluidDropdownPicker(
                         "Ask after",
-                        selectedTitle: self.settings.automaticDictionarySuggestionFrequency.displayName,
+                        selectedTitle: PichiLocalization.text(self.settings.automaticDictionarySuggestionFrequency.displayName),
                         selection: self.$settings.automaticDictionarySuggestionFrequency
                     ) {
                         ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
@@ -3142,8 +3142,8 @@ struct AnalyticsConfirmationView: View {
     @Environment(\.theme) private var theme
 
     private var contactInfoText: AttributedString {
-        var text = AttributedString("For privacy questions, contact our support team.")
-        if let range = text.range(of: "support team") {
+        var text = AttributedString(PichiLocalization.text("For privacy questions, contact our support team."))
+        if let range = text.range(of: PichiLocalization.text("support team")) {
             text[range].link = AppBrand.supportURL
             text[range].foregroundColor = self.theme.palette.accent
         }

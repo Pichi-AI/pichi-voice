@@ -114,6 +114,48 @@ final class PichiLocalizationTests: XCTestCase {
         XCTAssertEqual(PichiLocalization.format("%lld percent", language: .russian, bundle: .main, arguments: [21]), "21 процент")
     }
 
+    func testCompiledSettingsCopyLocalizesDescriptionsAndSelectedOptionsWithoutChangingStoredIDs() {
+        let activationLabels: [HotkeyActivationMode: String] = [
+            .toggle: "Переключение", .hold: "Удержание", .automatic: "Автоматически (оба режима)",
+        ]
+        XCTAssertEqual(HotkeyActivationMode.allCases.map(\.rawValue), ["toggle", "hold", "automatic"])
+        for mode in HotkeyActivationMode.allCases {
+            XCTAssertEqual(PichiLocalization.text(mode.displayName, language: .russian, bundle: .main), activationLabels[mode])
+            XCTAssertNotEqual(PichiLocalization.text(mode.description, language: .russian, bundle: .main), mode.description)
+            XCTAssertEqual(PichiLocalization.text(mode.displayName, language: .english, bundle: .main), mode.displayName)
+        }
+
+        XCTAssertEqual(SettingsStore.TextInsertionMode.allCases.map(\.rawValue), ["reliablePaste", "standard"])
+        XCTAssertEqual(PichiLocalization.text(SettingsStore.TextInsertionMode.reliablePaste.displayName, language: .russian, bundle: .main), "Через буфер обмена (рекомендуется)")
+        XCTAssertEqual(PichiLocalization.text(SettingsStore.TextInsertionMode.standard.displayName, language: .russian, bundle: .main), "Прямая вставка")
+        for mode in SettingsStore.TextInsertionMode.allCases {
+            XCTAssertNotEqual(PichiLocalization.text(mode.description, language: .russian, bundle: .main), mode.description)
+            XCTAssertEqual(PichiLocalization.text(mode.description, language: .english, bundle: .main), mode.description)
+        }
+        XCTAssertEqual(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases.map(\.rawValue), [1, 2, 3])
+        XCTAssertEqual(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases.map {
+            PichiLocalization.text($0.displayName, language: .russian, bundle: .main)
+        }, ["1 исправления", "2 исправлений", "3 исправлений"])
+
+        let descriptions = [
+            "Automatically copy transcribed text to clipboard as a backup.",
+            "Save transcriptions for stats tracking. Disable for privacy.",
+            "Store actual microphone audio locally with dictation history. Disabled by default.",
+            "Skip Saturday and Sunday when calculating usage streaks. Perfect for weekday-only users.",
+            "Avoid transcription when a recording up to four seconds contains only clear silence. Disabled by default to preserve quiet speech.",
+            "Say a phrase at the end of dictation to send with your chosen Enter command.",
+            "Share anonymous daily feature, insertion performance, onboarding, and model metrics. Never includes transcription text or prompts.",
+            "Telemetry is disabled in this distribution.",
+        ]
+        for description in descriptions {
+            XCTAssertNotEqual(PichiLocalization.text(description, language: .russian, bundle: .main), description)
+            XCTAssertEqual(PichiLocalization.text(description, language: .english, bundle: .main), description)
+        }
+        let privacyCopy = PichiLocalization.text("For privacy questions, contact our support team.", language: .russian, bundle: .main)
+        XCTAssertEqual(privacyCopy, "По вопросам конфиденциальности обратитесь в службу поддержки.")
+        XCTAssertNotNil(privacyCopy.range(of: PichiLocalization.text("support team", language: .russian, bundle: .main)))
+    }
+
     func testMeetingHealthWarningsUseCompiledCatalogWithoutChangingPersistedDiagnostics() throws {
         let warnings = [
             "No meeting audio is being captured while your microphone is active.": "Звук встречи не записывается, хотя микрофон активен.",

@@ -3454,6 +3454,23 @@
         }
       }
     },
+    "Activation mode": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activation mode"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Режим активации"
+          }
+        }
+      }
+    },
     "Active": {
       "extractionState": "manual",
       "localizations": {
@@ -4096,6 +4113,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Добавить сочетание"
+          }
+        }
+      }
+    },
+    "Add spacing when consecutive dictations are joined.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add spacing when consecutive dictations are joined."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавлять пробел при объединении последовательных диктовок."
           }
         }
       }
@@ -4817,6 +4851,23 @@
         }
       }
     },
+    "Animate overlay closing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Animate overlay closing"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Анимация закрытия индикатора"
+          }
+        }
+      }
+    },
     "Anonymous Analytics": {
       "extractionState": "manual",
       "localizations": {
@@ -5380,6 +5431,23 @@
         }
       }
     },
+    "Audio Deleted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio Deleted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозаписи удалены"
+          }
+        }
+      }
+    },
     "Audio Devices": {
       "extractionState": "manual",
       "localizations": {
@@ -5393,6 +5461,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Аудиоустройства"
+          }
+        }
+      }
+    },
+    "Audio Export Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio Export Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось экспортировать аудио"
+          }
+        }
+      }
+    },
+    "Audio Export Saved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio Export Saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспорт аудио сохранён"
+          }
+        }
+      }
+    },
+    "Audio Pruned": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio Pruned"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Старые аудиозаписи удалены"
           }
         }
       }
@@ -5686,6 +5805,23 @@
         }
       }
     },
+    "Automatic (Both)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic (Both)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматически (оба режима)"
+          }
+        }
+      }
+    },
     "Automatic Updates": {
       "extractionState": "manual",
       "localizations": {
@@ -5801,6 +5937,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Автоматически · обнаруженный звонок"
+          }
+        }
+      }
+    },
+    "Automatically copy transcribed text to clipboard as a backup.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatically copy transcribed text to clipboard as a backup."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматически копировать распознанный текст в буфер обмена как резервную копию."
           }
         }
       }
@@ -6031,6 +6184,23 @@
       },
       "comment": "Count label. Native plural forms must retain the integer argument; do not branch on language in application code."
     },
+    "Avoid transcription when a recording up to four seconds contains only clear silence. Disabled by default to preserve quiet speech.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avoid transcription when a recording up to four seconds contains only clear silence. Disabled by default to preserve quiet speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не распознавать записи до четырёх секунд, если в них только тишина. По умолчанию отключено, чтобы не пропустить тихую речь."
+          }
+        }
+      }
+    },
     "BUILT-IN": {
       "extractionState": "manual",
       "localizations": {
@@ -6164,6 +6334,74 @@
           "stringUnit": {
             "state": "translated",
             "value": "Резервное копирование"
+          }
+        }
+      }
+    },
+    "Backup Export Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backup Export Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось экспортировать резервную копию"
+          }
+        }
+      }
+    },
+    "Backup Exported": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backup Exported"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервная копия экспортирована"
+          }
+        }
+      }
+    },
+    "Backup Import Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backup Import Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось импортировать резервную копию"
+          }
+        }
+      }
+    },
+    "Backup Imported": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backup Imported"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резервная копия импортирована"
           }
         }
       }
@@ -9140,6 +9378,23 @@
         }
       }
     },
+    "Clipboard Paste (Recommended)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clipboard Paste (Recommended)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Через буфер обмена (рекомендуется)"
+          }
+        }
+      }
+    },
     "Close": {
       "extractionState": "manual",
       "localizations": {
@@ -10208,6 +10463,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Настройте чувствительность визуализатора к входящему звуку"
+          }
+        }
+      }
+    },
+    "Convert spoken slash commands and supported @ mentions into symbols.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Convert spoken slash commands and supported @ mentions into symbols."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Преобразовывать произнесённые команды с / и поддерживаемые упоминания @ в символы."
           }
         }
       }
@@ -12374,6 +12646,23 @@
         }
       }
     },
+    "Dictation shortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation shortcut"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сочетание для диктовки"
+          }
+        }
+      }
+    },
     "Dictation shortcut %@. Press once to start. Press again to stop.": {
       "extractionState": "manual",
       "localizations": {
@@ -12574,6 +12863,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Текст для проверки словаря"
+          }
+        }
+      }
+    },
+    "Direct Paste": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Direct Paste"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Прямая вставка"
           }
         }
       }
@@ -13156,6 +13462,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Перетащите, чтобы изменить размер панелей. Дважды нажмите, чтобы сбросить."
+          }
+        }
+      }
+    },
+    "Drop a final period from transcriptions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drop a final period from transcriptions."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Убирать завершающую точку из расшифровок."
           }
         }
       }
@@ -14284,6 +14607,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "Execute voice commands": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Execute voice commands"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выполняйте голосовые команды"
+          }
+        }
+      }
+    },
     "Expand your dictionary": {
       "extractionState": "manual",
       "localizations": {
@@ -14882,6 +15222,23 @@
         }
       }
     },
+    "Fast, compatible insertion using a temporary clipboard entry that is restored after paste.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fast, compatible insertion using a temporary clipboard entry that is restored after paste."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Быстрая вставка через буфер обмена с поддержкой разных приложений. После вставки прежнее содержимое буфера восстанавливается."
+          }
+        }
+      }
+    },
     "Faster Long Dictation": {
       "extractionState": "manual",
       "localizations": {
@@ -15031,6 +15388,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ширина списка файлов: %lld пунктов"
+          }
+        }
+      }
+    },
+    "File logs are always collected for diagnostics.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File logs are always collected for diagnostics."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Журналы в файлах всегда сохраняются для диагностики."
           }
         }
       }
@@ -16283,6 +16657,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "Follow these steps to enable Accessibility:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Follow these steps to enable Accessibility:"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чтобы включить универсальный доступ:"
+          }
+        }
+      }
+    },
     "For best results": {
       "extractionState": "manual",
       "localizations": {
@@ -16334,6 +16725,23 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "For long recordings, reuse completed live windows and process only the remaining tail when you stop.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For long recordings, reuse completed live windows and process only the remaining tail when you stop."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для длинных записей использовать уже распознанные фрагменты и после остановки обрабатывать только оставшуюся часть."
+          }
+        }
+      }
     },
     "For privacy questions, contact our support team.": {
       "extractionState": "manual",
@@ -17272,6 +17680,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "История недоступна"
+          }
+        }
+      }
+    },
+    "Hold": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удержание"
           }
         }
       }
@@ -18487,6 +18912,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "Invalid Budget": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid Budget"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный лимит"
+          }
+        }
+      }
+    },
     "It is at the top of the list.": {
       "extractionState": "manual",
       "localizations": {
@@ -18756,6 +19198,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сохраняет ваши слова без изменений, включая ошибки."
+          }
+        }
+      }
+    },
+    "Keyboard shortcut or mouse button": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keyboard shortcut or mouse button"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сочетание клавиш или кнопка мыши"
           }
         }
       }
@@ -20206,6 +20665,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Всё готово. Можно добавить эту замену."
+          }
+        }
+      }
+    },
+    "Lowercase First Letter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lowercase First Letter"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Строчная первая буква"
           }
         }
       }
@@ -22553,6 +23029,23 @@
         }
       }
     },
+    "New dictation shortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New dictation shortcut"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новое сочетание для диктовки"
+          }
+        }
+      }
+    },
     "New pronunciation captured.": {
       "extractionState": "manual",
       "localizations": {
@@ -24237,6 +24730,23 @@
         }
       }
     },
+    "Notify when AI Enhancement fails and raw transcription is typed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notify when AI Enhancement fails and raw transcription is typed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Уведомлять, если обработка ИИ не удалась и вставлен исходный распознанный текст."
+          }
+        }
+      }
+    },
     "Now let's try it out.": {
       "extractionState": "manual",
       "localizations": {
@@ -24386,6 +24896,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Выключено"
+          }
+        }
+      }
+    },
+    "Off by default. When off, dictation follows your current cursor. Applies to dictation only.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When off, dictation follows your current cursor. Applies to dictation only."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию отключено. Когда отключено, текст вставляется по текущему положению курсора. Применяется только к диктовке."
+          }
+        }
+      }
+    },
+    "Off closes immediately. Turn on to try the closing transition.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off closes immediately. Turn on to try the closing transition."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если отключено, индикатор закрывается сразу. Включите, чтобы попробовать анимацию закрытия."
           }
         }
       }
@@ -25552,6 +26096,23 @@
         }
       }
     },
+    "Parakeet only. Falls back to normal transcription if reuse is unavailable or fails.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parakeet only. Falls back to normal transcription if reuse is unavailable or fails."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Только для Parakeet. Если повторное использование невозможно или завершится ошибкой, выполняется обычное распознавание."
+          }
+        }
+      }
+    },
     "Parameter": {
       "extractionState": "manual",
       "localizations": {
@@ -25599,6 +26160,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Вставить последний распознанный текст"
+          }
+        }
+      }
+    },
+    "Paste dictation into the field where you started recording, even if you switch apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paste dictation into the field where you started recording, even if you switch apps."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вставлять диктовку в поле, в котором началась запись, даже если вы переключились в другое приложение."
           }
         }
       }
@@ -26198,6 +26776,23 @@
         }
       }
     },
+    "Posts text directly without changing the clipboard. Some editors may reject or truncate it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Posts text directly without changing the clipboard. Some editors may reject or truncate it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вставляет текст напрямую, не меняя буфер обмена. Некоторые редакторы могут отклонить или обрезать текст."
+          }
+        }
+      }
+    },
     "Practice stays here. Nothing is typed into another app or saved to history.": {
       "extractionState": "manual",
       "localizations": {
@@ -26654,6 +27249,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Основные сочетания клавиш диктовки"
+          }
+        }
+      }
+    },
+    "Primary dictation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Primary dictation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Основная диктовка"
           }
         }
       }
@@ -27409,6 +28021,23 @@
         }
       }
     },
+    "Re-insert your most recent transcription using your selected insertion method": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-insert your most recent transcription using your selected insertion method"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторно вставить последнюю расшифровку выбранным способом"
+          }
+        }
+      }
+    },
     "Ready": {
       "extractionState": "manual",
       "localizations": {
@@ -27915,6 +28544,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Записать новые примеры"
+          }
+        }
+      }
+    },
+    "Record only while the shortcut is held.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record only while the shortcut is held."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись идёт, пока вы удерживаете сочетание клавиш."
           }
         }
       }
@@ -28548,6 +29194,23 @@
         }
       }
     },
+    "Remove Trailing Period": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove Trailing Period"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Убирать точку в конце"
+          }
+        }
+      }
+    },
     "Remove app-specific override": {
       "extractionState": "manual",
       "localizations": {
@@ -28578,6 +29241,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Убрать файл"
+          }
+        }
+      }
+    },
+    "Remove filler sounds like ‘um’, ‘uh’, and ‘er’ from transcriptions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove filler sounds like ‘um’, ‘uh’, and ‘er’ from transcriptions."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Убирать из расшифровок слова-паразиты, указанные в списке."
           }
         }
       }
@@ -30252,6 +30932,23 @@
         }
       }
     },
+    "Save transcriptions for stats tracking. Disable for privacy.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save transcriptions for stats tracking. Disable for privacy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранять расшифровки для статистики. Для конфиденциальности можно отключить."
+          }
+        }
+      }
+    },
     "Saved %lld custom words.": {
       "extractionState": "manual",
       "localizations": {
@@ -30578,6 +31275,23 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "Say a phrase at the end of dictation to send with your chosen Enter command.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Say a phrase at the end of dictation to send with your chosen Enter command."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Произнесите фразу в конце диктовки, чтобы отправить текст выбранной командой Enter."
+          }
+        }
+      }
     },
     "Say anything in %@.": {
       "extractionState": "manual",
@@ -31315,6 +32029,23 @@
         }
       }
     },
+    "Select text and speak how to edit, or generate new content": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select text and speak how to edit, or generate new content"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выделите текст и скажите, как его изменить, или создайте новый текст"
+          }
+        }
+      }
+    },
     "Select text first, then press": {
       "extractionState": "manual",
       "localizations": {
@@ -31430,6 +32161,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отправить пример"
+          }
+        }
+      }
+    },
+    "Send Immediately": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Send Immediately"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отправлять сразу"
           }
         }
       }
@@ -31979,6 +32727,23 @@
         }
       }
     },
+    "Share anonymous daily feature, insertion performance, onboarding, and model metrics. Never includes transcription text or prompts.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share anonymous daily feature, insertion performance, onboarding, and model metrics. Never includes transcription text or prompts."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Передавать анонимную ежедневную статистику функций, скорости вставки, первоначальной настройки и моделей. Тексты расшифровок и запросов не передаются."
+          }
+        }
+      }
+    },
     "Share anonymous datapoint": {
       "extractionState": "manual",
       "localizations": {
@@ -32145,6 +32910,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показать субтитры"
+          }
+        }
+      }
+    },
+    "Show Debug Logs in App": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Debug Logs in App"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Показывать журнал отладки в приложении"
           }
         }
       }
@@ -32764,6 +33546,23 @@
         }
       }
     },
+    "Skip Saturday and Sunday when calculating usage streaks. Perfect for weekday-only users.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip Saturday and Sunday when calculating usage streaks. Perfect for weekday-only users."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не учитывать субботу и воскресенье при подсчёте серии дней. Подходит, если вы пользуетесь приложением только по будням."
+          }
+        }
+      }
+    },
     "Skip Silent Recordings": {
       "extractionState": "manual",
       "localizations": {
@@ -32794,6 +33593,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пропустить практику"
+          }
+        }
+      }
+    },
+    "Slash Commands & @ Formatting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Slash Commands & @ Formatting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Команды с / и упоминания @"
           }
         }
       }
@@ -32832,6 +33648,23 @@
         }
       }
     },
+    "Smart Capitalization": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smart Capitalization"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Умный выбор регистра"
+          }
+        }
+      }
+    },
     "Smart cleanup": {
       "extractionState": "manual",
       "localizations": {
@@ -32845,6 +33678,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Умная обработка"
+          }
+        }
+      }
+    },
+    "Smart dictation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smart dictation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Умная диктовка"
           }
         }
       }
@@ -33016,6 +33866,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пробел"
+          }
+        }
+      }
+    },
+    "Space Between Dictations": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Space Between Dictations"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пробел между диктовками"
           }
         }
       }
@@ -33752,6 +34619,23 @@
         }
       }
     },
+    "Start each transcription with a lowercase letter.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start each transcription with a lowercase letter."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начинать каждую расшифровку со строчной буквы."
+          }
+        }
+      }
+    },
     "Start recording": {
       "extractionState": "manual",
       "localizations": {
@@ -34092,6 +34976,23 @@
         }
       }
     },
+    "Stop listening and send as soon as the phrase is recognized. May not work with all voice models; Parakeet is recommended.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop listening and send as soon as the phrase is recognized. May not work with all voice models; Parakeet is recommended."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Останавливать запись и отправлять текст сразу после распознавания фразы. Поддерживается не всеми моделями; рекомендуется Parakeet."
+          }
+        }
+      }
+    },
     "Stop meeting recording and transcribe": {
       "extractionState": "manual",
       "localizations": {
@@ -34173,6 +35074,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отключить подробную анонимную аналитику?"
+          }
+        }
+      }
+    },
+    "Stop without pasting; save to History when enabled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop without pasting; save to History when enabled"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Остановить без вставки; сохранить в историю, если она включена"
           }
         }
       }
@@ -34275,6 +35193,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось определить свободное место"
+          }
+        }
+      }
+    },
+    "Store actual microphone audio locally with dictation history. Disabled by default.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Store actual microphone audio locally with dictation history. Disabled by default."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранять звук микрофона локально вместе с историей диктовок. По умолчанию отключено."
           }
         }
       }
@@ -34672,6 +35607,40 @@
         }
       }
     },
+    "Tap once to start, tap again to stop.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap once to start, tap again to stop."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите один раз, чтобы начать, и ещё раз, чтобы остановить."
+          }
+        }
+      }
+    },
+    "Tap to toggle, hold for push-to-talk.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tap to toggle, hold for push-to-talk."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите, чтобы включить или выключить запись, либо удерживайте клавиши во время диктовки."
+          }
+        }
+      }
+    },
     "Teach %@ by speaking it.": {
       "extractionState": "manual",
       "localizations": {
@@ -34737,6 +35706,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Телеметрия отключена в этой сборке"
+          }
+        }
+      }
+    },
+    "Telemetry is disabled in this distribution.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telemetry is disabled in this distribution."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В этой сборке телеметрия отключена."
           }
         }
       }
@@ -34907,6 +35893,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось вставить текст"
+          }
+        }
+      }
+    },
+    "Text insertion": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text insertion"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вставка текста"
           }
         }
       }
@@ -36520,6 +37523,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сегодня: слов %lld · сэкономлено %@ - посмотреть статистику"
+          }
+        }
+      }
+    },
+    "Toggle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Переключение"
           }
         }
       }
@@ -38195,6 +39215,23 @@
         }
       }
     },
+    "Use text before the cursor to choose uppercase or lowercase.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use text before the cursor to choose uppercase or lowercase."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбирать прописную или строчную букву с учётом текста перед курсором."
+          }
+        }
+      }
+    },
     "Use the floating guide to drag %@ into the Accessibility apps list.": {
       "extractionState": "manual",
       "localizations": {
@@ -38395,6 +39432,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Используются провайдер и модель из настроек улучшения текста ИИ. Выберите API, совместимый с OpenAI. Перед подготовкой итогов проверьте адрес назначения выше."
+          }
+        }
+      }
+    },
+    "Uses your primary shortcut. An extra shortcut is optional.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uses your primary shortcut. An extra shortcut is optional."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использует основное сочетание клавиш. Дополнительное сочетание необязательно."
           }
         }
       }
