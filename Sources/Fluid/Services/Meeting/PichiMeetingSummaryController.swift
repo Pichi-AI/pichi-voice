@@ -189,16 +189,31 @@ final class PichiMeetingSummaryController: ObservableObject {
     // Keep source state until presentation so a language change never restarts inference.
     var progress: String { self.progressState?.text() ?? "" }
     var error: String? { self.failure?.text }
+    /// The app owns active work; views may disappear and later reattach by session ID.
+    var generationStateChanged: ((PichiMeetingSummaryController) -> Void)?
+    let sessionID: UUID?
+    var presentedConfiguration: PichiMeetingSummaryConfiguration? { self.activeConfiguration ?? self.documentConfiguration }
+    var sourceSession: MeetingSession? { self.activeSourceSession ?? self.documentSourceSession }
+    private var activeConfiguration: PichiMeetingSummaryConfiguration?
+    private var activeSourceSession: MeetingSession?
+    private var documentConfiguration: PichiMeetingSummaryConfiguration?
+    private var documentSourceSession: MeetingSession?
     private var operation: Task<Void, Never>?
     private var generationID = UUID()
     private let generator: PichiMeetingSummaryGenerator
 
-    init(generator: PichiMeetingSummaryGenerator = .init()) { self.generator = generator }
+    init(sessionID: UUID? = nil, generator: PichiMeetingSummaryGenerator = .init()) {
+        self.sessionID = sessionID
+        self.generator = generator
+    }
 
     func refresh(session: MeetingSession?, configuration: PichiMeetingSummaryConfiguration?) async {
+        // Navigation and settings edits must not cancel or retarget an admitted attempt.
+        guard !self.generating, self.sessionID == nil || session?.id == self.sessionID else { return }
         let generationID = UUID()
         self.generationID = generationID
-        self.operation?.cancel()
+        self.documentConfiguration = configuration
+        self.documentSourceSession = session
         self.document = nil
         self.failure = nil
         self.checking = false
@@ -222,22 +237,32 @@ final class PichiMeetingSummaryController: ObservableObject {
 
     func summarize(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration, asr: ASRService) {
         guard !self.generating, !self.checking,
+              self.sessionID == nil || session.id == self.sessionID,
               let lock = MeetingSummaryActivityCoordinator.shared.lockSelection() else { return }
+        self.activeConfiguration = configuration
+        self.activeSourceSession = session
         self.generating = true
+        self.generationStateChanged?(self)
         self.failure = nil
         let generationID = self.generationID
         self.operation = Task { [weak self] in
             guard let self else { MeetingSummaryActivityCoordinator.shared.unlockSelection(lock); return }
             defer {
+                self.activeConfiguration = nil
+                self.activeSourceSession = nil
                 self.generating = false
                 self.operation = nil
                 self.progressState = nil
                 MeetingSummaryActivityCoordinator.shared.unlockSelection(lock)
+                self.generationStateChanged?(self)
             }
             do {
+                try Task.checkCancellation()
                 let output = try await self.generate(session: session, configuration: configuration, asr: asr)
                 try Task.checkCancellation()
                 guard self.generationID == generationID else { return }
+                self.documentConfiguration = configuration
+                self.documentSourceSession = session
                 self.document = output
                 let hash = PichiMeetingSummaryInput.fingerprint(session)
                 let artifact = PichiMeetingSummaryArtifact(version: 5, transcriptHash: hash,

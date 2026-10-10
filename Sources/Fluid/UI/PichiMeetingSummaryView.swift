@@ -8,9 +8,23 @@ struct PichiMeetingSummaryView: View {
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var interfaceLocale
     @StateObject private var preferences = PichiMeetingSummarySettings()
-    @StateObject private var controller = PichiMeetingSummaryController()
+    @ObservedObject private var controller: PichiMeetingSummaryController
     @ObservedObject private var settings = SettingsStore.shared
     @State private var showingConfiguration = false
+
+    init(session: MeetingSession?, asrService: ASRService?, isQuiescent: Bool) {
+        self.session = session
+        self.asrService = asrService
+        self.isQuiescent = isQuiescent
+        self.controller = AppServices.shared.meetingSummaryController(for: session?.id)
+    }
+
+    private var presentedConfiguration: PichiMeetingSummaryConfiguration? {
+        if self.controller.generating || self.controller.document != nil {
+            return self.controller.presentedConfiguration
+        }
+        return self.configuration
+    }
 
     private var interfaceLanguage: PichiInterfaceLanguage { PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian }
 
@@ -19,7 +33,7 @@ struct PichiMeetingSummaryView: View {
     }
 
     private var refreshIdentity: String {
-        (self.session.map(PichiMeetingSummaryInput.fingerprint) ?? "") + "|"
+        (self.session?.id.uuidString ?? "") + "|" + (self.session.map(PichiMeetingSummaryInput.fingerprint) ?? "") + "|"
             + self.preferences.selectionIdentity + "|" + (self.configuration?.cacheIdentity ?? "")
     }
 
@@ -61,7 +75,7 @@ struct PichiMeetingSummaryView: View {
             }
             .disabled(self.controller.generating)
 
-            if let config = self.configuration {
+            if let config = self.presentedConfiguration {
                 Label(config.isOnDevice ? PichiLocalization.format("Transcript stays on this Mac · %@", config.modelID)
                       : PichiLocalization.format("Transcript will be sent to %@ · %@", config.baseURL, config.modelID),
                       systemImage: config.isOnDevice ? "lock" : "network")
@@ -82,6 +96,12 @@ struct PichiMeetingSummaryView: View {
                     Text(self.controller.generating ? (self.controller.progressState?.text(language: self.interfaceLanguage) ?? "") : PichiLocalization.text("Loading saved summary…", locale: self.interfaceLocale))
                         .font(self.theme.typography.bodySmall)
                 }
+            }
+            if self.controller.generating {
+                Text("Processing continues while you use other screens in this app. Dictation is temporarily unavailable. Return to this meeting to cancel. Keep the app open.")
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let error = self.controller.error {
                 Label(error, systemImage: "exclamationmark.circle")
@@ -120,7 +140,6 @@ struct PichiMeetingSummaryView: View {
             await self.controller.refresh(session: self.session, configuration: self.configuration)
             if self.configuration == nil { self.showingConfiguration = true }
         }
-        .onDisappear { self.controller.cancel() }
     }
 
     private var configurationIssue: String {
@@ -258,7 +277,7 @@ struct PichiMeetingSummaryView: View {
     }
 
     private func source(_ evidence: PichiMeetingSummaryEvidence) -> some View {
-        let turn = self.session.flatMap { PichiMeetingSummaryInput.turns(for: $0).first { $0.id == evidence.segmentID } }
+        let turn = (self.controller.sourceSession ?? self.session).flatMap { PichiMeetingSummaryInput.turns(for: $0).first { $0.id == evidence.segmentID } }
         let seconds = Int(max(0, turn?.seconds ?? 0))
         return VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
             Text("\(seconds / 60):\(String(format: "%02d", seconds % 60)) · \(turn?.speaker ?? PichiLocalization.text("Speaker"))")
@@ -269,7 +288,7 @@ struct PichiMeetingSummaryView: View {
     }
 
     private func copy(_ document: PichiMeetingSummaryDocument) {
-        let language = self.configuration.flatMap { PichiInterfaceLanguage(rawValue: $0.language) } ?? self.interfaceLanguage
+        let language = self.presentedConfiguration.flatMap { PichiInterfaceLanguage(rawValue: $0.language) } ?? self.interfaceLanguage
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(document.copyText(language: language), forType: .string)
     }
