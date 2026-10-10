@@ -15,7 +15,7 @@ struct MeetingSummaryComingSoon: View {
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 Text("Your meeting, summed up.")
-                    .font(.system(.title, design: .serif).weight(.medium))
+                    .font(.fluidSystem(.title, design: .serif).weight(.medium))
                     .foregroundStyle(self.theme.palette.primaryText)
                     .accessibilityAddTraits(.isHeader)
                 Text("The recap, the decisions, and the follow-ups—without rereading the transcript.")

@@ -670,6 +670,7 @@ struct SidebarSearchField: View {
                 text: self.$text,
                 placeholder: PichiLocalization.text(self.placeholder, locale: self.interfaceLocale),
                 isActive: self.isActive,
+                font: self.theme.typography.nativeBodyFont,
                 onCommand: self.onCommand,
                 isFocused: self.$isFocused
             )
@@ -684,7 +685,7 @@ struct SidebarSearchField: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .font(.system(size: 14))
+        .font(.fluidSystem(size: 14))
         .padding(.horizontal, self.theme.metrics.spacing.sm)
         .frame(height: 32)
         .background(
@@ -723,6 +724,7 @@ private struct SidebarSearchInput: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let isActive: Bool
+    let font: NSFont
     var onCommand: (Selector) -> Bool = { _ in false }
 
     @Binding var isFocused: Bool
@@ -746,7 +748,7 @@ private struct SidebarSearchInput: NSViewRepresentable {
         searchField.focusRingType = .none
         (searchField.cell as? NSSearchFieldCell)?.searchButtonCell = nil
         (searchField.cell as? NSSearchFieldCell)?.cancelButtonCell = nil
-        searchField.font = .systemFont(ofSize: 14)
+        searchField.font = self.font
         searchField.identifier = Self.identifier
         searchField.setAccessibilityLabel(self.placeholder)
         context.coordinator.observeFocusRequests(for: searchField)
@@ -758,6 +760,7 @@ private struct SidebarSearchInput: NSViewRepresentable {
         // The host resolved this known UI key using its selected locale. Keep it verbatim here.
         searchField.placeholderString = self.placeholder
         searchField.setAccessibilityLabel(self.placeholder)
+        if searchField.font != self.font { searchField.font = self.font }
         if searchField.stringValue != self.text {
             searchField.stringValue = self.text
         }

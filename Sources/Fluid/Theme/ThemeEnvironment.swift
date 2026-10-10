@@ -13,15 +13,8 @@ extension EnvironmentValues {
 
 extension View {
     /// Applies an app theme to the view hierarchy.
-    @ViewBuilder
     func appTheme(_ theme: AppTheme) -> some View {
-        Group {
-            if FluidTypography.overridesStandard {
-                self.font(.fluidSystem(.body))
-            } else {
-                self
-            }
-        }
+        self.font(theme.typography.inheritedFont)
         .environment(\.theme, theme)
         .buttonStyle(FluidOutlinedButtonStyle())
     }

@@ -12,7 +12,7 @@ struct MeetingBubbleStyle {
 
     static func final(fill: Color, foreground: Color) -> MeetingBubbleStyle {
         MeetingBubbleStyle(
-            font: .system(size: 15, design: .monospaced),
+            font: .fluidSystem(size: 15, design: .monospaced),
             lineSpacing: 5,
             horizontalPadding: 18,
             verticalPadding: 12,

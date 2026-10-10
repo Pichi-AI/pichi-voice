@@ -66,11 +66,16 @@ nonisolated struct BrandLinks: Codable, Equatable, Sendable {
 
 nonisolated struct BrandStyle: Codable, Equatable, Sendable {
     enum Appearance: String, Codable, Sendable { case system, light, dark }
+    /// Native designs retain Apple's multilingual font coverage and font accessibility.
+    enum FontDesign: String, Codable, CaseIterable, Sendable { case sans, serif, rounded }
     var defaultAppearance: Appearance = .system
     var cornerRadiusScale: Double = 1
     var spacingScale: Double = 1
     /// Preferred first-run speech language. Missing fields preserve legacy appearance packages.
     var defaultOnboardingLanguageID: String? = nil
+    /// Missing fields retain the original body and editorial heading designs.
+    var bodyFontDesign: FontDesign? = nil
+    var titleFontDesign: FontDesign? = nil
 
     func validate() throws {
         if let languageID = self.defaultOnboardingLanguageID,

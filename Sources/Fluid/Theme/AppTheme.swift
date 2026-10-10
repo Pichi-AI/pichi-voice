@@ -56,29 +56,38 @@ struct AppTheme {
         let sidebarItem: Font
         let sidebarSection: Font
         let chromeCaption: Font
+        var inheritedFont: Font? = nil
+        var brandStyle: BrandStyle? = nil
+        var nativeBodyFont: NSFont { .fluidSystemFont(ofSize: 14, style: self.brandStyle) }
 
-        static let standard = Typography(
-            displayTitle: .fluidSystem(size: 42, weight: .semibold),
-            statement: .fluidSystem(size: 17, weight: .regular),
-            title: .fluidSystem(size: 22, weight: .bold),
-            titleIcon: .fluidSystem(size: 22, weight: .regular),
-            sectionTitle: .fluidSystem(size: 15, weight: .semibold),
-            body: .fluidSystem(size: 14, weight: .regular),
-            bodyStrong: .fluidSystem(size: 14, weight: .medium),
-            bodySmall: .fluidSystem(size: 13, weight: .regular),
-            bodySmallStrong: .fluidSystem(size: 13, weight: .medium),
-            caption: .fluidSystem(size: 12, weight: .regular),
-            captionStrong: .fluidSystem(size: 12, weight: .medium),
-            captionSmall: .fluidSystem(size: 11, weight: .regular),
-            tiny: .fluidSystem(size: 11, weight: .regular),
-            tinyStrong: .fluidSystem(size: 11, weight: .bold),
-            badge: .fluidSystem(size: 11, weight: .semibold),
-            metricTiny: .fluidSystem(size: 11, weight: .bold, design: .rounded),
-            codeCaption: .fluidSystem(size: 12, weight: .medium, design: .monospaced),
-            sidebarItem: .fluidSystem(size: 14, weight: .regular),
-            sidebarSection: .fluidSystem(size: 12, weight: .medium),
-            chromeCaption: .fluidSystem(size: 12, weight: .regular)
-        )
+        static var standard: Typography { self.standard(style: AppBrand.package.style) }
+
+        static func standard(style: BrandStyle?) -> Typography {
+            Typography(
+                displayTitle: .fluidSystem(size: 42, weight: .semibold, role: .title, style: style),
+                statement: .fluidSystem(size: 17, weight: .regular, style: style),
+                title: .fluidSystem(size: 22, weight: .bold, role: .title, style: style),
+                titleIcon: .fluidSystem(size: 22, weight: .regular, style: style),
+                sectionTitle: .fluidSystem(size: 15, weight: .semibold, role: .title, style: style),
+                body: .fluidSystem(size: 14, weight: .regular, style: style),
+                bodyStrong: .fluidSystem(size: 14, weight: .medium, style: style),
+                bodySmall: .fluidSystem(size: 13, weight: .regular, style: style),
+                bodySmallStrong: .fluidSystem(size: 13, weight: .medium, style: style),
+                caption: .fluidSystem(size: 12, weight: .regular, style: style),
+                captionStrong: .fluidSystem(size: 12, weight: .medium, style: style),
+                captionSmall: .fluidSystem(size: 11, weight: .regular, style: style),
+                tiny: .fluidSystem(size: 11, weight: .regular, style: style),
+                tinyStrong: .fluidSystem(size: 11, weight: .bold, style: style),
+                badge: .fluidSystem(size: 11, weight: .semibold, style: style),
+                metricTiny: .fluidSystem(size: 11, weight: .bold, design: .rounded, style: style),
+                codeCaption: .fluidSystem(size: 12, weight: .medium, design: .monospaced, style: style),
+                sidebarItem: .fluidSystem(size: 14, weight: .regular, style: style),
+                sidebarSection: .fluidSystem(size: 12, weight: .medium, style: style),
+                chromeCaption: .fluidSystem(size: 12, weight: .regular, style: style),
+                inheritedFont: FluidTypography.overridesStandard(style: style) ? .fluidSystem(.body, style: style) : nil,
+                brandStyle: style
+            )
+        }
     }
 
     struct Metrics {
@@ -328,7 +337,7 @@ struct AppTheme {
             cardSurface: self.metrics.cardSurface, onboardingSurface: self.metrics.onboardingSurface,
             window: self.metrics.window, cardShadow: self.metrics.cardShadow, elevatedCardShadow: self.metrics.elevatedCardShadow
         )
-        return AppTheme(palette: palette, typography: self.typography, metrics: metrics, materials: self.materials)
+        return AppTheme(palette: palette, typography: .standard(style: style), metrics: metrics, materials: self.materials)
     }
 
     /// Light theme using system colors so macOS accessibility contrast settings stay in control.

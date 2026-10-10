@@ -607,7 +607,7 @@ struct MeetingResultCanvas: View {
                         self.session.title,
                         id: String(describing: self.session.id),
                         enabled: self.isQuiescent,
-                        editorFont: .system(.largeTitle, design: .serif).weight(.medium),
+                        editorFont: .fluidSystem(.largeTitle, design: .serif).weight(.medium),
                         onRename: self.onRenameSession
                     )
                 self.meetingMetadata

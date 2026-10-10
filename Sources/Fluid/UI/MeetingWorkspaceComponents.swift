@@ -61,7 +61,7 @@ struct MeetingDocumentTitle: View {
 
     var body: some View {
         Text(self.title)
-            .font(.system(.largeTitle, design: .serif).weight(.medium))
+            .font(.fluidSystem(.largeTitle, design: .serif).weight(.medium))
             .foregroundStyle(self.theme.palette.primaryText)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)

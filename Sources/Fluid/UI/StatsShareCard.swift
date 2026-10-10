@@ -109,27 +109,27 @@ struct StatsShareCard: View {
                     .frame(width: 22, height: 22)
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                 Text(AppBrand.text("FluidVoice"))
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.fluidSystem(size: 14, weight: .semibold))
                 Spacer()
                 Text(Date.now.formatted(.dateTime.month(.wide).year().locale(self.interfaceLocale)))
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
 
             Spacer(minLength: 0)
 
             Text(self.content.totalWords.formatted())
-                .font(.system(size: 76, weight: .bold, design: .rounded))
+                .font(.fluidSystem(size: 76, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(
                     LinearGradient(colors: [.white, self.accent.opacity(0.85)], startPoint: .topLeading, endPoint: .bottomTrailing)
                 )
             Text("words dictated")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.fluidSystem(size: 17, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
                 .padding(.top, -6)
             Text(self.content.headline)
-                .font(.system(size: 13, weight: .medium))
+                .font(.fluidSystem(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
                 .padding(.top, 6)
 
@@ -171,7 +171,7 @@ struct StatsShareCard: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(stat.value(in: self.content))
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.fluidSystem(size: 22, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 if stat == .streak, let flame = self.streakFlame {
                     Image(systemName: "flame.fill")
@@ -180,7 +180,7 @@ struct StatsShareCard: View {
                 }
             }
             Text(PichiLocalization.text(stat.label))
-                .font(.system(size: 11, weight: .medium))
+                .font(.fluidSystem(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
         }
         .fixedSize()

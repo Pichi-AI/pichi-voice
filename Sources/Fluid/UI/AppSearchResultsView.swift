@@ -134,7 +134,7 @@ struct AppSearchResultsView: View {
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
                     .lineLimit(1)
                 Text(hit.snippet)
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color.secondary)
                     .lineLimit(2)
             }

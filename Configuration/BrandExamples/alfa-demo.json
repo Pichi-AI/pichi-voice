@@ -51,7 +51,9 @@
   "style": {
     "defaultAppearance": "system",
     "cornerRadiusScale": 0.8,
-    "spacingScale": 1
+    "spacingScale": 1,
+    "bodyFontDesign": "sans",
+    "titleFontDesign": "sans"
   },
   "logos": {
     "primary": {

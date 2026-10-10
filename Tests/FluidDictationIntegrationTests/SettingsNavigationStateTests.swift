@@ -138,9 +138,56 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(updated.contentView.bounds.origin, offset)
     }
 
+    func testBrandTypographyRecomputesExistingSemanticRoles() {
+        let original = AppTheme.Typography.standard(style: nil)
+        let style = BrandStyle(bodyFontDesign: .rounded, titleFontDesign: .serif)
+        let changed = AppTheme.Typography.standard(style: style)
+        XCTAssertEqual(original.body, .system(size: 14, weight: .regular))
+        XCTAssertEqual(changed.body, .system(size: 14, weight: .regular, design: .rounded))
+        XCTAssertEqual(changed.title, .system(size: 22, weight: .bold, design: .serif))
+        XCTAssertEqual(changed.sectionTitle, .system(size: 15, weight: .semibold, design: .serif))
+        XCTAssertEqual(changed.codeCaption, original.codeCaption)
+        XCTAssertEqual(changed.metricTiny, original.metricTiny)
+        XCTAssertNil(original.inheritedFont)
+        XCTAssertEqual(changed.inheritedFont, Font.system(.body, design: .rounded))
+    }
+
+    func testNativeSearchBrandTypographyKeepsEditorQueryAndSelection() async throws {
+        let state = SearchLocaleFixture()
+        let host = NSHostingView(rootView: SearchLocaleHost(state: state, source: "Search"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        let found = try await self.waitForSearch(in: host, placeholder: "Search", query: state.query)
+        let field = try XCTUnwrap(found)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 2, length: 3))
+        let selection = editor.selectedRange()
+        for style in [BrandStyle(bodyFontDesign: .rounded), BrandStyle(bodyFontDesign: .serif), BrandStyle()] {
+            state.style = style
+            let expected = NSFont.fluidSystemFont(ofSize: 14, style: style)
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if field.font == expected { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let updated = try XCTUnwrap(self.descendants(of: NSSearchField.self, in: host).first)
+            XCTAssertTrue(updated === field, "Importing typography must preserve the native subtree")
+            XCTAssertEqual(updated.font, expected)
+            XCTAssertTrue(updated.currentEditor() === editor)
+            XCTAssertEqual(editor.font, expected)
+            XCTAssertEqual(editor.selectedRange(), selection)
+            XCTAssertEqual(updated.stringValue, "Settings Иван")
+            XCTAssertEqual(state.query, "Settings Иван")
+        }
+    }
+
     private final class SearchLocaleFixture: ObservableObject {
         @Published var locale = Locale(identifier: "en")
         @Published var query = "Settings Иван"
+        @Published var style: BrandStyle? = nil
     }
 
     private struct SearchLocaleHost: View {
@@ -148,6 +195,7 @@ final class SettingsNavigationStateTests: XCTestCase {
         let source: String
         var body: some View {
             SidebarSearchField(text: self.$state.query, placeholder: self.source, isActive: true)
+                .appTheme(AppTheme.adaptive(accent: .purple, colorScheme: .light, package: BrandPackage(profile: .neutral, style: self.state.style)))
                 .environment(\.locale, self.state.locale)
         }
     }

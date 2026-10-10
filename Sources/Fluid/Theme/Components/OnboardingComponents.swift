@@ -72,13 +72,13 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
 
             VStack(spacing: 4) {
                 Text(PichiLocalization.text(self.title, locale: self.locale))
-                    .font(.fluidSystem(size: 52, weight: .semibold))
+                    .font(.fluidSystem(size: 52, weight: .semibold, role: .title))
                     .foregroundStyle(self.theme.palette.primaryText)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.82)
 
                 Text(PichiLocalization.text(self.accentTitle, locale: self.locale))
-                    .font(.fluidSystem(size: 50, weight: .semibold))
+                    .font(.fluidSystem(size: 50, weight: .semibold, role: .title))
                     .italic()
                     .foregroundStyle(FluidOnboardingLandingColors.blue)
                     .multilineTextAlignment(.center)

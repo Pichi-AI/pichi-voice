@@ -22,6 +22,12 @@ struct BrandProfileTests {
         precondition(packaged.style?.defaultOnboardingLanguageID == "ru")
         let legacyStyle = try JSONDecoder().decode(BrandStyle.self, from: Data("{\"defaultAppearance\":\"system\",\"cornerRadiusScale\":1,\"spacingScale\":1}".utf8))
         precondition(legacyStyle.defaultOnboardingLanguageID == nil, "Old appearance files must remain decodable")
+        precondition(legacyStyle.bodyFontDesign == nil && legacyStyle.titleFontDesign == nil)
+        for design in BrandStyle.FontDesign.allCases {
+            let style = BrandStyle(bodyFontDesign: design, titleFontDesign: design)
+            try self.require(try JSONDecoder().decode(BrandStyle.self, from: JSONEncoder().encode(style)) == style)
+        }
+        self.reject { _ = try JSONDecoder().decode(BrandStyle.self, from: Data("{\"defaultAppearance\":\"system\",\"cornerRadiusScale\":1,\"spacingScale\":1,\"bodyFontDesign\":\"arbitrary-font-name\"}".utf8)) }
         try BrandStyle(defaultOnboardingLanguageID: "fr-CA").validate()
         self.reject { try BrandStyle(defaultOnboardingLanguageID: "invalid language!").validate() }
         for example in ["sber-demo", "alfa-demo"] {

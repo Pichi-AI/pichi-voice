@@ -1706,7 +1706,7 @@ private struct MeetingHistoryInspector: View {
 
             if let errorMessage, !self.sessions.isEmpty {
                 Text(PichiLocalization.text(errorMessage))
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(.secondary)
                     .padding(self.theme.metrics.spacing.md)
             }
@@ -2175,7 +2175,7 @@ private struct MeetingSetupCanvas: View {
         } else {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 Text(self.planHeadline)
-                    .font(.system(.title2, design: .serif).weight(.medium))
+                    .font(.fluidSystem(.title2, design: .serif).weight(.medium))
                     .foregroundStyle(self.theme.palette.primaryText)
                 Text(self.planDetail)
                     .font(self.theme.typography.body)
