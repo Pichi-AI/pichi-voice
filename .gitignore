@@ -254,6 +254,7 @@ builds/
 !/docs/development/localization.md
 !/docs/development/analytics.md
 !/docs/development/local-russian-text-models.md
+!/docs/development/meeting-summary-strategy.md
 !/scripts/
 /scripts/*
 !/scripts/dev/
