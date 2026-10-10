@@ -1031,6 +1031,7 @@ final class ASRService: ObservableObject {
     private var parakeetRealtimeProvider: ParakeetRealtimeProvider?
     private var externalCoreMLProvider: ExternalCoreMLTranscriptionProvider?
     private var nemotronProviders: [NemotronProvider.Mode: NemotronProvider] = [:]
+    private var gigaamProvider: PichiGigaAMProvider?
     private var whisperProvider: WhisperProvider?
     private var appleSpeechProvider: AppleSpeechProvider?
     /// Stored as Any? because @available cannot be applied to stored properties
@@ -1139,6 +1140,7 @@ final class ASRService: ObservableObject {
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
         self.nemotronProviders.removeAll()
+        self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
@@ -1157,6 +1159,8 @@ final class ASRService: ObservableObject {
         #endif
 
         switch model {
+        case .gigaam:
+            return self.getGigaAMProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return self.getAppleSpeechAnalyzerProvider()
@@ -1179,6 +1183,13 @@ final class ASRService: ObservableObject {
         default:
             return self.getWhisperProvider()
         }
+    }
+
+    private func getGigaAMProvider() -> PichiGigaAMProvider {
+        if let existing = self.gigaamProvider { return existing }
+        let provider = PichiGigaAMProvider()
+        self.gigaamProvider = provider
+        return provider
     }
 
     private func getFluidAudioProvider() -> FluidAudioProvider {
@@ -1290,6 +1301,8 @@ final class ASRService: ObservableObject {
         if let injected = self.modelProvidersForTesting[model] { return injected }
         #endif
         switch model {
+        case .gigaam:
+            return PichiGigaAMProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return AppleSpeechAnalyzerProvider()
@@ -1511,6 +1524,7 @@ final class ASRService: ObservableObject {
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
+        self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
@@ -4164,6 +4178,7 @@ final class ASRService: ObservableObject {
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
         self.nemotronProviders.removeAll()
+        self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil

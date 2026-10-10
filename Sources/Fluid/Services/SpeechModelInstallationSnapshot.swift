@@ -15,6 +15,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
 
     nonisolated struct Probe: Sendable {
         nonisolated enum Kind: Sendable {
+            case gigaam
             case builtIn
             case parakeet(ParakeetSpeechModelCatalog.Descriptor)
             case realtime(folder: String, requiredModels: [String])
@@ -167,6 +168,8 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                 kind = .whisper(file: file, expectedBytes: model.expectedDownloadBytes)
             } else {
                 switch model {
+                case .gigaam:
+                    kind = .gigaam
                 case .appleSpeech, .appleSpeechAnalyzer:
                     kind = .builtIn
                 case .parakeetRealtime:
@@ -204,6 +207,8 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             try Task.checkCancellation()
             let exists: Bool
             switch probe.kind {
+            case .gigaam:
+                exists = PichiGigaAMModelStore.shared.modelsExistOnDisk()
             case .builtIn:
                 exists = true
             case let .parakeet(descriptor):

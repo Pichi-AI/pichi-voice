@@ -19,6 +19,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             || self.downloadingModel != nil
             || self.asr.hasActiveModelDownload
             || self.asr.hasActiveModelPreparation
+            || self.isImportingGigaAM
             || self.asr.isCancellingModelPreparation
             || (!self.asr.isAsrReady && (self.asr.isDownloadingModel || self.asr.isLoadingModel))
     }
@@ -28,6 +29,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var englishOnlyFilter: Bool = false
     @Published var installedOnlyFilter: Bool = false
     @Published var showSpeechFilters: Bool = false
+    @Published private(set) var isImportingGigaAM = false
 
     @Published var selectedSpeechProvider: SettingsStore.SpeechModel.Provider
     @Published var previewSpeechModel: SettingsStore.SpeechModel
@@ -89,6 +91,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         switch self.providerFilter {
         case .all:
             break
+        case .pichi:
+            models = models.filter { $0.provider == .pichi }
         case .nvidia:
             models = models.filter { $0.provider == .nvidia }
         case .apple:
@@ -147,6 +151,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     func downloadSpeechModel(_ model: SettingsStore.SpeechModel, updateWeights: Bool = false) {
         guard !self.areSpeechModelActionsBlocked else { return }
+        if model == .gigaam {
+            self.importGigaAMModel()
+            return
+        }
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -161,6 +169,31 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
                 } else {
                     self.asr.errorTitle = updateWeights ? "Model Update Failed" : "Model Download Failed"
                 }
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
+            }
+        }
+    }
+
+    func importGigaAMModel() {
+        guard !self.areSpeechModelActionsBlocked else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the folder containing your optimized GigaAM ONNX model and vocabulary."
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let directory = panel.url else { return }
+        guard !self.areSpeechModelActionsBlocked else { return }
+        self.isImportingGigaAM = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isImportingGigaAM = false }
+            do {
+                try await PichiGigaAMModelStore.shared.importModel(from: directory)
+                self.installations.refresh()
+            } catch {
+                self.asr.errorTitle = "GigaAM Import Failed"
                 self.asr.errorMessage = error.localizedDescription
                 self.asr.showError = true
             }

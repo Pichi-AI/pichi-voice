@@ -455,7 +455,13 @@ extension VoiceEngineSettingsView {
                 }
             } else {
                 ZStack(alignment: .trailing) {
-                    if model.requiresExternalArtifacts {
+                    if model == .gigaam {
+                        Button("Import model folder") {
+                            self.viewModel.importGigaAMModel()
+                        }
+                        .fluidGlassAction(prominent: true)
+                        .disabled(self.viewModel.areSpeechModelActionsBlocked)
+                    } else if model.requiresExternalArtifacts {
                         HStack(spacing: 8) {
                             if model.externalCoreMLSpec?.sourceURL != nil {
                                 Button {

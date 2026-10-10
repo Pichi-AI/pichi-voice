@@ -25,6 +25,22 @@ final class InferenceAPIController: LocalAPIRouteHandler {
         let model: String
     }
 
+    typealias FileTranscriber = @MainActor (URL) async throws -> TranscribeResponse
+    private let fileTranscriber: FileTranscriber
+
+    init(fileTranscriber: @escaping FileTranscriber = { fileURL in
+        let providerName = SettingsStore.shared.selectedSpeechModel.displayName
+        let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
+        return TranscribeResponse(
+            text: apiResult.result.text,
+            confidence: apiResult.result.confidence,
+            sampleCount: apiResult.sampleCount,
+            provider: providerName
+        )
+    }) {
+        self.fileTranscriber = fileTranscriber
+    }
+
     func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         guard request.method == "POST" else {
             return LocalAPI.error("Method not allowed.", status: 405)
@@ -61,15 +77,7 @@ final class InferenceAPIController: LocalAPIRouteHandler {
     }
 
     private func transcribeFile(_ fileURL: URL) async throws -> LocalAPI.Response {
-        let apiResult = try await AppServices.shared.asr.transcribeFileForAPI(fileURL)
-        return LocalAPI.json(
-            TranscribeResponse(
-                text: apiResult.result.text,
-                confidence: apiResult.result.confidence,
-                sampleCount: apiResult.sampleCount,
-                provider: SettingsStore.shared.selectedSpeechModel.displayName
-            )
-        )
+        LocalAPI.json(try await self.fileTranscriber(fileURL))
     }
 
     private func decodeFilePath(from request: LocalAPI.Request) throws -> URL? {

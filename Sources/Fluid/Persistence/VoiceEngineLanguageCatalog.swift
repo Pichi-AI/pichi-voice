@@ -141,6 +141,10 @@ enum VoiceEngineLanguageCatalog {
     private static func routeCandidates(for language: VoiceEngineLanguage) -> [VoiceEngineLanguageRoute] {
         var routes: [VoiceEngineLanguageRoute] = []
 
+        if language.id == "ru" {
+            routes.append(Self.route(language, .gigaam, .automatic))
+        }
+
         if language.id == "en" {
             routes.append(Self.route(language, .parakeetTDTv2, .automatic))
             routes.append(Self.route(language, .parakeetRealtime, .automatic))
