@@ -4329,6 +4329,60 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(sessions.isEmpty, "No invalid session may be persisted before final configuration validation")
     }
 
+    func testFrozenHostCapabilitiesRejectModelChangedDuringIntelPermissionPrompt() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .gigaam
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let gate = PermissionPreflightGate()
+        let preflightReached = self.expectation(description: "Intel permission prompt suspended")
+        capture.onPreflight = {
+            preflightReached.fulfill()
+            await gate.wait()
+        }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var frozenConfigurations: [MeetingFinalProcessingConfiguration] = []
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            validateFrozenRecordingConfiguration: { configuration in
+                frozenConfigurations.append(configuration)
+                try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration, isAppleSilicon: false)
+            }
+        )
+        self.addTeardownBlock { @MainActor in
+            await gate.open()
+            await coordinator.shutdownForTermination()
+        }
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "ru"
+        let start = Task { try await coordinator.startRecording(configuration: configuration) }
+        await self.fulfillment(of: [preflightReached], timeout: 2)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        settings.selectedSpeechModel = .parakeetTDT
+        await gate.open()
+        do {
+            _ = try await start.value
+            XCTFail("The actual post-admission model must satisfy the frozen host capabilities")
+        } catch {
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedArchitecture)
+        }
+        XCTAssertEqual(frozenConfigurations.count, 1)
+        XCTAssertEqual(frozenConfigurations.first?.asrModel, "parakeet-tdt")
+        XCTAssertEqual(frozenConfigurations.first?.languageCode, "ru")
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(coordinator.liveTranscript, .empty)
+        XCTAssertTrue(coordinator.isQuiescent)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
     func testDeniedPermissionNeverAcquiresMeetingLease() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

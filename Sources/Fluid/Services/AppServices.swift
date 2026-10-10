@@ -125,9 +125,17 @@ final class AppServices: ObservableObject {
             // The speaker model is only needed after Stop, so a missing model never blocks
             // recording; final processing waits for `MeetingDiarizationModelStore` instead.
             validateRecordingModels: {
-                guard CPUArchitecture.isAppleSilicon || SettingsStore.shared.selectedSpeechModel == .gigaam else {
-                    throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
+                let model = SettingsStore.shared.selectedSpeechModel
+                let registered = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue) != nil
+                guard CPUArchitecture.isAppleSilicon || (registered && !model.requiresAppleSilicon) else {
+                    throw MeetingProviderOptionsError.unsupportedArchitecture
                 }
+            },
+            validateFrozenRecordingConfiguration: { configuration in
+                try PichiMeetingProviderFactory.validateRecordingConfiguration(
+                    configuration,
+                    isAppleSilicon: CPUArchitecture.isAppleSilicon
+                )
             }
         )
         self._meetingSessionCoordinator = coordinator

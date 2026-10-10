@@ -118,6 +118,7 @@ nonisolated enum MeetingProviderOptionsError: LocalizedError, Equatable {
     case unsupportedASRModel(String)
     case unsupportedLanguageCode(String)
     case unsupportedFeature(String)
+    case unsupportedArchitecture
 
     var errorDescription: String? {
         switch self {
@@ -127,6 +128,8 @@ nonisolated enum MeetingProviderOptionsError: LocalizedError, Equatable {
             return "The selected speech model does not support meeting language \(language). Choose a compatible model or change the meeting language."
         case let .unsupportedFeature(feature):
             return "Meeting transcription does not support \(feature)."
+        case .unsupportedArchitecture:
+            return AppBrand.text("The selected meeting model requires Apple Silicon.")
         }
     }
 }

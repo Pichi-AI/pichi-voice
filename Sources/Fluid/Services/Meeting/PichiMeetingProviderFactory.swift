@@ -66,9 +66,19 @@ enum PichiMeetingProviderFactory {
         value?.hasPrefix("unavailable:") == true
     }
 
+    static func validateRecordingConfiguration(
+        _ configuration: MeetingFinalProcessingConfiguration,
+        isAppleSilicon: Bool
+    ) throws {
+        let options = try MeetingProviderOptions.resolve(configuration)
+        guard isAppleSilicon || !options.model.requiresAppleSilicon else {
+            throw MeetingProviderOptionsError.unsupportedArchitecture
+        }
+    }
+
     static func registerBackends(in registry: MeetingTranscriptionBackendRegistry) {
         for (modelID, registration) in self.registrations {
-            registry.register(registration.descriptor.id) { context in
+            registry.register(registration.descriptor.id, descriptor: registration.descriptor) { context in
                 MeetingProviderBackedBackend(
                     descriptor: registration.descriptor,
                     providerModelID: modelID,

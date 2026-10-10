@@ -193,6 +193,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
     private let validateRecordingModels: @MainActor () async throws -> Void
+    private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
     private let processingLogger: @MainActor (String) -> Void
     private static let correctionUndoStackCap = 50
 
@@ -203,6 +204,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
+        validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
         processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
     ) {
         self.store = store
@@ -212,6 +214,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.audioArbiter = audioArbiter
         self.preferredMicrophoneUID = preferredMicrophoneUID
         self.validateRecordingModels = validateRecordingModels
+        self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.processingLogger = processingLogger
     }
 
@@ -434,6 +437,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 languageCode: configuration.languageCode
             )
             _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
+            try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
         } catch {
             await self.audioArbiter.release(lease)
             throw error

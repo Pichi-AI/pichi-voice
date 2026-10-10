@@ -320,7 +320,7 @@ final class MeetingLiveMemoryGateTests: XCTestCase {
     func testGigaAMRejectsUnsupportedLanguageBeforeCaptionModelsLoad() {
         let notice = expectation(description: "Unsupported GigaAM language is rejected before loading")
         let coordinator = MeetingLiveTranscriptionCoordinator { snapshot in
-            XCTAssertEqual(snapshot.availability, .unavailable(reason: "GigaAM captions require Russian as the meeting language."))
+            XCTAssertEqual(snapshot.availability, .unavailable(reason: "The selected model does not support live captions in this meeting language."))
             XCTAssertTrue(snapshot.utterances.isEmpty)
             notice.fulfill()
         }

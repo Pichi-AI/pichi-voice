@@ -629,7 +629,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         var factoryCallCount = 0
         func registry() -> MeetingTranscriptionBackendRegistry {
             let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: Self.fixtureBackendID)
-            registry.register(Self.fixtureBackendID) { [self] _ in
+            registry.register(Self.fixtureBackendID, descriptor: self.makeFixtureDescriptor()) { [self] _ in
                 factoryCallCount += 1
                 return FixtureMeetingBackend(descriptor: self.makeFixtureDescriptor()) { plan in
                     .legacyCompatibility(self.makeResult(attemptID: plan.attemptID, text: "unused"))

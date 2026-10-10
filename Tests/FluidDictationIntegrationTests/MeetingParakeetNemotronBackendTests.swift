@@ -385,7 +385,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertThrowsError(try backend.plan(self.makeRequest(
             session: session,
             directory: self.makeTempSessionDirectory(),
-            configuration: MeetingFinalProcessingConfiguration(languageCode: "ru")
+            configuration: MeetingFinalProcessingConfiguration(asrModel: MeetingFinalProcessingConfiguration.defaultASRModel, languageCode: "ru")
         ))) { error in
             XCTAssertEqual(error as? MeetingBackendError, .unsupportedLanguage(backend: descriptor.id, languageCode: "ru"))
         }

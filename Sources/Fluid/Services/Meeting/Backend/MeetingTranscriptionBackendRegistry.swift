@@ -11,6 +11,7 @@ final class MeetingTranscriptionBackendRegistry {
     typealias Factory = @MainActor (MeetingBackendHostContext) -> any MeetingTranscriptionBackend
 
     private var factories: [MeetingBackendID: Factory] = [:]
+    private var descriptors: [MeetingBackendID: MeetingBackendDescriptor] = [:]
     let defaultBackendID: MeetingBackendID
 
     init(defaultBackendID: MeetingBackendID = .productionDefault) {
@@ -21,18 +22,29 @@ final class MeetingTranscriptionBackendRegistry {
     /// rollback backend. Its default shares the same source of truth as persisted settings.
     static func makeDefault() -> MeetingTranscriptionBackendRegistry {
         let registry = MeetingTranscriptionBackendRegistry()
-        registry.register(.legacyCompatibility) { context in
+        registry.register(.legacyCompatibility, descriptor: MeetingLegacyCompatibilityBackend.descriptor) { context in
             MeetingLegacyCompatibilityBackend(legacyExecutor: context.legacyExecutor)
         }
-        registry.register(.parakeetNemotron) { context in
+        registry.register(.parakeetNemotron, descriptor: MeetingParakeetNemotronBackend.descriptor) { context in
             MeetingParakeetNemotronBackend(runtimeFactory: context.parakeetNemotronRuntimeFactory)
         }
         PichiMeetingProviderFactory.registerBackends(in: registry)
         return registry
     }
 
-    func register(_ id: MeetingBackendID, factory: @escaping Factory) {
+    /// Declared capabilities allow preflight without constructing a backend or model. Bare
+    /// custom factories retain compatibility and are validated against their produced descriptor.
+    func register(_ id: MeetingBackendID, descriptor: MeetingBackendDescriptor? = nil, factory: @escaping Factory) {
         self.factories[id] = factory
+        self.descriptors[id] = descriptor
+    }
+
+    func descriptor(for id: MeetingBackendID) -> MeetingBackendDescriptor? { self.descriptors[id] }
+
+    /// Unknown custom capabilities cannot justify rejecting a language before construction.
+    var supportedLanguageCodes: Set<String>? {
+        guard !self.factories.isEmpty, self.factories.keys.allSatisfy({ self.descriptors[$0] != nil }) else { return nil }
+        return self.descriptors.values.reduce(into: Set<String>()) { $0.formUnion($1.supportedLanguageCodes) }
     }
 
     var registeredBackendIDs: Set<MeetingBackendID> {

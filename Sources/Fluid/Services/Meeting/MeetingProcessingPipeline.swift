@@ -1400,6 +1400,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
+        if let languages = self.backendRegistry.supportedLanguageCodes, !languages.contains(session.languageCode) {
+            throw MeetingProcessingError.unsupportedLanguage
+        }
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
             throw MeetingProcessingError.noRecoverableAudio
         }
@@ -1414,6 +1417,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             backendID = MeetingBackendID(rawValue: recordingBackendID)
         } else {
             backendID = self.backendIDProvider(session.languageCode)
+        }
+        if let descriptor = self.backendRegistry.descriptor(for: backendID),
+           !descriptor.supportedLanguageCodes.contains(session.languageCode) {
+            throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
         }
         DebugLogger.shared.info(
             "Meeting final processing selected backend=\(backendID.rawValue)",
@@ -1466,7 +1473,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             )
         )
         guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
-            throw MeetingProcessingError.unsupportedLanguage
+            throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
         }
         if backendID == .parakeetNemotron {
             try await self.prepareDiarizationModel()
