@@ -45528,6 +45528,40 @@
           }
         }
       }
+    },
+    "Setup Guide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setup Guide"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Инструкция по настройке"
+          }
+        }
+      }
+    },
+    "Get API Key": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get API Key"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получить API-ключ"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
