@@ -302,10 +302,11 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             needsReduction = recap.count > 8 && didShrink
         }
         try Task.checkCancellation()
-        return .init(summary: PichiMeetingSummaryDocument.unique(recap),
-                     decisions: decisions,
-                     actions: actions,
-                     openQuestions: questions)
+        let document = PichiMeetingSummaryDocument(summary: PichiMeetingSummaryDocument.unique(recap),
+                                                   decisions: decisions, actions: actions, openQuestions: questions)
+        // Reconciliation can add citations to otherwise valid chunk results.
+        // Enforce the same canonical limits before callers publish or persist it.
+        return try document.validated(against: turns)
     }
 
     private func recapBatches(_ items: [PichiMeetingSummaryItem]) -> [[PichiMeetingSummaryItem]] {

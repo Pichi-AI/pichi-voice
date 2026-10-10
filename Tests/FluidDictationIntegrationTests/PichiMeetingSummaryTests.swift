@@ -418,6 +418,61 @@ final class PichiMeetingSummaryTests: XCTestCase {
         } catch { XCTAssertEqual(error.localizedDescription, PichiMeetingSummaryError.invalidEvidence.localizedDescription) }
     }
 
+    func testMergedCorrectionRespectsCanonicalEvidenceLimitWithoutClipping() async throws {
+        for count in [15, 16] {
+            let fixture = self.evidenceBudgetFixture(count: count)
+            let turns = PichiMeetingSummaryInput.turns(for: fixture.session)
+            XCTAssertNoThrow(try fixture.document.validated(against: turns), "Each source document is valid before reconciliation")
+            let response = try self.json(fixture.document)
+            let update = String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [[
+                "index": 0, "evidence": [["segmentID": fixture.correction.segmentID.uuidString, "quote": fixture.correction.quote]],
+            ]]]), as: UTF8.self)
+            let transport = RepairTransport(responses: [response, update])
+            let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            let fingerprint = PichiMeetingSummaryInput.fingerprint(fixture.session)
+            do {
+                let result = try await generator.generate(session: fixture.session, configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+                XCTAssertEqual(count, 15, "A valid 16-citation source plus a later correction must be rejected before returning")
+                let decision = try XCTUnwrap(result.decisions.first)
+                XCTAssertEqual(decision.superseded, true)
+                XCTAssertEqual(decision.evidence.count, 16)
+                XCTAssertEqual(Set(decision.evidence), Set(fixture.document.decisions[0].evidence + [fixture.correction]),
+                               "Do not clip original evidence or drop the correcting source to fit")
+                XCTAssertNoThrow(try result.validated(against: turns))
+            } catch PichiMeetingSummaryError.invalidOutput {
+                XCTAssertEqual(count, 16)
+            }
+            let requests = await transport.requests
+            XCTAssertEqual(requests.count, 2, "The final gate rejects deterministically without another model request")
+            XCTAssertNil(requests[0].extraParameters["response_format"], "Exercise the compatible API's 16-citation contract")
+            XCTAssertEqual(fixture.document.decisions[0].evidence.count, count)
+            XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(fixture.session), fingerprint)
+        }
+    }
+
+    @MainActor
+    func testControllerEvidenceBudgetFailureRestoresResourcesBeforePublication() async throws {
+        let fixture = self.evidenceBudgetFixture(count: 16)
+        let update = String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [[
+            "index": 0, "evidence": [["segmentID": fixture.correction.segmentID.uuidString, "quote": fixture.correction.quote]],
+        ]]]), as: UTF8.self)
+        let transport = RepairTransport(responses: [try self.json(fixture.document), update])
+        let owner = MeetingModelResidencyCoordinator()
+        let resources = SummaryResidentResources(owner: owner)
+        let asr = ASRService(meetingModelResidency: owner)
+        asr.meetingModelParticipantsForTesting = resources.participants
+        let controller = PichiMeetingSummaryController(generator: .init { try await transport.complete($0) })
+        do {
+            _ = try await controller.generate(session: fixture.session, configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"), asr: asr)
+            XCTFail("Do not return an oversized document to the caller that publishes and saves it")
+        } catch PichiMeetingSummaryError.invalidOutput {}
+        XCTAssertNil(controller.document)
+        resources.assertRestored()
+        XCTAssertEqual(owner.phase, .normal)
+        XCTAssertFalse(owner.isExclusive)
+        XCTAssertNil(asr.activeExclusiveActivity)
+    }
+
     func testIdenticalDecisionAndTaskReinstatementStayActiveAfterEarlierCancellation() async throws {
         let transport = FixtureTransport(cancellationMode: true)
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
@@ -660,6 +715,24 @@ final class PichiMeetingSummaryTests: XCTestCase {
         second.text = "Отменяем выпуск в пятницу. Иван не должен готовить релиз. " + String(repeating: "Другие подробности. ", count: 300)
         session.transcriptSegments = [first, second]
         return session
+    }
+
+    private func evidenceBudgetFixture(count: Int) -> (session: MeetingSession, document: PichiMeetingSummaryDocument, correction: PichiMeetingSummaryEvidence) {
+        var session = self.session()
+        let quotes = (0..<count).map { "Согласовали пункт \($0)." }
+        session.transcriptSegments[0].text = quotes.joined(separator: " ")
+        var later = session.transcriptSegments[0]
+        later.id = UUID()
+        later.start = .init(value: 60_000, timescale: 1000)
+        later.end = .init(value: 61_000, timescale: 1000)
+        later.text = "Отменяем согласованные пункты."
+        session.transcriptSegments.append(later)
+        let evidence = quotes.map { PichiMeetingSummaryEvidence(segmentID: self.id, quote: $0) }
+        let correction = PichiMeetingSummaryEvidence(segmentID: later.id, quote: later.text)
+        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили согласованные пункты.", evidence: [evidence[0]])],
+                                                  decisions: [.init(text: "Согласованные пункты.", evidence: evidence)], actions: [], openQuestions: [],
+                                                  changes: [.init(text: later.text, evidence: [correction])])
+        return (session, document, correction)
     }
 
     private func questionSession() -> MeetingSession {
