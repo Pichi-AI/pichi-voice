@@ -7,7 +7,9 @@ export DEVELOPER_DIR="$task_developer_dir"
 task_test_dir=$(mktemp -d /tmp/fluidvoice-command-markdown.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
 # Compile the real value parser, excluding views and the application singleton.
+# Tool output titles use the real Foundation-only localization helper. No catalogs
+# are bundled here; these tests verify parser behavior, not translated UI titles.
 sed '/^@MainActor/,$d' Sources/Fluid/Views/CommandMarkdownContent.swift > "$task_test_dir/Markdown.swift"
 { echo 'import Foundation'; sed -n '/^struct CommandToolOutput:/,$p' Sources/Fluid/Views/CommandMessageView.swift; } > "$task_test_dir/ToolOutput.swift"
-xcrun swiftc -parse-as-library "$task_test_dir/Markdown.swift" "$task_test_dir/ToolOutput.swift" Tests/CommandMarkdownParserTests.swift -o "$task_test_dir/tests"
+xcrun swiftc -parse-as-library Sources/Fluid/Localization/PichiLocalization.swift "$task_test_dir/Markdown.swift" "$task_test_dir/ToolOutput.swift" Tests/CommandMarkdownParserTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"
