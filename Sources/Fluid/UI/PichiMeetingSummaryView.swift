@@ -243,10 +243,8 @@ struct PichiMeetingSummaryView: View {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                     ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                            Text(item.text)
-                                .font(self.theme.typography.body)
+                            CommandMarkdownContent(text: item.text)
                                 .strikethrough(item.superseded == true)
-                                .textSelection(.enabled)
                             if item.superseded == true {
                                 Text("Cancelled or replaced later")
                                     .font(self.theme.typography.captionStrong)
