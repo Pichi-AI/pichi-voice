@@ -92,8 +92,8 @@ final class PichiLocalizationPresentationTests: XCTestCase {
         let expected = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили цену.", evidence: [evidence])],
                                                    decisions: [], actions: [], openQuestions: [])
         let response = String(decoding: try JSONEncoder().encode(expected), as: UTF8.self)
-        let controller = PichiMeetingSummaryController(generator: .init { _ in
-            await gate.wait { entered.fulfill() }
+        let controller = PichiMeetingSummaryController(generator: .init { configuration in
+            try await gate.wait(configuration: configuration) { entered.fulfill() }
             try Task.checkCancellation()
             return response
         })
@@ -120,13 +120,20 @@ final class PichiLocalizationPresentationTests: XCTestCase {
         XCTAssertEqual(owner.phase, .summary)
         let callsBeforeRelease = await gate.calls
         XCTAssertEqual(callsBeforeRelease, 1)
+        let stagesBeforeRelease = await gate.stages
+        XCTAssertEqual(stagesBeforeRelease, ["map"], "Presentation changes must not start another map or review while the first inference is held")
         await gate.release()
         await fulfillment(of: [finished], timeout: 5)
         XCTAssertEqual(controller.document, expected)
         XCTAssertFalse(owner.isExclusive)
         XCTAssertEqual(owner.phase, .normal)
         let callsAfterCompletion = await gate.calls
-        XCTAssertEqual(callsAfterCompletion, 1)
+        XCTAssertEqual(callsAfterCompletion, 2, "The same generation completes one map and one source-support review")
+        let stagesAfterCompletion = await gate.stages
+        XCTAssertEqual(stagesAfterCompletion, ["map", "support-review"], "Changing language must not duplicate or skip either inference stage")
+        let requests = await gate.requests
+        XCTAssertEqual(requests.map(\.model), ["fixture-model", "fixture-model"])
+        XCTAssertEqual(requests.map(\.baseURL), ["http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/v1"])
     }
 
     func testOnlyMissingSpeakerNamesAreLocalizedAndExistingNamesStayVerbatim() throws {
@@ -169,9 +176,16 @@ final class PichiLocalizationPresentationTests: XCTestCase {
         private var continuation: CheckedContinuation<Void, Never>?
         private var released = false
         private(set) var calls = 0
-        func wait(onEnter: @Sendable () -> Void) async {
+        private(set) var stages: [String] = []
+        private(set) var requests: [LLMClient.Config] = []
+        func wait(configuration: LLMClient.Config, onFirstEnter: @Sendable () -> Void) async throws {
+            guard let input = configuration.messages.last?["content"] as? String,
+                  let fields = try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any]
+            else { throw LLMError.invalidResponse }
             self.calls += 1
-            onEnter()
+            self.requests.append(configuration)
+            self.stages.append(fields["candidate"] == nil ? "map" : "support-review")
+            if self.calls == 1 { onFirstEnter() }
             if self.released { return }
             await withCheckedContinuation { self.continuation = $0 }
         }

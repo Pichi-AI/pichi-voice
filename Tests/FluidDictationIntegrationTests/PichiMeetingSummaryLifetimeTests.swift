@@ -176,9 +176,8 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
         let entered = expectation(description: "Local generation entered")
         let settled = expectation(description: "Local document published and saved")
         let drain = InferenceDrain()
-        let controller = PichiMeetingSummaryController(sessionID: session.id, generator: .init { _ in
-            entered.fulfill()
-            await drain.wait()
+        let controller = PichiMeetingSummaryController(sessionID: session.id, generator: .init { configuration in
+            try await drain.wait(configuration: configuration) { entered.fulfill() }
             return response
         })
         controller.generationStateChanged = { controller in
@@ -192,6 +191,7 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
         await controller.refresh(session: session, configuration: remote)
         XCTAssertEqual(controller.requestConfiguration(current: remote)?.cacheIdentity, local.cacheIdentity)
         XCTAssertEqual(controller.requestConfiguration(current: nil)?.cacheIdentity, local.cacheIdentity)
+        XCTAssertEqual(drain.stages, ["map"], "The first inference stays admitted with its original destination")
         drain.release()
         await fulfillment(of: [settled], timeout: 5)
         XCTAssertFalse(controller.generating)
@@ -203,6 +203,10 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
         XCTAssertEqual(controller.documentConfiguration?.cacheIdentity, local.cacheIdentity)
         XCTAssertEqual(controller.documentConfiguration?.language, "ru", "Copy uses the saved document's language")
         XCTAssertEqual(controller.documentSourceSession, session)
+        XCTAssertEqual(drain.stages, ["map", "support-review"], "One admitted generation completes both real stages without retargeting or restarting")
+        XCTAssertEqual(drain.requests.map(\.model), [local.modelID, local.modelID])
+        XCTAssertEqual(drain.requests.map(\.baseURL), [local.baseURL, local.baseURL])
+        XCTAssertEqual(drain.requests.map(\.apiKey), [local.apiKey, local.apiKey], "Changed remote credentials must not enter the admitted local attempt")
         try await MeetingSessionStore.shared.delete(id: session.id)
     }
 
@@ -243,6 +247,17 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
     private final class InferenceDrain {
         private var continuation: CheckedContinuation<Void, Never>?
         private var released = false
+        private(set) var stages: [String] = []
+        private(set) var requests: [LLMClient.Config] = []
+        func wait(configuration: LLMClient.Config, onFirstEnter: @Sendable () -> Void) async throws {
+            guard let input = configuration.messages.last?["content"] as? String,
+                  let fields = try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any]
+            else { throw LLMError.invalidResponse }
+            self.stages.append(fields["candidate"] == nil ? "map" : "support-review")
+            self.requests.append(configuration)
+            if self.stages.count == 1 { onFirstEnter() }
+            await self.wait()
+        }
         func wait() async {
             if self.released { return }
             await withCheckedContinuation { self.continuation = $0 }
