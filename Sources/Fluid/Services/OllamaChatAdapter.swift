@@ -138,14 +138,18 @@ nonisolated enum OllamaChatAdapter {
         }
         if let stop = options["stop"] as? String { options["stop"] = [stop] }
         if let stop = options["stop"], !(stop is [String]) { throw LLMError.invalidRequest(PichiLocalization.text("Invalid local model stop sequences.")) }
-        // Retention is a caller policy. Ordinary requests retain the short default;
-        // interactive dictation may request a finite idle window. Owned meeting
-        // aliases still override this value only in their separate transport.
+        // The app pins its selected enhancement artifact for its lifetime. A
+        // command or rewrite using that artifact must not shorten the lease.
+        // Unselected artifacts retain the finite caller policy. Meeting aliases
+        // still own their separate transport and cleanup.
         var keepAlive: Any = "60s"
         if let requested = config.extraParameters["keep_alive"] {
             let seconds = try self.positiveInteger(requested)
             guard seconds <= 3600 else { throw LLMError.invalidRequest(PichiLocalization.text("Invalid local model options.")) }
             keepAlive = seconds
+        }
+        if LocalAIModelResidencyPolicy.shared.isPinned(baseURL: config.baseURL, model: config.model) {
+            keepAlive = -1
         }
         var body: [String: Any] = [
             "model": config.model, "messages": try self.messages(config.messages),

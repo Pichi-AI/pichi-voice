@@ -52,6 +52,31 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertTrue(context.fixture.requests.isEmpty)
     }
 
+    func testPinnedEnhancementSurvivesCommandRequestsAndReleasesToFiniteRetention() throws {
+        let context = OllamaTransportContext()
+        defer { context.cleanup() }
+        let policy = LocalAIModelResidencyPolicy.shared
+        let selected = self.config()
+        policy.pin(baseURL: selected.baseURL, model: selected.model)
+        defer { policy.unpin(baseURL: selected.baseURL, model: selected.model) }
+
+        // A command uses the ordinary short lease; the selected enhancement
+        // artifact stays pinned regardless of which UI entry point sent it.
+        let command = try OllamaTransportFixture.body(context.client.buildRequest(selected))
+        XCTAssertEqual(command["keep_alive"] as? Int, -1)
+        var dictation = selected
+        DictationPostProcessingService.configureInteractiveLocalRequest(&dictation)
+        let enhanced = try OllamaTransportFixture.body(context.client.buildRequest(dictation))
+        XCTAssertEqual(enhanced["keep_alive"] as? Int, -1)
+        XCTAssertEqual(enhanced["think"] as? Bool, false)
+
+        var other = selected
+        other.model = "synthetic-other:latest"
+        XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(other))["keep_alive"] as? String, "60s")
+        policy.unpin(baseURL: selected.baseURL, model: selected.model)
+        XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(selected))["keep_alive"] as? String, "60s")
+    }
+
     func testInteractiveNativeSessionBoundsTotalResponseLifetimeAndPreservesFixtureIsolation() async throws {
         let context = OllamaTransportContext()
         defer { context.cleanup() }
@@ -118,19 +143,23 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertTrue(context.fixture.requests.isEmpty)
     }
 
-    func testSelectedNativePreloadUsesEmptyContentAndTheDictationContext() async throws {
-        let context = OllamaTransportContext(body: #"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"load"}"#)
+    func testSelectedNativeWarmupRunsSyntheticInferenceWithTheDictationContext() async throws {
+        let context = OllamaTransportContext(body: #"{"message":{"role":"assistant","content":"OK"},"done":true,"done_reason":"stop"}"#)
         defer { context.cleanup() }
         let route = DictationProviderRoute(providerID: "synthetic-provider", providerKey: "synthetic-provider",
                                            baseURL: "http://127.0.0.1:11434/v1", model: "synthetic-selected:latest", apiKey: "")
+        LocalAIModelResidencyPolicy.shared.pin(baseURL: route.baseURL, model: route.model)
+        defer { LocalAIModelResidencyPolicy.shared.unpin(baseURL: route.baseURL, model: route.model) }
         try await DictationPostProcessingService.shared.prewarmLocalModel(route, client: context.client)
         let request = try XCTUnwrap(context.fixture.requests.first)
         let body = try OllamaTransportFixture.body(request)
         XCTAssertEqual(body["model"] as? String, route.model)
-        XCTAssertEqual((body["messages"] as? [[String: Any]])?.count, 0)
+        XCTAssertEqual((body["messages"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual((body["messages"] as? [[String: Any]])?.first?["content"] as? String, "Reply with OK only.")
+        XCTAssertEqual((body["options"] as? [String: Any])?["num_predict"] as? Int, 16)
         XCTAssertEqual(body["stream"] as? Bool, false)
         XCTAssertEqual(body["think"] as? Bool, false)
-        XCTAssertEqual(body["keep_alive"] as? Int, 1800)
+        XCTAssertEqual(body["keep_alive"] as? Int, -1)
         XCTAssertEqual((body["options"] as? [String: Any])?["num_ctx"] as? Int, 8192)
         XCTAssertEqual(request.timeoutInterval, 30)
         XCTAssertEqual(context.fixture.requests.count, 1)

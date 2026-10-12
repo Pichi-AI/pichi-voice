@@ -375,8 +375,6 @@ struct ContentView: View {
     @State private var accessibilityGuideRequestID: UUID?
     @State private var prewarmDictationTask: Task<Void, Never>?
     @State private var prewarmDictationRequestID: UUID?
-    @State private var prewarmDictationRoute: DictationProviderRoute?
-    @State private var prewarmDictationVerifiedUntil: TimeInterval = 0
     @State private var overlayLifecycleID: UInt64 = 0
     @State private var spokenSendAutoStopTask: Task<Void, Never>?
     @State private var spokenSendAutoStopTriggered = false
@@ -4550,9 +4548,7 @@ struct ContentView: View {
     private func cancelPrewarmDictationIfNeeded() {
         self.prewarmDictationTask?.cancel()
         // Retain the task until its transport returns so a replacement can join
-        // it. Clearing this reference here could overlap two native model loads.
-        self.prewarmDictationRoute = nil
-        self.prewarmDictationVerifiedUntil = 0
+        // it. Clearing this reference here could overlap two private runtime loads.
     }
 
     private func handleLivePromptModeSwitch(_ mode: SettingsStore.PromptMode) {
@@ -4758,19 +4754,15 @@ struct ContentView: View {
             appBundleID: appBundleID
         )
         let nativeLocal = OllamaChatAdapter.supports(route.baseURL)
-        guard nativeLocal || (!localOnly && route.usesPrivateAI),
+        if nativeLocal || localOnly {
+            // App-owned work survives window closure and rechecks daemon eviction.
+            self.appServices.refreshLocalAIResidency()
+            return
+        }
+        guard route.usesPrivateAI,
               DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appBundleID),
               self.asr.activeExclusiveActivity == nil || self.asr.activeExclusiveActivity == .dictation
         else {
-            if localOnly, self.prewarmDictationRoute != nil { self.cancelPrewarmDictationIfNeeded() }
-            return
-        }
-
-        // Settings redraws, activation and recording can request the same warmup.
-        // Coalesce pending work and a short verified interval; there is no timer
-        // that repeatedly warms an idle app or loads all configured models.
-        if nativeLocal, self.prewarmDictationRoute == route,
-           self.prewarmDictationTask != nil || ProcessInfo.processInfo.systemUptime < self.prewarmDictationVerifiedUntil {
             return
         }
 
@@ -4780,7 +4772,6 @@ struct ContentView: View {
         previous?.cancel()
         let requestID = UUID()
         self.prewarmDictationRequestID = requestID
-        self.prewarmDictationRoute = nativeLocal ? route : nil
         let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
         self.prewarmDictationTask = Task {
             await previous?.value
@@ -4794,20 +4785,7 @@ struct ContentView: View {
                 "ContentView: AI dictation prewarm started slot=\(slot.rawValue)",
                 source: "ContentView"
             )
-            if nativeLocal {
-                do {
-                    try await DictationPostProcessingService.shared.prewarmLocalModel(route)
-                    guard !Task.isCancelled, self.prewarmDictationRequestID == requestID else { return }
-                    self.prewarmDictationVerifiedUntil = ProcessInfo.processInfo.systemUptime + 30
-                } catch {
-                    if !Task.isCancelled {
-                        DebugLogger.shared.debug("Local dictation prewarm unavailable; normal dictation remains available", source: "ContentView")
-                    }
-                    return
-                }
-            } else {
-                await PrivateAIIntegrationService.shared.prewarmDictation()
-            }
+            await PrivateAIIntegrationService.shared.prewarmDictation()
             DebugLogger.shared.debug(
                 "AI dictation prewarm complete slot=\(slot.rawValue)",
                 source: "ContentView"
