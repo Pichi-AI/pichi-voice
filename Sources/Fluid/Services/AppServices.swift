@@ -42,9 +42,49 @@ final class AppServices: ObservableObject {
             self.isUIReady = true
         }
         _ = self.meetingAutoDetector
+        self.refreshLocalAIResidency()
     }
 
     // MARK: - Lazy Services
+
+    private var _localAIModelResidency: LocalAIModelResidencyController?
+
+    /// Window visibility does not own native model lifetime. Requests before the
+    /// startup gate are fulfilled by signalUIReady's initial reconciliation.
+    func refreshLocalAIResidency() {
+        guard self.isUIReady else { return }
+        if self._localAIModelResidency == nil {
+            DictationAppSession.shared.start()
+            let controller = LocalAIModelResidencyController(dependencies: .init(
+                selectedRoute: {
+                    let appID = DictationAppSession.shared.appID
+                    guard DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appID) else { return nil }
+                    let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: .primary, appBundleID: appID)
+                    return OllamaChatAdapter.supports(route.baseURL) ? route : nil
+                },
+                canWarm: { [weak self] in
+                    guard let self else { return false }
+                    return !self.hasActiveMeetingActivity && !self.hasActiveFileTranscriptionActivity
+                        && !MeetingModelResidencyCoordinator.shared.isExclusive
+                        && !MeetingSummaryActivityCoordinator.shared.isProcessing
+                        && MeetingSummaryActivityCoordinator.shared.selectionLock == nil
+                        && self.activeMeetingSummarySession == nil
+                },
+                warm: { try await DictationPostProcessingService.shared.prewarmLocalModel($0) },
+                isReady: { try await LocalAIModelResidencyTransport.isReady($0) },
+                release: { await LocalAIModelResidencyTransport.release($0) }
+            ))
+            self._localAIModelResidency = controller
+            SettingsStore.shared.objectWillChange
+                .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.refreshLocalAIResidency() }
+                }
+                .store(in: &self.cancellables)
+            controller.start()
+        }
+        self._localAIModelResidency?.refresh()
+    }
 
     /// Audio hardware observation service (lazily initialized)
     private var _audioObserver: AudioHardwareObserver?
@@ -355,6 +395,8 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        await self._localAIModelResidency?.shutdown()
+        self._localAIModelResidency = nil
         self._meetingAutoDetector?.stop()
         self._meetingAutoDetector = nil
         if let meetingSessionCoordinator = self._meetingSessionCoordinator {
