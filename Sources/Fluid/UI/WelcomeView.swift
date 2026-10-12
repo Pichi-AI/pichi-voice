@@ -1595,9 +1595,11 @@ struct OnboardingFlowView: View {
 
         return VStack(alignment: .leading, spacing: isCompactModel ? self.theme.metrics.spacing.sm : 10) {
             HStack(alignment: .top, spacing: 10) {
-                if model.brandName == "FluidVoice" {
-                    FluidVoiceBrandIcon(size: 22)
-                }
+                SpeechModelProviderMark(
+                    presentation: model.provider.presentation,
+                    providerColor: Color(hex: model.brandColorHex),
+                    size: 22
+                )
                 Text(LocalizedStringKey(self.onboardingModelTitle(for: model)))
                     .font(self.theme.typography.sectionTitle)
                     .foregroundStyle(self.theme.palette.primaryText)
@@ -1629,6 +1631,12 @@ struct OnboardingFlowView: View {
 
             if model.hasPerformanceRatings {
                 self.onboardingModelFeaturePanel(for: model)
+            } else {
+                Text(LocalizedStringKey(model.cardDescription))
+                    .font(self.theme.typography.bodySmall)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 0)
