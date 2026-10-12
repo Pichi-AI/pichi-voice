@@ -4,7 +4,7 @@ import PichiGigaAM
 extension GigaAMModelDescriptor {
     /// The E2E tokenizer identifies formatted exports; older character exports do not
     /// inherit their punctuation claims or the measured v5 CPU speed.
-    var libraryMetadata: SpeechModelLibraryMetadata {
+    nonisolated var libraryMetadata: SpeechModelLibraryMetadata {
         let formatted = self.vocabularyFile != nil
         return SpeechModelLibraryMetadata(
             size: formatted ? "~435.2 MiB" : "~428.8 MiB",
