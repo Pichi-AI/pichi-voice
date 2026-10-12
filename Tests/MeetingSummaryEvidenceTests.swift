@@ -17,6 +17,36 @@ struct MeetingSummaryEvidenceTests {
         document.actions[0].deadline = nil
         _ = try document.validated(against: [source])
 
+        let legacy = try PichiMeetingSummaryDocument.decode(String(decoding: JSONEncoder().encode(document), as: UTF8.self), turns: [source])
+        guard legacy.actions[0].title == nil, legacy.actions[0].status == nil, legacy.actions[0].urgency == nil
+        else { throw Failure("Legacy metadata became an inferred task state") }
+        document.actions[0].title = "Уточнить отчёт"
+        do { _ = try document.validated(against: [source]); throw Failure("Partial task metadata was accepted") }
+        catch PichiMeetingSummaryError.invalidOutput {}
+        document.actions[0].status = .requested
+        document.actions[0].urgency = .unspecified
+        _ = try document.validated(against: [source])
+        let structured = try PichiMeetingSummaryDocument.decode(String(decoding: JSONEncoder().encode(document), as: UTF8.self), turns: [source])
+        guard structured == document else { throw Failure("Structured task metadata did not round trip") }
+        let invalidStatus = String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
+            .replacingOccurrences(of: "\"requested\"", with: "\"pending\"")
+        do { _ = try PichiMeetingSummaryDocument.decode(invalidStatus, turns: [source]); throw Failure("Unknown task status was accepted") }
+        catch PichiMeetingSummaryError.invalidOutput {}
+        document.summary[0].status = .agreed
+        do { _ = try document.validated(against: [source]); throw Failure("Task metadata was accepted on a recap item") }
+        catch PichiMeetingSummaryError.invalidOutput {}
+        document.summary[0].status = nil
+        document.actions[0] = .init(text: "Проверить *поля* и <данные>.", evidence: document.actions[0].evidence,
+                                   title: "Уточнить [PX-17]", status: .requested, urgency: .unspecified)
+        let markdown = document.copyMarkdown(language: .english, sources: [.init(id: id, seconds: 65, speaker: "Мария [Speaker]", text: source.text)])
+        guard markdown.contains("### Уточнить \\[PX\\-17\\]"), markdown.contains("Проверить \\*поля\\* и \\<данные\\>\\."),
+              markdown.contains("1:05 · Мария \\[Speaker\\]"), markdown.contains("Status: Requested"), !markdown.contains(id.uuidString)
+        else { throw Failure("Structured Markdown omitted fields, source time or safe literal punctuation") }
+        document.actions[0].superseded = true
+        guard !document.copyMarkdown(language: .english).contains("Status: Requested")
+        else { throw Failure("Superseded action retained an advertised current state") }
+        document.actions[0].superseded = nil
+
         let commitment = PichiMeetingSummaryTurn(id: id, seconds: 0, speaker: "Иван, к пятнице", text: "Я подготовлю отчёт.")
         let commitmentEvidence = PichiMeetingSummaryEvidence(segmentID: id, quote: commitment.text)
         document.summary[0].evidence = [commitmentEvidence]
@@ -72,7 +102,7 @@ struct MeetingSummaryEvidenceTests {
                 else { throw Failure("Evidence or context admission bounds regressed") }
             }
         }
-        print("Meeting summary evidence checks passed: selected-excerpt support, speaker-only owners, isolated deadlines, source coverage and unchanged admission bounds.")
+        print("Meeting summary evidence checks passed: cited fields, source coverage, admission bounds, legacy/typed task metadata and structured Markdown.")
     }
 
     static func reject(_ document: PichiMeetingSummaryDocument, turns: [PichiMeetingSummaryTurn], issue: PichiMeetingSummaryValidationIssue) throws {

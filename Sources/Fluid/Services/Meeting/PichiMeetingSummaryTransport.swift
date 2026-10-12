@@ -261,8 +261,11 @@ nonisolated enum PichiMeetingSummaryTransport {
         let nullableText: [[String: Any]] = [["type": "null"], ["type": "string", "minLength": 1, "maxLength": 200]]
         actionProperties["owner"] = ["anyOf": nullableText, "description": "Exact original name, or JSON null without quotes when unspecified."]
         actionProperties["deadline"] = ["anyOf": nullableText, "description": "Exact source speech substring including prepositions and grammatical case. Never normalize; use JSON null without quotes if unspecified."]
+        actionProperties["title"] = ["type": "string", "minLength": 1, "maxLength": 160]
+        actionProperties["status"] = ["type": "string", "enum": PichiMeetingSummaryActionStatus.allCases.map(\.rawValue)]
+        actionProperties["urgency"] = ["type": "string", "enum": PichiMeetingSummaryActionUrgency.allCases.map(\.rawValue)]
         let action: [String: Any] = ["type": "object", "additionalProperties": false,
-                                     "required": ["text", "evidence", "owner", "deadline"], "properties": actionProperties]
+                                     "required": ["title", "text", "status", "urgency", "evidence", "owner", "deadline"], "properties": actionProperties]
         var fields: [String: Any] = [:]
         for name in ["summary", "decisions", "actions", "openQuestions", "changes", "answers"] {
             fields[name] = ["type": "array", "items": name == "actions" ? action : item,

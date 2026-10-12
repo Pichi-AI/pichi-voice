@@ -19,8 +19,11 @@ for signature in ['static func normalized(', 'static func chunks(', 'static func
     methods.append(source[start:end])
 start = source.index('nonisolated enum PichiMeetingSummaryError:')
 end = source.index('\nnonisolated struct PichiMeetingSummaryGenerator:', start)
+view = pathlib.Path('Sources/Fluid/UI/PichiMeetingSummaryView.swift').read_text()
+exports = view[view.index('extension PichiMeetingSummaryDocument {'):]
 pathlib.Path(sys.argv[1]).write_text(types + '\nnonisolated enum PichiMeetingSummaryInput {\n'
-    + '\n'.join(methods) + '\n}\n' + source[start:end])
+    + '\n'.join(methods) + '\n}\n' + source[start:end]
+    + '\n' + exports)
 PY
 xcrun swiftc -parse-as-library Sources/Fluid/Localization/PichiLocalization.swift \
     "$task_test_dir/SummaryEvidence.swift" Tests/MeetingSummaryEvidenceTests.swift -o "$task_test_dir/tests"

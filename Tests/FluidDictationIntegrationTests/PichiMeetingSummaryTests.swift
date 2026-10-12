@@ -78,6 +78,108 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
+    func testStructuredActionsRoundTripWhileLegacyActionsKeepUnknownMetadata() throws {
+        let legacy = self.document()
+        let raw = try self.json(legacy)
+        let decoded = try PichiMeetingSummaryDocument.decode(raw, turns: self.turns)
+        XCTAssertNil(decoded.actions[0].title)
+        XCTAssertNil(decoded.actions[0].status, "Legacy tasks must never become implicitly agreed")
+        XCTAssertNil(decoded.actions[0].urgency)
+        var structured = legacy
+        structured.actions[0].title = "Подготовить отчёт"
+        structured.actions[0].status = .requested
+        structured.actions[0].urgency = .unspecified
+        XCTAssertEqual(try PichiMeetingSummaryDocument.decode(self.json(structured), turns: self.turns), structured)
+        XCTAssertEqual(structured.actions[0].owner, "Иван", "A requested owner does not require agreed status")
+        XCTAssertEqual(structured.actions[0].status, .requested)
+        XCTAssertEqual(structured.actions[0].deadline, "к пятнице")
+    }
+
+    func testStructuredActionMetadataIsCompleteAndLimitedToActions() throws {
+        var document = self.document()
+        document.actions[0].title = "Подготовить отчёт"
+        XCTAssertThrowsError(try document.validated(against: self.turns))
+        document.actions[0].status = .agreed
+        XCTAssertThrowsError(try document.validated(against: self.turns))
+        document.actions[0].urgency = .normal
+        XCTAssertNoThrow(try document.validated(against: self.turns))
+        for title in ["  ", String(repeating: "Ё", count: 161), "Подготовить\nотчёт"] {
+            document.actions[0].title = title
+            XCTAssertThrowsError(try document.validated(against: self.turns))
+        }
+        document.actions[0].title = "Подготовить отчёт"
+        document.summary[0].status = .completed
+        XCTAssertThrowsError(try document.validated(against: self.turns))
+        document.summary[0].status = nil
+        document.openQuestions = [document.actions[0]]
+        document.openQuestions[0].owner = nil
+        document.openQuestions[0].deadline = nil
+        XCTAssertThrowsError(try document.validated(against: self.turns), "Question data cannot carry task metadata")
+    }
+
+    func testActionStatusAndUrgencyRejectUnknownValuesAndWrongTypes() throws {
+        var document = self.document()
+        document.actions[0].title = "Подготовить отчёт"
+        document.actions[0].status = .requested
+        document.actions[0].urgency = .unspecified
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(self.json(document).utf8)) as? [String: Any])
+        for (field, value) in [("status", "pending" as Any), ("urgency", "high" as Any), ("status", 1 as Any), ("title", false as Any)] {
+            var fields = original
+            var actions = try XCTUnwrap(fields["actions"] as? [[String: Any]])
+            actions[0][field] = value
+            fields["actions"] = actions
+            let raw = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+            XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode(raw, turns: self.turns))
+        }
+        var changed = document.actions[0]
+        changed.status = .agreed
+        XCTAssertEqual(PichiMeetingSummaryDocument.unique([document.actions[0], changed]).count, 2,
+                       "Different structured task states must not collapse merely because their prose matches")
+    }
+
+    func testActionSchemaRequiresTypedMetadataWithoutAddingFieldsToRecap() throws {
+        let schema = PichiMeetingSummaryTransport.schema(ledger: false, sourceIndexes: [0])
+        let fields = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let action = try XCTUnwrap((fields["actions"] as? [String: Any])?["items"] as? [String: Any])
+        let properties = try XCTUnwrap(action["properties"] as? [String: Any])
+        XCTAssertEqual((properties["status"] as? [String: Any])?["enum"] as? [String], ["requested", "proposed", "agreed", "completed", "cancelled"])
+        XCTAssertEqual((properties["urgency"] as? [String: Any])?["enum"] as? [String], ["urgent", "normal", "unspecified"])
+        XCTAssertTrue(Set(action["required"] as? [String] ?? []).isSuperset(of: ["title", "text", "status", "urgency", "evidence", "owner", "deadline"]))
+        let recap = try XCTUnwrap((fields["summary"] as? [String: Any])?["items"] as? [String: Any])
+        let recapProperties = try XCTUnwrap(recap["properties"] as? [String: Any])
+        XCTAssertNil(recapProperties["status"])
+        XCTAssertNil(recapProperties["title"])
+        XCTAssertNil(recapProperties["urgency"])
+    }
+
+    func testStructuredMarkdownPreservesSourcePunctuationAndOriginalTimeWithoutModelIDs() throws {
+        var document = self.document()
+        document.actions[0] = .init(text: "Проверить *поля* и <данные>.", evidence: document.actions[0].evidence,
+                                   owner: "Иван", deadline: "к пятнице", title: "Подготовить [PX-17]", status: .requested, urgency: .unspecified)
+        let source = PichiMeetingSummaryTurn(id: self.id, seconds: 65, speaker: "Иван [Speaker]", text: self.turns[0].text)
+        let markdown = document.copyMarkdown(language: .english, sources: [source])
+        let blocks = CommandMarkdownParser.parse(markdown)
+        XCTAssertTrue(blocks.contains {
+            if case let .heading(text, level) = $0.content { return level == 3 && String(text.characters) == "Подготовить [PX-17]" }
+            return false
+        })
+        XCTAssertTrue(blocks.contains {
+            if case let .paragraph(text) = $0.content { return String(text.characters) == "Проверить *поля* и <данные>." }
+            return false
+        })
+        XCTAssertTrue(blocks.contains {
+            if case let .quote(text) = $0.content { return String(text.characters) == "1:05 · Иван [Speaker]" }
+            return false
+        })
+        XCTAssertFalse(markdown.contains(self.id.uuidString))
+        XCTAssertEqual(document.actions[0].status, .requested)
+        XCTAssertEqual(document.actions[0].text, "Проверить *поля* и <данные>.")
+        document.actions[0].superseded = true
+        let historical = document.copyMarkdown(language: .english)
+        XCTAssertFalse(historical.contains("Status: Requested"), "A superseded entry must not advertise an unchanged current state")
+        XCTAssertTrue(historical.contains("Superseded"))
+    }
+
     func testEmptyDecisionsAndTasksAreValidButEveryClaimNeedsEvidence() throws {
         var doc = self.document()
         doc.actions = []

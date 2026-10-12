@@ -120,7 +120,7 @@ struct PichiMeetingSummaryView: View {
                 }
                 self.summarySection(PichiLocalization.text("Recap"), items: document.summary)
                 self.summarySection(PichiLocalization.text("Decisions"), items: document.decisions)
-                self.summarySection(PichiLocalization.text("Action items"), items: document.actions)
+                self.summarySection(PichiLocalization.text("Action items"), items: document.actions, actions: true)
                 self.summarySection(PichiLocalization.text("Questions and answers"), items: document.openQuestions, questions: true)
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Button("Copy summary", systemImage: "doc.on.doc") { self.copy(document) }
@@ -233,7 +233,7 @@ struct PichiMeetingSummaryView: View {
         }
     }
 
-    private func summarySection(_ title: String, items: [PichiMeetingSummaryItem], questions: Bool = false) -> some View {
+    private func summarySection(_ title: String, items: [PichiMeetingSummaryItem], questions: Bool = false, actions: Bool = false) -> some View {
         FluidManagementGroup(title: title) {
             if items.isEmpty {
                 Text("None stated in the transcript.")
@@ -243,8 +243,14 @@ struct PichiMeetingSummaryView: View {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                     ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
+                            if actions, let title = item.title {
+                                Text(title)
+                                    .font(self.theme.typography.bodySmallStrong)
+                                    .foregroundStyle(self.theme.palette.primaryText)
+                                    .accessibilityAddTraits(.isHeader)
+                            }
                             CommandMarkdownContent(text: item.text)
-                                .strikethrough(item.superseded == true)
+                                .strikethrough(item.superseded == true || item.status == .cancelled)
                             if item.superseded == true {
                                 Text("Cancelled or replaced later")
                                     .font(self.theme.typography.captionStrong)
@@ -254,6 +260,21 @@ struct PichiMeetingSummaryView: View {
                                 Text(PichiLocalization.text(item.resolved == true ? "Answered later" : "Open question"))
                                     .font(self.theme.typography.captionStrong)
                                     .foregroundStyle(item.resolved == true ? self.theme.palette.success : self.theme.palette.secondaryText)
+                            }
+                            if actions {
+                                if item.superseded != true {
+                                    Text(item.status.map { PichiLocalization.format("Status: %@", language: self.interfaceLanguage, bundle: .main,
+                                        arguments: [$0.text(language: self.interfaceLanguage)]) }
+                                        ?? PichiLocalization.text("Task status not specified", locale: self.interfaceLocale))
+                                        .font(self.theme.typography.captionStrong)
+                                        .foregroundStyle(item.status == .completed ? self.theme.palette.success : self.theme.palette.secondaryText)
+                                }
+                                Text(item.urgency.flatMap { urgency in urgency == .unspecified ? nil
+                                    : PichiLocalization.format("Urgency: %@", language: self.interfaceLanguage, bundle: .main,
+                                        arguments: [urgency.text(language: self.interfaceLanguage)]) }
+                                    ?? PichiMeetingSummaryActionUrgency.unspecified.text(language: self.interfaceLanguage))
+                                    .font(self.theme.typography.caption)
+                                    .foregroundStyle(item.urgency == .urgent ? self.theme.palette.warning : self.theme.palette.secondaryText)
                             }
                             if let owner = item.owner {
                                 Text(PichiLocalization.text("Owner: ") + owner)
@@ -291,11 +312,59 @@ struct PichiMeetingSummaryView: View {
     private func copy(_ document: PichiMeetingSummaryDocument) {
         let language = self.controller.documentConfiguration.flatMap { PichiInterfaceLanguage(rawValue: $0.language) } ?? self.interfaceLanguage
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(document.copyText(language: language), forType: .string)
+        let sources = (self.controller.documentSourceSession ?? self.session).map(PichiMeetingSummaryInput.turns(for:)) ?? []
+        NSPasteboard.general.setString(document.copyMarkdown(language: language, sources: sources), forType: .string)
     }
 }
 
 extension PichiMeetingSummaryDocument {
+    /// Assemble readable Markdown from canonical structured fields. Source text
+    /// remains literal when rendered; escaped punctuation cannot create links/HTML.
+    nonisolated func copyMarkdown(language: PichiInterfaceLanguage, bundle: Bundle = .main, sources: [PichiMeetingSummaryTurn] = []) -> String {
+        func literal(_ value: String) -> String {
+            value.reduce(into: "") { result, character in
+                if "\\`*_{}[]()#+-.!|><&".contains(character) { result.append("\\") }
+                result.append(character)
+            }
+        }
+        let sections: [(String, [PichiMeetingSummaryItem], Bool)] = [
+            ("Recap", self.summary, false), ("Decisions", self.decisions, false),
+            ("Action items", self.actions, true), ("Questions and answers", self.openQuestions, false),
+        ]
+        return sections.map { key, items, actions in
+            "## " + literal(PichiLocalization.text(key, language: language, bundle: bundle)) + "\n\n" + items.map { item in
+                var lines: [String] = []
+                if actions, let title = item.title { lines.append("### " + literal(title)) }
+                let marker = (item.superseded == true ? PichiLocalization.text("[Superseded] ", language: language, bundle: bundle) : "")
+                    + (item.resolved == true ? PichiLocalization.text("[Answered] ", language: language, bundle: bundle) : "")
+                lines.append(literal(marker + item.text))
+                if actions {
+                    if item.superseded != true {
+                        let status = item.status.map { PichiLocalization.format("Status: %@", language: language, bundle: bundle,
+                            arguments: [$0.text(language: language, bundle: bundle)]) }
+                            ?? PichiLocalization.text("Task status not specified", language: language, bundle: bundle)
+                        lines.append("- " + literal(status))
+                    }
+                    let urgency = item.urgency.flatMap { urgency in urgency == .unspecified ? nil
+                        : PichiLocalization.format("Urgency: %@", language: language, bundle: bundle,
+                            arguments: [urgency.text(language: language, bundle: bundle)]) }
+                        ?? PichiMeetingSummaryActionUrgency.unspecified.text(language: language, bundle: bundle)
+                    lines.append("- " + literal(urgency))
+                }
+                if let owner = item.owner { lines.append("- " + literal(PichiLocalization.text("Owner: ", language: language, bundle: bundle) + owner)) }
+                if let deadline = item.deadline { lines.append("- " + literal(PichiLocalization.text("Due: ", language: language, bundle: bundle) + deadline)) }
+                for evidence in item.evidence {
+                    if let turn = sources.first(where: { $0.id == evidence.segmentID }), turn.seconds.isFinite, turn.seconds < Double(Int.max) {
+                        let seconds = Int(max(0, turn.seconds))
+                        lines.append("> " + literal("\(seconds / 60):\(String(format: "%02d", seconds % 60)) · \(turn.speaker)"))
+                    }
+                    lines.append(evidence.quote.components(separatedBy: .newlines).map { "> " + literal($0) }.joined(separator: "\n"))
+                }
+                return lines.joined(separator: "\n\n")
+            }.joined(separator: "\n\n")
+        }.joined(separator: "\n\n")
+    }
+
     /// Localize export chrome for the requested output language; all model/source data stays verbatim.
     nonisolated func copyText(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
         let sections: [(String, [PichiMeetingSummaryItem])] = [
