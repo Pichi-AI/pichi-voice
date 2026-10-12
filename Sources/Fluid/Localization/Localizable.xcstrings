@@ -2483,6 +2483,24 @@
         }
       }
     },
+    "%lldh": {
+      "comment": "Compact whole-hour estimate in statistics and share cards. Keep the numeric argument; unit labels are localized here, never parsed by application logic.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lldh"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld ч"
+          }
+        }
+      }
+    },
     "%lldh %lldm": {
       "extractionState": "manual",
       "localizations": {

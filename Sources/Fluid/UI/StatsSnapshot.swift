@@ -39,13 +39,12 @@ nonisolated struct StatsSnapshot: Sendable {
         self.totalTranscriptions == 0 ? 0 : self.aiProcessedCount * 100 / self.totalTranscriptions
     }
 
+    func timeSavedMinutes(typingWPM: Int) -> Double {
+        typingWPM > 0 ? max(0, Double(self.totalWords) / Double(typingWPM) - Double(self.totalWords) / 150) : 0
+    }
+
     func formattedTimeSaved(typingWPM: Int) -> String {
-        let minutes = typingWPM > 0 ? max(0, Double(self.totalWords) / Double(typingWPM) - Double(self.totalWords) / 150) : 0
-        if minutes < 1 { return "< 1m" }
-        if minutes < 60 { return "\(Int(minutes))m" }
-        let hours = Int(minutes) / 60
-        let remainder = Int(minutes) % 60
-        return remainder == 0 ? "\(hours)h" : "\(hours)h \(remainder)m"
+        PichiLocalization.formattedTimeSaved(minutes: self.timeSavedMinutes(typingWPM: typingWPM))
     }
 
     func dailyWordCounts(days: Int) -> [(date: Date, words: Int)] {

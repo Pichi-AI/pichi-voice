@@ -80,6 +80,37 @@ final class PichiLocalizationTests: XCTestCase {
         }
     }
 
+    func testStatsDurationUsesCompiledCatalogForZeroSubminuteMinutesAndHours() {
+        let cases: [(Double, String, String)] = [
+            (0, "< 1 min", "< 1 мин"),
+            (0.5, "< 1 min", "< 1 мин"),
+            (1, "1 min", "1 мин"),
+            (21, "21 min", "21 мин"),
+            (59.99, "59 min", "59 мин"),
+            (60, "1h", "1 ч"),
+            (120, "2h", "2 ч"),
+            (125.9, "2h 5m", "2 ч 5 мин"),
+        ]
+        for (minutes, english, russian) in cases {
+            XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: minutes, language: .english), english)
+            XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: minutes, language: .russian), russian)
+        }
+        XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 125.9, hoursOnly: true, language: .english), "2h")
+        XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 125.9, hoursOnly: true, language: .russian), "2 ч")
+        XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 21, hoursOnly: true, language: .russian), "21 мин")
+    }
+
+    func testStatsDurationAcceptsAdditionalCatalogLanguageWithoutParsingUnitLabels() throws {
+        try self.withLocalizedBundle { bundle in
+            let french = try XCTUnwrap(PichiInterfaceLanguage(rawValue: "fr-CA"))
+            XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 0, language: french, bundle: bundle), "moins de 1 minute")
+            XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 21, language: french, bundle: bundle), "21 minutes")
+            XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 60, language: french, bundle: bundle), "1 heure(s)")
+            XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 125, language: french, bundle: bundle), "2 heure(s), 5 minute(s)")
+            XCTAssertEqual(PichiLocalization.formattedTimeSaved(minutes: 125, hoursOnly: true, language: french, bundle: bundle), "2 heure(s)")
+        }
+    }
+
     func testSemanticKeysRetainEnglishFallbackAndSeparateTranslationContexts() throws {
         try self.withLocalizedBundle { bundle in
             XCTAssertEqual(PichiLocalization.text("action.edit", language: .russian, bundle: bundle, defaultValue: "Edit"), "Изменить")
@@ -290,6 +321,8 @@ final class PichiLocalizationTests: XCTestCase {
         let frenchStrings = try PropertyListSerialization.data(fromPropertyList: [
             "Settings": "Paramètres", "Recap": "Récapitulatif", "Decisions": "Décisions", "Action items": "Actions",
             "Questions and answers": "Questions et réponses", "[Superseded] ": "[Remplacé] ", "[Answered] ": "[Répondu] ",
+            "< 1 min": "moins de 1 minute", "%lld min": "%lld minutes", "%lldh": "%lld heure(s)",
+            "%lldh %lldm": "%lld heure(s), %lld minute(s)",
         ], format: .xml, options: 0)
         try frenchStrings.write(to: french.appendingPathComponent("Localizable.strings"))
         let english = directory.appendingPathComponent("en.lproj", isDirectory: true)
