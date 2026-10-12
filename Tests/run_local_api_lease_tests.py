@@ -6,22 +6,161 @@ not the real provider, disk store, or SwiftUI integration.
 """
 from pathlib import Path
 import os
+import re
 import subprocess
 import sys
 import tempfile
 
 repo = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent
-selected_toolchain = subprocess.check_output(["xcode-select", "-p"], text=True).strip()
+selected_toolchain = subprocess.check_output(["xcode-select", "-p"], text=True, timeout=10).strip()
 developer_dir = os.environ.get("DEVELOPER_DIR", selected_toolchain)
 if ".app/Contents/Developer" not in developer_dir or not (Path(developer_dir) / "usr/bin/xcodebuild").is_file():
     raise SystemExit("Set DEVELOPER_DIR to an installed full Xcode before running this test.")
 os.environ["DEVELOPER_DIR"] = developer_dir
 
+def skip_non_code(text: str, index: int) -> int | None:
+    """Skip Swift comments or strings, including raw strings and interpolation."""
+    if text.startswith("//", index):
+        end = text.find("\n", index)
+        return len(text) if end == -1 else end
+    if text.startswith("/*", index):
+        depth, cursor = 1, index + 2
+        while cursor < len(text):
+            if text.startswith("/*", cursor):
+                depth += 1
+                cursor += 2
+            elif text.startswith("*/", cursor):
+                depth -= 1
+                cursor += 2
+                if depth == 0:
+                    return cursor
+            else:
+                cursor += 1
+        raise ValueError("Unterminated Swift block comment")
+    cursor = index
+    while cursor < len(text) and text[cursor] == "#":
+        cursor += 1
+    if not text.startswith('"', cursor):
+        return None
+    hashes = text[index:cursor]
+    quotes = '"""' if text.startswith('"""', cursor) else '"'
+    closing = quotes + hashes
+    escape = "\\" + hashes
+    cursor += len(quotes)
+    while cursor < len(text):
+        if text.startswith(closing, cursor):
+            return cursor + len(closing)
+        if text.startswith(escape, cursor):
+            cursor += len(escape)
+            if text.startswith("(", cursor):
+                depth = 1
+                cursor += 1
+                while cursor < len(text) and depth:
+                    skipped = skip_non_code(text, cursor)
+                    if skipped is not None:
+                        cursor = skipped
+                    else:
+                        depth += (text[cursor] == "(") - (text[cursor] == ")")
+                        cursor += 1
+                if depth:
+                    raise ValueError("Unterminated Swift interpolation")
+            else:
+                cursor += 1
+        else:
+            cursor += 1
+    raise ValueError("Unterminated Swift string")
+
+
+def declaration(text: str, kind: str, name: str) -> str:
+    """Copy one complete production declaration verbatim, never neighboring methods."""
+    # Find declarations only in code. A removed/commented implementation must not
+    # be reconstructed from a comment or a documentation string and then "tested".
+    code = list(text)
+    cursor = 0
+    while cursor < len(text):
+        skipped = skip_non_code(text, cursor)
+        if skipped is None:
+            cursor += 1
+            continue
+        for position in range(cursor, skipped):
+            if code[position] != "\n":
+                code[position] = " "
+        cursor = skipped
+    modifiers = r"(?:(?:private|fileprivate|internal|public|package|final|nonisolated)\s+)*"
+    pattern = rf"(?m)^[ \t]*{modifiers}{re.escape(kind)}\s+{re.escape(name)}\b"
+    matches = list(re.finditer(pattern, "".join(code)))
+    if len(matches) != 1:
+        raise ValueError(f"Expected exactly one {kind} {name}; found {len(matches)}")
+    start = cursor = matches[0].start()
+    parentheses = depth = 0
+    in_body = False
+    while cursor < len(text):
+        skipped = skip_non_code(text, cursor)
+        if skipped is not None:
+            cursor = skipped
+            continue
+        char = text[cursor]
+        if not in_body:
+            parentheses += (char == "(") - (char == ")")
+            if char == "{" and parentheses == 0:
+                in_body, depth = True, 1
+        else:
+            depth += (char == "{") - (char == "}")
+            if depth == 0:
+                return text[start:cursor + 1]
+        cursor += 1
+    raise ValueError(f"Unterminated body for {kind} {name}")
+
+
+def verify_extraction() -> int:
+    checks = 0
+    fixtures = [
+        'func target() { /* { /* } */ } */ return 1 }',
+        r'func target() { let value = "escaped \" }"; return value }',
+        'func target() { let value = #"{ ignored }"#; return value }',
+        'func target() { let value = """\n}\\(String("}"))\n"""; return value }',
+        'func target(_ work: () -> Int = { 1 }) { return work() }',
+    ]
+    for fixture in fixtures:
+        assert declaration(fixture + '\nfunc unrelated() { }', 'func', 'target') == fixture
+        checks += 1
+    for visibility in ['', 'private ']:
+        fixture = visibility + 'actor TranscriptionExecutor { func run() { } }'
+        assert declaration(fixture, 'actor', 'TranscriptionExecutor') == fixture
+        checks += 1
+    commented = [
+        '/*\nfunc target() { }\n*/',
+        'let value = """\nfunc target() { }\n"""',
+        'let value = #"""\nfunc target() { }\n"""#',
+    ]
+    for invalid in ['func target() {', 'func target() {}\nfunc target() {}', 'func unrelated() {}'] + commented:
+        try:
+            declaration(invalid, 'func', 'target')
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Invalid or ambiguous declarations must fail closed")
+        checks += 1
+    for comment in commented:
+        live = 'func target() { return 1 }'
+        assert declaration(comment + '\n' + live, 'func', 'target') == live
+        checks += 1
+    return checks
+
+
+extraction_checks = verify_extraction()
+print(f"PASS {extraction_checks} Swift declaration extraction fixtures", flush=True)
 source = (repo / 'Sources/Fluid/Services/ASRService.swift').read_text()
-methods = source[source.index('    func transcribeSamplesForAPI('):source.index('    // MARK: - Scoped Meeting ASR Preparation')]
-leases = source[source.index('    func acquireExclusiveActivity('):source.index('    func prepareMeetingAudioHandoff(')]
-types = source[source.index('enum ASRExclusiveActivity:'):source.index('nonisolated enum ASRHardwareListenerEventDisposition:')]
-executor = source[source.index('private actor TranscriptionExecutor {'):source.index('private nonisolated func logTranscriptionExecutorPhase')]
+methods = '\n'.join(declaration(source, 'func', name) for name in (
+    'transcribeSamplesForAPI', 'transcribeSamplesForAPIWithLease', 'transcribeFileForAPI',
+))
+leases = '\n'.join(declaration(source, 'func', name) for name in (
+    'acquireExclusiveActivity', 'releaseExclusiveActivity',
+))
+types = '\n'.join(declaration(source, kind, name) for kind, name in (
+    ('enum', 'ASRExclusiveActivity'), ('struct', 'ASRActivityLease'), ('enum', 'ASRActivityError'),
+))
+executor = declaration(source, 'actor', 'TranscriptionExecutor')
 swift = r'''
 import Foundation
 TYPES
@@ -175,5 +314,6 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
 with tempfile.TemporaryDirectory(prefix="fluidvoice-api-regression-") as directory:
     root = Path(directory)
     (root / 'api-proof.swift').write_text(swift)
-    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(root/'api-proof.swift'), '-o', str(root/'api-proof')], check=True)
-    subprocess.run([str(root/'api-proof')], check=True)
+    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(root/'module-cache'),
+                    str(root/'api-proof.swift'), '-o', str(root/'api-proof')], check=True, timeout=120)
+    subprocess.run([str(root/'api-proof')], check=True, timeout=30)
