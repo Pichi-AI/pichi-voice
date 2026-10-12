@@ -876,7 +876,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             detail = "Return only the required updates JSON object with valid candidate indexes, evidence and task status fields. Respect all item and citation limits, including at most 16 combined original and later citations per candidate; never clip existing evidence."
         default: return nil
         }
-        return detail + " Regenerate the COMPLETE updates array from the same immutable input. Never include a valid prefix of a rejected response. If no definite supported later update fits, return an empty updates array and leave the original candidates unchanged."
+        return detail + " Regenerate the COMPLETE updates array from the same immutable input. Never include a valid prefix of a rejected response. If uncertain whether the supplied later sources establish an update, return an empty updates array and leave the original candidates unchanged. Never drop a known supported update merely to hide a structure or citation-limit error."
     }
 
     /// Build a complete plan without mutating the batch snapshot. Both the first

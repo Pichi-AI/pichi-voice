@@ -1532,6 +1532,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertTrue(feedback.contains("strictly GREATER"))
         XCTAssertTrue(feedback.contains("equal-time and earlier witnesses are invalid"))
         XCTAssertTrue(feedback.contains("COMPLETE updates array"))
+        XCTAssertTrue(feedback.contains("Never drop a known supported update merely to hide a structure or citation-limit error"))
         XCTAssertFalse(feedback.contains(fixture.session.transcriptSegments[0].text), "No private speech or expected answer in validation feedback")
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(fixture.session), fingerprint)
     }
