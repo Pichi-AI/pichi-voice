@@ -64,6 +64,9 @@ final class OllamaChatTransportTests: XCTestCase {
         // artifact stays pinned regardless of which UI entry point sent it.
         let command = try OllamaTransportFixture.body(context.client.buildRequest(selected))
         XCTAssertEqual(command["keep_alive"] as? Int, -1)
+        var builtInCommand = selected
+        builtInCommand.baseURL = "http://localhost:11434/v1"
+        XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(builtInCommand))["keep_alive"] as? Int, -1)
         var dictation = selected
         DictationPostProcessingService.configureInteractiveLocalRequest(&dictation)
         let enhanced = try OllamaTransportFixture.body(context.client.buildRequest(dictation))

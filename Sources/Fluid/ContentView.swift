@@ -4754,9 +4754,9 @@ struct ContentView: View {
             appBundleID: appBundleID
         )
         let nativeLocal = OllamaChatAdapter.supports(route.baseURL)
+        self.appServices.refreshLocalAIResidency(for: localOnly ? nil : slot)
         if nativeLocal || localOnly {
             // App-owned work survives window closure and rechecks daemon eviction.
-            self.appServices.refreshLocalAIResidency()
             return
         }
         guard route.usesPrivateAI,
