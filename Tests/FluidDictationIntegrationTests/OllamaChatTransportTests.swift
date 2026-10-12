@@ -64,8 +64,7 @@ final class OllamaChatTransportTests: XCTestCase {
         // artifact stays pinned regardless of which UI entry point sent it.
         let command = try OllamaTransportFixture.body(context.client.buildRequest(selected))
         XCTAssertEqual(command["keep_alive"] as? Int, -1)
-        var builtInCommand = selected
-        builtInCommand.baseURL = "http://localhost:11434/v1"
+        let builtInCommand = self.config(baseURL: "http://localhost:11434/v1")
         XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(builtInCommand))["keep_alive"] as? Int, -1)
         var dictation = selected
         DictationPostProcessingService.configureInteractiveLocalRequest(&dictation)
@@ -73,8 +72,8 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(enhanced["keep_alive"] as? Int, -1)
         XCTAssertEqual(enhanced["think"] as? Bool, false)
 
-        var other = selected
-        other.model = "synthetic-other:latest"
+        let other = LLMClient.Config(messages: selected.messages, model: "synthetic-other:latest",
+                                     baseURL: selected.baseURL, apiKey: selected.apiKey)
         XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(other))["keep_alive"] as? String, "60s")
         policy.unpin(baseURL: selected.baseURL, model: selected.model)
         XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(selected))["keep_alive"] as? String, "60s")
