@@ -490,8 +490,16 @@ struct SettingsView: View {
                                     .foregroundStyle(self.settingsSecondaryText)
                             }
                             .settingsSearchTarget(.automaticUpdates)
+                            .disabled(!AppBrand.updatesEnabled)
 
-                            if let version = self.updater.availableUpdateVersion {
+                            if !AppBrand.updatesEnabled {
+                                Text("Signed app updates are not configured for this distribution. Install a reviewed build manually.")
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.settingsSecondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            if AppBrand.updatesEnabled, let version = self.updater.availableUpdateVersion {
                                 HStack(spacing: 10) {
                                     Label("Update available · \(version)", systemImage: "arrow.down.circle")
                                         .font(self.theme.typography.bodyStrong)
@@ -517,7 +525,7 @@ struct SettingsView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(self.theme.palette.accent)
                                 .controlSize(.regular)
-                                .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
+                                .disabled(!AppBrand.updatesEnabled || self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
 
                                 Button("Release Notes") {
                                     if let url = URL(string: "\(AppBrand.repositoryURL.absoluteString)/releases") {

@@ -153,6 +153,52 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(changed.inheritedFont, Font.system(.body, design: .rounded))
     }
 
+    func testProminentGlassFallbackUsesActiveThemeInsteadOfPackagedAccent() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            for accent in [Color.green, .red] {
+                let rendered = try self.prominentGlassColor(accent: accent, tone: nil, scheme: scheme)
+                let expected = try XCTUnwrap(NSColor(accent).usingColorSpace(.deviceRGB))
+                XCTAssertEqual(rendered.redComponent, expected.redComponent, accuracy: 0.08)
+                XCTAssertEqual(rendered.greenComponent, expected.greenComponent, accuracy: 0.08)
+                XCTAssertEqual(rendered.blueComponent, expected.blueComponent, accuracy: 0.08)
+            }
+        }
+    }
+
+    func testProminentGlassFallbackKeepsExplicitSemanticTone() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let rendered = try self.prominentGlassColor(accent: .green, tone: .red, scheme: scheme)
+            let expected = try XCTUnwrap(NSColor(Color.red).usingColorSpace(.deviceRGB))
+            XCTAssertEqual(rendered.redComponent, expected.redComponent, accuracy: 0.08)
+            XCTAssertEqual(rendered.greenComponent, expected.greenComponent, accuracy: 0.08)
+            XCTAssertEqual(rendered.blueComponent, expected.blueComponent, accuracy: 0.08)
+        }
+    }
+
+    private func prominentGlassColor(accent: Color, tone: Color?, scheme: ColorScheme) throws -> NSColor {
+        var actions = 0
+        let content = Button { actions += 1 } label: { Color.clear.frame(width: 80, height: 20) }
+            .fluidGlassAction(prominent: true, tone: tone)
+            .appTheme(.adaptive(accent: accent, colorScheme: scheme, package: BrandPackage(profile: .neutral)))
+            .environment(\.accessibilityReduceTransparency, true)
+            .environment(\.accessibilityReduceMotion, true)
+            .environment(\.colorScheme, scheme)
+            .frame(width: 180, height: 80)
+        let host = NSHostingView(rootView: content)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 180, height: 80), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        XCTAssertEqual(actions, 0, "Rendering imported appearance must not trigger an action")
+        let color = try XCTUnwrap(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2))
+        return try XCTUnwrap(color.usingColorSpace(.deviceRGB))
+    }
+
     func testNativeSearchBrandTypographyKeepsEditorQueryAndSelection() async throws {
         let state = SearchLocaleFixture()
         let host = NSHostingView(rootView: SearchLocaleHost(state: state, source: "Search"))

@@ -139,6 +139,7 @@ struct FluidGlassControlGroup<Content: View>: View {
 
 private struct FluidGlassActionModifier: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.theme) private var theme
     let prominent: Bool
     let circular: Bool
     let tone: Color?
@@ -150,14 +151,14 @@ private struct FluidGlassActionModifier: ViewModifier {
             content.buttonStyle(FluidQuietActionStyle(circular: self.circular, tone: self.tone, spacious: self.spacious))
         } else if #available(macOS 26, *), !self.reduceTransparency {
             if self.prominent {
-                content.buttonStyle(.glassProminent).tint(self.tone ?? FluidBrandColors.blue)
+                content.buttonStyle(.glassProminent).tint(self.tone ?? self.theme.palette.accent)
                     .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             } else {
                 content.buttonStyle(.glass).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             }
         } else {
             if self.prominent {
-                content.buttonStyle(AccentButtonStyle(tone: self.tone ?? FluidBrandColors.blue))
+                content.buttonStyle(AccentButtonStyle(tone: self.tone))
             } else {
                 content.buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight))
             }

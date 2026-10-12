@@ -46073,6 +46073,23 @@
           }
         }
       }
+    },
+    "Signed app updates are not configured for this distribution. Install a reviewed build manually.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed app updates are not configured for this distribution. Install a reviewed build manually."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой сборки не настроены подписанные обновления. Установите проверенную сборку вручную."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
