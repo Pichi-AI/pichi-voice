@@ -3,6 +3,200 @@ import Foundation
 import XCTest
 
 @MainActor
+final class LocalAIModelResidencyTests: XCTestCase {
+    private func route(_ model: String) -> DictationProviderRoute {
+        .init(providerID: "fixture", providerKey: "fixture", baseURL: "http://localhost:11434/v1", model: model, apiKey: "")
+    }
+
+    private func eventually(_ condition: () -> Bool) async throws {
+        for _ in 0..<100 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTFail("The controller did not finish its deterministic fixture operation")
+    }
+
+    func testPinPolicyNormalizesEndpointAndDefaultModelTagWithoutPinningOtherArtifacts() {
+        let policy = LocalAIModelResidencyPolicy()
+        policy.pin(baseURL: " http://LOCALHOST:11434/v1/ ", model: " fixture ")
+        XCTAssertTrue(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture:latest"))
+        XCTAssertFalse(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture:other"))
+        policy.unpin(baseURL: "http://localhost:11434/v1", model: "fixture:latest")
+        XCTAssertFalse(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture"))
+        policy.pin(baseURL: "https://remote.example/v1", model: "fixture")
+        XCTAssertFalse(policy.isPinned(baseURL: "https://remote.example/v1", model: "fixture"))
+        XCTAssertNil(LocalAIModelResidencyPolicy.identity(baseURL: "http://secret@localhost:11434/v1", model: "fixture"))
+    }
+
+    func testReadinessRequiresMatchingArtifactContextAndIndefiniteExpiry() {
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        func ready(context: Int? = 8192, expiry: String? = "2318-10-12T12:00:00.000000000Z", model: String = "fixture:latest") -> Bool {
+            LocalAIModelResidencyTransport.isReady([
+                .init(name: model, model: model, context_length: context, expires_at: expiry)
+            ], model: "fixture", now: now)
+        }
+        XCTAssertTrue(ready())
+        XCTAssertFalse(ready(context: 262_144))
+        XCTAssertFalse(ready(context: nil))
+        XCTAssertFalse(ready(expiry: "2026-10-12T12:00:00Z"))
+        XCTAssertFalse(ready(expiry: nil))
+        XCTAssertFalse(ready(expiry: "invalid"))
+        XCTAssertFalse(ready(model: "other:latest"))
+    }
+
+    func testAppLifetimeStartCoalescesWarmupAndRecoversEvictionAfterIdleAdmission() async throws {
+        let selected = self.route("fixture")
+        let policy = LocalAIModelResidencyPolicy()
+        var warms = 0
+        var probes = 0
+        var releases = 0
+        var now: TimeInterval = 0
+        var allowed = true
+        var resident = true
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { allowed },
+            warm: { _ in warms += 1 },
+            isReady: { _ in probes += 1; return resident },
+            release: { route in
+                XCTAssertFalse(policy.isPinned(baseURL: route.baseURL, model: route.model))
+                releases += 1
+            }, now: { now }
+        ), policy: policy)
+        controller.start()
+        controller.start()
+        try await self.eventually { warms == 1 }
+        for _ in 0..<5 { controller.refresh(); await Task.yield() }
+        XCTAssertEqual(warms, 1)
+        XCTAssertEqual(probes, 0)
+        XCTAssertTrue(policy.isPinned(baseURL: selected.baseURL, model: selected.model))
+        // No view or window owns this controller. The same app-wide task remains
+        // alive across idle time and only inspects a healthy resident runner.
+        now = 60
+        controller.refresh()
+        try await self.eventually { probes == 1 }
+        XCTAssertEqual(warms, 1)
+        allowed = false
+        resident = false
+        now = 120
+        controller.refresh()
+        await Task.yield()
+        XCTAssertEqual(probes, 1)
+        allowed = true
+        controller.refresh()
+        try await self.eventually { warms == 2 }
+        XCTAssertEqual(probes, 2)
+        await controller.shutdown()
+        XCTAssertEqual(releases, 1)
+    }
+
+    func testRouteChangeUnpinsAndJoinsOldWarmupBeforeReleasingOrWarmingNextArtifact() async throws {
+        let first = self.route("first")
+        let second = self.route("second")
+        let policy = LocalAIModelResidencyPolicy()
+        let entered = ResidencyLatch()
+        let complete = ResidencyLatch()
+        var selected: DictationProviderRoute? = first
+        var events: [String] = []
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true },
+            warm: { route in
+                events.append("warm:\(route.model)")
+                if route.model == first.model { entered.release(); await complete.wait() }
+            }, isReady: { _ in true },
+            release: { route in events.append("release:\(route.model)") }
+        ), policy: policy)
+        controller.start()
+        await entered.wait()
+        selected = second
+        controller.refresh()
+        XCTAssertFalse(policy.isPinned(baseURL: first.baseURL, model: first.model))
+        await Task.yield()
+        XCTAssertEqual(events, ["warm:first"])
+        complete.release()
+        try await self.eventually { events.count == 3 }
+        XCTAssertEqual(events, ["warm:first", "release:first", "warm:second"])
+        XCTAssertTrue(policy.isPinned(baseURL: second.baseURL, model: second.model))
+        await controller.shutdown()
+    }
+
+    func testDisablingWhileBusyDefersHandbackUntilIdleWithoutLoadingAnythingElse() async throws {
+        var selected: DictationProviderRoute? = self.route("fixture")
+        var allowed = true
+        var warms = 0
+        var releases = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { allowed },
+            warm: { _ in warms += 1 }, isReady: { _ in true }, release: { _ in releases += 1 }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        try await self.eventually { warms == 1 }
+        allowed = false
+        selected = nil
+        controller.refresh()
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(releases, 0)
+        allowed = true
+        controller.refresh()
+        try await self.eventually { releases == 1 }
+        XCTAssertEqual(warms, 1)
+        await controller.shutdown()
+        XCTAssertEqual(releases, 1)
+    }
+
+    func testTerminationJoinsNoncooperativeWarmupBeforeHandbackAndCannotRestart() async throws {
+        let selected = self.route("fixture")
+        let entered = ResidencyLatch()
+        let complete = ResidencyLatch()
+        let policy = LocalAIModelResidencyPolicy()
+        var warms = 0
+        var releases = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true },
+            warm: { _ in warms += 1; entered.release(); await complete.wait() },
+            isReady: { _ in true }, release: { _ in releases += 1 }
+        ), policy: policy)
+        controller.start()
+        await entered.wait()
+        let stopping = Task { await controller.shutdown() }
+        try await self.eventually { !policy.isPinned(baseURL: selected.baseURL, model: selected.model) }
+        XCTAssertEqual(releases, 0)
+        complete.release()
+        await stopping.value
+        XCTAssertEqual(releases, 1)
+        controller.start()
+        controller.refresh()
+        await Task.yield()
+        XCTAssertEqual(warms, 1)
+    }
+
+    func testFailedWarmupUsesBackoffDespiteRepeatedSettingsRefreshes() async throws {
+        let selected = self.route("fixture")
+        var now: TimeInterval = 0
+        var warms = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true },
+            warm: { _ in warms += 1; throw CocoaError(.fileReadUnknown) },
+            isReady: { _ in true }, release: { _ in }, now: { now }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        try await self.eventually { warms == 1 }
+        now = 30
+        for _ in 0..<5 { controller.refresh(); await Task.yield() }
+        XCTAssertEqual(warms, 1)
+        now = 60
+        controller.refresh()
+        try await self.eventually { warms == 2 }
+        now = 120
+        for _ in 0..<5 { controller.refresh(); await Task.yield() }
+        XCTAssertEqual(warms, 2)
+        now = 180
+        controller.refresh()
+        try await self.eventually { warms == 3 }
+        await controller.shutdown()
+    }
+}
+
+@MainActor
 private final class ResidencyTrace {
     var events: [String] = []
     func participant(_ owner: String, loaded: Bool) -> MeetingModelParticipant {
