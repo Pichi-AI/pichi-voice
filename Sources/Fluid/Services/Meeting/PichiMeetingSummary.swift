@@ -330,7 +330,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     var baseCacheIdentity: String {
         // Hash a canonical payload rather than delimiter-joining user-controlled values.
         // Credentials and the temporary inference alias never become persisted metadata.
-        let payload: [String: Any] = ["version": 13, "provider": self.providerID, "model": self.modelID,
+        let payload: [String: Any] = ["version": 14, "provider": self.providerID, "model": self.modelID,
                                       "endpoint": self.baseURL, "language": self.language,
                                       "execution": self.execution.identity, "connection": self.connectionOptions]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
@@ -787,8 +787,13 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                 guard let data = try self.resolvedResponse(raw, sources: catalog).data(using: .utf8), data.count <= 100_000,
                       let updates = try? JSONDecoder().decode(LedgerUpdates.self, from: data), updates.updates.count <= candidates.count
                 else { throw PichiMeetingSummaryError.invalidOutput }
+                // Every update in one response sees the same state. Applying a
+                // later completion first must not change an earlier acceptance.
+                let stateBeforeUpdates = result
+                var plannedUpdates = stateBeforeUpdates
                 var updated = Set<Int>()
                 for update in updates.updates {
+                    try Task.checkCancellation()
                     guard let candidate = candidates.first(where: { $0.index == update.index }),
                           updated.insert(update.index).inserted, (1...8).contains(update.evidence.count),
                           actionStates ? update.hasStatus : !update.hasStatus
@@ -800,7 +805,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                         }), event.sourceSeconds > candidate.lastSourceSeconds
                         else { throw PichiMeetingSummaryError.invalidEvidence }
                     }
-                    var item = result[update.index]
+                    var item = stateBeforeUpdates[update.index]
                     if resolvingQuestions { item.resolved = true }
                     else if actionStates, let status = update.status,
                             status != .completed, status != .cancelled {
@@ -810,7 +815,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                         // a similar task or an independent repeated request is distinct.
                         let identity = [item.title, item.text, item.owner, item.deadline, item.urgency?.rawValue]
                         let hasLaterVersion = (actionVersions[identity] ?? []).contains { index in
-                            let later = result[index]
+                            let later = stateBeforeUpdates[index]
                             return index != update.index && later.superseded != true && later.status == status
                                 && update.evidence.allSatisfy(later.evidence.contains)
                         }
@@ -819,8 +824,11 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                     if actionStates, let status = update.status { item.status = status }
                     var seen = Set<PichiMeetingSummaryEvidence>()
                     item.evidence = (item.evidence + update.evidence).filter { seen.insert($0).inserted }
-                    result[update.index] = item
+                    plannedUpdates[update.index] = item
                 }
+                // A later malformed update cannot commit a valid prefix.
+                try Task.checkCancellation()
+                result = plannedUpdates
             }
         }
         return result

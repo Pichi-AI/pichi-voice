@@ -887,6 +887,39 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
     }
 
+    func testAcceptanceAndCompletionInOneResponseAreIndependentOfUpdateOrder() async throws {
+        var session = self.session()
+        session.transcriptSegments = ["Иван, подготовь отчёт к пятнице.", "Согласен, подготовлю этот отчёт к пятнице.",
+                                      "Отчёт готов. Я завершил подготовку отчёта."].enumerated().map { index, text in
+            var segment = session.transcriptSegments[0]
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 60_000), timescale: 1000)
+            segment.text = text
+            return segment
+        }
+        var documents: [PichiMeetingSummaryDocument] = []
+        for reversed in [false, true] {
+            let transport = UpdateOrderTransport(reversed: reversed)
+            let document = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            XCTAssertEqual(document.actions.map(\.status), [.agreed, .completed])
+            XCTAssertTrue(document.actions.allSatisfy { $0.superseded == true }, "A completed version cannot leave an earlier accepted task current")
+            XCTAssertEqual(Set(document.actions[0].evidence.map(\.segmentID)), Set(session.transcriptSegments.prefix(2).map(\.id)))
+            XCTAssertEqual(Set(document.actions[1].evidence.map(\.segmentID)), Set(session.transcriptSegments.dropFirst().map(\.id)))
+            XCTAssertNoThrow(try document.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+            documents.append(document)
+        }
+        XCTAssertEqual(documents[0], documents[1], "One validated response has the same document regardless of its update array order")
+        let invalid = UpdateOrderTransport(reversed: false, invalidSecondEvidence: true)
+        do {
+            _ = try await PichiMeetingSummaryGenerator { try await invalid.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            XCTFail("An invalid second update must reject the complete response instead of publishing the valid first update")
+        } catch PichiMeetingSummaryError.invalidEvidence {}
+        let requests = await invalid.requests
+        XCTAssertEqual(requests.count, 2, "Ledger evidence rejection fails closed without schema regeneration or publishing a prefix")
+    }
+
     func testAcceptanceRequiresExactTaskFieldsBeforeSupersedingAnEarlierRow() async throws {
         for difference in [["title": "Подготовить новый отчёт"], ["text": "Подготовить другой отчёт."],
                            ["owner": "Мария"], ["deadline": "к среде"], ["urgency": "urgent"]] {
@@ -2155,6 +2188,51 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 } else {
                     result["changes"] = [["text": source.text, "evidence": evidence]]
                 }
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self)
+        }
+    }
+
+    private actor UpdateOrderTransport {
+        let reversed: Bool
+        let invalidSecondEvidence: Bool
+        var requests: [LLMClient.Config] = []
+        init(reversed: Bool, invalidSecondEvidence: Bool = false) {
+            self.reversed = reversed
+            self.invalidSecondEvidence = invalidSecondEvidence
+        }
+
+        func complete(_ config: LLMClient.Config) throws -> String {
+            self.requests.append(config)
+            let prompt = try XCTUnwrap(config.messages.first?["content"] as? String)
+            let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            let result: [String: Any]
+            if prompt.contains("Reconcile meeting tasks") {
+                let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+                let events = try XCTUnwrap(fields["changes"] as? [[String: Any]])
+                let earlier = try XCTUnwrap(candidates.first { $0["lastSourceSeconds"] as? Double == 0 })
+                let accepted = try XCTUnwrap(candidates.first { $0["lastSourceSeconds"] as? Double == 60 })
+                let acceptance = try XCTUnwrap(events.first { $0["sourceSeconds"] as? Double == 60 }?["item"] as? [String: Any])
+                let completion = try XCTUnwrap(events.first { $0["sourceSeconds"] as? Double == 120 }?["item"] as? [String: Any])
+                let first: [String: Any] = ["index": try XCTUnwrap(earlier["index"] as? Int), "status": "agreed",
+                                          "evidence": try XCTUnwrap(acceptance["evidence"] as? [[String: Any]])]
+                let second: [String: Any] = ["index": try XCTUnwrap(accepted["index"] as? Int), "status": "completed",
+                                           "evidence": try XCTUnwrap((self.invalidSecondEvidence ? acceptance : completion)["evidence"] as? [[String: Any]])]
+                result = ["updates": self.reversed ? [second, first] : [first, second]]
+            } else {
+                func evidence(_ seconds: Double) throws -> [[String: Any]] {
+                    [["sourceIndex": try XCTUnwrap(sources.first { $0.seconds == seconds }?.sourceIndex)]]
+                }
+                func action(_ seconds: Double, status: String) throws -> [String: Any] {
+                    ["title": "Подготовить отчёт", "text": "Подготовить отчёт.", "owner": "Иван", "deadline": "к пятнице",
+                     "urgency": "unspecified", "status": status, "evidence": try evidence(seconds)]
+                }
+                result = ["summary": [["text": "Обсудили подготовку отчёта.", "evidence": try evidence(0)]], "decisions": [],
+                          "actions": [try action(0, status: "requested"), try action(60, status: "agreed")], "openQuestions": [], "answers": [],
+                          "changes": [["text": "Иван согласился подготовить отчёт.", "evidence": try evidence(60)],
+                                      ["text": "Подготовка отчёта завершена.", "evidence": try evidence(120)]]]
             }
             return String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self)
         }
