@@ -1507,6 +1507,155 @@ final class PichiMeetingSummaryTests: XCTestCase {
         try await store.delete(id: session.id)
     }
 
+    func testRecapOnlySchemaForcesEmptyLedgersAndLeavesExtractionSchemaUnchanged() throws {
+        let regular = PichiMeetingSummaryTransport.schema(ledger: false, sourceIndexes: [0, 1])
+        let explicitRegular = PichiMeetingSummaryTransport.schema(ledger: false, sourceIndexes: [0, 1], recapOnly: false)
+        XCTAssertEqual(try Self.wireJSON(regular), try Self.wireJSON(explicitRegular))
+        let recap = PichiMeetingSummaryTransport.schema(ledger: false, sourceIndexes: [0, 1], recapOnly: true)
+        let fields = try XCTUnwrap(recap["properties"] as? [String: Any])
+        let summary = try XCTUnwrap(fields["summary"] as? [String: Any])
+        XCTAssertEqual(summary["minItems"] as? Int, 1)
+        XCTAssertEqual(summary["maxItems"] as? Int, 8)
+        var restoredFields = fields
+        for key in ["decisions", "actions", "openQuestions", "changes", "answers"] {
+            var array = try XCTUnwrap(fields[key] as? [String: Any])
+            XCTAssertEqual(array["maxItems"] as? Int, 0, "Recap schema cannot permit fresh ledger items")
+            XCTAssertEqual(array["minItems"] as? Int, 0)
+            array["maxItems"] = 30
+            restoredFields[key] = array
+        }
+        var restored = recap
+        restored["properties"] = restoredFields
+        XCTAssertEqual(try Self.wireJSON(restored), try Self.wireJSON(regular),
+                       "Only unused-array cardinality changes; all extraction item/evidence types and fields stay identical")
+    }
+
+    func testRecapOnlyDecoderRejectsUnusedKindsBeforeInventedOwnerAndKeepsEvidenceChecks() throws {
+        let original = self.document()
+        var recap = original
+        recap.decisions = []; recap.actions = []; recap.openQuestions = []; recap.changes = []; recap.answers = []
+        XCTAssertNoThrow(try PichiMeetingSummaryDocument.decode(self.json(recap), turns: self.turns, recapOnly: true))
+        for key in ["decisions", "actions", "openQuestions", "changes", "answers"] {
+            var fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(self.json(recap).utf8)) as? [String: Any])
+            fields[key] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(key == "actions" ? original.actions : original.summary))
+            XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode(Self.wireJSON(fields), turns: self.turns, recapOnly: true)) {
+                guard case PichiMeetingSummaryError.invalidOutput = $0 else { return XCTFail("Unused stage data must be rejected as a whole document") }
+            }
+        }
+        var invented = original
+        invented.actions[0].owner = "Неподтверждённый исполнитель"
+        XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode(self.json(invented), turns: self.turns, recapOnly: true)) {
+            guard case PichiMeetingSummaryError.invalidOutput = $0 else { return XCTFail("Reject the forbidden action before general owner validation") }
+        }
+        XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode(self.json(invented), turns: self.turns)) {
+            XCTAssertEqual($0 as? PichiMeetingSummaryValidationIssue, .unsupportedOwner, "Normal extraction retains its original validation")
+        }
+        var long = recap
+        long.summary = Array(repeating: recap.summary[0], count: 9)
+        XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode(self.json(long), turns: self.turns, recapOnly: true))
+        var invalidSource = recap
+        invalidSource.summary[0].evidence = [.init(segmentID: UUID(), quote: self.turns[0].text)]
+        XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode(self.json(invalidSource), turns: self.turns, recapOnly: true)) {
+            XCTAssertEqual($0 as? PichiMeetingSummaryValidationIssue, .unknownSource)
+        }
+    }
+
+    func testRecapStageRegeneratesOnceAndPreservesValidatedTaskDecisionAndQuestionLedgers() async throws {
+        let session = self.recapStageSession()
+        let clean = RecapStageTransport(invalidRecaps: 0)
+        let expected = try await PichiMeetingSummaryGenerator { try await clean.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        let transport = RecapStageTransport(invalidRecaps: 1)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.decisions.count, 2)
+        XCTAssertEqual(result.actions.count, 2)
+        XCTAssertEqual(result.openQuestions.count, 2)
+        XCTAssertEqual(result.decisions, expected.decisions)
+        XCTAssertEqual(result.actions, expected.actions)
+        XCTAssertEqual(result.openQuestions, expected.openQuestions)
+        XCTAssertEqual(result.summary, expected.summary)
+        let requests = await transport.recapRequests
+        XCTAssertEqual(requests.count, 2, "One invalid recap stage result permits exactly one bounded regeneration")
+        XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String)
+        XCTAssertEqual(requests[0].model, requests[1].model)
+        XCTAssertEqual(requests[0].maxTokens, requests[1].maxTokens)
+        let feedback = try XCTUnwrap(requests[1].messages.first?["content"] as? String)
+        XCTAssertTrue(feedback.contains("This is recap reduction"))
+        XCTAssertTrue(feedback.contains("EMPTY decisions, actions, openQuestions, changes and answers"))
+        for request in requests {
+            let format = try XCTUnwrap(request.extraParameters["response_format"] as? [String: Any])
+            let fields = try XCTUnwrap(((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])?["properties"] as? [String: Any])
+            XCTAssertEqual((fields["actions"] as? [String: Any])?["maxItems"] as? Int, 0)
+        }
+    }
+
+    @MainActor
+    func testTwoInvalidRecapStageResultsPublishNothingAndRestoreResources() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let resources = SummaryResidentResources(owner: owner)
+        let asr = ASRService(meetingModelResidency: owner)
+        asr.meetingModelParticipantsForTesting = resources.participants
+        let transport = RecapStageTransport(invalidRecaps: 2)
+        let controller = PichiMeetingSummaryController(generator: .init { try await transport.complete($0) })
+        do {
+            _ = try await controller.generate(session: self.recapStageSession(), configuration: self.configuration(), asr: asr)
+            XCTFail("Never publish valid recap claims after two forbidden-stage outputs")
+        } catch PichiMeetingSummaryError.invalidOutput {}
+        XCTAssertNil(controller.document)
+        XCTAssertFalse(owner.isExclusive)
+        resources.assertRestored()
+        let count = await transport.recapRequests.count
+        XCTAssertEqual(count, 2, "No third request, stripping actions or publishing an extraction fallback")
+    }
+
+    private func recapStageSession() -> MeetingSession {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = (0..<2).map { index in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 60_000), timescale: 1000)
+            segment.text = "Решили сохранить план. Подготовь отчёт. Какой срок? " + String(repeating: "Подробности. ", count: 500)
+            return segment
+        }
+        return session
+    }
+
+    private actor RecapStageTransport {
+        let invalidRecaps: Int
+        var recapRequests: [LLMClient.Config] = []
+        init(invalidRecaps: Int) { self.invalidRecaps = invalidRecaps }
+        func complete(_ config: LLMClient.Config) throws -> String {
+            if let review = try PichiMeetingSummaryTests.identityReview(config) { return review }
+            let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            if let items = fields["recap"] as? [[String: Any]] {
+                self.recapRequests.append(config)
+                let summary = [try XCTUnwrap(items.first)]
+                var result: [String: Any] = ["summary": summary, "decisions": [], "actions": [], "openQuestions": [], "changes": [], "answers": []]
+                if self.recapRequests.count <= self.invalidRecaps {
+                    // Even an unresolvable quote in a forbidden array must fail
+                    // the stage before citation hydration/general attribution.
+                    result["actions"] = [["title": "Выдуманное поручение", "text": "Выдуманное поручение.", "status": "requested", "urgency": "unspecified",
+                                          "owner": "Неподтверждённый исполнитель", "deadline": NSNull(), "evidence": [["sourceIndex": 999]]]]
+                }
+                return try PichiMeetingSummaryTests.wireJSON(result)
+            }
+            let source = try XCTUnwrap(sources.first)
+            let evidence = [["sourceIndex": source.sourceIndex]]
+            let suffix = String(Int(source.seconds))
+            return try PichiMeetingSummaryTests.wireJSON([
+                "summary": [["text": "Обсудили план " + suffix + ".", "evidence": evidence]],
+                "decisions": [["text": "Сохранить план " + suffix + ".", "evidence": evidence]],
+                "actions": [["title": "Подготовить отчёт " + suffix, "text": "Подготовить отчёт.", "status": "requested", "urgency": "unspecified",
+                              "owner": NSNull(), "deadline": NSNull(), "evidence": evidence]],
+                "openQuestions": [["text": "Какой срок " + suffix + "?", "evidence": evidence]], "changes": [], "answers": [],
+            ])
+        }
+    }
+
     func testLedgerScopedSchemaBindsCandidateIndexAndLegalWitnessesWithTaskState() throws {
         for actionStates in [false, true] {
             let schema = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [0, 1, 2, 3],

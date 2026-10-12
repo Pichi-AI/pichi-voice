@@ -235,7 +235,7 @@ nonisolated enum PichiMeetingSummaryTransport {
     }
 
     static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil, candidateSourceIndexes: [Int: [Int]]? = nil,
-                       actionStates: Bool = false) -> [String: Any] {
+                       actionStates: Bool = false, recapOnly: Bool = false) -> [String: Any] {
         var evidence: [String: Any] = [
             "type": "object", "additionalProperties": false, "required": ["segmentID", "quote"],
             "properties": ["segmentID": ["type": "string"], "quote": ["type": "string", "minLength": 1, "maxLength": 500]],
@@ -304,7 +304,7 @@ nonisolated enum PichiMeetingSummaryTransport {
         var fields: [String: Any] = [:]
         for name in ["summary", "decisions", "actions", "openQuestions", "changes", "answers"] {
             fields[name] = ["type": "array", "items": name == "actions" ? action : item,
-                            "minItems": name == "summary" ? 1 : 0, "maxItems": name == "summary" ? 8 : 30]
+                            "minItems": name == "summary" ? 1 : 0, "maxItems": name == "summary" ? 8 : (recapOnly ? 0 : 30)]
         }
         return definitions.merging(["type": "object", "additionalProperties": false, "required": Array(fields.keys).sorted(), "properties": fields]) { _, new in new }
     }

@@ -125,10 +125,15 @@ nonisolated struct PichiMeetingSummaryDocument: Codable, Equatable, Sendable {
         return self
     }
 
-    static func decode(_ response: String, turns: [PichiMeetingSummaryTurn]) throws -> Self {
+    static func decode(_ response: String, turns: [PichiMeetingSummaryTurn], recapOnly: Bool = false) throws -> Self {
         let json = self.unfenced(response)
         guard let data = json.data(using: .utf8), data.count <= 200_000,
               let document = try? JSONDecoder().decode(Self.self, from: data)
+        else { throw PichiMeetingSummaryError.invalidOutput }
+        // Reduction cannot introduce or replace the separately preserved ledgers,
+        // even when a compatible endpoint ignores its structured-output schema.
+        guard !recapOnly || ((1...8).contains(document.summary.count)
+            && [document.decisions, document.actions, document.openQuestions, document.changes ?? [], document.answers ?? []].allSatisfy(\.isEmpty))
         else { throw PichiMeetingSummaryError.invalidOutput }
         guard document.allItems.count <= 100, document.allItems.allSatisfy({ $0.superseded != true && $0.resolved != true }),
               document.actions.allSatisfy({ $0.title != nil && $0.status != nil && $0.urgency != nil })
@@ -330,7 +335,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     var baseCacheIdentity: String {
         // Hash a canonical payload rather than delimiter-joining user-controlled values.
         // Credentials and the temporary inference alias never become persisted metadata.
-        let payload: [String: Any] = ["version": 17, "provider": self.providerID, "model": self.modelID,
+        let payload: [String: Any] = ["version": 18, "provider": self.providerID, "model": self.modelID,
                                       "endpoint": self.baseURL, "language": self.language,
                                       "execution": self.execution.identity, "connection": self.connectionOptions]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
@@ -548,7 +553,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         let prepared = try self.preparedInput(reducing ? ["recap": JSONSerialization.jsonObject(with: Data(input.utf8))] : ["context": input], sources: sources)
         let response: String
         do {
-            response = try await self.completion(self.config(prompt: prompt, input: prepared, configuration: configuration, sources: sources),
+            response = try await self.completion(self.config(prompt: prompt, input: prepared, configuration: configuration, sources: sources, recapOnly: reducing),
                                                  remainingRequests: &remainingRequests)
         } catch PichiMeetingSummaryError.outputLimit {
             // Retry only an explicitly truncated first response, never evidence/schema
@@ -570,7 +575,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         let candidate: PichiMeetingSummaryDocument
         let repairInstruction: String
         do {
-            candidate = try PichiMeetingSummaryDocument.decode(self.resolvedResponse(response, sources: sources), turns: turns)
+            candidate = try PichiMeetingSummaryDocument.decode(self.resolvedResponse(response, sources: sources, recapOnly: reducing),
+                                                               turns: turns, recapOnly: reducing)
         } catch let issue as PichiMeetingSummaryValidationIssue {
             repairInstruction = issue.repairInstruction
             return try await self.regenerate(prompt: prompt, input: input, prepared: prepared, repairInstruction: repairInstruction,
@@ -578,6 +584,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                                              remainingRequests: &remainingRequests)
         } catch PichiMeetingSummaryError.invalidOutput {
             repairInstruction = "The output did not satisfy the required JSON structure or item limits. Return only the required object with all six array fields and their required item fields."
+                + (reducing ? " This is recap reduction: return 1 to 8 summary items and EMPTY decisions, actions, openQuestions, changes and answers arrays. The application preserves the existing validated ledgers separately; never create or replace their items during reduction." : "")
             return try await self.regenerate(prompt: prompt, input: input, prepared: prepared, repairInstruction: repairInstruction,
                                              configuration: configuration, turns: turns, sources: sources, reducing: reducing,
                                              remainingRequests: &remainingRequests)
@@ -597,10 +604,11 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         let repaired = try await self.completion(self.config(
             prompt: prompt + "\nThe previous result was rejected by validation. " + repairInstruction
                 + " Regenerate the complete result from the same supplied input. Every claim still requires valid evidence.",
-            input: prepared, configuration: configuration, sources: sources
+            input: prepared, configuration: configuration, sources: sources, recapOnly: reducing
         ), remainingRequests: &remainingRequests)
         try Task.checkCancellation()
-        let candidate = try PichiMeetingSummaryDocument.decode(self.resolvedResponse(repaired, sources: sources), turns: turns)
+        let candidate = try PichiMeetingSummaryDocument.decode(self.resolvedResponse(repaired, sources: sources, recapOnly: reducing),
+                                                               turns: turns, recapOnly: reducing)
         return [try await self.review(candidate, context: input, configuration: configuration, turns: turns,
                                       sources: sources, reducing: reducing, remainingRequests: &remainingRequests)]
     }
@@ -654,7 +662,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
 
     private func config(prompt: String, input: String, configuration: PichiMeetingSummaryConfiguration,
                         sources: [PichiMeetingSummarySource]? = nil, candidateIndexes: [Int]? = nil,
-                        candidateSourceIndexes: [Int: [Int]]? = nil, actionStates: Bool = false) throws -> LLMClient.Config {
+                        candidateSourceIndexes: [Int: [Int]]? = nil, actionStates: Bool = false,
+                        recapOnly: Bool = false) throws -> LLMClient.Config {
         var config = LLMClient.Config(messages: [["role": "system", "content": prompt], ["role": "user", "content": input]],
                                       model: configuration.inferenceModelID ?? configuration.modelID, baseURL: configuration.baseURL,
                                       apiKey: configuration.apiKey, streaming: false, maxTokens: configuration.execution.outputTokens)
@@ -674,7 +683,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             || CloudTextProvider.descriptor(forEndpoint: config.baseURL) != nil {
             guard sources.count <= 128 else { throw PichiMeetingSummaryError.tooManyChunks }
             let schema = PichiMeetingSummaryTransport.schema(ledger: prompt.contains("Reconcile meeting"), sourceIndexes: sources.map(\.sourceIndex),
-                                                            candidateIndexes: candidateIndexes, candidateSourceIndexes: candidateSourceIndexes, actionStates: actionStates)
+                                                            candidateIndexes: candidateIndexes, candidateSourceIndexes: candidateSourceIndexes, actionStates: actionStates, recapOnly: recapOnly)
             guard try JSONSerialization.data(withJSONObject: schema).count <= 64_000 else { throw PichiMeetingSummaryError.tooManyChunks }
             config.extraParameters["response_format"] = ["type": "json_schema", "json_schema": [
                 "name": "meeting_summary", "strict": true,
@@ -724,9 +733,19 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func resolvedResponse(_ response: String, sources: [PichiMeetingSummarySource]) throws -> String {
+    private func resolvedResponse(_ response: String, sources: [PichiMeetingSummarySource], recapOnly: Bool = false) throws -> String {
         let data = Data(PichiMeetingSummaryDocument.unfenced(response).utf8)
         guard data.count <= 200_000, let object = try? JSONSerialization.jsonObject(with: data) else { throw PichiMeetingSummaryError.invalidOutput }
+        if recapOnly {
+            guard let fields = object as? [String: Any] else { throw PichiMeetingSummaryError.invalidOutput }
+            // Reject forbidden stage output before hydrating unrelated citations
+            // or validating invented owners. Nothing is cleared or salvaged.
+            for key in ["decisions", "actions", "openQuestions", "changes", "answers"] {
+                if let value = fields[key] {
+                    guard let items = value as? [Any], items.isEmpty else { throw PichiMeetingSummaryError.invalidOutput }
+                }
+            }
+        }
         let lookup = Dictionary(uniqueKeysWithValues: sources.map { ($0.sourceIndex, $0.evidence) })
         func resolve(_ value: Any) throws -> Any {
             if let fields = value as? [String: Any] {
