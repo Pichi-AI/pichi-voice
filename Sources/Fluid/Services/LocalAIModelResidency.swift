@@ -54,8 +54,8 @@ final class LocalAIModelResidencyController {
         var canWarm: () -> Bool
         var warm: (DictationProviderRoute) async throws -> Void
         var isReady: (DictationProviderRoute) async throws -> Bool
-        var release: (DictationProviderRoute) async -> Void
-        var releaseForTermination: ((DictationProviderRoute) async -> Void)? = nil
+        var release: (DictationProviderRoute) async -> Bool
+        var releaseForTermination: ((DictationProviderRoute) async -> Bool)? = nil
         var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
         var sleep: (TimeInterval) async throws -> Void = {
             try await Task.sleep(for: .seconds($0))
@@ -136,7 +136,7 @@ final class LocalAIModelResidencyController {
         let releaseTasks = self.pendingReleases.values.map { route in
             Task { await (self.dependencies.releaseForTermination ?? self.dependencies.release)(route) }
         }
-        for task in releaseTasks { await task.value }
+        for task in releaseTasks { _ = await task.value }
         self.pendingReleases.removeAll()
         self.selected = nil
         self.runner = nil
@@ -174,8 +174,8 @@ final class LocalAIModelResidencyController {
         self.pendingReleases.removeValue(forKey: desiredID ?? "")
         for (key, previous) in self.pendingReleases {
             guard self.dependencies.canWarm(), !Task.isCancelled else { return }
-            await self.dependencies.release(previous)
-            if !Task.isCancelled { self.pendingReleases.removeValue(forKey: key) }
+            let released = await self.dependencies.release(previous)
+            if released, !Task.isCancelled { self.pendingReleases.removeValue(forKey: key) }
         }
         guard !Task.isCancelled, let route = self.selected,
               self.identity(self.dependencies.selectedRoute()) == desiredID,
@@ -267,8 +267,8 @@ nonisolated enum LocalAIModelResidencyTransport {
         _ route: DictationProviderRoute,
         residency: MeetingModelResidencyCoordinator = .shared,
         activity: MeetingSummaryActivityCoordinator = .shared,
-        work: @escaping @MainActor (DictationProviderRoute) async -> Void = { await Self.release($0) }
-    ) async {
+        work: @escaping @MainActor (DictationProviderRoute) async -> Bool = { await Self.release($0) }
+    ) async -> Bool {
         let pending = Task {
             try await residency.withBackgroundOperation(owner: "local-text", modelID: route.model) {
                 await work(route)
@@ -280,22 +280,24 @@ nonisolated enum LocalAIModelResidencyTransport {
         }) else {
             pending.cancel()
             _ = await pending.result
-            return
+            return false
         }
         defer { activity.endProcessing(token) }
-        await withTaskCancellationHandler { _ = await pending.result } onCancel: { pending.cancel() }
+        let result = await withTaskCancellationHandler { await pending.result } onCancel: { pending.cancel() }
+        guard case .success(let released) = result, !Task.isCancelled else { return false }
+        return released
     }
 
-    static func release(_ route: DictationProviderRoute, client: LLMClient = .shared) async {
-        guard LocalAIModelResidencyPolicy.identity(baseURL: route.baseURL, model: route.model) != nil else { return }
-        let work = Task {
+    static func release(_ route: DictationProviderRoute, client: LLMClient = .shared) async -> Bool {
+        guard LocalAIModelResidencyPolicy.identity(baseURL: route.baseURL, model: route.model) != nil else { return false }
+        let work = Task { () -> Bool in
             do {
                 let models = try await self.runningModels(route)
-                guard let resident = models.first(where: { self.matches($0, model: route.model) }),
-                      let context = resident.context_length,
+                guard let resident = models.first(where: { self.matches($0, model: route.model) }) else { return true }
+                guard let context = resident.context_length,
                       (512...OllamaChatAdapter.maximumContextTokens).contains(context),
                       !LocalAIModelResidencyPolicy.shared.isPinned(baseURL: route.baseURL, model: route.model)
-                else { return }
+                else { return false }
                 try Task.checkCancellation()
                 var config = LLMClient.Config(messages: [], model: route.model, baseURL: route.baseURL,
                                               apiKey: route.apiKey, streaming: false,
@@ -305,16 +307,20 @@ nonisolated enum LocalAIModelResidencyTransport {
                 config.timeoutSeconds = 5
                 config.maxRetries = 1
                 _ = try await client.call(config)
+                try Task.checkCancellation()
+                return true
             } catch {
                 DebugLogger.shared.debug("retention_release available=0", source: "LocalAIModelResidency")
+                return false
             }
         }
         let deadline = Task {
             do { try await Task.sleep(for: .seconds(5)) } catch { return }
             work.cancel()
         }
-        await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        let released = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
         deadline.cancel()
+        return released && !Task.isCancelled
     }
 
     private static func matches(_ running: RunningModel, model: String) -> Bool {

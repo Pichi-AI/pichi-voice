@@ -62,6 +62,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
             release: { route in
                 XCTAssertFalse(policy.isPinned(baseURL: route.baseURL, model: route.model))
                 releases += 1
+                return true
             }, now: { now }
         ), policy: policy)
         controller.start()
@@ -105,7 +106,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
                 events.append("warm:\(route.model)")
                 if route.model == first.model { entered.release(); await complete.wait() }
             }, isReady: { _ in true },
-            release: { route in events.append("release:\(route.model)") }
+            release: { route in events.append("release:\(route.model)"); return true }
         ), policy: policy)
         controller.start()
         await entered.wait()
@@ -128,7 +129,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
         var releases = 0
         let controller = LocalAIModelResidencyController(dependencies: .init(
             selectedRoute: { selected }, canWarm: { allowed },
-            warm: { _ in warms += 1 }, isReady: { _ in true }, release: { _ in releases += 1 }
+            warm: { _ in warms += 1 }, isReady: { _ in true }, release: { _ in releases += 1; return true }
         ), policy: LocalAIModelResidencyPolicy())
         controller.start()
         try await self.eventually { warms == 1 && !controller.hasPendingOperation }
@@ -155,7 +156,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
         let controller = LocalAIModelResidencyController(dependencies: .init(
             selectedRoute: { selected }, canWarm: { true },
             warm: { _ in warms += 1; entered.release(); await complete.wait() },
-            isReady: { _ in true }, release: { _ in releases += 1 }
+            isReady: { _ in true }, release: { _ in releases += 1; return true }
         ), policy: policy)
         controller.start()
         await entered.wait()
@@ -178,7 +179,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
         let controller = LocalAIModelResidencyController(dependencies: .init(
             selectedRoute: { selected }, canWarm: { true },
             warm: { _ in warms += 1; throw CocoaError(.fileReadUnknown) },
-            isReady: { _ in true }, release: { _ in }, now: { now }
+            isReady: { _ in true }, release: { _ in true }, now: { now }
         ), policy: LocalAIModelResidencyPolicy())
         controller.start()
         try await self.eventually { warms == 1 && !controller.hasPendingOperation }
@@ -204,8 +205,8 @@ final class LocalAIModelResidencyTests: XCTestCase {
         var termination = 0
         let controller = LocalAIModelResidencyController(dependencies: .init(
             selectedRoute: { selected }, canWarm: { true }, warm: { _ in warmed.release() },
-            isReady: { _ in true }, release: { _ in ordinary += 1 },
-            releaseForTermination: { _ in termination += 1 }
+            isReady: { _ in true }, release: { _ in ordinary += 1; return true },
+            releaseForTermination: { _ in termination += 1; return true }
         ), policy: LocalAIModelResidencyPolicy())
         controller.start()
         await warmed.wait()
@@ -227,6 +228,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
                 probeEntered.release()
                 await probeComplete.wait() // Simulate ps waiting while takeover requests cancellation.
                 if !Task.isCancelled { chatStarted = true }
+                return !Task.isCancelled
             }
         }
         await probeEntered.wait()
@@ -251,11 +253,46 @@ final class LocalAIModelResidencyTests: XCTestCase {
         XCTAssertFalse(summaryStarted)
         XCTAssertFalse(chatStarted)
         probeComplete.release()
-        await handback.value
+        let released = await handback.value
+        XCTAssertFalse(released)
         try await summary.value
         XCTAssertTrue(summaryStarted)
         XCTAssertFalse(chatStarted)
         XCTAssertFalse(activity.isProcessing)
+    }
+
+    func testCancelledHandbackRemainsPendingAndRetriesAfterIdleRefresh() async throws {
+        let first = self.route("first")
+        let second = self.route("second")
+        var selected: DictationProviderRoute? = first
+        var warms = 0
+        var releases = 0
+        var handbackCompleted = false
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true }, warm: { _ in warms += 1 },
+            isReady: { _ in true }, release: { route in
+                if route.model == first.model {
+                    releases += 1
+                    if releases == 1 { return false } // Joined summary cancellation or failed transport.
+                    handbackCompleted = true
+                }
+                return true
+            }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
+        selected = second
+        controller.refresh()
+        try await self.eventually { warms == 2 && !controller.hasPendingOperation }
+        XCTAssertEqual(releases, 1)
+        XCTAssertFalse(handbackCompleted)
+        controller.refresh()
+        try await self.eventually { handbackCompleted }
+        XCTAssertEqual(releases, 2)
+        controller.refresh()
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(releases, 2, "Only a verified handback removes the old route from pending cleanup")
+        await controller.shutdown()
     }
 }
 
