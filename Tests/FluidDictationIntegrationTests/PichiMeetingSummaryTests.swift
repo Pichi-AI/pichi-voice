@@ -728,10 +728,18 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(historical.owner, "Иван")
         XCTAssertEqual(Set(historical.evidence.map(\.segmentID)), Set(session.transcriptSegments.map(\.id)))
         let markdown = output.copyMarkdown(language: .english, sources: PichiMeetingSummaryInput.turns(for: session))
-        XCTAssertFalse(markdown.contains("Status: Agreed"))
+        let blocks = CommandMarkdownParser.parse(markdown)
+        let sourceQuotes: [String] = blocks.compactMap {
+            if case let .quote(text) = $0.content { return String(text.characters) }
+            return nil
+        }
+        XCTAssertFalse(blocks.contains {
+            if case let .listItem(text, _, _) = $0.content { return String(text.characters) == "Status: Agreed" }
+            return false
+        })
         XCTAssertTrue(markdown.contains("Completed later"))
-        XCTAssertTrue(markdown.contains("0:00"))
-        XCTAssertTrue(markdown.contains("1:00"))
+        XCTAssertTrue(sourceQuotes.contains { $0.hasPrefix("0:00 · ") })
+        XCTAssertTrue(sourceQuotes.contains { $0.hasPrefix("1:00 · ") })
         XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
         let requests = await transport.requests
         XCTAssertTrue(requests.allSatisfy { $0.model == "fixture-model" && $0.baseURL == self.configuration().baseURL })
