@@ -150,7 +150,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                 if active {
                     Label("Active", systemImage: "checkmark.circle.fill")
                         .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(Color.fluidGreen)
+                        .foregroundStyle(self.theme.palette.primaryText)
                         .frame(minWidth: 76, minHeight: 24)
                         .accessibilityLabel(PichiLocalization.text("Active model"))
                 } else {

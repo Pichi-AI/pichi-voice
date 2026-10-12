@@ -2100,7 +2100,7 @@ extension AIEnhancementSettingsView {
                 .stroke(self.theme.palette.cardBorder.opacity(0.35), lineWidth: 0.8)
         )
         .fixedSize()
-        .help("How much raw dictation Fluid-1 can clean at once. Higher values help long transcripts but use more RAM and can slow first response.")
+        .help("How much raw dictation the selected model can clean at once. Higher values help long transcripts but use more RAM and can slow first response.")
     }
 
     private func decreasePrivateAIContextTokenLimit() {

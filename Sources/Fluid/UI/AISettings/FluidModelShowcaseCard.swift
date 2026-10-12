@@ -29,7 +29,7 @@ struct FluidModelShowcaseCard: View {
                         if self.isRecommended {
                             Text(PichiLocalization.text(self.compact ? "Recommended" : "Recommended for your Mac"))
                                 .font(self.theme.typography.captionStrong)
-                                .foregroundStyle(FluidBrandColors.blue)
+                                .foregroundStyle(self.theme.palette.primaryText)
                                 .lineLimit(1).minimumScaleFactor(0.8)
                                 .padding(.trailing, 24)
                                 .help(PichiLocalization.text("Based on your Mac’s RAM. You can choose either model."))

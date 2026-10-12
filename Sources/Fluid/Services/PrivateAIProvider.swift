@@ -65,56 +65,56 @@ struct PrivateAIModelDownloadProgress: Sendable, Equatable {
 
 enum PrivateAIModelDownloadProgressText {
     static func buttonTitle(for progress: PrivateAIModelDownloadProgress?) -> String {
-        if progress?.isComplete == true { return "Verifying" }
-        guard let fraction = progress?.fractionCompleted else { return "Downloading" }
-        return "Downloading \(Int(fraction * 100))%"
+        if progress?.isComplete == true { return PichiLocalization.text("Verifying") }
+        guard let fraction = progress?.fractionCompleted else { return PichiLocalization.text("Downloading") }
+        return PichiLocalization.format("Downloading %@%%", String(Int(fraction * 100)))
     }
 
     static func statusText(for progress: PrivateAIModelDownloadProgress?) -> String {
         guard let progress else {
-            return "Starting download. This can take a few minutes."
+            return PichiLocalization.text("Starting download. This can take a few minutes.")
         }
         if progress.isComplete {
-            return "Verifying download. This can take a moment."
+            return PichiLocalization.text("Verifying download. This can take a moment.")
         }
         guard progress.hasWrittenBytes else {
-            return "Downloading. This can take a few minutes."
+            return PichiLocalization.text("Downloading. This can take a few minutes.")
         }
         guard let fraction = progress.fractionCompleted else {
-            return "Downloading. This can take a few minutes."
+            return PichiLocalization.text("Downloading. This can take a few minutes.")
         }
-        return "Downloading \(Int(fraction * 100))%. This can take a few minutes."
+        return PichiLocalization.format("Downloading %@%%. This can take a few minutes.", String(Int(fraction * 100)))
     }
 
     static func byteText(for progress: PrivateAIModelDownloadProgress?) -> String? {
         guard let progress else { return nil }
 
         if progress.isComplete {
-            return "\(Self.byteCountText(progress.totalBytesWritten)) downloaded"
+            return PichiLocalization.format("%@ downloaded", Self.byteCountText(progress.totalBytesWritten))
         }
 
         guard progress.hasWrittenBytes else {
             guard let expected = progress.totalBytesExpected, expected > 0 else { return nil }
-            return "\(Self.byteCountText(expected)) download"
+            return PichiLocalization.format("%@ download", Self.byteCountText(expected))
         }
 
         let written = Self.byteCountText(progress.totalBytesWritten)
         guard let expected = progress.totalBytesExpected, expected > 0 else {
-            return "\(written) downloaded"
+            return PichiLocalization.format("%@ downloaded", written)
         }
 
-        return "\(written) of \(Self.byteCountText(expected))"
+        return PichiLocalization.format("%@ of %@", written, Self.byteCountText(expected))
     }
 
     static func detailText(for progress: PrivateAIModelDownloadProgress?) -> String {
-        guard let progress else { return "Starting download..." }
+        guard let progress else { return PichiLocalization.text("Starting download...") }
         if progress.isComplete {
-            return "Verifying download..."
+            return PichiLocalization.text("Verifying download...")
         }
-        guard let byteText = Self.byteText(for: progress) else { return "Downloading..." }
+        guard let byteText = Self.byteText(for: progress) else { return PichiLocalization.text("Downloading...") }
         guard progress.hasWrittenBytes else { return byteText }
         guard let fraction = progress.fractionCompleted else { return byteText }
-        return "\(byteText) (\(Int(fraction * 100))%)"
+        return PichiLocalization.format("%@ (%@%%)", byteText, String(Int(fraction * 100)))
     }
 
     private static func byteCountText(_ bytes: Int64) -> String {
