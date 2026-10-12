@@ -17,6 +17,8 @@ final class OllamaChatTransportTests: XCTestCase {
             XCTAssertEqual(body["model"] as? String, "synthetic-small:latest")
             XCTAssertEqual(body["stream"] as? Bool, false)
             XCTAssertEqual(body["keep_alive"] as? String, "60s")
+            XCTAssertEqual(body["truncate"] as? Bool, false)
+            XCTAssertEqual(body["shift"] as? Bool, false)
             let options = try XCTUnwrap(body["options"] as? [String: Any])
             XCTAssertEqual(options["num_ctx"] as? Int, 8192)
             XCTAssertEqual(options["num_predict"] as? Int, 2048)
@@ -32,7 +34,7 @@ final class OllamaChatTransportTests: XCTestCase {
         defer { context.cleanup() }
         var config = self.config(streaming: true, temperature: 0.2)
         config.maxTokens = 99999
-        config.extraParameters = ["options": ["num_ctx": 16384, "seed": 1729, "top_p": 0.85], "think": true]
+        config.extraParameters = ["options": ["num_ctx": 16384, "seed": 1729, "top_p": 0.85], "think": true, "stop": "Конец"]
         let body = try OllamaTransportFixture.body(context.client.buildRequest(config))
         XCTAssertEqual(body["stream"] as? Bool, true)
         XCTAssertEqual(body["think"] as? Bool, true)
@@ -42,6 +44,7 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(options["temperature"] as? Double, 0.2)
         XCTAssertEqual(options["seed"] as? Int, 1729)
         XCTAssertEqual(options["top_p"] as? Double, 0.85)
+        XCTAssertEqual(options["stop"] as? [String], ["Конец"])
 
         config.extraParameters = ["options": ["num_ctx": 8192]]
         let lowerContext = try OllamaTransportFixture.body(context.client.buildRequest(config))
@@ -132,6 +135,9 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(request.url?.path, "/api/chat")
         XCTAssertEqual(request.timeoutInterval, 120)
         XCTAssertEqual(context.fixture.requests.count, 1)
+        XCTAssertEqual(context.fixture.metadataRequests.map { $0.url?.path }, ["/api/version"])
+        XCTAssertEqual(context.fixture.metadataRequests.first?.httpMethod, "GET")
+        XCTAssertEqual(context.fixture.metadataRequests.first?.timeoutInterval, 5)
     }
 
     func testNativeInlineThinkingTagsDoNotLeakIntoFinalContent() async throws {
@@ -179,7 +185,7 @@ final class OllamaChatTransportTests: XCTestCase {
         {"message":{"role":"assistant","content":"<thi"},"done":false}
         {"message":{"role":"assistant","content":"nk>Проверка источника."},"done":false}
         {"message":{"role":"assistant","content":"</think>Готово."},"done":false}
-        {"done":true,"done_reason":"stop"}
+        {"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}
 
         """, chunkSize: 5)
         defer { context.cleanup() }
@@ -291,6 +297,7 @@ final class OllamaChatTransportTests: XCTestCase {
                 XCTAssertTrue(error is CancellationError || cancelledNetwork, "Unexpected cancellation error: \(error)")
             }
             XCTAssertGreaterThanOrEqual(context.fixture.stops, 1, "The caller must cancel its owned URLSession task")
+            XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
             XCTAssertEqual(context.fixture.requests.count, 1)
         }
     }
@@ -302,6 +309,84 @@ final class OllamaChatTransportTests: XCTestCase {
         config.timeoutSeconds = 900
         _ = try await context.client.call(config)
         XCTAssertEqual(context.fixture.requests.first?.timeoutInterval, 120)
+    }
+
+    func testNativeReasoningCapabilitiesNormalizeLegacyAliasesAndSupportedLevels() async throws {
+        let scenarios: [(String, String, String?, Bool?)] = [
+            ("ultra", "{}", "max", nil),
+            ("high", #"{"thinking":{"values":[true,false],"default":false}}"#, nil, true),
+            ("max", #"{"thinking":{"values":["low","medium","high","max"],"default":"medium"}}"#, "max", nil),
+        ]
+        for (effort, metadata, expectedLevel, expectedBoolean) in scenarios {
+            let context = OllamaTransportContext(body: #"{"message":{"role":"assistant","content":"Готово."},"done":true,"done_reason":"stop"}"#, showBody: metadata)
+            defer { context.cleanup() }
+            var config = self.config()
+            config.extraParameters = ["reasoning_effort": effort]
+            _ = try await context.client.call(config)
+            XCTAssertEqual(context.fixture.requests.count, 1)
+            XCTAssertEqual(context.fixture.metadataRequests.map { $0.url?.path }, ["/api/version", "/api/show"])
+            let show = try XCTUnwrap(context.fixture.metadataRequests.last)
+            XCTAssertEqual(show.httpMethod, "POST")
+            XCTAssertEqual(show.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-local-key")
+            XCTAssertEqual(try OllamaTransportFixture.body(show)["model"] as? String, "synthetic-small:latest")
+            let body = try OllamaTransportFixture.body(XCTUnwrap(context.fixture.requests.first))
+            if let expectedLevel { XCTAssertEqual(body["think"] as? String, expectedLevel) }
+            if let expectedBoolean { XCTAssertEqual(body["think"] as? Bool, expectedBoolean) }
+        }
+    }
+
+    func testNativeUnsupportedNamedThinkingLevelFailsBeforeInference() async throws {
+        let context = OllamaTransportContext(showBody: #"{"thinking":{"values":["low","max"],"default":"low"}}"#)
+        defer { context.cleanup() }
+        var config = self.config()
+        config.extraParameters = ["reasoning_effort": "medium"]
+        do {
+            _ = try await context.client.call(config)
+            XCTFail("Unsupported named reasoning level must not silently become a boolean")
+        } catch { self.assertInvalidRequest(error) }
+        XCTAssertTrue(context.fixture.requests.isEmpty)
+        XCTAssertEqual(context.fixture.metadataRequests.map { $0.url?.path }, ["/api/version", "/api/show"])
+    }
+
+    func testNativeOldServerFailsBeforeInference() async throws {
+        let context = OllamaTransportContext(version: "0.15.9")
+        defer { context.cleanup() }
+        do {
+            _ = try await context.client.call(self.config())
+            XCTFail("Older servers cannot guarantee explicit overflow rejection")
+        } catch { self.assertInvalidRequest(error) }
+        XCTAssertTrue(context.fixture.requests.isEmpty)
+        XCTAssertEqual(context.fixture.metadataRequests.map { $0.url?.path }, ["/api/version"])
+    }
+
+    func testNativeMetadataCancellationNeverStartsInference() async throws {
+        for path in ["/api/version", "/api/show"] {
+            let context = OllamaTransportContext(heldMetadataPath: path)
+            defer { context.cleanup() }
+            var config = self.config()
+            if path == "/api/show" { config.extraParameters = ["reasoning_effort": "high"] }
+            let client = context.client
+            let capturedConfig = config
+            let pending = Task { try await client.call(capturedConfig) }
+            for _ in 0..<100 where !context.fixture.metadataRequests.contains(where: { $0.url?.path == path }) {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertTrue(context.fixture.metadataRequests.contains { $0.url?.path == path })
+            pending.cancel()
+            do {
+                _ = try await pending.value
+                XCTFail("Cancelled metadata cannot admit inference")
+            } catch {
+                let networkCancelled = if case let LLMError.networkError(underlying) = error {
+                    (underlying as? URLError)?.code == .cancelled
+                } else { false }
+                XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled || networkCancelled)
+            }
+            XCTAssertGreaterThanOrEqual(context.fixture.stops, 1)
+            XCTAssertGreaterThanOrEqual(context.fixture.stops(for: path), 1, "Cancellation must stop the held metadata request itself")
+            XCTAssertTrue(context.fixture.requests.isEmpty)
+            XCTAssertEqual(context.fixture.metadataRequests.count, path == "/api/version" ? 1 : 2)
+        }
     }
 
     func testCloudRemoteAndCustomLocalEndpointsKeepTheirExistingProtocol() async throws {
@@ -316,6 +401,7 @@ final class OllamaChatTransportTests: XCTestCase {
             XCTAssertNil(body["keep_alive"])
             XCTAssertNil(body["options"])
             XCTAssertEqual(body["stream"] as? Bool, false)
+            XCTAssertTrue(context.fixture.metadataRequests.isEmpty, "Other providers must not contact Ollama metadata endpoints")
         }
     }
 
@@ -353,8 +439,11 @@ private final class OllamaTransportContext {
     let session: URLSession
     let client: LLMClient
 
-    init(status: Int = 200, body: String = "{}", chunkSize: Int? = nil, held: Bool = false) {
-        self.fixture = OllamaTransportFixture(status: status, body: body, chunkSize: chunkSize, held: held)
+    init(status: Int = 200, body: String = "{}", chunkSize: Int? = nil, held: Bool = false,
+         version: String = "0.34.2", showBody: String = #"{"thinking":{"values":[true,false],"default":false}}"#,
+         heldMetadataPath: String? = nil) {
+        self.fixture = OllamaTransportFixture(status: status, body: body, chunkSize: chunkSize, held: held,
+                                             version: version, showBody: showBody, heldMetadataPath: heldMetadataPath)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [OllamaTransportURLProtocol.self]
         configuration.httpAdditionalHeaders = ["X-Ollama-Transport-Test": self.token]
@@ -375,17 +464,27 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
     private let data: Data
     private let chunkSize: Int?
     private let held: Bool
+    private let version: String
+    private let showBody: Data
+    private let heldMetadataPath: String?
     private var recordedRequests: [URLRequest] = []
+    private var recordedMetadataRequests: [URLRequest] = []
     private var stopCount = 0
+    private var stoppedPaths: [String: Int] = [:]
 
     var requests: [URLRequest] { self.lock.withLock { self.recordedRequests } }
+    var metadataRequests: [URLRequest] { self.lock.withLock { self.recordedMetadataRequests } }
     var stops: Int { self.lock.withLock { self.stopCount } }
+    func stops(for path: String) -> Int { self.lock.withLock { self.stoppedPaths[path] ?? 0 } }
 
-    init(status: Int, body: String, chunkSize: Int?, held: Bool) {
+    init(status: Int, body: String, chunkSize: Int?, held: Bool, version: String, showBody: String, heldMetadataPath: String?) {
         self.status = status
         self.data = Data(body.utf8)
         self.chunkSize = chunkSize
         self.held = held
+        self.version = version
+        self.showBody = Data(showBody.utf8)
+        self.heldMetadataPath = heldMetadataPath
     }
 
     func receive(_ loading: OllamaTransportURLProtocol) {
@@ -393,20 +492,34 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
         // the synthetic load so later assertions never depend on stream lifetime.
         var recordedRequest = loading.request
         recordedRequest.httpBody = Self.bodyData(loading.request)
-        self.lock.withLock { self.recordedRequests.append(recordedRequest) }
-        guard !self.held else { return }
+        let path = loading.request.url?.path
+        let metadata = path == "/api/version" || path == "/api/show"
+        self.lock.withLock {
+            if metadata { self.recordedMetadataRequests.append(recordedRequest) }
+            else { self.recordedRequests.append(recordedRequest) }
+        }
+        // Holding an inference fixture never holds the read-only admission probes.
+        guard metadata ? path != self.heldMetadataPath : !self.held else { return }
+        let status = metadata ? 200 : self.status
+        let data = if path == "/api/version" { Data("{\"version\":\"\(self.version)\"}".utf8) }
+                   else if path == "/api/show" { self.showBody } else { self.data }
         guard let url = loading.request.url,
-              let response = HTTPURLResponse(url: url, statusCode: self.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/x-ndjson"])
+              let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": metadata ? "application/json" : "application/x-ndjson"])
         else { loading.client?.urlProtocol(loading, didFailWithError: URLError(.badURL)); return }
         loading.client?.urlProtocol(loading, didReceive: response, cacheStoragePolicy: .notAllowed)
-        let width = self.chunkSize ?? max(1, self.data.count)
-        for offset in stride(from: 0, to: self.data.count, by: width) {
-            loading.client?.urlProtocol(loading, didLoad: self.data.subdata(in: offset..<min(offset + width, self.data.count)))
+        let width = self.chunkSize ?? max(1, data.count)
+        for offset in stride(from: 0, to: data.count, by: width) {
+            loading.client?.urlProtocol(loading, didLoad: data.subdata(in: offset..<min(offset + width, data.count)))
         }
         loading.client?.urlProtocolDidFinishLoading(loading)
     }
 
-    func stopped() { self.lock.withLock { self.stopCount += 1 } }
+    func stopped(path: String) {
+        self.lock.withLock {
+            self.stopCount += 1
+            self.stoppedPaths[path, default: 0] += 1
+        }
+    }
 
     static func body(_ request: URLRequest) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: self.bodyData(request)) as? [String: Any])
@@ -451,7 +564,7 @@ private nonisolated final class OllamaTransportURLProtocol: URLProtocol, @unchec
         fixture.receive(self)
     }
 
-    override func stopLoading() { self.activeLock.withLock { self.fixture }?.stopped() }
+    override func stopLoading() { self.activeLock.withLock { self.fixture }?.stopped(path: self.request.url?.path ?? "") }
 }
 
 private nonisolated final class OllamaCallbackProbe: @unchecked Sendable {
