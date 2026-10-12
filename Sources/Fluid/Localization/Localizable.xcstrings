@@ -21151,19 +21151,19 @@
         }
       }
     },
-    "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection. Import the model folder to activate.": {
+    "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection. Import the model folder to activate."
+            "value": "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Локальное распознавание русского языка нашей оптимизированной моделью GigaAM с определением конца фразы. Импортируйте папку модели для активации."
+            "value": "Локальное распознавание русского языка нашей оптимизированной моделью GigaAM с определением конца фразы."
           }
         }
       }

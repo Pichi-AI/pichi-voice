@@ -5359,7 +5359,7 @@ final class SettingsStore: ObservableObject {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
-            case .gigaam: return "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection. Import the model folder to activate."
+            case .gigaam: return "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection."
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
