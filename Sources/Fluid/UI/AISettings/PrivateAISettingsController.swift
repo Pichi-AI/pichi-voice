@@ -18,7 +18,7 @@ enum PrivateAIModelLoadState: Equatable {
 
     static func failure(modelID: String, message: String) -> Self {
         // Verification crosses the provider bridge as text. Match only its known missing-file errors.
-        if message.hasPrefix("Missing local model: ") || message == self.missingModelMessage {
+        if message.hasPrefix("Missing local model: ") || message == self.missingModelMessage || message == PichiLocalization.text(self.missingModelMessage) {
             return .downloadRequired(modelID: modelID)
         }
         return .failed(modelID: modelID, message: message)

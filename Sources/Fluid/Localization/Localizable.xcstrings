@@ -46565,6 +46565,23 @@
           }
         }
       }
+    },
+    "S1-mini did not finish cleaning this dictation within its output limit.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini did not finish cleaning this dictation within its output limit."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini не успела завершить улучшение диктовки в пределах лимита вывода."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -287,6 +287,7 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus
     func prewarmDictation() async
     func unloadCachedRuntime(reason: String) async
+    func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws
     func shutdownForTermination() async
     nonisolated func enhanceDictation(
         _ inputText: String,
@@ -311,6 +312,12 @@ protocol PrivateAIIntegrationProviding: Sendable {
 }
 
 extension PrivateAIIntegrationProviding {
+    /// Providers with concurrent inference must hold their ownership gate through file mutation.
+    func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws {
+        await self.unloadCachedRuntime(reason: reason)
+        try operation()
+    }
+
     func summarizeMeeting(_: String, style _: String) async throws -> String {
         throw PrivateAIUnavailableError()
     }

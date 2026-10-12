@@ -74,6 +74,18 @@ No branching strategy guarantees zero conflicts. Separate files and small integr
 
 A manual sync check is sufficient initially. A future scheduled update workflow should create a review branch or PR and run checks, without auto-merging or shipping. No recurring update automation is enabled by this setup.
 
+## Embedded dictation cleanup
+
+The public FluidVoice source supplies `PrivateAIProviderFeatureProviding` and `PrivateAIIntegrationProviding`, but does not supply the private Fluid Intelligence inference engine. The downstream registers S1-mini by Superwhisper through those contracts and bundles llama.cpp in the small `Vendor/NativeTextInference` package. This package owns native pointers, greedy decoding, exact context accounting, UTF-8 streaming and joined cancellation. It does not start a local HTTP server or require Ollama or LM Studio.
+
+S1-mini is the default registered dictation cleanup model. Onboarding and Settings share the existing preparation, verification, activation and resource-coordination operations. Its task catalog contains dictation only; meeting summaries, edit instructions and commands continue to use their existing providers. Supported runtimes and acceleration controls come from feature capabilities, so common orchestration does not branch on a model identifier. Model presentation metadata lives with the registered descriptor. The existing private build bridge retains its conditional registration.
+
+The artifact is the smallest author-published GGUF, `superwhisper/s1-mini-GGUF/s1-mini-q4_k_m.gguf`, pinned to Hugging Face revision `34add00a48a2e5d24e5a4ee5405a99620a3a240c`. It contains 484,219,808 bytes and has SHA-256 `3b41ebe2502cbd03e811d5d16b022f5ab551eda58d62597d152f89535003c634`. Downloads use the existing progressive downloader, bounded file validation and atomic installation in the trusted application storage namespace. Model weights remain outside Git. Verification fingerprints bind the model, runtime, version and digest.
+
+The adapter follows the [author's exact prompt format](https://huggingface.co/superwhisper/s1-mini-GGUF#input-format), including the styling controls, non-thinking assistant prefix and greedy decoding. It accepts transcripts in any language without a language filter. Language quality must be evaluated using actual model outputs; the multilingual base alone does not establish cleanup quality after fine-tuning. Empty output is valid for filler-only input. Input or output limit errors must not publish partial cleanup.
+
+The native runtime release and checksum are pinned in the vendor package. S1-mini's full license and attribution notice, plus llama.cpp's MIT license, are included in the app's `Notices` resources. Preserve these when distributing a build.
+
 ## First implementation sequence
 
 1. Establish and verify an unchanged upstream macOS build.
