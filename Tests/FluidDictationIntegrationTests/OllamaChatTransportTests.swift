@@ -52,14 +52,14 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertTrue(context.fixture.requests.isEmpty)
     }
 
-    func testInteractiveNativeSessionBoundsTotalResponseLifetimeAndPreservesFixtureIsolation() throws {
+    func testInteractiveNativeSessionBoundsTotalResponseLifetimeAndPreservesFixtureIsolation() async throws {
         let context = OllamaTransportContext()
         defer { context.cleanup() }
         var config = self.config()
         DictationPostProcessingService.configureInteractiveLocalRequest(&config)
         let originalResourceTimeout = context.session.configuration.timeoutIntervalForResource
-        let session = try context.client.makeBoundedLocalSession(config)
-        defer { session.invalidateAndCancel() }
+        let owned = try context.client.makeBoundedLocalSession(config)
+        let session = owned.session
         XCTAssertEqual(session.configuration.timeoutIntervalForRequest, 30)
         XCTAssertEqual(session.configuration.timeoutIntervalForResource, 30)
         XCTAssertEqual(session.configuration.httpAdditionalHeaders?["X-Ollama-Transport-Test"] as? String, context.token)
@@ -67,6 +67,55 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertTrue(session.configuration.protocolClasses?.first == OllamaTransportURLProtocol.self)
         XCTAssertEqual(context.session.configuration.timeoutIntervalForResource, originalResourceTimeout,
                        "A call must not mutate its shared or caller-supplied session configuration")
+        await owned.lifetime.invalidateAndWait(for: session)
+        XCTAssertTrue(owned.lifetime.hasInvalidated)
+    }
+
+    func testOwnedNativeSessionInvalidationJoinsOnSuccessAndFailure() async throws {
+        for status in [200, 503] {
+            let context = OllamaTransportContext(status: status, body: #"{"message":{"content":"Готово."},"done":true}"#)
+            defer { context.cleanup() }
+            let owned = try context.client.makeBoundedLocalSession(self.config())
+            let request = try context.client.buildRequest(self.config())
+            _ = try await owned.session.data(for: request)
+            XCTAssertFalse(owned.lifetime.hasInvalidated)
+            await owned.lifetime.invalidateAndWait(for: owned.session)
+            XCTAssertTrue(owned.lifetime.hasInvalidated)
+            // Completion-before-wait and repeated joins cannot lose a wakeup.
+            await owned.lifetime.invalidateAndWait(for: owned.session)
+            XCTAssertTrue(owned.lifetime.hasInvalidated)
+        }
+    }
+
+    func testOwnedNativeSessionCancellationJoinsStopBeforeInvalidationCompletion() async throws {
+        let context = OllamaTransportContext(body: "", held: true)
+        defer { context.cleanup() }
+        let owned = try context.client.makeBoundedLocalSession(self.config())
+        let request = try context.client.buildRequest(self.config())
+        let pending = Task { try await owned.session.data(for: request) }
+        for _ in 0..<100 where context.fixture.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(context.fixture.requests.count, 1)
+        await owned.lifetime.invalidateAndWait(for: owned.session)
+        XCTAssertTrue(owned.lifetime.hasInvalidated)
+        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
+        do { _ = try await pending.value; XCTFail("Cancelled request cannot complete successfully") } catch {}
+    }
+
+    func testNativeMetadataHasItsOwnResourceBoundAndJoinedCancellation() async throws {
+        let context = OllamaTransportContext(body: "", heldMetadataPath: "/api/version")
+        defer { context.cleanup() }
+        let metadata = try context.client.makeBoundedLocalSession(self.config(), timeoutCap: 5)
+        XCTAssertEqual(metadata.session.configuration.timeoutIntervalForRequest, 5)
+        XCTAssertEqual(metadata.session.configuration.timeoutIntervalForResource, 5)
+        await metadata.lifetime.invalidateAndWait(for: metadata.session)
+        let config = self.config()
+        let pending = Task { try await context.client.call(config) }
+        for _ in 0..<100 where context.fixture.metadataRequests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(context.fixture.metadataRequests.count, 1)
+        pending.cancel()
+        do { _ = try await pending.value; XCTFail("Cancelled metadata cannot admit inference") } catch {}
+        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/version"), 1)
+        XCTAssertTrue(context.fixture.requests.isEmpty)
     }
 
     func testSelectedNativePreloadUsesEmptyContentAndTheDictationContext() async throws {

@@ -56,6 +56,51 @@ nonisolated enum LLMError: Error, LocalizedError, @unchecked Sendable {
 
 // MARK: - LLMClient
 
+/// Foundation invalidation returns before cancelled tasks and delegate callbacks
+/// drain. Each owned session therefore needs its own completion, rather than the
+/// redirect singleton shared by unrelated transports.
+final nonisolated class LLMClientSessionLifetime: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var invalidationRequested = false
+    private var invalidated = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var hasInvalidated: Bool { self.lock.withLock { self.invalidated } }
+
+    func invalidateAndWait(for session: URLSession) async {
+        // Cleanup deliberately survives caller cancellation and is always joined.
+        await withCheckedContinuation { continuation in
+            let shouldInvalidate: Bool? = self.lock.withLock {
+                if self.invalidated { return nil }
+                self.waiters.append(continuation)
+                if self.invalidationRequested { return false }
+                self.invalidationRequested = true
+                return true
+            }
+            if let shouldInvalidate {
+                if shouldInvalidate { session.invalidateAndCancel() }
+            } else { continuation.resume() }
+        }
+    }
+
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        let pending = self.lock.withLock {
+            self.invalidated = true
+            let pending = self.waiters
+            self.waiters.removeAll()
+            return pending
+        }
+        for continuation in pending { continuation.resume() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        CloudTextProviderTransport.redirectPolicy.urlSession(session, task: task,
+            willPerformHTTPRedirection: response, newRequest: request, completionHandler: completionHandler)
+    }
+}
+
 /// Unified LLM communication layer for all modes (Transcription, Command, Rewrite).
 /// Handles HTTP requests, SSE streaming, thinking token extraction, and tool call parsing.
 /// Stateless, thread-safe transport. Keeping streaming decode off MainActor prevents
@@ -202,7 +247,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         try Task.checkCancellation()
         var request: URLRequest
         if OllamaChatAdapter.supports(config.baseURL) {
-            request = try await OllamaChatAdapter.preparedRequest(config, load: { try await self.localSession.data(for: $0) })
+            request = try await self.preparedLocalRequest(config)
         } else { request = try buildRequest(config) }
         if let provider = CloudTextProvider.descriptor(forEndpoint: config.baseURL) {
             let headers = try await self.cloudAuthorization.headers(for: provider, credential: config.apiKey, options: config.providerOptions)
@@ -222,14 +267,33 @@ final nonisolated class LLMClient: @unchecked Sendable {
         // and headers; invalidate only after inference has returned or cancelled.
         let boundedLocalSession = OllamaChatAdapter.supports(config.baseURL)
             ? try self.makeBoundedLocalSession(config) : nil
-        defer { boundedLocalSession?.invalidateAndCancel() }
-        let transport = boundedLocalSession ?? self.transportSession(for: request)
+        let transport = boundedLocalSession?.session ?? self.transportSession(for: request)
         do {
             let response = try await self.executeWithRetry(request: request, config: config, session: transport)
+            if let boundedLocalSession {
+                await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
+                try Task.checkCancellation()
+            }
             self.benchmark(config, "call_return")
             return response
         } catch {
+            if let boundedLocalSession {
+                await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
+            }
             self.benchmark(config, "call_fail")
+            throw error
+        }
+    }
+
+    private func preparedLocalRequest(_ config: Config) async throws -> URLRequest {
+        let owned = try self.makeBoundedLocalSession(config, timeoutCap: 5)
+        do {
+            let request = try await OllamaChatAdapter.preparedRequest(config, load: { try await owned.session.data(for: $0) })
+            await owned.lifetime.invalidateAndWait(for: owned.session)
+            try Task.checkCancellation()
+            return request
+        } catch {
+            await owned.lifetime.invalidateAndWait(for: owned.session)
             throw error
         }
     }
@@ -563,13 +627,18 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     /// Native calls have a finite total response lifetime, including streams that
     /// keep emitting. Session ownership remains with the calling operation.
-    func makeBoundedLocalSession(_ config: Config) throws -> URLSession {
+    func makeBoundedLocalSession(_ config: Config, timeoutCap: TimeInterval? = nil) throws -> (session: URLSession, lifetime: LLMClientSessionLifetime) {
         guard OllamaChatAdapter.supports(config.baseURL) else { throw LLMError.invalidURL }
         guard let configuration = self.localSession.configuration.copy() as? URLSessionConfiguration else { throw LLMError.invalidResponse }
-        let timeout = try OllamaChatAdapter.timeout(config)
+        let requested = try OllamaChatAdapter.timeout(config)
+        let cap = timeoutCap ?? requested
+        guard cap.isFinite, cap > 0 else { throw LLMError.invalidRequest(PichiLocalization.text("Invalid local model timeout.")) }
+        let timeout = min(requested, cap)
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout
-        return URLSession(configuration: configuration, delegate: CloudTextProviderTransport.redirectPolicy, delegateQueue: nil)
+        let lifetime = LLMClientSessionLifetime()
+        let session = URLSession(configuration: configuration, delegate: lifetime, delegateQueue: nil)
+        return (session, lifetime)
     }
 
     private func safeHTTPErrorBody(_ data: Data, request: URLRequest) -> String {
