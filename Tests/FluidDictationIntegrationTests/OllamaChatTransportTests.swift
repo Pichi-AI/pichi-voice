@@ -120,6 +120,22 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertNil(body["response_format"], "OpenAI envelope must not be sent to the native server")
     }
 
+    func testNativeExplicitToolChoiceAndThinkingTypesPreserveIntent() throws {
+        let context = OllamaTransportContext()
+        defer { context.cleanup() }
+        var config = LLMClient.Config(messages: [["role": "user", "content": "Do not call tools."]],
+                                      model: "synthetic-small:latest", baseURL: "http://localhost:11434/v1", apiKey: "",
+                                      tools: [["type": "function", "function": ["name": "synthetic_tool"]]],
+                                      extraParameters: ["tool_choice": "none", "think": false])
+        let body = try OllamaTransportFixture.body(context.client.buildRequest(config))
+        XCTAssertNil(body["tools"], "An explicit no-tools request cannot enable native tools")
+        XCTAssertEqual(body["think"] as? Bool, false)
+        config.extraParameters = ["think": NSNumber(value: 1)]
+        XCTAssertThrowsError(try context.client.buildRequest(config)) { self.assertInvalidRequest($0) }
+        config.extraParameters = ["tool_choice": ["type": "function", "function": ["name": "forced"]]]
+        XCTAssertThrowsError(try context.client.buildRequest(config)) { self.assertInvalidRequest($0) }
+    }
+
     func testNativeNonStreamingResponsePreservesRussianThinkingAndTools() async throws {
         let context = OllamaTransportContext(body: #"{"message":{"role":"assistant","thinking":"Проверяю имена и факты.","content":"Ёжик подготовит отчёт.","tool_calls":[{"function":{"name":"save_note","arguments":{"title":"Итоги","urgent":false}}}]},"done":true,"done_reason":"stop"}"#)
         defer { context.cleanup() }
@@ -313,6 +329,8 @@ final class OllamaChatTransportTests: XCTestCase {
 
     func testNativeReasoningCapabilitiesNormalizeLegacyAliasesAndSupportedLevels() async throws {
         let scenarios: [(String, String, String?, Bool?)] = [
+            ("high", "{}", "high", nil),
+            ("max", "{}", "max", nil),
             ("ultra", "{}", "max", nil),
             ("high", #"{"thinking":{"values":[true,false],"default":false}}"#, nil, true),
             ("max", #"{"thinking":{"values":["low","medium","high","max"],"default":"medium"}}"#, "max", nil),

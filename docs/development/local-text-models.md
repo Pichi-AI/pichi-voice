@@ -10,9 +10,18 @@ The initial library includes Qwen3.5 2B, 4B and 9B, T-lite-it 2.1, Gemma 4 E2B a
 
 Summary discovery retains its existing loopback URL validation and its ephemeral session that refuses redirects. Credentials are unnecessary for local discovery. Neither the library nor a refresh changes the summary destination, the user's provider configuration, per-model reasoning settings or inference resource limits.
 
+The standard on-device Ollama connection (loopback port 11434 and `/v1`) uses native `/api/chat` inside the existing `LLMClient` for enhancement and connection verification. OpenAI compatibility cannot set a per-request context limit. The protocol adapter requests 8192 context tokens by default, permits an explicit context up to 16384 tokens, and limits generation to 2048 tokens by default and at most 8192 tokens within that context. Request timeouts are capped at 120 seconds; the local session has a 240-second resource deadline. Existing finite retry policy still applies. A length-limited completion fails instead of becoming a successful partial rewrite.
+
+Verification uses the same adapter with a short synthetic prompt, 50 output tokens, thinking disabled and a 15-second request timeout. Actual enhancement keeps the configured thinking option or the selected artifact's default. Native JSON and NDJSON are normalized into the existing response parser and callbacks, including thinking and tool calls. The request asks the shared server to keep the model resident for 60 seconds; the app does not change global server settings or unload models owned by another client. This limits context allocation, not total memory for arbitrary model weights. Nonstandard local endpoints, LM Studio and cloud providers retain their existing protocol and server-side context configuration.
+
+Read-only `/api/version` admission requires Ollama 0.16 or later, where explicit `truncate: false` and `shift: false` reject source/context overflow instead of silently discarding text. No client token estimate is presented as exact tokenization. An explicit reasoning effort also reads `/api/show` to adapt Boolean or named thinking controls without guessing from model names. Unsupported advertised levels fail clearly. Servers without the newer thinking descriptor retain the legacy protocol effort values; a named effort does not prove that an artifact offers distinct reasoning budgets. Metadata requests carry the selected model identifier only, never the transcript, and use a five-second request timeout.
+
+Meeting summaries retain their separate bounded execution policy, structured schema, immutable artifact snapshot and cleanup. Only strict standard-endpoint recognition is shared with the enhancement adapter.
+
 ## Checks
 
 - `bash Tests/run_local_text_model_catalog_tests.sh` exercises production metadata parsing, exact alias availability, unknown model preservation, schema version and duplicate rejection, and local selection preservation.
 - `bash Tests/run_command_model_catalog_tests.sh` checks the existing command model catalog after the repository extension.
 - Native `LocalTextModelDiscoveryTests` verify injected-session discovery, the packaged resource, unknown installed IDs and selection behavior. Run them with the integrated macOS suite.
+- Native `OllamaChatTransportTests` exercise bounded request construction, Russian thinking/content, streamed UTF-8, tools, termination, server errors, cancellation and protocol isolation with synthetic `URLProtocol` fixtures. They do not run a model or measure GPU memory.
 - `bash scripts/dev/check.sh` checks repository and localization resources. Native builds, real model quality and UI layout require separate parent-owned verification.

@@ -23,13 +23,7 @@ nonisolated enum PichiMeetingSummaryTransport {
     static let client = LLMClient(session: session)
 
     static func usesNativeOllama(_ config: LLMClient.Config) -> Bool {
-        guard PichiMeetingSummaryConfiguration.isLoopback(config.baseURL),
-              let url = URL(string: config.baseURL), url.port == 11434,
-              ["http", "https"].contains(url.scheme), url.user == nil, url.password == nil,
-              url.query == nil, url.fragment == nil,
-              url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "v1"
-        else { return false }
-        return true
+        OllamaChatAdapter.supports(config.baseURL)
     }
 
     static func complete(_ config: LLMClient.Config) async throws -> String {

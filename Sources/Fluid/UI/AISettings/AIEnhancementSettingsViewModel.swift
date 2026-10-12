@@ -867,12 +867,17 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
         // Registered protocol policies use the same transport as enhancement and
         // summaries. Verification sends only this public synthetic prompt.
-        if CloudTextProvider.descriptor(forEndpoint: baseURL) != nil {
+        if CloudTextProvider.descriptor(forEndpoint: baseURL) != nil || OllamaChatAdapter.supports(baseURL) {
             var config = LLMClient.Config(messages: [["role": "user", "content": "test"]], model: trimmedModel,
                                           baseURL: baseURL, apiKey: apiKey, streaming: false, maxTokens: 50)
             config.providerOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
             config.timeoutSeconds = 15
             config.maxRetries = 1
+            if OllamaChatAdapter.supports(baseURL) {
+                // This verifies connectivity using public synthetic data, not
+                // enhancement quality. Thinking can exhaust a tiny probe budget.
+                config.extraParameters["think"] = false
+            }
             do {
                 _ = try await LLMClient.shared.call(config)
                 guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }

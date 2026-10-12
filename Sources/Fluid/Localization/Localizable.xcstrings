@@ -1,6 +1,212 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Update Ollama to version 0.16 or later for bounded local processing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Ollama to version 0.16 or later for bounded local processing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновите Ollama до версии 0.16 или новее для локальной обработки с ограничением ресурсов."
+          }
+        }
+      }
+    },
+    "Invalid local model stop sequences.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model stop sequences."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректные последовательности остановки локальной модели."
+          }
+        }
+      }
+    },
+    "Local model metadata request failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model metadata request failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось получить метаданные локальной модели."
+          }
+        }
+      }
+    }
+,
+    "Invalid local model timeout.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model timeout."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное ограничение времени для локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model options.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model options."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректные параметры локальной модели."
+          }
+        }
+      }
+    },
+    "Local model context must be between 512 and 16384 tokens.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model context must be between 512 and 16384 tokens."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контекст локальной модели должен составлять от 512 до 16384 токенов."
+          }
+        }
+      }
+    },
+    "Set local context in options.num_ctx.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set local context in options.num_ctx."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Укажите контекст локальной модели в options.num_ctx."
+          }
+        }
+      }
+    },
+    "Invalid local model token budget.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model token budget."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное ограничение числа токенов для локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model thinking setting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model thinking setting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректная настройка рассуждений локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model tool message.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model tool message."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное сообщение инструмента для локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model tool arguments.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model tool arguments."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректные аргументы инструмента для локальной модели."
+          }
+        }
+      }
+    },
+    "The local model reached its output token limit.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local model reached its output token limit."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная модель достигла ограничения числа токенов ответа."
+          }
+        }
+      }
+    }
+,
     "Completed later": {
       "extractionState": "manual",
       "localizations": {
