@@ -371,6 +371,9 @@ struct ContentView: View {
     @State private var accessibilityGuideMonitorTask: Task<Void, Never>?
     @State private var accessibilityGuideRequestID: UUID?
     @State private var prewarmDictationTask: Task<Void, Never>?
+    @State private var prewarmDictationRequestID: UUID?
+    @State private var prewarmDictationRoute: DictationProviderRoute?
+    @State private var prewarmDictationVerifiedUntil: TimeInterval = 0
     @State private var overlayLifecycleID: UInt64 = 0
     @State private var spokenSendAutoStopTask: Task<Void, Never>?
     @State private var spokenSendAutoStopTriggered = false
@@ -495,6 +498,7 @@ struct ContentView: View {
             .environment(\.fluidToolbarTrailingInset, self.toolbarTrailingInset)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 self.refreshAccessibilityPermissionState()
+                self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine)) { _ in
                 self.navigateToApp(.customDictionary)
@@ -627,6 +631,12 @@ struct ContentView: View {
             }
             .onChange(of: self.selectedProviderID) { _, newValue in
                 SettingsStore.shared.selectedProviderID = newValue
+            }
+            .onChange(of: self.localDictationWarmupRoute) { _, _ in
+                self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
+            }
+            .onReceive(self.asr.$activeExclusiveActivity) { activity in
+                if activity != nil, activity != .dictation { self.cancelPrewarmDictationIfNeeded() }
             }
             .onChange(of: self.activeShortcutRecordingTarget) { _, _ in
                 self.hotkeyManager?.resetModifierOnlyShortcutTracking()
@@ -764,6 +774,7 @@ struct ContentView: View {
         }
 
         self.loadProviderState()
+        self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
         self.installShortcutCaptureMonitor()
     }
 
@@ -2913,6 +2924,7 @@ struct ContentView: View {
             benchmarkID: benchmarkID
         )
         config.providerOptions = route.connectionOptions
+        DictationPostProcessingService.configureInteractiveLocalRequest(&config)
         if enableStreaming {
             config.onContentChunk = { chunk in
                 streamHandler?(chunk)
@@ -2947,6 +2959,7 @@ struct ContentView: View {
                     benchmarkID: benchmarkID
                 )
                 fallbackConfig.providerOptions = config.providerOptions
+                DictationPostProcessingService.configureInteractiveLocalRequest(&fallbackConfig)
                 response = try await LLMClient.shared.call(fallbackConfig)
             }
         } else {
@@ -4533,7 +4546,10 @@ struct ContentView: View {
     /// the warm prefix cache the prewarm prime.
     private func cancelPrewarmDictationIfNeeded() {
         self.prewarmDictationTask?.cancel()
-        self.prewarmDictationTask = nil
+        // Retain the task until its transport returns so a replacement can join
+        // it. Clearing this reference here could overlap two native model loads.
+        self.prewarmDictationRoute = nil
+        self.prewarmDictationVerifiedUntil = 0
     }
 
     private func handleLivePromptModeSwitch(_ mode: SettingsStore.PromptMode) {
@@ -4659,7 +4675,7 @@ struct ContentView: View {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
-                self.prewarmPrivateAIDictationIfNeeded(for: .primary)
+                self.prewarmAIDictationIfNeeded(for: .primary)
                 DebugLogger.shared.benchmark(
                     "APP_BENCH",
                     message: "overlay_phase phase=recording trigger=first_pcm",
@@ -4723,7 +4739,14 @@ struct ContentView: View {
         return true
     }
 
-    private func prewarmPrivateAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
+    private var localDictationWarmupRoute: DictationProviderRoute? {
+        let appID = DictationAppSession.shared.appID
+        guard DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appID) else { return nil }
+        let route = DictationProviderRoute.resolve(settings: self.settings, dictationSlot: .primary, appBundleID: appID)
+        return OllamaChatAdapter.supports(route.baseURL) ? route : nil
+    }
+
+    private func prewarmAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot, localOnly: Bool = false) {
         let appBundleID = self.asr.isRunningOrStarting ? self.recordingAppInfo?.bundleId : DictationAppSession.shared.appID
         let settings = SettingsStore.shared
         let route = DictationProviderRoute.resolve(
@@ -4731,28 +4754,61 @@ struct ContentView: View {
             dictationSlot: slot,
             appBundleID: appBundleID
         )
-        guard route.usesPrivateAI,
-              DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appBundleID)
-        else { return }
+        let nativeLocal = OllamaChatAdapter.supports(route.baseURL)
+        guard nativeLocal || (!localOnly && route.usesPrivateAI),
+              DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appBundleID),
+              self.asr.activeExclusiveActivity == nil || self.asr.activeExclusiveActivity == .dictation
+        else {
+            if localOnly, self.prewarmDictationRoute != nil { self.cancelPrewarmDictationIfNeeded() }
+            return
+        }
+
+        // Settings redraws, activation and recording can request the same warmup.
+        // Coalesce pending work and a short verified interval; there is no timer
+        // that repeatedly warms an idle app or loads all configured models.
+        if nativeLocal, self.prewarmDictationRoute == route,
+           self.prewarmDictationTask != nil || ProcessInfo.processInfo.systemUptime < self.prewarmDictationVerifiedUntil {
+            return
+        }
 
         // Cancel any prior prewarm so rapid start/stop doesn't queue duplicate
         // actor work on PrivateAIIntegrationService.
-        self.prewarmDictationTask?.cancel()
+        let previous = self.prewarmDictationTask
+        previous?.cancel()
+        let requestID = UUID()
+        self.prewarmDictationRequestID = requestID
+        self.prewarmDictationRoute = nativeLocal ? route : nil
         let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
         self.prewarmDictationTask = Task {
-            guard !Task.isCancelled, MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
+            await previous?.value
+            defer {
+                if self.prewarmDictationRequestID == requestID { self.prewarmDictationTask = nil }
+            }
+            guard !Task.isCancelled,
+                  self.asr.activeExclusiveActivity == nil || self.asr.activeExclusiveActivity == .dictation,
+                  MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
             DebugLogger.shared.debug(
                 "ContentView: AI dictation prewarm started slot=\(slot.rawValue)",
                 source: "ContentView"
             )
-            await PrivateAIIntegrationService.shared.prewarmDictation()
+            if nativeLocal {
+                do {
+                    try await DictationPostProcessingService.shared.prewarmLocalModel(route)
+                    guard !Task.isCancelled, self.prewarmDictationRequestID == requestID else { return }
+                    self.prewarmDictationVerifiedUntil = ProcessInfo.processInfo.systemUptime + 30
+                } catch {
+                    if !Task.isCancelled {
+                        DebugLogger.shared.debug("Local dictation prewarm unavailable; normal dictation remains available", source: "ContentView")
+                    }
+                    return
+                }
+            } else {
+                await PrivateAIIntegrationService.shared.prewarmDictation()
+            }
             DebugLogger.shared.debug(
                 "AI dictation prewarm complete slot=\(slot.rawValue)",
                 source: "ContentView"
             )
-            if !Task.isCancelled {
-                self.prewarmDictationTask = nil
-            }
         }
     }
 
@@ -4896,7 +4952,7 @@ struct ContentView: View {
             let slot = self.activeDictationShortcutSlot ?? .primary
             DictationAppSession.shared.select(selection, slot: slot, appID: DictationAppSession.shared.appID)
             self.applyDictationShortcutSelectionContext(for: slot)
-            self.prewarmPrivateAIDictationIfNeeded(for: slot)
+            self.prewarmAIDictationIfNeeded(for: slot)
         }
 
         guard self.hotkeyManager == nil else { return }
@@ -5431,7 +5487,7 @@ extension ContentView {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
-                self.prewarmPrivateAIDictationIfNeeded(for: slot)
+                self.prewarmAIDictationIfNeeded(for: slot)
                 self.appBench("overlay_phase phase=recording trigger=first_pcm")
             })
             guard !Task.isCancelled else {

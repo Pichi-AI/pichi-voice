@@ -138,9 +138,18 @@ nonisolated enum OllamaChatAdapter {
         }
         if let stop = options["stop"] as? String { options["stop"] = [stop] }
         if let stop = options["stop"], !(stop is [String]) { throw LLMError.invalidRequest(PichiLocalization.text("Invalid local model stop sequences.")) }
+        // Retention is a caller policy. Ordinary requests retain the short default;
+        // interactive dictation may request a finite idle window. Owned meeting
+        // aliases still override this value only in their separate transport.
+        var keepAlive: Any = "60s"
+        if let requested = config.extraParameters["keep_alive"] {
+            let seconds = try self.positiveInteger(requested)
+            guard seconds <= 3600 else { throw LLMError.invalidRequest(PichiLocalization.text("Invalid local model options.")) }
+            keepAlive = seconds
+        }
         var body: [String: Any] = [
             "model": config.model, "messages": try self.messages(config.messages),
-            "stream": config.streaming, "options": options, "keep_alive": "60s",
+            "stream": config.streaming, "options": options, "keep_alive": keepAlive,
             "truncate": false, "shift": false,
         ]
         if let choice = config.extraParameters["tool_choice"], !["auto", "none"].contains(choice as? String ?? "") {
@@ -161,6 +170,22 @@ nonisolated enum OllamaChatAdapter {
         do { request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]) }
         catch { throw LLMError.encodingError }
         return request
+    }
+
+    /// Numeric runtime diagnostics only. Never include generated text or thinking.
+    static func timingDiagnostics(_ payload: [String: Any]) -> String {
+        let durations = ["load_duration", "prompt_eval_duration", "eval_duration", "total_duration"].compactMap { key -> String? in
+            guard let number = payload[key] as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite, number.doubleValue >= 0,
+                  number.doubleValue <= Double(Int64.max) else { return nil }
+            return "\(key)Ms=\(Int64(number.doubleValue / 1_000_000))"
+        }
+        let counts = ["prompt_eval_count", "eval_count"].compactMap { key -> String? in
+            guard let value = try? self.positiveInteger(payload[key] ?? 0) else { return nil }
+            return "\(key)=\(value)"
+        }
+        return (durations + counts).joined(separator: " ")
     }
 
     /// Native thinking is separate from visible content. Function arguments are

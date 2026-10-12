@@ -585,6 +585,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
         let parsed: Response
         if OllamaChatAdapter.supports(config.baseURL) {
+            self.benchmark(config, "native_timing \(OllamaChatAdapter.timingDiagnostics(json))")
             parsed = self.parseMessageResponse(try OllamaChatAdapter.message(json, completed: true))
         } else if self.isResponsesRequest(request) {
             parsed = try self.parseResponsesResponse(json)
@@ -769,6 +770,9 @@ final nonisolated class LLMClient: @unchecked Sendable {
             if nativeOllama {
                 guard !nativeCompleted else { throw LLMError.invalidResponse }
                 nativeCompleted = json["done"] as? Bool == true
+                if nativeCompleted {
+                    self.benchmark(config, "native_timing \(OllamaChatAdapter.timingDiagnostics(json))")
+                }
                 delta = try OllamaChatAdapter.message(json, completed: nativeCompleted)
                 let calls = self.parseMessageResponse(delta).toolCalls
                 for call in calls { config.onToolCallStart?(call.name) }

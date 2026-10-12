@@ -216,6 +216,39 @@ final class DictationPostProcessingService {
 
     private init() {}
 
+    /// Dictation is interactive; meeting reasoning remains a separate per-attempt
+    /// policy. Apply this to UI and API calls without changing model preferences.
+    nonisolated static func configureInteractiveLocalRequest(_ config: inout LLMClient.Config) {
+        guard OllamaChatAdapter.supports(config.baseURL) else { return }
+        for key in ["think", "enable_thinking", "thinking", "reasoning", "reasoning_effort"] {
+            config.extraParameters.removeValue(forKey: key)
+        }
+        config.extraParameters["think"] = false
+        config.extraParameters["keep_alive"] = 30 * 60
+        config.timeoutSeconds = 30
+        config.maxRetries = 1
+    }
+
+    /// Empty native chat loads only the selected artifact, without sending user
+    /// content or generating a synthetic answer. The caller owns and joins this
+    /// work; the existing admission token remains held until transport drains.
+    func prewarmLocalModel(_ route: DictationProviderRoute, client: LLMClient = .shared) async throws {
+        guard OllamaChatAdapter.supports(route.baseURL), !route.model.isEmpty else { throw LLMError.invalidURL }
+        try Task.checkCancellation()
+        guard let activity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+            throw MeetingModelResidencyError.busy
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(activity) }
+        try await MeetingModelResidencyCoordinator.shared.withBackgroundOperation(owner: "local-text", modelID: route.model) {
+            var config = LLMClient.Config(messages: [], model: route.model, baseURL: route.baseURL,
+                                          apiKey: route.apiKey, streaming: false,
+                                          benchmarkID: "warm-\(UUID().uuidString)")
+            config.providerOptions = route.connectionOptions
+            Self.configureInteractiveLocalRequest(&config)
+            _ = try await client.call(config)
+        }
+    }
+
     struct Result {
         let text: String
         let providerID: String
@@ -316,6 +349,7 @@ final class DictationPostProcessingService {
         )
         config.providerOptions = resolved.connectionOptions
         config.timeoutSeconds = 120
+        Self.configureInteractiveLocalRequest(&config)
 
         let response = try await LLMClient.shared.call(config)
         guard !response.content.isEmpty else {

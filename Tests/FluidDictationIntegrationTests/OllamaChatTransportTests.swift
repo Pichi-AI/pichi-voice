@@ -4,6 +4,125 @@ import XCTest
 
 @MainActor
 final class OllamaChatTransportTests: XCTestCase {
+    func testInteractiveDictationSuppressesThinkingWithoutChangingTheModelConfiguration() throws {
+        let context = OllamaTransportContext()
+        defer { context.cleanup() }
+        for reasoning in [["enable_thinking": true], ["reasoning_effort": "high"], ["thinking": true], [:]] as [[String: Any]] {
+            var original = self.config(streaming: true)
+            original.extraParameters = reasoning
+            original.timeoutSeconds = 120
+            var interactive = original
+            DictationPostProcessingService.configureInteractiveLocalRequest(&interactive)
+            let body = try OllamaTransportFixture.body(context.client.buildRequest(interactive))
+            XCTAssertEqual(body["think"] as? Bool, false, "Absence of a reasoning preference cannot re-enable an artifact's default thinking")
+            XCTAssertEqual(body["keep_alive"] as? Int, 1800)
+            XCTAssertEqual(interactive.timeoutSeconds, 30)
+            XCTAssertEqual(interactive.maxRetries, 1)
+            XCTAssertEqual(interactive.model, original.model)
+            XCTAssertEqual(interactive.messages.count, original.messages.count)
+            XCTAssertEqual(try JSONSerialization.data(withJSONObject: original.extraParameters, options: .sortedKeys),
+                           try JSONSerialization.data(withJSONObject: reasoning, options: .sortedKeys),
+                           "Per-request policy must not change the saved reasoning dictionary used by meetings")
+        }
+    }
+
+    func testInteractivePolicyLeavesCloudAndOtherLocalProtocolsUnchanged() throws {
+        for baseURL in ["https://api.example.com/v1", "http://127.0.0.1:1234/v1", "http://192.168.1.2:11434/v1"] {
+            var config = self.config(baseURL: baseURL)
+            config.extraParameters = ["reasoning_effort": "high"]
+            config.timeoutSeconds = 120
+            DictationPostProcessingService.configureInteractiveLocalRequest(&config)
+            XCTAssertEqual(config.extraParameters["reasoning_effort"] as? String, "high")
+            XCTAssertNil(config.extraParameters["think"])
+            XCTAssertNil(config.extraParameters["keep_alive"])
+            XCTAssertEqual(config.timeoutSeconds, 120)
+            XCTAssertEqual(config.maxRetries, 3)
+        }
+    }
+
+    func testNativeRetentionRejectsUnboundedOrMalformedValues() throws {
+        let context = OllamaTransportContext()
+        defer { context.cleanup() }
+        for value in [-1, 0, 3601, true, 1800.5, "forever"] as [Any] {
+            var config = self.config()
+            config.extraParameters["keep_alive"] = value
+            XCTAssertThrowsError(try context.client.buildRequest(config)) { self.assertInvalidRequest($0) }
+        }
+        XCTAssertTrue(context.fixture.requests.isEmpty)
+    }
+
+    func testSelectedNativePreloadUsesEmptyContentAndTheDictationContext() async throws {
+        let context = OllamaTransportContext(body: #"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"load"}"#)
+        defer { context.cleanup() }
+        let route = DictationProviderRoute(providerID: "synthetic-provider", providerKey: "synthetic-provider",
+                                           baseURL: "http://127.0.0.1:11434/v1", model: "synthetic-selected:latest", apiKey: "")
+        try await DictationPostProcessingService.shared.prewarmLocalModel(route, client: context.client)
+        let request = try XCTUnwrap(context.fixture.requests.first)
+        let body = try OllamaTransportFixture.body(request)
+        XCTAssertEqual(body["model"] as? String, route.model)
+        XCTAssertEqual((body["messages"] as? [[String: Any]])?.count, 0)
+        XCTAssertEqual(body["stream"] as? Bool, false)
+        XCTAssertEqual(body["think"] as? Bool, false)
+        XCTAssertEqual(body["keep_alive"] as? Int, 1800)
+        XCTAssertEqual((body["options"] as? [String: Any])?["num_ctx"] as? Int, 8192)
+        XCTAssertEqual(request.timeoutInterval, 30)
+        XCTAssertEqual(context.fixture.requests.count, 1)
+        XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
+    }
+
+    func testPreloadRejectsCloudAndUnselectedModelWithoutARequest() async throws {
+        let context = OllamaTransportContext()
+        defer { context.cleanup() }
+        for (baseURL, model) in [("https://api.example.com/v1", "synthetic-selected"), ("http://localhost:11434/v1", "")] {
+            let route = DictationProviderRoute(providerID: "synthetic", providerKey: "synthetic", baseURL: baseURL, model: model, apiKey: "")
+            do {
+                try await DictationPostProcessingService.shared.prewarmLocalModel(route, client: context.client)
+                XCTFail("A preload cannot send a cloud request or choose an unspecified model")
+            } catch {}
+        }
+        XCTAssertTrue(context.fixture.requests.isEmpty)
+        XCTAssertTrue(context.fixture.metadataRequests.isEmpty)
+    }
+
+    func testPreloadCancellationJoinsTransportAndReleasesAdmission() async throws {
+        let context = OllamaTransportContext(body: "", held: true)
+        defer { context.cleanup() }
+        let route = DictationProviderRoute(providerID: "synthetic", providerKey: "synthetic", baseURL: "http://localhost:11434/v1", model: "synthetic-selected", apiKey: "")
+        let task = Task { try await DictationPostProcessingService.shared.prewarmLocalModel(route, client: context.client) }
+        for _ in 0..<100 where context.fixture.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(context.fixture.requests.count, 1)
+        XCTAssertTrue(MeetingSummaryActivityCoordinator.shared.isProcessing)
+        task.cancel()
+        do { try await task.value; XCTFail("Cancelled warmup cannot succeed") } catch {}
+        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
+        XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
+        try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) {}
+    }
+
+    func testPreloadFailureReleasesAdmissionAndDoesNotRetry() async throws {
+        let context = OllamaTransportContext(status: 503, body: #"{"error":"synthetic unavailable"}"#)
+        defer { context.cleanup() }
+        let route = DictationProviderRoute(providerID: "synthetic", providerKey: "synthetic", baseURL: "http://localhost:11434/v1", model: "synthetic-selected", apiKey: "")
+        do {
+            try await DictationPostProcessingService.shared.prewarmLocalModel(route, client: context.client)
+            XCTFail("Failed warmup cannot succeed")
+        } catch {}
+        XCTAssertEqual(context.fixture.requests.count, 1)
+        XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
+        try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) {}
+    }
+
+    func testNativeTimingDiagnosticsContainOnlyFiniteNumericMetrics() {
+        let metrics = OllamaChatAdapter.timingDiagnostics([
+            "load_duration": 2_500_000, "prompt_eval_duration": 3_200_000,
+            "eval_duration": 40_900_000, "total_duration": 50_000_000,
+            "prompt_eval_count": 19, "eval_count": 7,
+            "message": ["content": "private transcript", "thinking": "private reasoning"],
+        ])
+        XCTAssertEqual(metrics, "load_durationMs=2 prompt_eval_durationMs=3 eval_durationMs=40 total_durationMs=50 prompt_eval_count=19 eval_count=7")
+        XCTAssertEqual(OllamaChatAdapter.timingDiagnostics(["load_duration": Double.infinity, "eval_duration": -1, "total_duration": true, "eval_count": "private text"]), "")
+    }
+
     func testStandardLoopbackEndpointsUseBoundedNativeChatRequests() throws {
         for baseURL in ["http://localhost:11434/v1", "http://127.0.0.1:11434/v1/", "http://[::1]:11434/v1"] {
             let context = OllamaTransportContext()
