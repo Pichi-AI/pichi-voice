@@ -310,6 +310,27 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
+    func testExtractionContractKeepsQuestionsAndReportedProblemsSeparateFromAssignedWork() async throws {
+        // Verify the same provider-facing contract for both output languages.
+        // This does not substitute for evaluating an actual model's response.
+        for language in ["ru", "en"] {
+            let transport = RepairTransport(responses: [try self.referenceResponse(0)])
+            var configuration = self.configuration()
+            configuration.language = language
+            _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: self.session(), configuration: configuration)
+            let requests = await transport.requests
+            XCTAssertEqual(requests.count, 1)
+            let prompt = try XCTUnwrap(requests.first?.messages.first?["content"] as? String)
+            XCTAssertTrue(prompt.contains("An ability, permission or status question belongs in openQuestions, not actions"))
+            XCTAssertTrue(prompt.contains("Actions require a direct actionable request, assignment, explicit commitment or concrete proposal"))
+            XCTAssertTrue(prompt.contains("An unresolved problem, unmet past expectation or missing result alone does not create a task"))
+            XCTAssertTrue(prompt.contains("Combine overlapping steps toward the same stated outcome"))
+            XCTAssertTrue(prompt.contains("Personal experiences and unverified claims remain attributed reports"))
+            XCTAssertFalse(prompt.contains(self.turns[0].text), "Transcript data must not become instructions")
+        }
+    }
+
     func testLedgerRejectsUnknownAndDuplicateCandidateIDsEvenWhenProviderIgnoresSchema() async throws {
         let fixture = self.evidenceBudgetFixture(count: 1)
         let update: [String: Any] = ["index": 0, "evidence": [["segmentID": fixture.correction.segmentID.uuidString,
@@ -813,6 +834,70 @@ final class PichiMeetingSummaryTests: XCTestCase {
                     XCTAssertFalse(body.contains(segment.id.uuidString), "Persistence UUIDs stay outside the model input")
                 }
             }
+        }
+    }
+
+    func testLaterAcceptedActionPreservesTheEarlierOccurrenceAsHistory() async throws {
+        let transport = AcceptanceStateTransport(includeAcceptedAction: true)
+        let session = self.acceptanceSession()
+        let output = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(output.actions.count, 2, "Both source occurrences remain available")
+        XCTAssertEqual(output.actions.filter { $0.superseded != true }.count, 1, "The accepted task has one current row")
+        XCTAssertEqual(output.actions[0].superseded, true)
+        XCTAssertEqual(output.actions[0].status, .agreed)
+        XCTAssertEqual(Set(output.actions[0].evidence.map(\.segmentID)), Set(session.transcriptSegments.map(\.id)))
+        XCTAssertNil(output.actions[1].superseded)
+        XCTAssertEqual(output.actions[1].status, .agreed)
+        XCTAssertEqual(Set(output.actions[1].evidence.map(\.segmentID)), [session.transcriptSegments[1].id])
+        XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+    }
+
+    func testAcceptanceDoesNotCollapseAnIndependentRepeatedInstruction() async throws {
+        let transport = AcceptanceStateTransport(includeAcceptedAction: true)
+        var session = self.acceptanceSession()
+        session.transcriptSegments[1].text += " " + String(repeating: "Детали. ", count: 960)
+        var repeatInstruction = session.transcriptSegments[0]
+        repeatInstruction.id = UUID()
+        repeatInstruction.start = .init(value: 120_000, timescale: 1000)
+        repeatInstruction.text = "Иван, подготовь отчёт к пятнице."
+        session.transcriptSegments.append(repeatInstruction)
+        let output = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(output.actions.count, 3, "Repeated work retains its distinct source occurrence")
+        let current = output.actions.filter { $0.superseded != true }
+        XCTAssertEqual(current.count, 2)
+        XCTAssertEqual(current.map(\.status), [.agreed, .requested])
+        XCTAssertEqual(Set(current[1].evidence.map(\.segmentID)), [repeatInstruction.id], "The unrelated request's witness cannot identify the acceptance update")
+        XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+    }
+
+    func testLaterAcceptedVersionRemainsEligibleForACompletionUpdate() async throws {
+        let transport = AcceptanceStateTransport(terminalStatus: .completed, includeAcceptedAction: true)
+        let session = self.acceptanceSession(terminalStatus: .completed)
+        let output = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(output.actions.count, 2)
+        XCTAssertTrue(output.actions.allSatisfy { $0.superseded == true })
+        XCTAssertEqual(output.actions.map(\.status), [.agreed, .completed])
+        XCTAssertEqual(Set(output.actions[0].evidence.map(\.segmentID)), Set(session.transcriptSegments.prefix(2).map(\.id)))
+        XCTAssertEqual(Set(output.actions[1].evidence.map(\.segmentID)), Set(session.transcriptSegments.dropFirst().map(\.id)))
+        let states = await transport.reconciliationStates
+        XCTAssertEqual(states, [.requested, .agreed])
+        XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+    }
+
+    func testAcceptanceRequiresExactTaskFieldsBeforeSupersedingAnEarlierRow() async throws {
+        for difference in [["title": "Подготовить новый отчёт"], ["text": "Подготовить другой отчёт."],
+                           ["owner": "Мария"], ["deadline": "к среде"], ["urgency": "urgent"]] {
+            let transport = AcceptanceStateTransport(includeAcceptedAction: true, acceptedFields: difference)
+            var session = self.acceptanceSession()
+            session.transcriptSegments[1].text += " Мария подготовит другой отчёт к среде, это срочно."
+            let output = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            XCTAssertEqual(output.actions.count, 2)
+            XCTAssertTrue(output.actions.allSatisfy { $0.superseded != true }, "Different task fields must not form a replacement: \(difference)")
+            XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
         }
     }
 
@@ -2009,12 +2094,17 @@ final class PichiMeetingSummaryTests: XCTestCase {
     private actor AcceptanceStateTransport {
         let initialStatus: PichiMeetingSummaryActionStatus
         let terminalStatus: PichiMeetingSummaryActionStatus?
+        let includeAcceptedAction: Bool
+        let acceptedFields: [String: String]
         var reconciliationStates: [PichiMeetingSummaryActionStatus] = []
         var requests: [LLMClient.Config] = []
 
-        init(initialStatus: PichiMeetingSummaryActionStatus = .requested, terminalStatus: PichiMeetingSummaryActionStatus? = nil) {
+        init(initialStatus: PichiMeetingSummaryActionStatus = .requested, terminalStatus: PichiMeetingSummaryActionStatus? = nil,
+             includeAcceptedAction: Bool = false, acceptedFields: [String: String] = [:]) {
             self.initialStatus = initialStatus
             self.terminalStatus = terminalStatus
+            self.includeAcceptedAction = includeAcceptedAction
+            self.acceptedFields = acceptedFields
         }
 
         func complete(_ config: LLMClient.Config) throws -> String {
@@ -2056,6 +2146,12 @@ final class PichiMeetingSummaryTests: XCTestCase {
                                         "evidence": [["sourceIndex": try XCTUnwrap(sources.dropFirst(8).first?.sourceIndex)]]])
                     }
                     result["changes"] = changes
+                    if self.includeAcceptedAction {
+                        var action: [String: Any] = ["title": "Подготовить отчёт", "text": "Подготовить отчёт.", "evidence": changeEvidence,
+                                                     "owner": "Иван", "deadline": "к пятнице", "status": "agreed", "urgency": "unspecified"]
+                        for (key, value) in self.acceptedFields { action[key] = value }
+                        result["actions"] = [action]
+                    }
                 } else {
                     result["changes"] = [["text": source.text, "evidence": evidence]]
                 }

@@ -330,7 +330,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     var baseCacheIdentity: String {
         // Hash a canonical payload rather than delimiter-joining user-controlled values.
         // Credentials and the temporary inference alias never become persisted metadata.
-        let payload: [String: Any] = ["version": 12, "provider": self.providerID, "model": self.modelID,
+        let payload: [String: Any] = ["version": 13, "provider": self.providerID, "model": self.modelID,
                                       "endpoint": self.baseURL, "language": self.language,
                                       "execution": self.execution.identity, "connection": self.connectionOptions]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
@@ -535,6 +535,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         Return six array fields: summary, decisions, actions, openQuestions, changes, answers. Each item has text and evidence. Each evidence entry has only sourceIndex, an integer selected from the supplied catalog, never a timestamp or a number spoken in the meeting. Actions also require title (a short action name), text (the concise result or scope), status (requested, proposed, agreed, completed or cancelled), urgency (urgent, normal or unspecified), owner and deadline (each an exact source phrase or JSON null without quotes). Other item types have no title, status, urgency, owner or deadline.
         Before including EACH item, verify EVERY factual assertion against its selected source text: who, what, polarity, number, time, status and certainty. A citation to a related topic is insufficient. Split independent claims into separate brief items and cite every excerpt needed to support them. If a clause lacks support, remove that clause rather than attach an unrelated reference. Do not copy or invent source IDs or quotes; the application preserves the literal text for each selected sourceIndex.
         Preserve the speech act: a question is not an answer, a proposal is not a decision, intended work is not completed work, and an individual's opinion is not an established fact. Attribute opinions and retain conditions, uncertainty, negation and disagreement. Do not infer approval or an assignment from the speaker label. Keep collective choices collective. A request or direct assignment without explicit acceptance has status requested; a concrete proposal or conditional next step has status proposed; agreed requires an explicit commitment or agreement to that same work; completed and cancelled require an explicit report about that same work. A brief agreement to one step does not accept other steps. Cite sources that identify both the work and its later change when describing cancellation, replacement or completion; one explicit utterance may establish both. A close deadline alone does not establish urgency: urgent or normal require explicit urgency or non-urgency for that task, otherwise use unspecified.
+        An ability, permission or status question belongs in openQuestions, not actions, unless the source also explicitly assigns concrete work. Actions require a direct actionable request, assignment, explicit commitment or concrete proposal to perform work. An unresolved problem, unmet past expectation or missing result alone does not create a task; never invent prerequisite or remedial work from such a report. Combine overlapping steps toward the same stated outcome into one concise task when they have no distinct owner, deadline or agreed scope, while retaining separate commitments. Personal experiences and unverified claims remain attributed reports, not established external facts.
         Determine the action's owner separately from whether the work was accepted. Copy the explicitly addressed target of a request, directly assigned person or speaker who explicitly commits to that same work, literally from cited speech or the cited speaker label. Naming a request's target does not mean that person agreed. Otherwise owner is null; the person asking a question or speaking nearby is not the owner by default. Copy a deadline only when the selected cited excerpt explicitly sets it for that action, including its prepositions and grammatical case. Do not translate, normalize or calculate names or dates. Mentioning a person or a date elsewhere does not assign that owner or deadline. Missing or ambiguous values are null, never the string "null".
         Read the entire supplied catalog, including its final entries, and check each distinct topic before finalizing. Preserve material corrections, answers, qualifications and unresolved issues. Do not invent facts to fill an array. Keep tasks concise and actionable; an anecdote, past activity or standing preference alone is not future work. Write grammatical \(language) prose with complete sentences and ordinary punctuation. Retain real names and product names, but do not add foreign-language lead-ins, decorative arrows, emoji, HTML or Markdown markup. Keep items brief enough to finish the complete JSON object.
         \(reducing ? "The input contains grounded recap items in chronological order. Condense repetition into 1 to 8 coherent short paragraphs that explain the meeting's material topics, relevant circumstances, conclusions and unresolved issues. Group related claims, but do not force unrelated facts into one item merely to reduce the count or replace substantive details with topic labels. Verify each retained claim against the supplied original sources. Later explicit corrections or cancellations replace the earlier state; describe the final state and cite both the original work and correcting source. Preserve unresolved disagreement and uncertainty when no definite resolution exists. Return empty decisions, actions, openQuestions, changes and answers; their separate ledgers are preserved by the application. Do not introduce new claims." : "The input contains timestamped source excerpts from transcript turns. First identify explicit decisions, concrete future actions or requests and unresolved questions across every excerpt. Put each in its corresponding array, even if it also merits a recap item. Describe unaccepted requests as requests and concrete conditional next steps as conditional; proposals and hypothetical work are not commitments. Then write 1 to 8 brief atomic recap items covering distinct material topics. Put explicit task acceptance, completion, cancellation, correction, postponement and replacement in changes, including when the original work is outside this part. A completion of previously discussed work also belongs in actions with status completed; a past anecdote unrelated to meeting work does not. Put definite answers and factual clarifications in answers, including answers to earlier questions. Tentative suggestions, guesses and questions are not answers. Never mark an item superseded or resolved yourself. Use empty arrays only where the supplied sources contain no applicable items.")
@@ -728,6 +729,12 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         let events = changes.map { LedgerChange(sourceSeconds: $0.evidence.compactMap { times[$0.segmentID] }.max() ?? 0, item: $0) }
             .sorted { $0.sourceSeconds < $1.sourceSeconds }
         var result = items
+        // Task fields remain immutable through reconciliation. Index exact versions
+        // once instead of scanning every task for every later state update.
+        let actionVersions: [[String?]: [Int]] = actionStates ? Dictionary(grouping: items.indices, by: { index in
+            let item = items[index]
+            return [item.title, item.text, item.owner, item.deadline, item.urgency?.rawValue]
+        }) : [:]
         var eventBatches: [[LedgerChange]] = []
         var batch: [LedgerChange] = []
         var size = 0
@@ -798,8 +805,16 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                     else if actionStates, let status = update.status,
                             status != .completed, status != .cancelled {
                         // Acceptance changes the same pending task's state. Keep
-                        // it eligible for a later completion or cancellation.
-                        item.superseded = nil
+                        // it current unless extraction already supplied that exact
+                        // later version. Preserve both occurrences and their sources;
+                        // a similar task or an independent repeated request is distinct.
+                        let identity = [item.title, item.text, item.owner, item.deadline, item.urgency?.rawValue]
+                        let hasLaterVersion = (actionVersions[identity] ?? []).contains { index in
+                            let later = result[index]
+                            return index != update.index && later.superseded != true && later.status == status
+                                && update.evidence.allSatisfy(later.evidence.contains)
+                        }
+                        item.superseded = hasLaterVersion ? true : nil
                     } else { item.superseded = true }
                     if actionStates, let status = update.status { item.status = status }
                     var seen = Set<PichiMeetingSummaryEvidence>()
