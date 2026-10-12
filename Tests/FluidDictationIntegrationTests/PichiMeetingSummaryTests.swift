@@ -13,7 +13,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
                           deadline: String? = "к пятнице", evidenceID: UUID? = nil) -> PichiMeetingSummaryDocument {
         let evidence = PichiMeetingSummaryEvidence(segmentID: evidenceID ?? self.id, quote: quote)
         return .init(summary: [.init(text: "Обсудили отчёт.", evidence: [evidence])],
-                     decisions: [], actions: [.init(text: "Подготовить отчёт.", evidence: [evidence], owner: owner, deadline: deadline)],
+                     decisions: [], actions: [.init(text: "Подготовить отчёт.", evidence: [evidence], owner: owner, deadline: deadline,
+                                                    title: "Подготовить отчёт", status: .agreed, urgency: .unspecified)],
                      openQuestions: [])
     }
 
@@ -79,12 +80,16 @@ final class PichiMeetingSummaryTests: XCTestCase {
     }
 
     func testStructuredActionsRoundTripWhileLegacyActionsKeepUnknownMetadata() throws {
-        let legacy = self.document()
+        var legacy = self.document()
+        legacy.actions[0].title = nil
+        legacy.actions[0].status = nil
+        legacy.actions[0].urgency = nil
         let raw = try self.json(legacy)
-        let decoded = try PichiMeetingSummaryDocument.decode(raw, turns: self.turns)
+        let decoded = try JSONDecoder().decode(PichiMeetingSummaryDocument.self, from: Data(raw.utf8)).validated(against: self.turns)
         XCTAssertNil(decoded.actions[0].title)
         XCTAssertNil(decoded.actions[0].status, "Legacy tasks must never become implicitly agreed")
         XCTAssertNil(decoded.actions[0].urgency)
+        XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode(raw, turns: self.turns), "Fresh generation must not bypass typed metadata by posing as a saved legacy artifact")
         var structured = legacy
         structured.actions[0].title = "Подготовить отчёт"
         structured.actions[0].status = .requested
@@ -97,6 +102,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
 
     func testStructuredActionMetadataIsCompleteAndLimitedToActions() throws {
         var document = self.document()
+        document.actions[0].status = nil
+        document.actions[0].urgency = nil
         document.actions[0].title = "Подготовить отчёт"
         XCTAssertThrowsError(try document.validated(against: self.turns))
         document.actions[0].status = .agreed
@@ -265,7 +272,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
         session.transcriptSegments[0].text = "Иван подготовит отчёт. Срок пока не назначили."
         let evidence = PichiMeetingSummaryEvidence(segmentID: self.id, quote: session.transcriptSegments[0].text)
         let valid = PichiMeetingSummaryDocument(summary: [.init(text: "Отчёт подготовят, срок не назначен.", evidence: [evidence])],
-                                               decisions: [], actions: [.init(text: "Подготовить отчёт.", evidence: [evidence], owner: "Иван")],
+                                               decisions: [], actions: [.init(text: "Подготовить отчёт.", evidence: [evidence], owner: "Иван",
+                                                                              title: "Подготовить отчёт", status: .agreed, urgency: .unspecified)],
                                                openQuestions: [])
         var contaminated = valid
         contaminated.actions[0].deadline = "к среде"
@@ -677,6 +685,44 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(Set(output.actions[0].evidence.map(\.segmentID)), Set(session.transcriptSegments.map(\.id)))
         XCTAssertTrue(output.summary.first?.text.contains("Отменяем") == true)
         XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+    }
+
+    func testLaterCompletionMakesEarlierTaskHistoricalAndRetainsBothSourceTimes() async throws {
+        let transport = CompletionStateTransport()
+        let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
+        let session = self.completionSession()
+        let output = try await generator.generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(output.actions.count, 2, "Keep source history instead of deleting the earlier task")
+        let historical = try XCTUnwrap(output.actions.first { $0.superseded == true })
+        let current = try XCTUnwrap(output.actions.first { $0.superseded != true })
+        XCTAssertEqual(historical.status, .completed)
+        XCTAssertEqual(current.status, .completed)
+        XCTAssertEqual(historical.owner, "Иван")
+        XCTAssertEqual(Set(historical.evidence.map(\.segmentID)), Set(session.transcriptSegments.map(\.id)))
+        let markdown = output.copyMarkdown(language: .english, sources: PichiMeetingSummaryInput.turns(for: session))
+        XCTAssertFalse(markdown.contains("Status: Agreed"))
+        XCTAssertTrue(markdown.contains("Completed later"))
+        XCTAssertTrue(markdown.contains("0:00"))
+        XCTAssertTrue(markdown.contains("1:00"))
+        XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        let requests = await transport.requests
+        XCTAssertTrue(requests.allSatisfy { $0.model == "fixture-model" && $0.baseURL == self.configuration().baseURL })
+    }
+
+    func testCompletionUpdatesRejectMissingStatusAndEarlierEvidence() async throws {
+        for earlier in [false, true] {
+            var session = self.completionSession()
+            if earlier {
+                session.transcriptSegments[0].start = .init(value: 60_000, timescale: 1000)
+                session.transcriptSegments[1].start = .init(value: 0, timescale: 1000)
+            }
+            let transport = CompletionStateTransport(omitStatus: !earlier)
+            do {
+                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: session, configuration: self.configuration())
+                XCTFail("Missing action update metadata or a prior completion must not create an accepted current state")
+            } catch PichiMeetingSummaryError.invalidEvidence {}
+        }
     }
 
     func testEarlierChangeCannotCancelLaterDecision() async {
@@ -1641,6 +1687,17 @@ final class PichiMeetingSummaryTests: XCTestCase {
         return session
     }
 
+    private func completionSession() -> MeetingSession {
+        var session = self.session()
+        session.transcriptSegments[0].text = "Я подготовлю отчёт к пятнице. " + String(repeating: "Детали. ", count: 965)
+        var later = session.transcriptSegments[0]
+        later.id = UUID()
+        later.start = .init(value: 60_000, timescale: 1000)
+        later.text = "Отчёт готов. Я завершил подготовку отчёта."
+        session.transcriptSegments.append(later)
+        return session
+    }
+
     private func cancellationSession() -> MeetingSession {
         var session = self.session()
         var first = session.transcriptSegments[0]
@@ -1749,6 +1806,40 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
+    private actor CompletionStateTransport {
+        let omitStatus: Bool
+        var requests: [LLMClient.Config] = []
+        init(omitStatus: Bool = false) { self.omitStatus = omitStatus }
+
+        func complete(_ config: LLMClient.Config) throws -> String {
+            self.requests.append(config)
+            let prompt = config.messages[0]["content"] as? String ?? ""
+            let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let sources = try JSONDecoder().decode([PichiMeetingSummarySource].self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fields["sources"])))
+            if prompt.contains("Reconcile meeting tasks") {
+                let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+                let candidate = try XCTUnwrap(candidates.first { ($0["item"] as? [String: Any])?["status"] as? String == "agreed" })
+                var update: [String: Any] = ["index": try XCTUnwrap(candidate["index"] as? Int),
+                                            "evidence": [["sourceIndex": try XCTUnwrap(sources.first?.sourceIndex)]]]
+                if !self.omitStatus { update["status"] = "completed" }
+                return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [update]]), as: UTF8.self)
+            }
+            let source = try XCTUnwrap(sources.first)
+            let evidence: [[String: Any]] = [["sourceIndex": source.sourceIndex]]
+            var result: [String: Any] = ["summary": [["text": "Обсудили подготовку отчёта.", "evidence": evidence]],
+                                        "decisions": [], "actions": [], "openQuestions": [], "changes": [], "answers": []]
+            if !prompt.contains("Condense") {
+                let completed = source.text.hasPrefix("Отчёт готов.")
+                result["actions"] = [["title": "Подготовить отчёт", "text": "Подготовить отчёт.", "evidence": evidence,
+                                      "owner": "Иван", "deadline": completed ? NSNull() as Any : "к пятнице" as Any, "status": completed ? "completed" : "agreed",
+                                      "urgency": "unspecified"]]
+                if completed { result["changes"] = [["text": "Подготовка отчёта завершена.", "evidence": evidence]] }
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self)
+        }
+    }
+
     private actor FixtureTransport {
         var requests: [LLMClient.Config] = []
         let cancellationMode: Bool
@@ -1775,7 +1866,9 @@ final class PichiMeetingSummaryTests: XCTestCase {
                           let event = events.first(where: { self.wrongChronology || ($0["sourceSeconds"] as? Double ?? 0) > time }),
                           let eventItem = event["item"] as? [String: Any],
                           let evidence = eventItem["evidence"] as? [[String: Any]] else { return nil }
-                    return ["index": index, "evidence": evidence]
+                    var update: [String: Any] = ["index": index, "evidence": evidence]
+                    if prompt.contains("Reconcile meeting tasks") { update["status"] = NSNull() }
+                    return update
                 }
                 return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": updates]), as: UTF8.self)
             }
@@ -1813,7 +1906,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
                     let cancelling = turn.text.hasPrefix("Отменяем")
                     let evidence = [PichiMeetingSummaryEvidence(segmentID: turn.id, quote: String(turn.text.prefix(57)))]
                     let fact = PichiMeetingSummaryItem(text: cancelling ? "Отменяем выпуск." : "Выпустить в пятницу.", evidence: evidence)
-                    let action = PichiMeetingSummaryItem(text: "Подготовить релиз.", evidence: evidence, owner: "Иван", deadline: "пятницу")
+                    let action = PichiMeetingSummaryItem(text: "Подготовить релиз.", evidence: evidence, owner: "Иван", deadline: "пятницу",
+                                                        title: "Подготовить релиз", status: .agreed, urgency: .unspecified)
                     let document = PichiMeetingSummaryDocument(summary: [fact], decisions: [fact],
                                                                actions: cancelling ? [] : [action], openQuestions: [], changes: cancelling ? [fact] : [])
                     return String(decoding: try JSONEncoder().encode(document), as: UTF8.self)

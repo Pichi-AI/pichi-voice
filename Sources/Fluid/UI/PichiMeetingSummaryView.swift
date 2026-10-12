@@ -252,9 +252,9 @@ struct PichiMeetingSummaryView: View {
                             CommandMarkdownContent(text: item.text)
                                 .strikethrough(item.superseded == true || item.status == .cancelled)
                             if item.superseded == true {
-                                Text("Cancelled or replaced later")
+                                Text(PichiLocalization.text(item.status == .completed ? "Completed later" : "Updated later", locale: self.interfaceLocale))
                                     .font(self.theme.typography.captionStrong)
-                                    .foregroundStyle(self.theme.palette.warning)
+                                    .foregroundStyle(item.status == .completed ? self.theme.palette.success : self.theme.palette.warning)
                             }
                             if questions {
                                 Text(PichiLocalization.text(item.resolved == true ? "Answered later" : "Open question"))
@@ -335,7 +335,7 @@ extension PichiMeetingSummaryDocument {
             "## " + literal(PichiLocalization.text(key, language: language, bundle: bundle)) + "\n\n" + items.map { item in
                 var lines: [String] = []
                 if actions, let title = item.title { lines.append("### " + literal(title)) }
-                let marker = (item.superseded == true ? PichiLocalization.text("[Superseded] ", language: language, bundle: bundle) : "")
+                let marker = (item.superseded == true ? PichiLocalization.text(item.status == .completed ? "[Completed later] " : "[Superseded] ", language: language, bundle: bundle) : "")
                     + (item.resolved == true ? PichiLocalization.text("[Answered] ", language: language, bundle: bundle) : "")
                 lines.append(literal(marker + item.text))
                 if actions {

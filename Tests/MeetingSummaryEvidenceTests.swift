@@ -17,9 +17,12 @@ struct MeetingSummaryEvidenceTests {
         document.actions[0].deadline = nil
         _ = try document.validated(against: [source])
 
-        let legacy = try PichiMeetingSummaryDocument.decode(String(decoding: JSONEncoder().encode(document), as: UTF8.self), turns: [source])
+        let legacyData = try JSONEncoder().encode(document)
+        let legacy = try JSONDecoder().decode(PichiMeetingSummaryDocument.self, from: legacyData).validated(against: [source])
         guard legacy.actions[0].title == nil, legacy.actions[0].status == nil, legacy.actions[0].urgency == nil
         else { throw Failure("Legacy metadata became an inferred task state") }
+        do { _ = try PichiMeetingSummaryDocument.decode(String(decoding: legacyData, as: UTF8.self), turns: [source]); throw Failure("Fresh generation accepted missing task metadata as legacy") }
+        catch PichiMeetingSummaryError.invalidOutput {}
         document.actions[0].title = "Уточнить отчёт"
         do { _ = try document.validated(against: [source]); throw Failure("Partial task metadata was accepted") }
         catch PichiMeetingSummaryError.invalidOutput {}

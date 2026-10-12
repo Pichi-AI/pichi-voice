@@ -228,7 +228,7 @@ nonisolated enum PichiMeetingSummaryTransport {
         return context
     }
 
-    static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil) -> [String: Any] {
+    static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil, actionStates: Bool = false) -> [String: Any] {
         var evidence: [String: Any] = [
             "type": "object", "additionalProperties": false, "required": ["segmentID", "quote"],
             "properties": ["segmentID": ["type": "string"], "quote": ["type": "string", "minLength": 1, "maxLength": 500]],
@@ -250,8 +250,14 @@ nonisolated enum PichiMeetingSummaryTransport {
                 if !choices.isEmpty { index["enum"] = choices }
                 updates["maxItems"] = choices.count
             }
+            var updateProperties: [String: Any] = ["index": index, "evidence": citations]
+            var required = ["index", "evidence"]
+            if actionStates {
+                updateProperties["status"] = ["anyOf": [["type": "null"], ["type": "string", "enum": PichiMeetingSummaryActionStatus.allCases.map(\.rawValue)]]]
+                required.append("status")
+            }
             updates["items"] = ["type": "object", "additionalProperties": false,
-                                "required": ["index", "evidence"], "properties": ["index": index, "evidence": citations]]
+                                "required": required, "properties": updateProperties]
             return definitions.merging(["type": "object", "additionalProperties": false, "required": ["updates"],
                                         "properties": ["updates": updates]]) { _, new in new }
         }
