@@ -1599,6 +1599,36 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(deletes.count, 1)
     }
 
+    @MainActor
+    func testLegacySavedActionShapeLoadsWithMatchingProvenanceWithoutImplicitAgreement() async throws {
+        let session = self.session()
+        let configuration = self.configuration()
+        var legacy = self.document()
+        legacy.actions[0].title = nil
+        legacy.actions[0].status = nil
+        legacy.actions[0].urgency = nil
+        let store = MeetingSessionStore.shared
+        try await store.create(session)
+        do {
+            let savedDirectory = try await store.existingSessionDirectory(for: session.id)
+            let directory = try XCTUnwrap(savedDirectory)
+            let artifact = PichiMeetingSummaryArtifact(version: 6,
+                transcriptHash: PichiMeetingSummaryInput.fingerprint(session), configurationIdentity: configuration.cacheIdentity,
+                generatedAt: Date(), document: legacy, baseConfigurationIdentity: configuration.baseCacheIdentity)
+            try JSONEncoder().encode(artifact).write(to: directory.appendingPathComponent("pichi-meeting-summary.json"), options: .atomic)
+            let controller = PichiMeetingSummaryController(generator: .init(complete: { _ in
+                XCTFail("Viewing a saved legacy shape must not call inference")
+                throw LLMError.invalidResponse
+            }))
+            await controller.refresh(session: session, configuration: configuration)
+            XCTAssertEqual(controller.document, legacy)
+            XCTAssertNil(controller.document?.actions[0].status)
+            XCTAssertNil(controller.document?.actions[0].urgency)
+            XCTAssertFalse(controller.documentIsHistorical, "This fixture's current provenance matches; it is not a cache migration test")
+        } catch { try await store.delete(id: session.id); throw error }
+        try await store.delete(id: session.id)
+    }
+
     func testGeneratorFailureJoinsOwnedAliasRelease() async throws {
         let server = ArtifactServer()
         let generator = PichiMeetingSummaryGenerator(complete: { _ in throw URLError(.cannotConnectToHost) },
