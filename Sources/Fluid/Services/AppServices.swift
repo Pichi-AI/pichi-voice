@@ -49,11 +49,12 @@ final class AppServices: ObservableObject {
 
     private var _localAIModelResidency: LocalAIModelResidencyController?
     private var localAIResidencySlot: SettingsStore.DictationShortcutSlot = .primary
+    private var isTerminating = false
 
     /// Window visibility does not own native model lifetime. Requests before the
     /// startup gate are fulfilled by signalUIReady's initial reconciliation.
     func refreshLocalAIResidency(for slot: SettingsStore.DictationShortcutSlot? = nil) {
-        guard self.isUIReady else { return }
+        guard self.isUIReady, !self.isTerminating else { return }
         if let slot { self.localAIResidencySlot = slot }
         if self._localAIModelResidency == nil {
             DictationAppSession.shared.start()
@@ -400,6 +401,7 @@ final class AppServices: ObservableObject {
     }
 
     func shutdownForTermination() async {
+        self.isTerminating = true
         await self._localAIModelResidency?.shutdown()
         self._localAIModelResidency = nil
         self._meetingAutoDetector?.stop()

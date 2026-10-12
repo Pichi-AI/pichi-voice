@@ -78,6 +78,9 @@ final class LocalAIModelResidencyController {
     private var failures = 0
     private var terminating = false
 
+    /// A read-only lifetime diagnostic; completion includes the joined transport.
+    var hasPendingOperation: Bool { self.warmup != nil || self.probe != nil }
+
     init(dependencies: Dependencies, policy: LocalAIModelResidencyPolicy = .shared) {
         self.dependencies = dependencies
         self.policy = policy

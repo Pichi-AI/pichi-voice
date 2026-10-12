@@ -66,7 +66,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
         ), policy: policy)
         controller.start()
         controller.start()
-        try await self.eventually { warms == 1 }
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
         for _ in 0..<5 { controller.refresh(); await Task.yield() }
         XCTAssertEqual(warms, 1)
         XCTAssertEqual(probes, 0)
@@ -75,7 +75,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
         // alive across idle time and only inspects a healthy resident runner.
         now = 60
         controller.refresh()
-        try await self.eventually { probes == 1 }
+        try await self.eventually { probes == 1 && !controller.hasPendingOperation }
         XCTAssertEqual(warms, 1)
         allowed = false
         resident = false
@@ -85,7 +85,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
         XCTAssertEqual(probes, 1)
         allowed = true
         controller.refresh()
-        try await self.eventually { warms == 2 }
+        try await self.eventually { warms == 2 && !controller.hasPendingOperation }
         XCTAssertEqual(probes, 2)
         await controller.shutdown()
         XCTAssertEqual(releases, 1)
@@ -131,7 +131,7 @@ final class LocalAIModelResidencyTests: XCTestCase {
             warm: { _ in warms += 1 }, isReady: { _ in true }, release: { _ in releases += 1 }
         ), policy: LocalAIModelResidencyPolicy())
         controller.start()
-        try await self.eventually { warms == 1 }
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
         allowed = false
         selected = nil
         controller.refresh()
@@ -181,19 +181,19 @@ final class LocalAIModelResidencyTests: XCTestCase {
             isReady: { _ in true }, release: { _ in }, now: { now }
         ), policy: LocalAIModelResidencyPolicy())
         controller.start()
-        try await self.eventually { warms == 1 }
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
         now = 30
         for _ in 0..<5 { controller.refresh(); await Task.yield() }
         XCTAssertEqual(warms, 1)
         now = 60
         controller.refresh()
-        try await self.eventually { warms == 2 }
+        try await self.eventually { warms == 2 && !controller.hasPendingOperation }
         now = 120
         for _ in 0..<5 { controller.refresh(); await Task.yield() }
         XCTAssertEqual(warms, 2)
         now = 180
         controller.refresh()
-        try await self.eventually { warms == 3 }
+        try await self.eventually { warms == 3 && !controller.hasPendingOperation }
         await controller.shutdown()
     }
 
