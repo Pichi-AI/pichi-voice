@@ -617,7 +617,7 @@ final class FileTranscriptionService: ObservableObject {
                 }
 
                 // Convert buffer to 16kHz mono Float32 samples
-                let samples: [Float]
+                var samples: [Float]
                 do {
                     samples = try AudioBufferConverter.monoSamples(
                         from: buffer,
@@ -627,10 +627,14 @@ final class FileTranscriptionService: ObservableObject {
                     throw TranscriptionError.audioConversionFailed("Could not resample audio: \(error.localizedDescription)")
                 }
 
-                // Skip if chunk is too short (< 1 second)
-                guard samples.count >= Int(sampleRate) else {
+                // Keep short files and final tails. The existing ASR minimum is met with
+                // trailing silence, without dropping source audio or changing its duration.
+                guard !samples.isEmpty else {
                     currentFrame += AVAudioFramePosition(framesToRead)
                     continue
+                }
+                if samples.count < Int(sampleRate) {
+                    samples.append(contentsOf: repeatElement(Float(0), count: Int(sampleRate) - samples.count))
                 }
 
                 // Transcribe this chunk using the provider (works for both Parakeet and Whisper)
@@ -652,7 +656,7 @@ final class FileTranscriptionService: ObservableObject {
 
             if allTranscriptions.isEmpty {
                 DebugLogger.shared.warning(
-                    "No audio chunks were long enough to transcribe (minimum 1 second required)",
+                    "No audio chunks produced recognized text",
                     source: "FileTranscriptionService"
                 )
             }
