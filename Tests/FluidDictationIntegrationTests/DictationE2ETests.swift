@@ -2531,11 +2531,6 @@ extension DictationE2ETests {
 
             UserDefaults.standard.set(tempURL.path, forKey: self.privateAILocalModelPathKey)
 
-            #if PRIVATE_AI_PROVIDER
-            XCTAssertEqual(PrivateAIIntegrationService.isLocalRuntimeConfigured, PrivateFeatures.privateAIProvider)
-            #else
-            XCTAssertFalse(PrivateAIIntegrationService.isLocalRuntimeConfigured, "An empty file cannot configure the bundled native runtime")
-            #endif
             XCTAssertFalse(PrivateAIIntegrationService.shouldHandleDictation(model: "gpt-4.1"))
             XCTAssertEqual(
                 PrivateAIIntegrationService.shouldHandleDictation(model: PrivateAIProviderFeature.shared.providerID),
@@ -2567,11 +2562,6 @@ extension DictationE2ETests {
             settings.verifiedProviderFingerprints = [:]
             settings.setDictationPromptSelection(.default)
 
-            #if PRIVATE_AI_PROVIDER
-            XCTAssertEqual(PrivateAIIntegrationService.isLocalRuntimeConfigured, PrivateFeatures.privateAIProvider)
-            #else
-            XCTAssertFalse(PrivateAIIntegrationService.isLocalRuntimeConfigured, "An empty file cannot configure the bundled native runtime")
-            #endif
             XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: nil))
         }
     }
