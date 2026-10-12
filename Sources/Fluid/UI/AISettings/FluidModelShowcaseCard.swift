@@ -49,11 +49,11 @@ struct FluidModelShowcaseCard: View {
                 }
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                        Text(presentation.summary)
+                        Text(PichiLocalization.text(presentation.summary))
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(self.theme.palette.primaryText)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(presentation.useCase)
+                        Text(PichiLocalization.text(presentation.useCase))
                             .font(self.theme.typography.body)
                             .foregroundStyle(self.theme.palette.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)

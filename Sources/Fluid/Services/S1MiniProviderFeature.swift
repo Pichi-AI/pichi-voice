@@ -19,7 +19,7 @@ nonisolated struct S1MiniProviderFeature: PrivateAIProviderFeatureProviding {
             version: Self.revision
         ),
         presentation: PrivateAIModelPresentation(
-            summary: "S1-mini by Superwhisper",
+            summary: "Compact on-device cleanup",
             useCase: "Clean up dictation locally on your Mac.",
             language: nil
         )

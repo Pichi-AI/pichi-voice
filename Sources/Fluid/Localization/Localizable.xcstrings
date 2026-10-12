@@ -46582,6 +46582,23 @@
           }
         }
       }
+    },
+    "Compact on-device cleanup": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact on-device cleanup"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Компактная локальная модель"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
