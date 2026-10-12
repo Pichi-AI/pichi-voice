@@ -129,16 +129,16 @@ final class SettingsStore: ObservableObject {
         }
 
         /// Default backend when no preference is stored.
-        /// Apple Silicon → MLX (fastest Fluid-1 path). Intel → llama.cpp.
+        /// The registered provider owns its supported runtime and default.
         static var systemDefault: PrivateAIBackendPreference {
-            CPUArchitecture.isAppleSilicon ? .mlx : .llama
+            PrivateAIProviderFeature.shared.defaultBackend
         }
 
         var displayName: String {
             switch self {
             case .auto: return Self.systemDefault.displayName
-            case .llama: return "llama.cpp (Compatibility)"
-            case .mlx: return "MLX (Recommended)"
+            case .llama: return "llama.cpp"
+            case .mlx: return "MLX"
             }
         }
 
@@ -147,11 +147,9 @@ final class SettingsStore: ObservableObject {
             case .auto:
                 return Self.systemDefault.detail
             case .llama:
-                return CPUArchitecture.isAppleSilicon
-                    ? "Optional and slower than MLX. Replaces MLX after verification."
-                    : "Recommended compatibility backend for Intel Macs."
+                return "Runs locally using Metal on Apple Silicon or the CPU on Intel."
             case .mlx:
-                return "Recommended and faster than llama.cpp. Replaces it after verification."
+                return "Runs locally using MLX on Apple Silicon."
             }
         }
     }
@@ -1691,7 +1689,7 @@ final class SettingsStore: ObservableObject {
     }
 
     var privateAIPrefixKVCacheEnabled: Bool {
-        get { self.defaults.object(forKey: PrivateAIProviderFeature.shared.prefixCacheDefaultsKey) as? Bool ?? true }
+        get { PrivateAIProviderFeature.shared.supportsPrefixCache && (self.defaults.object(forKey: PrivateAIProviderFeature.shared.prefixCacheDefaultsKey) as? Bool ?? true) }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: PrivateAIProviderFeature.shared.prefixCacheDefaultsKey)
@@ -1740,7 +1738,7 @@ final class SettingsStore: ObservableObject {
     }
 
     var privateAIBoostEnabled: Bool {
-        get { self.defaults.object(forKey: PrivateAIProviderFeature.shared.boostDefaultsKey) as? Bool ?? true }
+        get { PrivateAIProviderFeature.shared.supportsBoost && (self.defaults.object(forKey: PrivateAIProviderFeature.shared.boostDefaultsKey) as? Bool ?? true) }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: PrivateAIProviderFeature.shared.boostDefaultsKey)
@@ -1757,17 +1755,13 @@ final class SettingsStore: ObservableObject {
             if preference == .auto {
                 preference = PrivateAIBackendPreference.systemDefault
             }
-            if preference == .mlx, CPUArchitecture.isIntel {
-                return .llama
-            }
+            guard PrivateAIProviderFeature.shared.supportedBackends.contains(preference) else { return .systemDefault }
             return preference
         }
         set {
             objectWillChange.send()
             var preference = newValue == .auto ? PrivateAIBackendPreference.systemDefault : newValue
-            if preference == .mlx, CPUArchitecture.isIntel {
-                preference = .llama
-            }
+            if !PrivateAIProviderFeature.shared.supportedBackends.contains(preference) { preference = .systemDefault }
             self.defaults.set(preference.rawValue, forKey: Keys.privateAIBackendPreference)
         }
     }
@@ -1819,6 +1813,9 @@ final class SettingsStore: ObservableObject {
     /// Check if the current AI provider is fully configured (API key/baseURL + selected model)
     var isAIConfigured: Bool {
         let providerID = self.selectedProviderID
+        if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
+            return PrivateAIProviderPromptFormat.verifiedModelID(settings: self) != nil
+        }
 
         // Get base URL to check for local endpoints
         var baseURL = ""

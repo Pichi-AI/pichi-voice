@@ -9,6 +9,7 @@ let package = Package(
         .macOS("15.0"),
     ],
     dependencies: [
+        .package(path: "Vendor/NativeTextInference"),
         .package(path: "Vendor/WebRTCAudioProcessing"),
         .package(path: "Vendor/PichiGigaAM"),
         .package(url: "https://github.com/mxcl/AppUpdater.git", from: "1.0.0"),
@@ -29,6 +30,7 @@ let package = Package(
         .executableTarget(
             name: "FluidVoice",
             dependencies: [
+                .product(name: "NativeTextInference", package: "NativeTextInference"),
                 "AppUpdater",
                 "CoreAudioCaptureSupport",
                 "FluidAudio",

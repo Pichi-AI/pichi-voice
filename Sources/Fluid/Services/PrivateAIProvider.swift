@@ -149,6 +149,7 @@ struct PrivateAIRegisteredModel: Sendable, Codable, Hashable, Identifiable {
     var parameterCount: String
     var recommendedMemoryGB: Int?
     var artifact: PrivateAIModelArtifact
+    var presentation: PrivateAIModelPresentation? = nil
 
     var canDownload: Bool {
         self.artifact.downloadURL != nil && self.artifact.sha256?.isEmpty == false
@@ -193,6 +194,13 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
     var prefixCacheDefaultsKey: String { get }
     var boostDefaultsKey: String { get }
     var modelDirectoryName: String { get }
+    var supportedBackends: [SettingsStore.PrivateAIBackendPreference] { get }
+    var defaultBackend: SettingsStore.PrivateAIBackendPreference { get }
+    var supportsBoost: Bool { get }
+    var supportsPrefixCache: Bool { get }
+    var includesUpcomingModels: Bool { get }
+
+    func recommendedModelID() async -> String
 
     func selectedModelDefaultsKey(for task: PrivateAIModelTask) -> String
     func modelIDs() -> [String]
@@ -205,6 +213,23 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
 }
 
 extension PrivateAIProviderFeatureProviding {
+    var supportedBackends: [SettingsStore.PrivateAIBackendPreference] {
+        CPUArchitecture.isIntel ? [.llama] : [.mlx, .llama]
+    }
+
+    var defaultBackend: SettingsStore.PrivateAIBackendPreference {
+        CPUArchitecture.isAppleSilicon ? .mlx : .llama
+    }
+
+    var supportsBoost: Bool { true }
+    var supportsPrefixCache: Bool { true }
+    var includesUpcomingModels: Bool { true }
+
+    func recommendedModelID() async -> String {
+        let recommendation = await PrivateAIHardwareRecommendation.current()
+        return self.model(id: recommendation.model.rawValue)?.id ?? self.defaultModelID
+    }
+
     func selectedModelDefaultsKey(for _: PrivateAIModelTask) -> String {
         self.selectedModelDefaultsKey
     }
@@ -372,6 +397,9 @@ private enum PrivateAIProviderBootstrap {
     static let installOnce: Void = {
         #if PRIVATE_AI_PROVIDER
         PrivateAIProviderBridge.install()
+        #else
+        PrivateAIProviderRegistry.feature = S1MiniProviderFeature.shared
+        PrivateAIProviderRegistry.integration = S1MiniIntegrationProvider.shared
         #endif
     }()
 
@@ -407,7 +435,14 @@ enum PrivateAIProviderFeature {
             // Keep fingerprint in sync with SettingsStore.privateAIBackendPreference default.
             normalizedBackendPreference = SettingsStore.PrivateAIBackendPreference.systemDefault.rawValue
         }
-        return "private-ai-provider|\(modelID)|backend:\(normalizedBackendPreference)"
+        let feature = self.shared
+        let preference = SettingsStore.PrivateAIBackendPreference(rawValue: normalizedBackendPreference)
+        let effectiveBackend = preference.flatMap { feature.supportedBackends.contains($0) ? $0 : nil } ?? feature.defaultBackend
+        var fingerprint = "private-ai-provider|\(modelID)|backend:\(effectiveBackend.rawValue)"
+        if let artifact = feature.model(id: modelID)?.artifact, let digest = artifact.sha256 {
+            fingerprint += "|sha256:\(digest)|version:\(artifact.version ?? "")"
+        }
+        return fingerprint
     }
 }
 

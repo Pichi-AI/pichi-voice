@@ -4,8 +4,8 @@ extension OnboardingAISetupController {
     static let live: OnboardingAISetupController = .init(dependencies: Dependencies(
         recommend: {
             guard PrivateFeatures.privateAIProvider else { throw PrivateAIUnavailableError() }
-            let recommendation = await PrivateAIHardwareRecommendation.current()
-            guard let model = PrivateAIModelRegistry.model(id: recommendation.model.rawValue), model.isEnabled else {
+            let modelID = await PrivateAIProviderFeature.shared.recommendedModelID()
+            guard let model = PrivateAIModelRegistry.model(id: modelID), model.isEnabled else {
                 throw PrivateAIUnavailableError()
             }
             let installed = await Task.detached(priority: .utility) {
@@ -30,7 +30,7 @@ extension OnboardingAISetupController {
         },
         load: { model in
             guard let registered = PrivateAIModelRegistry.model(id: model.id) else { throw PrivateAIUnavailableError() }
-            let status = try await PrivateAIIntegrationService.shared.loadModel(registered)
+            let status = try await PrivateAIIntegrationService.shared.verifyModel(registered)
             guard status.state == .ready else {
                 throw SetupError(message: status.message ?? "The model could not be prepared. Please try again.")
             }

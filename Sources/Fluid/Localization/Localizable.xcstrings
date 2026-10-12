@@ -68,8 +68,7 @@
           }
         }
       }
-    }
-,
+    },
     "Invalid local model timeout.": {
       "extractionState": "manual",
       "localizations": {
@@ -222,8 +221,7 @@
           }
         }
       }
-    }
-,
+    },
     "Completed later": {
       "extractionState": "manual",
       "localizations": {
@@ -46343,6 +46341,227 @@
           "stringUnit": {
             "state": "translated",
             "value": "Откройте настройки и проверьте доступ к микрофону."
+          }
+        }
+      }
+    },
+    "S1-mini by Superwhisper": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini by Superwhisper"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini от Superwhisper"
+          }
+        }
+      }
+    },
+    "Clean up dictation locally on your Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean up dictation locally on your Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Улучшение текста диктовки локально на вашем Mac."
+          }
+        }
+      }
+    },
+    "Runs the selected model inside the app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs the selected model inside the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускает выбранную модель внутри приложения."
+          }
+        }
+      }
+    },
+    "Runs locally using Metal on Apple Silicon or the CPU on Intel.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs locally using Metal on Apple Silicon or the CPU on Intel."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Работает локально через Metal на Apple Silicon или процессор на Intel."
+          }
+        }
+      }
+    },
+    "Runs locally using MLX on Apple Silicon.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs locally using MLX on Apple Silicon."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Работает локально через MLX на Apple Silicon."
+          }
+        }
+      }
+    },
+    "llama.cpp": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "llama.cpp"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "llama.cpp"
+          }
+        }
+      }
+    },
+    "MLX": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MLX"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MLX"
+          }
+        }
+      }
+    },
+    "The selected S1-mini model is not available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected S1-mini model is not available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранная модель S1-mini недоступна."
+          }
+        }
+      }
+    },
+    "Download S1-mini before using AI enhancement.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download S1-mini before using AI enhancement."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачайте S1-mini, чтобы использовать ИИ-улучшение."
+          }
+        }
+      }
+    },
+    "The S1-mini file failed its integrity check. Download it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The S1-mini file failed its integrity check. Download it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файл S1-mini не прошёл проверку целостности. Скачайте его заново."
+          }
+        }
+      }
+    },
+    "S1-mini could not verify its native runtime.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini could not verify its native runtime."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить встроенный движок S1-mini."
+          }
+        }
+      }
+    },
+    "S1-mini is available for dictation cleanup only.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini is available for dictation cleanup only."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini предназначена для улучшения текста диктовки."
+          }
+        }
+      }
+    },
+    "The S1-mini model folder is not safe to modify.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The S1-mini model folder is not safe to modify."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Невозможно безопасно изменить папку модели S1-mini."
           }
         }
       }

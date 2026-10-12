@@ -63,9 +63,9 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
         .padding(20)
         .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: AppTheme.Metrics.Showcase.cardRadius))
         .task {
-            let recommendation = await PrivateAIHardwareRecommendation.current()
+            let recommendation = await PrivateAIProviderFeature.shared.recommendedModelID()
             guard !Task.isCancelled else { return }
-            self.recommendedModelID = recommendation.model.rawValue
+            self.recommendedModelID = recommendation
         }
         .task(id: self.readIdentity) {
             self.snapshots = [:]

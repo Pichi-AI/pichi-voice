@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A51A10000000000000000003 /* NativeTextInference in Frameworks */ = {isa = PBXBuildFile; productRef = A51A10000000000000000002 /* NativeTextInference */; };
+		A51A10000000000000000004 /* NativeTextInference in Frameworks */ = {isa = PBXBuildFile; productRef = A51A10000000000000000002 /* NativeTextInference */; };
 		FD1100000000000000000002 /* PichiMeetingSummaryLifetimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */; };
 		EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA200000000000000000001 /* CloudTextProviderTests.swift */; };
 		C71A40000000000000000002 /* OllamaChatTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71A40000000000000000001 /* OllamaChatTransportTests.swift */; };
@@ -341,6 +343,7 @@
 			files = (
 				AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */,
 				C41C41000000000000000003 /* PichiGigaAM in Frameworks */,
+				A51A10000000000000000003 /* NativeTextInference in Frameworks */,
 				7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */,
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
 				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
@@ -364,6 +367,7 @@
 			files = (
 				AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */,
 				C41C41000000000000000004 /* PichiGigaAM in Frameworks */,
+				A51A10000000000000000004 /* NativeTextInference in Frameworks */,
 				A5B000000000000000000014 /* DynamicNotchKit in Frameworks */,
 				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
 				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
@@ -597,6 +601,7 @@
 			packageProductDependencies = (
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				C41C41000000000000000002 /* PichiGigaAM */,
+				A51A10000000000000000002 /* NativeTextInference */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
@@ -651,6 +656,7 @@
 			packageProductDependencies = (
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
 				C41C41000000000000000002 /* PichiGigaAM */,
+				A51A10000000000000000002 /* NativeTextInference */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
@@ -720,6 +726,7 @@
 			packageReferences = (
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
 				C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */,
+				A51A10000000000000000001 /* XCLocalSwiftPackageReference "NativeTextInference" */,
 				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
@@ -1417,6 +1424,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		A51A10000000000000000001 /* XCLocalSwiftPackageReference "NativeTextInference" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/NativeTextInference;
+		};
 		C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/PichiGigaAM;
@@ -1481,6 +1492,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A51A10000000000000000002 /* NativeTextInference */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A51A10000000000000000001 /* XCLocalSwiftPackageReference "NativeTextInference" */;
+			productName = NativeTextInference;
+		};
 		C41C41000000000000000002 /* PichiGigaAM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */;

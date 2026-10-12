@@ -717,7 +717,7 @@ extension AIEnhancementSettingsView {
                 )
             }
 
-            self.privateAIPrefixCacheRow(isBusy: isBusy)
+            if PrivateAIProviderFeature.shared.supportsPrefixCache { self.privateAIPrefixCacheRow(isBusy: isBusy) }
             if self.privateAIShowsBoostRow {
                 self.privateAIBoostRow(isBusy: isBusy)
             }
@@ -849,11 +849,11 @@ extension AIEnhancementSettingsView {
         .fluidDropdownStyle()
         .labelsHidden()
         .disabled(isBusy)
-        .help("Local Fluid-1 runtime. Default is MLX on Apple Silicon.")
+        .help("Runs the selected model inside the app.")
     }
 
     private var privateAISelectableBackendPreferences: [SettingsStore.PrivateAIBackendPreference] {
-        CPUArchitecture.isIntel ? [.llama] : [.mlx, .llama]
+        PrivateAIProviderFeature.shared.supportedBackends
     }
 
     private var privateAIBackendShortName: String {
@@ -973,6 +973,7 @@ extension AIEnhancementSettingsView {
     }
 
     private var privateAIShowsBoostRow: Bool {
+        guard PrivateAIProviderFeature.shared.supportsBoost else { return false }
         switch self.settings.privateAIBackendPreference {
         case .llama:
             return true
@@ -1890,10 +1891,12 @@ extension AIEnhancementSettingsView {
                         FluidManagementRow(title: "Dictation window", detail: PichiLocalization.format("%@. Longer windows use more memory.", self.privateAIContextCueText)) {
                             self.privateAIContextControl(isBusy: isBusy)
                         }
-                        Divider()
-                        FluidManagementRow(title: "Faster first result", detail: "Keep the model ready between dictations.") {
-                            Toggle("Faster first result", isOn: self.privateAIPrefixCacheBinding)
-                                .labelsHidden().toggleStyle(.switch).disabled(isBusy)
+                        if PrivateAIProviderFeature.shared.supportsPrefixCache {
+                            Divider()
+                            FluidManagementRow(title: "Faster first result", detail: "Keep the model ready between dictations.") {
+                                Toggle("Faster first result", isOn: self.privateAIPrefixCacheBinding)
+                                    .labelsHidden().toggleStyle(.switch).disabled(isBusy)
+                            }
                         }
                         Divider()
                         FluidManagementRow(title: "Free memory when idle", detail: "Experimental. Unloads the model after a quiet period and reloads it as you start speaking.") {
@@ -1987,7 +1990,7 @@ extension AIEnhancementSettingsView {
                     Spacer(minLength: 0)
                 }
 
-                self.privateAIPrefixCacheRow(isBusy: isBusy)
+                if PrivateAIProviderFeature.shared.supportsPrefixCache { self.privateAIPrefixCacheRow(isBusy: isBusy) }
                 if self.privateAIShowsBoostRow {
                     self.privateAIBoostRow(isBusy: isBusy)
                 }
