@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		FD1100000000000000000002 /* PichiMeetingSummaryLifetimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */; };
 		EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA200000000000000000001 /* CloudTextProviderTests.swift */; };
+		C71A40000000000000000002 /* OllamaChatTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71A40000000000000000001 /* OllamaChatTransportTests.swift */; };
 		793D196E690048D89D679409 /* PichiLocalizationPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */; };
 		EC546646745D49A49C8EDC02 /* PichiLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */; };
 		C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */; };
@@ -186,6 +187,7 @@
 /* Begin PBXFileReference section */
 		FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryLifetimeTests.swift; sourceTree = "<group>"; };
 		EAA200000000000000000001 /* CloudTextProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTextProviderTests.swift; sourceTree = "<group>"; };
+		C71A40000000000000000001 /* OllamaChatTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaChatTransportTests.swift; sourceTree = "<group>"; };
 		3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiLocalizationPresentationTests.swift; sourceTree = "<group>"; };
 		3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiLocalizationTests.swift; sourceTree = "<group>"; };
 		C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiGigaAMIntegrationTests.swift; sourceTree = "<group>"; };
@@ -463,6 +465,7 @@
 				FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */,
 				F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */,
 				EAA200000000000000000001 /* CloudTextProviderTests.swift */,
+				C71A40000000000000000001 /* OllamaChatTransportTests.swift */,
 				F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */,
 				EAA100000000000000000001 /* PichiTextModelEvalTests.swift */,
 				3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */,
@@ -847,6 +850,7 @@
 				FD1100000000000000000002 /* PichiMeetingSummaryLifetimeTests.swift in Sources */,
 				F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */,
 				EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */,
+				C71A40000000000000000002 /* OllamaChatTransportTests.swift in Sources */,
 				5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */,
 				EAA100000000000000000002 /* PichiTextModelEvalTests.swift in Sources */,
 				793D196E690048D89D679409 /* PichiLocalizationPresentationTests.swift in Sources */,
