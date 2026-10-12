@@ -50,9 +50,13 @@ struct BrandOwnedNativeMenuTests {
             BrandAppearanceController.refreshApplicationMenu(main, appName: name, language: .english, bundle: bundle)
             precondition(applicationItem.title == name && application.title == name)
             let icon = NSImage(size: NSSize(width: 16, height: 16))
+            icon.accessibilityDescription = "Installed distribution icon"
             let options = BrandAppearanceController.aboutPanelOptions(appName: name, icon: icon)
             precondition(options[.applicationName] as? String == name)
-            precondition(options[.applicationIcon] as? NSImage === icon)
+            guard let displayedIcon = options[.applicationIcon] as? NSImage else { fatalError("About icon is missing") }
+            precondition(displayedIcon !== icon && displayedIcon.size == icon.size)
+            precondition(displayedIcon.accessibilityDescription == name, "About icon accessibility copy must use the active brand as verbatim data")
+            precondition(icon.accessibilityDescription == "Installed distribution icon", "About must not mutate a cached or caller-owned image")
             precondition(Set(options.keys) == [.applicationName, .applicationIcon], "About options must not override bundle version or legal credits")
             precondition(about.title == "About " + name && hide.title == "Hide " + name && quit.title == "Quit " + name)
             precondition(hideOthers.title == "Hide Others" && settings.title == "Settings")
@@ -69,8 +73,11 @@ struct BrandOwnedNativeMenuTests {
             precondition(PichiLocalization.format("About %@", language: .russian, bundle: bundle, arguments: [name]) == "О модели " + name,
                          "The model showcase About context must remain unchanged")
         }
+        precondition(BrandAppearanceController.nativeAppearance(for: .light)?.name == .aqua)
+        precondition(BrandAppearanceController.nativeAppearance(for: .dark)?.name == .darkAqua)
+        precondition(BrandAppearanceController.nativeAppearance(for: nil) == nil, "System appearance must remain unset so later OS theme changes propagate")
         BrandAppearanceController.refreshApplicationMenu(nil, appName: "No Menu", language: .english)
-        print("Application/model About contexts remain separate; owned commands update in EN/RU and user labels stay unchanged")
+        print("Owned EN/RU commands and icon descriptions update without changing user labels or cached artwork; native theme mapping restores System")
     }
 
     /// Compile-free fixture resources come from the actual catalog, never duplicate translations in test code.

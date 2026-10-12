@@ -50,6 +50,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.applicationIconImage = PichiBrandMark.appIcon
+        NSApplication.shared.appearance = BrandAppearanceController.nativeAppearance(for: SettingsStore.shared.themePreference.preferredColorScheme)
         AccessibilityMessagingTimeout.configure()
         #if DEBUG
         self.updateUISimulationObserver = UpdatePromptSimulation.register(self)

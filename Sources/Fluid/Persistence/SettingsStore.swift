@@ -2682,6 +2682,7 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.themePreference)
+            NSApplication.shared.appearance = BrandAppearanceController.nativeAppearance(for: newValue.preferredColorScheme)
         }
     }
 
