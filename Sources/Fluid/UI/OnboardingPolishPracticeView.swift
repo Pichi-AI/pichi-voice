@@ -11,11 +11,12 @@ struct OnboardingPolishPracticeView: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.theme) private var theme
     @FocusState private var isEditorFocused: Bool
     @State private var hasActivated = false
     @State private var isKeyPressed = false
 
-    private var blue: Color { FluidOnboardingLandingColors.blue }
+    private var blue: Color { self.theme.palette.accent }
     private var status: String {
         if !self.hasActivated { return PichiLocalization.format("Press %@ to begin.", self.shortcutDisplay) }
         if self.isRunning { return "Listening" }
@@ -27,7 +28,7 @@ struct OnboardingPolishPracticeView: View {
         VStack(alignment: .leading, spacing: 22) {
             Text("Let’s try a few examples.")
                 .font(.fluidSystem(size: 28, weight: .regular, design: .serif))
-                .foregroundStyle(.white.opacity(0.94))
+                .foregroundStyle(self.theme.palette.primaryText)
             HStack(spacing: 18) {
                 OnboardingShortcutKeycap(text: self.shortcutDisplay, isPressed: self.isKeyPressed, isListening: self.isRunning)
                 self.recordingStatus
@@ -37,10 +38,10 @@ struct OnboardingPolishPracticeView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Label("Say this", systemImage: "quote.opening")
                             .font(.fluidSystem(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.48, green: 0.72, blue: 1))
+                            .foregroundStyle(self.theme.palette.primaryText)
                         Text(PichiLocalization.text(self.practice.example.spoken))
                             .font(.fluidSystem(size: 17))
-                            .foregroundStyle(.white.opacity(0.92))
+                            .foregroundStyle(self.theme.palette.primaryText)
                             .lineSpacing(5)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.leading, 14)
@@ -89,7 +90,7 @@ struct OnboardingPolishPracticeView: View {
                     .accessibilityHidden(true)
                 Text(PichiLocalization.text(self.status))
                     .font(.fluidSystem(size: 14, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.86))
+                    .foregroundStyle(self.theme.palette.primaryText)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -98,7 +99,7 @@ struct OnboardingPolishPracticeView: View {
         } else if !self.hasActivated {
             Text(PichiLocalization.text(self.status))
                 .font(.fluidSystem(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.64))
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 
@@ -111,6 +112,7 @@ struct OnboardingPolishPracticeView: View {
         ZStack(alignment: .topLeading) {
             TextEditor(text: self.$finalText)
                 .font(.fluidSystem(size: 16))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .scrollContentBackground(.hidden)
                 .focused(self.$isEditorFocused)
                 .padding(12)
@@ -119,17 +121,17 @@ struct OnboardingPolishPracticeView: View {
             if self.finalText.isEmpty {
                 Text("Your words appear here…")
                     .font(.fluidSystem(size: 16))
-                    .foregroundStyle(.white.opacity(0.38))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .padding(.horizontal, 18)
                     .padding(.top, 12)
                     .allowsHitTesting(false)
             }
         }
         .frame(height: 180)
-        .background(.white.opacity(self.isEditorFocused ? 0.055 : 0.025), in: RoundedRectangle(cornerRadius: 12))
+        .background(self.theme.palette.primaryText.opacity(self.isEditorFocused ? 0.055 : 0.025), in: RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(self.isEditorFocused ? self.blue.opacity(0.8) : .white.opacity(0.18))
+                .fill(self.isEditorFocused ? self.blue.opacity(0.8) : self.theme.palette.cardBorder)
                 .frame(height: 1)
                 .padding(.horizontal, 12)
         }

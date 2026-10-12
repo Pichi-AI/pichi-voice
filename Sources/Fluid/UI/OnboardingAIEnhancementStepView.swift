@@ -90,22 +90,22 @@ struct OnboardingAIEnhancementStepView: View {
                     FluidOnboardingCompactAppIconMark(size: 56)
                     Text(AppBrand.text("AI text cleanup with Fluid Intelligence"))
                         .font(.fluidSystem(size: 30, weight: .semibold, role: .title))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(self.theme.palette.primaryText)
                         .multilineTextAlignment(.center)
                     Text("AI cleanup is optional. Dictation already works with your selected speech model.")
                         .font(.fluidSystem(size: 17, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.78))
+                        .foregroundStyle(self.theme.palette.primaryText)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 660)
                     Text("Connect Ollama or LM Studio in AI Providers to process text locally. Meeting summaries have their own local AI settings.")
                         .font(.fluidSystem(size: 15))
-                        .foregroundStyle(.white.opacity(0.64))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 660)
                     if hasConfiguredCleanup {
                         Text("A text provider is already configured. This step keeps your settings and does not contact another service.")
                             .font(.fluidSystem(size: 14))
-                            .foregroundStyle(.white.opacity(0.64))
+                            .foregroundStyle(self.theme.palette.secondaryText)
                             .multilineTextAlignment(.center)
                             .frame(maxWidth: 660)
                     }
@@ -158,7 +158,7 @@ struct OnboardingAIEnhancementStepView: View {
                         if self.isReady && self.showPractice {
                             Button("Skip practice", action: self.onFinishSetup)
                                 .buttonStyle(.plain)
-                                .foregroundStyle(.white.opacity(0.58))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .disabled(!self.canNavigate)
                             self.action(id: "practice-next", title: self.practice.isLast ? "Finish setup" : "Next example", tone: .primary, width: 180) {
                                 guard self.canNavigate, self.practice.result != nil else { return }
@@ -226,7 +226,7 @@ struct OnboardingAIEnhancementStepView: View {
                     OnboardingCleanupExampleCarousel(autoplay: self.carouselAutoplay)
                     Text(AppBrand.text("You can choose a different model or turn off Fluid Intelligence anytime in Settings."))
                         .font(self.theme.typography.caption)
-                        .foregroundStyle(.white.opacity(0.46))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .multilineTextAlignment(.center)
                         .padding(.top, 12)
                 }
@@ -245,19 +245,19 @@ struct OnboardingAIEnhancementStepView: View {
                 .padding(.bottom, 4)
             Text(AppBrand.text("Meet Fluid Intelligence"))
                 .font(.fluidSystem(size: 28, weight: .semibold, role: .title))
-                .foregroundStyle(.white)
+                .foregroundStyle(self.theme.palette.primaryText)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
             Text("Choose a local AI model to turn spoken words into clear, formatted text on your Mac.")
                 .font(.fluidSystem(size: 15, weight: .medium))
-                .foregroundStyle(.white.opacity(0.64))
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
                 .frame(maxWidth: 540)
             if !self.isReady {
                 Text(AppBrand.text("Fluid Intelligence can…"))
                     .font(.fluidSystem(size: 20, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .foregroundStyle(self.theme.palette.primaryText)
                     .padding(.top, 4)
             }
         }
@@ -282,11 +282,11 @@ struct OnboardingAIEnhancementStepView: View {
             if self.setup.phase == .unavailable {
                 Text(AppBrand.text("Fluid Intelligence isn't available right now. You can finish setup and try again later."))
                     .font(self.theme.typography.caption)
-                    .foregroundStyle(.white.opacity(0.64))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .multilineTextAlignment(.center)
                 Button("Try again") { self.setup.refresh() }
                     .buttonStyle(.plain)
-                    .foregroundStyle(FluidOnboardingLandingColors.blue)
+                    .foregroundStyle(self.theme.palette.primaryText)
             }
         }
         .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.32), value: self.setup.isBusy)
@@ -301,7 +301,7 @@ struct OnboardingAIEnhancementStepView: View {
                 }
                 .buttonStyle(.plain)
                 .font(.fluidSystem(size: 15, weight: .medium))
-                .foregroundStyle(.white.opacity(self.canNavigate ? 0.86 : 0.4))
+                .foregroundStyle(self.theme.palette.primaryText.opacity(self.canNavigate ? 1 : 0.4))
                 .disabled(!self.canNavigate)
             }
 
@@ -341,21 +341,21 @@ struct OnboardingAIEnhancementStepView: View {
                         if let bytes = self.setup.progress?.bytes {
                             Text(bytes.replacingOccurrences(of: " downloaded", with: " ready").replacingOccurrences(of: " download", with: ""))
                                 .font(self.theme.typography.caption)
-                                .foregroundStyle(.white.opacity(0.62))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .monospacedDigit()
                                 .fixedSize()
                         }
                     }
                     Text(PichiLocalization.text(self.downloadProgressTitle))
                         .font(self.theme.typography.caption)
-                        .foregroundStyle(.white.opacity(0.58))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .monospacedDigit()
                 } else {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text(PichiLocalization.text(self.preparationStatus))
                             .font(self.theme.typography.captionStrong)
-                            .foregroundStyle(.white.opacity(0.62))
+                            .foregroundStyle(self.theme.palette.primaryText)
                     }
                 }
             }
@@ -367,18 +367,18 @@ struct OnboardingAIEnhancementStepView: View {
                         .frame(minWidth: 80, minHeight: 32)
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Color(red: 1, green: 0.48, blue: 0.48))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
                 .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.red.opacity(0.18), lineWidth: 1))
             }
         }
-        .tint(FluidOnboardingLandingColors.blue)
+        .tint(self.theme.palette.accent)
         .frame(height: 44)
         .padding(16)
-        .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.09), lineWidth: 1))
+        .background(self.theme.palette.primaryText.opacity(0.045), in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(self.theme.palette.cardBorder, lineWidth: 1))
         .frame(maxWidth: 600)
     }
 
@@ -438,7 +438,7 @@ struct OnboardingAIEnhancementStepView: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Change modes with one click")
                 .font(.fluidSystem(size: 28, weight: .regular, design: .serif))
-                .foregroundStyle(.white.opacity(0.94))
+                .foregroundStyle(self.theme.palette.primaryText)
             HStack(alignment: .top, spacing: 24) {
                 self.modeSummary(
                     name: "Basic",
@@ -464,14 +464,14 @@ struct OnboardingAIEnhancementStepView: View {
             HStack(spacing: 10) {
                 Label(PichiLocalization.text(name), systemImage: smart ? "sparkles" : "bolt.fill")
                     .font(.fluidSystem(size: 18, weight: .semibold))
-                    .foregroundStyle(smart ? Color(red: 0.48, green: 0.72, blue: 1) : .white)
+                    .foregroundStyle(self.theme.palette.primaryText)
                 Text(PichiLocalization.text(subtitle))
                     .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
             Text(PichiLocalization.text(detail))
                 .font(.fluidSystem(size: 15))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -499,12 +499,12 @@ struct OnboardingAIEnhancementStepView: View {
             Button(action: action) {
                 Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(tone == .primary ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
                     .frame(width: width - 32, height: 40)
             }
             .fluidGlassAction(prominent: tone == .primary)
             .font(.fluidSystem(size: 17, weight: .semibold))
-            .tint(tone == .primary ? FluidOnboardingLandingColors.blue : nil)
+            .tint(tone == .primary ? self.theme.palette.accent : nil)
             .disabled(!self.canNavigate)
         } else {
             self.pillButton(PillButtonConfiguration(
@@ -532,7 +532,7 @@ struct OnboardingAIEnhancementStepView: View {
         let isDisabled = !configuration.isEnabled
         let isHovered = self.hoveredButtonID == configuration.id && !isDisabled
         let shape = Capsule()
-        let accentColor = configuration.tone == .destructive ? Color.red : FluidOnboardingLandingColors.blue
+        let accentColor = configuration.tone == .destructive ? Color.red : self.theme.palette.accent
         let isPrimary = configuration.tone == .primary
         let isDestructive = configuration.tone == .destructive
         let fillColor: Color = {
@@ -542,7 +542,7 @@ struct OnboardingAIEnhancementStepView: View {
             if isDestructive {
                 return Color.red.opacity(isDisabled ? 0.045 : (isHovered ? 0.24 : 0.16))
             }
-            return Color.white.opacity(isDisabled ? 0.045 : (isHovered ? 0.11 : 0.07))
+            return self.theme.palette.primaryText.opacity(isDisabled ? 0.045 : (isHovered ? 0.11 : 0.07))
         }()
         let borderColor: Color = {
             if isPrimary {
@@ -551,9 +551,9 @@ struct OnboardingAIEnhancementStepView: View {
             if isDestructive {
                 return Color.red.opacity(isHovered ? 0.48 : 0.24)
             }
-            return isHovered ? accentColor.opacity(0.30) : Color.white.opacity(0.07)
+            return isHovered ? accentColor.opacity(0.30) : self.theme.palette.cardBorder
         }()
-        let foregroundOpacity = isDisabled ? 0.42 : (isPrimary ? 1.0 : (isHovered ? 0.94 : 0.78))
+        let foregroundOpacity = isDisabled ? 0.42 : 1.0
         let shadowOpacity = isDisabled ? 0 : (isPrimary ? (isHovered ? 0.56 : 0.26) : (isHovered ? 0.12 : 0))
 
         return Button(action: action) {
@@ -568,7 +568,7 @@ struct OnboardingAIEnhancementStepView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
-            .foregroundStyle(.white.opacity(foregroundOpacity))
+            .foregroundStyle((isPrimary ? self.theme.palette.accentForeground : self.theme.palette.primaryText).opacity(foregroundOpacity))
             .frame(width: configuration.width, height: configuration.height)
             .background(
                 shape

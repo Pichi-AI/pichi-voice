@@ -33,6 +33,7 @@ Read [development setup](docs/development/codex.md) and [upstream strategy](docs
 - macOS builds require full Xcode. A successful cloud check is not evidence that the app compiled or that microphone, Accessibility, CoreML, or UI behavior works.
 - Keep DerivedData and source package checkouts inside the current worktree. Never share a mutable build directory between concurrent sessions.
 - Before interactive permission and audio tests, finish the required builds and local signing, verify the exact bundle and freeze a tested copy in ignored local storage. Do not rebuild, replace or re-sign the running copy during E2E. An ad-hoc signature identifies a particular build and cannot provide stable permission identity across rebuilds; use an existing valid development/distribution signing identity when available. Never weaken a signing requirement or edit/reset the system permission database to bypass a failed grant.
+- After each interactive UI step, capture and save a native screenshot named with the test case, step and tested revision. Inspect contrast, layout, localization and state immediately; fix material issues and repeat the affected step and checks. Code fixes require a newly validated frozen copy before interactive testing resumes.
 - Run an independent automated code review after integrating feature branches and before publishing a PR. Fix material findings, rerun affected checks, and report the reviewed commit and remaining limitations.
 
 ## Changes and upstream
