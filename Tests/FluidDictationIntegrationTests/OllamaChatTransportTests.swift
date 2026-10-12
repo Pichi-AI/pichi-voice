@@ -87,7 +87,7 @@ final class OllamaChatTransportTests: XCTestCase {
         }
     }
 
-    func testOwnedNativeSessionCancellationJoinsStopBeforeInvalidationCompletion() async throws {
+    func testOwnedNativeSessionCancellationJoinsRequestAndInvalidation() async throws {
         let context = OllamaTransportContext(body: "", held: true)
         defer { context.cleanup() }
         let owned = try context.client.makeBoundedLocalSession(self.config())
@@ -97,8 +97,10 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(context.fixture.requests.count, 1)
         await owned.lifetime.invalidateAndWait(for: owned.session)
         XCTAssertTrue(owned.lifetime.hasInvalidated)
-        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
         do { _ = try await pending.value; XCTFail("Cancelled request cannot complete successfully") } catch {}
+        // invalidateAndCancel may notify the session delegate before request cancellation
+        // finishes. Production joins the request as well as the session's invalidation.
+        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
     }
 
     func testNativeMetadataHasItsOwnResourceBoundAndJoinedCancellation() async throws {
