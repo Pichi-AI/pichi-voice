@@ -887,7 +887,7 @@ struct CustomDictionaryView: View {
                     )
                     self.trainingInstruction(
                         number: 3,
-                        text: AppBrand.text(PichiLocalization.format("Say %@ naturally, then pause. FluidVoice records and listens again automatically.", self.trainingTargetReference))
+                        text: AppBrand.format("Say %@ naturally, then pause. FluidVoice records and listens again automatically.", self.trainingTargetReference)
                     )
                     self.trainingInstruction(
                         number: 4,

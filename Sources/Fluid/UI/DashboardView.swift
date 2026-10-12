@@ -59,6 +59,7 @@ struct DashboardView: View {
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var contentState = NotchContentState.shared
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var statsOwner = UUID()
     @State private var greeting = "Welcome back"
@@ -112,12 +113,28 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        Text(self.greetingName.isEmpty
-            ? PichiLocalization.text(self.greeting) + "."
-            : PichiLocalization.text(self.greeting) + ", " + self.greetingName + ".")
-            .font(.fluidSystem(size: 34, weight: .regular, design: .serif))
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(self.greetingName.isEmpty
+                ? PichiLocalization.text(self.greeting) + "."
+                : PichiLocalization.text(self.greeting) + ", " + self.greetingName + ".")
+                .font(.fluidSystem(size: 34, weight: .regular, design: .serif))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                self.selectedSidebarItem = .voiceEngine
+            } label: {
+                Label(PichiLocalization.format("Transcript language: %@", self.transcriptLanguageName), systemImage: "globe")
+                    .font(self.theme.typography.captionStrong)
+            }
+            .fluidGlassAction(quiet: true)
+            .disabled(self.busy)
+            .help(PichiLocalization.text("Open speech recognition settings"))
+        }
+    }
+
+    private var transcriptLanguageName: String {
+        VoiceEngineLanguageCatalog.currentLanguage(settings: self.settings)?.localizedDisplayName(locale: self.locale)
+            ?? PichiLocalization.text("Auto Detect")
     }
 
     private func mainColumn(layout: DashboardLayout) -> some View {

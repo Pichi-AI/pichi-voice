@@ -65,6 +65,28 @@ final class WhisperLanguageSelectionTests: XCTestCase {
     }
 
     @MainActor
+    func testCurrentLanguageReflectsEngineBindingsInsteadOfTheOnboardingPreference() {
+        let unrelated: [VoiceEngineLanguageRoute.LanguageBinding] = [.whisper(languageCode: "de"), .cohere(.english)]
+        XCTAssertEqual(VoiceEngineLanguageCatalog.currentLanguage(for: .gigaam, matchingBindings: unrelated)?.id, "ru")
+        XCTAssertEqual(VoiceEngineLanguageCatalog.currentLanguage(for: .parakeetTDTv2, matchingBindings: unrelated)?.id, "en")
+        XCTAssertNil(VoiceEngineLanguageCatalog.currentLanguage(for: .parakeetTDT, matchingBindings: unrelated))
+        for model in SettingsStore.SpeechModel.allCases.filter(\.isWhisperModel) {
+            XCTAssertNil(VoiceEngineLanguageCatalog.currentLanguage(for: model, matchingBindings: []))
+            XCTAssertEqual(VoiceEngineLanguageCatalog.currentLanguage(for: model, matchingBindings: [.whisper(languageCode: "ru")])?.id, "ru")
+            XCTAssertEqual(VoiceEngineLanguageCatalog.currentLanguage(for: model, matchingBindings: [.whisper(languageCode: "de")])?.id, "de")
+        }
+        for localeIdentifier in ["en-GB", "en-CA", "en_US"] {
+            XCTAssertEqual(VoiceEngineLanguageCatalog.currentLanguage(for: .appleSpeech, matchingBindings: [.appleSpeech(localeIdentifier: localeIdentifier)])?.id, "en")
+        }
+        for localeIdentifier in ["nb-NO", "wuu-CN", "yue-CN"] {
+            XCTAssertNotNil(VoiceEngineLanguageCatalog.currentLanguage(for: .appleSpeech, matchingBindings: [.appleSpeech(localeIdentifier: localeIdentifier)]))
+        }
+        XCTAssertEqual(VoiceEngineLanguageCatalog.currentLanguage(for: .cohereTranscribeSixBit, matchingBindings: unrelated)?.id, "en")
+        XCTAssertNil(VoiceEngineLanguageCatalog.currentLanguage(for: .nemotronOffline, matchingBindings: [.nemotron(.auto)]))
+        XCTAssertEqual(VoiceEngineLanguageCatalog.currentLanguage(for: .nemotronOffline, matchingBindings: [.nemotron(.init(rawValue: "ru"))])?.id, "ru")
+    }
+
+    @MainActor
     func testMeetingLanguagePresentationUsesInterfaceLocaleAndPreservesEngineMetadata() throws {
         let languages = VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])
         let metadata = languages.map { ($0.id, $0.displayName, $0.aliases) }

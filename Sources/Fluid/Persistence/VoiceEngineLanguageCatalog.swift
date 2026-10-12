@@ -184,6 +184,56 @@ enum VoiceEngineLanguageCatalog {
         return Self.routes(for: language, availableModels: availableModels)
     }
 
+    /// Describe the active engine, not an earlier onboarding choice. A multilingual
+    /// automatic route has no forced language, whereas a single-language engine does.
+    static func currentLanguage(settings: SettingsStore = .shared) -> VoiceEngineLanguage? {
+        var bindings: [VoiceEngineLanguageRoute.LanguageBinding] = [
+            .appleSpeech(localeIdentifier: settings.selectedAppleSpeechLocaleIdentifier),
+            .cohere(settings.selectedCohereLanguage),
+            .nemotron(settings.selectedNemotronLanguage),
+        ]
+        if let languageCode = settings.selectedWhisperLanguageCode {
+            bindings.append(.whisper(languageCode: languageCode))
+        }
+        return self.currentLanguage(for: settings.selectedSpeechModel, matchingBindings: bindings)
+    }
+
+    static func currentLanguage(for model: SettingsStore.SpeechModel,
+                                matchingBindings: [VoiceEngineLanguageRoute.LanguageBinding]) -> VoiceEngineLanguage? {
+        // The onboarding shortlist intentionally omits some installed Whisper sizes.
+        // Their actual language preference still uses the complete existing catalog.
+        if model.isWhisperModel {
+            for binding in matchingBindings {
+                if case let .whisper(languageCode) = binding {
+                    return self.whisperLanguage(forCode: languageCode)
+                }
+            }
+            return nil
+        }
+        let routes = self.allLanguages(availableModels: [model]).flatMap {
+            self.routes(for: $0, availableModels: [model])
+        }
+        // Native Speech supports locales outside the onboarding shortlist. An explicit
+        // locale still identifies a language; it must not be shown as auto-detection.
+        if model.provider == .apple {
+            for binding in matchingBindings {
+                if case let .appleSpeech(localeIdentifier) = binding {
+                    if let route = routes.first(where: { $0.binding == binding }) { return route.language }
+                    guard let identifier = PichiInterfaceLanguage(rawValue: localeIdentifier)?.languageCode else { return nil }
+                    return self.languageDefinitions.first(where: { $0.id == identifier })
+                        ?? VoiceEngineLanguage(id: identifier,
+                            displayName: Locale(identifier: "en").localizedString(forIdentifier: identifier) ?? identifier,
+                            aliases: [], isPopular: false)
+                }
+            }
+            return nil
+        }
+        let selected = routes.filter { matchingBindings.contains($0.binding) }
+        if selected.count == 1 { return selected.first?.language }
+        let automatic = routes.filter { $0.binding == .automatic }
+        return automatic.count == 1 ? automatic.first?.language : nil
+    }
+
     static func apply(_ route: VoiceEngineLanguageRoute, to settings: SettingsStore = .shared) {
         settings.onboardingSelectedLanguageID = route.language.id
         settings.selectedSpeechModel = route.model

@@ -140,6 +140,10 @@ struct BrandProfileTests {
             precondition(AppBrand.format("FLUIDVOICE %@", profile: imported, language: .english, arguments: ["1.6.10"]) == name.uppercased() + " 1.6.10")
             precondition(AppBrand.format("Rolled back to %@. FluidVoice will relaunch shortly.", profile: imported, language: .english, arguments: ["FluidVoice %@"]) == "Rolled back to FluidVoice %@. " + name + " will relaunch shortly.")
             precondition(AppBrand.format("FluidMeet + Fluid Intelligence: %lld%%", profile: imported, language: .english, arguments: [25]) == name + " Meet + " + name + " AI: 25%")
+            let trainingWord = "FluidVoice ё %@ 100%"
+            precondition(AppBrand.format("Say %@ naturally, then pause. FluidVoice records and listens again automatically.",
+                profile: imported, language: .english, arguments: [trainingWord])
+                == "Say " + trainingWord + " naturally, then pause. " + name + " records and listens again automatically.")
             precondition(AppBrand.substitutingProductNames(in: "FluidVoice", profile: imported) == name, "Plain text must not double percent characters")
         }
         precondition(AppBrand.filenamePrefix(for: "Сбер/Голос:Demo\\Preview") == "Сбер_Голос_Demo_Preview")
