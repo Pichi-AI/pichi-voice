@@ -623,14 +623,22 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         Combine overlapping steps toward one explicitly requested outcome without merging distinct requests, owners, deadlines or scope. Keep separate topics and uncertainty. Rebuild 1 to 8 concise coherent summary items from supported content, then concise tasks and questions; preserve supported decisions, corrections, acceptance, completion, cancellation and answers for chronological reconciliation.
         Return six arrays: summary, decisions, actions, openQuestions, changes, answers. Each item has text and evidence, with evidence entries containing only an integer sourceIndex from the supplied catalog. Actions also require title, status (requested, proposed, agreed, completed or cancelled), urgency (urgent, normal or unspecified), owner and deadline. Agreed/completed/cancelled and urgency require explicit supporting speech; otherwise a request is requested and urgency unspecified. Other items have no action metadata. Do not mark superseded or resolved. No invented facts or nonliteral names/dates, no Markdown, decorative symbols or foreign-language lead-ins in prose; retain real proper names. Return all six arrays, including empty ones when applicable.
         """
+        // Compatible APIs may return valid short literal quotes rather than the
+        // original catalog's whole windows. Keep those exact selected excerpts
+        // selectable too; quote-only context would lose their source identity.
+        // Preserve the entire original catalog for omission recovery, never clip
+        // candidate evidence to fit. Existing source/input admission fails closed.
+        var seen = Set<PichiMeetingSummaryEvidence>()
+        let evidence = (sources.map(\.evidence) + candidate.allItems.flatMap(\.evidence)).filter { seen.insert($0).inserted }
+        let reviewSources = try self.sources(evidence, turns: turns)
         let fields = try JSONSerialization.jsonObject(with: Data(self.encoded(candidate).utf8))
-        let input = try self.preparedInput(["context": context, "candidate": fields], sources: sources)
+        let input = try self.preparedInput(["context": context, "candidate": fields], sources: reviewSources)
         // No recursive review or retry: an invalid/truncated review fails the entire
         // attempt. The caller never publishes an extraction-only fallback or prefix.
-        let response = try await self.completion(self.config(prompt: prompt, input: input, configuration: configuration, sources: sources),
+        let response = try await self.completion(self.config(prompt: prompt, input: input, configuration: configuration, sources: reviewSources),
                                                  remainingRequests: &remainingRequests)
         try Task.checkCancellation()
-        return try PichiMeetingSummaryDocument.decode(self.resolvedResponse(response, sources: sources), turns: turns)
+        return try PichiMeetingSummaryDocument.decode(self.resolvedResponse(response, sources: reviewSources), turns: turns)
     }
 
     /// One immutable attempt owns all extraction, repair, reduction and ledger calls.

@@ -1553,6 +1553,32 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.turns(for: session).count, 3)
     }
 
+    func testSupportReviewPreservesValidShortQuotesFromCompatibleAPI() async throws {
+        // An OpenAI-compatible endpoint need not select a catalog index. Its
+        // valid short quote must retain the exact evidence, owner and deadline
+        // after revision, rather than becoming unresolvable quote-only context.
+        let valid = self.document()
+        let transport = RepairTransport(responses: [try self.json(valid)])
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: self.session(), configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+        XCTAssertEqual(result, valid)
+        let recorded = await transport.recordedRequests
+        XCTAssertEqual(recorded.count, 2)
+        let input = try XCTUnwrap(recorded[1].messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        let sources = try ModelSource.catalog(from: fields)
+        XCTAssertEqual(sources.map(\.text), [self.turns[0].text, valid.actions[0].evidence[0].quote],
+                       "Keep the full original window plus exact validated candidate excerpt")
+        let projected = try XCTUnwrap(fields["candidate"] as? [String: Any])
+        let action = try XCTUnwrap((projected["actions"] as? [[String: Any]])?.first)
+        let evidence = try XCTUnwrap(action["evidence"] as? [[String: Any]])
+        XCTAssertEqual(evidence.first?["sourceIndex"] as? Int, 1)
+        XCTAssertNil(evidence.first?["quote"])
+        XCTAssertNil(evidence.first?["segmentID"])
+        XCTAssertEqual(result.actions[0].owner, "Иван")
+        XCTAssertEqual(result.actions[0].deadline, "к пятнице")
+    }
+
     func testSupportReviewInvalidOutputOrEvidenceRejectsWholeAttemptWithoutFallbackOrRetry() async throws {
         for reviewed in ["{}", try self.referenceResponse(999), try self.json(self.document(owner: "Неизвестный"))] {
             let transport = SupportReviewTransport(responses: [try self.referenceResponse(0), reviewed])
