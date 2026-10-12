@@ -34,14 +34,7 @@ nonisolated enum OllamaChatAdapter {
     /// unknown fields, so require a version with explicit overflow rejection.
     static func preparedRequest(_ config: LLMClient.Config,
                                 load: @Sendable (URLRequest) async throws -> (Data, URLResponse)) async throws -> URLRequest {
-        guard self.supports(config.baseURL) else { throw LLMError.invalidURL }
-        let versionData = try await self.metadata(config, path: "/api/version", body: nil, load: load)
-        struct Version: Decodable { let version: String }
-        guard let version = try? JSONDecoder().decode(Version.self, from: versionData).version else { throw LLMError.invalidResponse }
-        let parts = version.split(separator: ".").prefix(2).compactMap { Int($0) }
-        guard parts.count == 2, parts[0] > 0 || (parts[0] == 0 && parts[1] >= 16) else {
-            throw LLMError.invalidRequest(PichiLocalization.text("Update Ollama to version 0.16 or later for bounded local processing."))
-        }
+        try await self.requireOverflowRejection(config, load: load)
         var thinking: ThinkingMetadata?
         if config.extraParameters["reasoning_effort"] != nil || config.extraParameters["reasoning"] != nil
             || config.extraParameters["think"] is String {
@@ -55,13 +48,28 @@ nonisolated enum OllamaChatAdapter {
         return try self.request(config, thinking: thinking)
     }
 
+    /// Shared admission only. Callers retain their inference policy and sessions.
+    static func requireOverflowRejection(_ config: LLMClient.Config,
+                                         load: @Sendable (URLRequest) async throws -> (Data, URLResponse)) async throws {
+        guard self.supports(config.baseURL) else { throw LLMError.invalidURL }
+        let versionData = try await self.metadata(config, path: "/api/version", body: nil, load: load)
+        struct Version: Decodable { let version: String }
+        guard let version = try? JSONDecoder().decode(Version.self, from: versionData).version else { throw LLMError.invalidResponse }
+        let parts = version.split(separator: ".").prefix(2).compactMap { Int($0) }
+        guard parts.count == 2, parts[0] > 0 || (parts[0] == 0 && parts[1] >= 16) else {
+            throw LLMError.invalidRequest(PichiLocalization.text("Update Ollama to version 0.16 or later for bounded local processing."))
+        }
+    }
+
     private static func metadata(_ config: LLMClient.Config, path: String, body: [String: String]?,
                                  load: @Sendable (URLRequest) async throws -> (Data, URLResponse)) async throws -> Data {
         guard var components = URLComponents(string: config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw LLMError.invalidURL }
         components.path = path
         guard let url = components.url else { throw LLMError.invalidURL }
         var request = URLRequest(url: url)
-        request.timeoutInterval = min(try self.timeout(config), 5)
+        let timeout = config.timeoutSeconds ?? 5
+        guard timeout.isFinite, timeout > 0 else { throw LLMError.invalidRequest(PichiLocalization.text("Invalid local model timeout.")) }
+        request.timeoutInterval = min(timeout, 5)
         if let body {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -164,6 +172,11 @@ nonisolated enum OllamaChatAdapter {
         }
         if completed, payload["done"] as? Bool != true { throw LLMError.invalidResponse }
         guard var message = payload["message"] as? [String: Any] else { throw LLMError.invalidResponse }
+        // Native thinking frames carry an empty content field. It is not the
+        // content phase until visible text arrives; keep shared SSE semantics.
+        if message["content"] as? String == "", let thinking = message["thinking"] as? String, !thinking.isEmpty {
+            message.removeValue(forKey: "content")
+        }
         if let calls = message["tool_calls"] as? [[String: Any]] {
             message["tool_calls"] = try calls.enumerated().map { index, call -> [String: Any] in
                 var call = call

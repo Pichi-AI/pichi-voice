@@ -466,6 +466,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(body["think"] as? Bool, false)
         XCTAssertEqual(body["stream"] as? Bool, false)
         XCTAssertEqual(body["keep_alive"] as? Int, 0, "Release this model before ASR resumes")
+        XCTAssertEqual(body["truncate"] as? Bool, false, "Never silently remove transcript input")
+        XCTAssertEqual(body["shift"] as? Bool, false, "Never shift away evidence while generating")
         let schema = try XCTUnwrap(body["format"] as? [String: Any])
         XCTAssertTrue((schema["required"] as? [String] ?? []).contains("actions"))
         XCTAssertTrue((schema["required"] as? [String] ?? []).contains("decisions"))

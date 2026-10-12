@@ -167,8 +167,9 @@ final class OllamaChatTransportTests: XCTestCase {
 
     func testNativeNDJSONStreamingUsesExistingCallbacksAndStripsThinking() async throws {
         let context = OllamaTransportContext(body: """
-        {"message":{"role":"assistant","thinking":"Проверяю "},"done":false}
-        {"message":{"role":"assistant","thinking":"источники.","content":"Ёжик "},"done":false}
+        {"message":{"role":"assistant","thinking":"Проверяю ","content":""},"done":false}
+        {"message":{"role":"assistant","thinking":"источники.","content":""},"done":false}
+        {"message":{"role":"assistant","content":"Ёжик "},"done":false}
         {"message":{"role":"assistant","content":"подготовит отчёт.","tool_calls":[{"function":{"name":"save_note","arguments":{"title":"Итоги"}}}]},"done":false}
         {"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}
 
@@ -190,6 +191,10 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(callbacks.contentText, result.content)
         XCTAssertEqual(callbacks.events.filter { $0 == .thinkingStart }.count, 1)
         XCTAssertEqual(callbacks.events.filter { $0 == .thinkingEnd }.count, 1)
+        XCTAssertEqual(callbacks.events.filter { if case .tool = $0 { return false }; return true }, [
+            .thinkingStart, .thinking("Проверяю "), .thinking("источники."),
+            .thinkingEnd, .content("Ёжик "), .content("подготовит отчёт."), .content(""),
+        ], "Native empty content cannot end thinking before the remaining reasoning arrives")
         XCTAssertTrue(callbacks.events.contains(.tool("save_note")))
         XCTAssertFalse(callbacks.sawMainThread, "Streaming decode must not block the UI executor")
         let body = try OllamaTransportFixture.body(XCTUnwrap(context.fixture.requests.first))
@@ -407,6 +412,88 @@ final class OllamaChatTransportTests: XCTestCase {
         }
     }
 
+    func testSummaryOverflowAdmissionPreservesItsOwnPolicyAndArtifactChecks() async throws {
+        for (contextTokens, outputTokens, timeout) in [(8192, 3000, 180.0), (16384, 8192, 900.0)] {
+            let fixture = SummaryOverflowFixture()
+            var config = self.config()
+            config.maxTokens = outputTokens
+            config.timeoutSeconds = timeout
+            config.extraParameters = ["summary_artifact_id": fixture.digest,
+                                      "options": ["num_ctx": contextTokens],
+                                      "response_format": ["json_schema": ["schema": ["type": "object", "required": ["synthetic"]]]]]
+            let result = try await PichiMeetingSummaryTransport.completeOllama(config,
+                inference: { try await fixture.load($0) }, management: { try await fixture.load($0) })
+            XCTAssertEqual(result, "Русское резюме.")
+            let requests = await fixture.requests
+            XCTAssertEqual(requests.map { $0.url?.path }, ["/api/tags", "/api/version", "/api/chat", "/api/tags"])
+            XCTAssertEqual(requests[1].timeoutInterval, 5)
+            XCTAssertNil(requests[1].httpBody, "Version admission never receives the private transcript")
+            XCTAssertEqual(requests[2].timeoutInterval, timeout, "Summary request time must not inherit enhancement's 120-second cap")
+            let body = try OllamaTransportFixture.body(requests[2])
+            let options = try XCTUnwrap(body["options"] as? [String: Any])
+            XCTAssertEqual(options["num_ctx"] as? Int, contextTokens)
+            XCTAssertEqual(options["num_predict"] as? Int, outputTokens)
+            XCTAssertEqual(body["model"] as? String, config.model)
+            XCTAssertEqual(body["keep_alive"] as? Int, 0)
+            XCTAssertEqual(body["stream"] as? Bool, false)
+            XCTAssertEqual(body["truncate"] as? Bool, false)
+            XCTAssertEqual(body["shift"] as? Bool, false)
+            XCTAssertEqual((body["format"] as? [String: Any])?["required"] as? [String], ["synthetic"])
+        }
+    }
+
+    func testSummaryOldServerAndContextOverflowCannotPublishPartialSuccess() async throws {
+        for (version, status) in [("0.15.9", 200), ("0.34.2", 400)] {
+            let context = OllamaTransportContext(status: status, body: #"{"error":"synthetic input exceeds context"}"#, version: version)
+            defer { context.cleanup() }
+            let session = context.session
+            do {
+                _ = try await PichiMeetingSummaryTransport.completeOllama(self.config(),
+                    inference: { try await session.data(for: $0) }, management: { try await session.data(for: $0) })
+                XCTFail("Unsupported servers and overflow must fail before publishing a summary")
+            } catch {
+                if status == 400 {
+                    guard case LLMError.httpError(400, _) = error else { return XCTFail("Expected native context error, got \(error)") }
+                } else { self.assertInvalidRequest(error) }
+            }
+            XCTAssertEqual(context.fixture.requests.count, status == 400 ? 1 : 0)
+            XCTAssertEqual(context.fixture.metadataRequests.map { $0.url?.path }, ["/api/version"])
+        }
+    }
+
+    func testSummaryCancelledAdmissionNeverStartsInference() async throws {
+        let context = OllamaTransportContext(heldMetadataPath: "/api/version")
+        defer { context.cleanup() }
+        let session = context.session
+        let config = self.config()
+        let pending = Task {
+            try await PichiMeetingSummaryTransport.completeOllama(config,
+                inference: { try await session.data(for: $0) }, management: { try await session.data(for: $0) })
+        }
+        for _ in 0..<100 where context.fixture.metadataRequests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(context.fixture.metadataRequests.count, 1)
+        pending.cancel()
+        do { _ = try await pending.value; XCTFail("Cancelled admission cannot publish a summary") }
+        catch { XCTAssertTrue(error is CancellationError, "Unexpected cancellation: \(error)") }
+        XCTAssertTrue(context.fixture.requests.isEmpty)
+        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/version"), 1)
+    }
+
+    func testSummaryArtifactChangeAfterInferenceStillRejectsResult() async throws {
+        let fixture = SummaryOverflowFixture(changesArtifact: true)
+        var config = self.config()
+        config.extraParameters = ["summary_artifact_id": fixture.digest]
+        do {
+            _ = try await PichiMeetingSummaryTransport.completeOllama(config,
+                inference: { try await fixture.load($0) }, management: { try await fixture.load($0) })
+            XCTFail("The existing post-inference artifact check must still reject a changed alias")
+        } catch {
+            guard case LLMError.invalidResponse = error else { return XCTFail("Expected artifact mismatch, got \(error)") }
+        }
+        let requests = await fixture.requests
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/api/tags", "/api/version", "/api/chat", "/api/tags"])
+    }
+
     func testCloudRemoteAndCustomLocalEndpointsKeepTheirExistingProtocol() async throws {
         for baseURL in ["https://api.openai.com/v1", "https://synthetic-cloud.example/v1", "http://localhost:1234/v1", "http://127.0.0.1:11434/custom/v1", "http://192.0.2.1:11434/v1"] {
             let context = OllamaTransportContext(body: #"{"choices":[{"message":{"role":"assistant","content":"Русский ответ по OpenAI-совместимому протоколу."}}]}"#)
@@ -447,6 +534,30 @@ final class OllamaChatTransportTests: XCTestCase {
         guard case LLMError.invalidRequest = error else {
             return XCTFail("Expected invalidRequest, got \(error)", file: file, line: line)
         }
+    }
+}
+
+private actor SummaryOverflowFixture {
+    nonisolated let digest = String(repeating: "c", count: 64)
+    private let changesArtifact: Bool
+    private var tagReads = 0
+    private(set) var requests: [URLRequest] = []
+    init(changesArtifact: Bool = false) { self.changesArtifact = changesArtifact }
+    func load(_ request: URLRequest) throws -> (Data, URLResponse) {
+        self.requests.append(request)
+        let url = try XCTUnwrap(request.url)
+        let body: String
+        switch url.path {
+        case "/api/version": body = #"{"version":"0.34.2"}"#
+        case "/api/tags":
+            self.tagReads += 1
+            let digest = self.changesArtifact && self.tagReads > 1 ? String(repeating: "d", count: 64) : self.digest
+            body = "{\"models\":[{\"name\":\"synthetic-small:latest\",\"digest\":\"\(digest)\"}]}"
+        case "/api/chat": body = #"{"message":{"content":"Русское резюме."},"done":true,"done_reason":"stop"}"#
+        default: throw LLMError.invalidURL
+        }
+        let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "1.1", headerFields: nil))
+        return (Data(body.utf8), response)
     }
 }
 

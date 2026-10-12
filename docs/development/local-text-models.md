@@ -16,7 +16,7 @@ Verification uses the same adapter with a short synthetic prompt, 50 output toke
 
 Read-only `/api/version` admission requires Ollama 0.16 or later, where explicit `truncate: false` and `shift: false` reject source/context overflow instead of silently discarding text. No client token estimate is presented as exact tokenization. An explicit reasoning effort also reads `/api/show` to adapt Boolean or named thinking controls without guessing from model names. Unsupported advertised levels fail clearly. Servers without the newer thinking descriptor retain the legacy protocol effort values; a named effort does not prove that an artifact offers distinct reasoning budgets. Metadata requests carry the selected model identifier only, never the transcript, and use a five-second request timeout.
 
-Meeting summaries retain their separate bounded execution policy, structured schema, immutable artifact snapshot and cleanup. Only strict standard-endpoint recognition is shared with the enhancement adapter.
+Meeting summaries retain their separate bounded execution policy, structured schema, immutable artifact snapshot and cleanup. Strict standard-endpoint recognition and overflow-support admission are shared with the enhancement adapter.
 
 ## Checks
 

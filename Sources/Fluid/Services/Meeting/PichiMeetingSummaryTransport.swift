@@ -28,16 +28,26 @@ nonisolated enum PichiMeetingSummaryTransport {
 
     static func complete(_ config: LLMClient.Config) async throws -> String {
         guard self.usesNativeOllama(config) else { return try await self.client.call(config).content }
+        return try await self.completeOllama(config, inference: { try await self.session.data(for: $0) },
+                                             management: { try await self.managementSession.data(for: $0) })
+    }
+
+    // The native adapter owns its existing inference and management sessions.
+    // Injected requests exercise admission and artifact checks without a runner.
+    static func completeOllama(_ config: LLMClient.Config, inference: ManagementRequest,
+                              management: @escaping ManagementRequest) async throws -> String {
+        guard self.usesNativeOllama(config) else { throw LLMError.invalidURL }
         if let artifact = config.extraParameters["summary_artifact_id"] as? String {
-            try await self.verifyArtifact(artifact, model: config.model, baseURL: config.baseURL, apiKey: config.apiKey)
+            try await self.verifyArtifact(artifact, model: config.model, baseURL: config.baseURL, apiKey: config.apiKey, load: management)
         }
+        try await OllamaChatAdapter.requireOverflowRejection(config, load: management)
         let request = try self.ollamaRequest(config)
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await inference(request)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw LLMError.invalidResponse }
         guard http.statusCode == 200 else { throw LLMError.httpError(http.statusCode, "Local summary request failed.") }
         if let artifact = config.extraParameters["summary_artifact_id"] as? String {
-            try await self.verifyArtifact(artifact, model: config.model, baseURL: config.baseURL, apiKey: config.apiKey)
+            try await self.verifyArtifact(artifact, model: config.model, baseURL: config.baseURL, apiKey: config.apiKey, load: management)
         }
         return try self.ollamaContent(data)
     }
@@ -185,6 +195,7 @@ nonisolated enum PichiMeetingSummaryTransport {
         let body: [String: Any] = [
             "model": config.model, "messages": config.messages, "stream": false,
             "think": thinking, "keep_alive": 0, "format": schema, "options": options,
+            "truncate": false, "shift": false,
         ]
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
