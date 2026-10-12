@@ -11,11 +11,17 @@ import AudioToolbox
 import CoreAudio
 
 /// Serializes transcription operations and lets teardown cancel the real queued work.
-private actor TranscriptionExecutor {
+actor TranscriptionExecutor {
     private var lastTask: Task<Void, Never>?
+    private var lastTaskID: UUID?
     private var operationCancellations: [UUID: () -> Void] = [:]
 
+    #if DEBUG
+    var pendingOperationCountForTesting: Int { self.operationCancellations.count }
+    #endif
+
     func run<T>(benchmarkSessionID: Int? = nil, _ operation: @escaping () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
         logTranscriptionExecutorPhase("entered", sessionID: benchmarkSessionID)
         let previous = self.lastTask
         let operationID = UUID()
@@ -24,21 +30,38 @@ private actor TranscriptionExecutor {
             _ = await previous?.result
             logTranscriptionExecutorPhase("previous_finished", sessionID: benchmarkSessionID)
             try Task.checkCancellation()
-            return try await operation()
+            let result = try await operation()
+            try Task.checkCancellation()
+            return result
         }
         self.operationCancellations[operationID] = { task.cancel() }
         self.lastTask = Task { _ = try? await task.value }
+        self.lastTaskID = operationID
         defer { self.operationCancellations.removeValue(forKey: operationID) }
-        return try await task.value
+        return try await withTaskCancellationHandler {
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     func cancelAndAwaitPending() async {
-        for cancel in self.operationCancellations.values {
+        let pending = self.lastTask
+        let pendingID = self.lastTaskID
+        let cancellations = self.operationCancellations
+        for cancel in cancellations.values {
             cancel()
         }
-        _ = await self.lastTask?.result
-        self.lastTask = nil
-        self.operationCancellations.removeAll()
+        _ = await pending?.result
+        if self.lastTaskID == pendingID {
+            self.lastTask = nil
+            self.lastTaskID = nil
+        }
+        // A newer queued operation may have arrived while the old work drained.
+        // Retire only the captured ownership set, preserving its cancellation handle.
+        for id in cancellations.keys { self.operationCancellations.removeValue(forKey: id) }
     }
 }
 
@@ -4100,7 +4123,9 @@ final class ASRService: ObservableObject {
                 var processedSampleCount = 0
 
                 while true {
+                    try Task.checkCancellation()
                     var samples = try await reader.nextSamples()
+                    try Task.checkCancellation()
                     let sampleCount = samples.count
                     guard sampleCount > 0 else { break }
                     if sampleCount < 16_000 {
@@ -4108,6 +4133,7 @@ final class ASRService: ObservableObject {
                     }
 
                     let result = try await provider.transcribeFinal(samples)
+                    try Task.checkCancellation()
                     if !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         textParts.append(result.text)
                     }

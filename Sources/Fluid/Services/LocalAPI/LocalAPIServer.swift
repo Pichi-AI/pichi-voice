@@ -5,13 +5,15 @@ import Network
 final class LocalAPIServer {
     static let shared = LocalAPIServer()
 
-    private let router = LocalAPIRouter()
+    private let router: LocalAPIRouter
     private let queue = DispatchQueue(label: "fluidvoice.local-api", qos: .utility)
     private var listener: NWListener?
+    private var listenerGeneration: UUID?
+    private var stopTask: Task<Void, Never>?
     private var activeConnections: [ObjectIdentifier: LocalAPIConnectionHandler] = [:]
     private(set) var port: UInt16 = LocalAPI.defaultPort
 
-    private init() {}
+    init(router: LocalAPIRouter = LocalAPIRouter()) { self.router = router }
 
     func start() {
         let config = LocalAPI.Configuration.current
@@ -33,6 +35,7 @@ final class LocalAPIServer {
             let parameters = NWParameters.tcp
 
             let listener = try NWListener(using: parameters, on: port)
+            let generation = UUID()
             listener.newConnectionHandler = { [weak self] connection in
                 guard Self.isLoopback(connection.endpoint) else {
                     connection.cancel()
@@ -44,55 +47,90 @@ final class LocalAPIServer {
                         connection.cancel()
                         return
                     }
-
-                    let handler = LocalAPIConnectionHandler(connection: connection, router: self.router)
-                    let id = ObjectIdentifier(handler)
-                    handler.onClose = { [weak self] in
-                        Task { @MainActor in
-                            self?.activeConnections[id] = nil
-                        }
-                    }
-                    self.activeConnections[id] = handler
-                    handler.start(on: self.queue)
+                    self.handleConnection(connection, generation: generation)
                 }
             }
-            listener.stateUpdateHandler = { state in
-                Task { @MainActor in
-                    self.handleState(state)
+            listener.stateUpdateHandler = { [weak self] state in
+                Task { @MainActor [weak self] in
+                    self?.handleState(state, generation: generation)
                 }
             }
 
             self.port = config.port
             self.listener = listener
+            self.listenerGeneration = generation
             listener.start(queue: self.queue)
         } catch {
             DebugLogger.shared.error("Local API failed to start: \(error.localizedDescription)", source: "LocalAPIServer")
         }
     }
 
-    func stop() {
-        for handler in self.activeConnections.values {
-            handler.cancel()
-        }
-        self.activeConnections.removeAll()
+    /// Stop admission immediately, then retain and join only this server's retiring routes.
+    /// Existing synchronous callers may ignore the handle; native work still owns its lease
+    /// until this drain completes, including a provider that ignores cancellation temporarily.
+    @discardableResult
+    func stop() -> Task<Void, Never> {
+        self.listenerGeneration = nil
         self.listener?.cancel()
         self.listener = nil
+        let handlers = Array(self.activeConnections.values)
+        for handler in handlers {
+            handler.cancel()
+        }
+        let previous = self.stopTask
+        let drain = Task { @MainActor in
+            await previous?.value
+            for handler in handlers { await handler.waitForPendingRequest() }
+        }
+        self.stopTask = drain
+        return drain
     }
 
-    private func handleState(_ state: NWListener.State) {
+    private func retain(_ handler: LocalAPIConnectionHandler) {
+        let id = ObjectIdentifier(handler)
+        handler.onClose = { [weak self] in self?.activeConnections[id] = nil }
+        self.activeConnections[id] = handler
+    }
+
+    private func handleConnection(_ connection: NWConnection, generation: UUID) {
+        guard self.listenerGeneration == generation else { connection.cancel(); return }
+        let handler = LocalAPIConnectionHandler(connection: connection, router: self.router)
+        self.retain(handler)
+        handler.start(on: self.queue)
+    }
+
+    private func handleState(_ state: NWListener.State, generation: UUID) {
+        guard self.listenerGeneration == generation else { return }
         switch state {
         case .ready:
             DebugLogger.shared.info("Local API listening on http://127.0.0.1:\(self.port)", source: "LocalAPIServer")
         case let .failed(error):
             DebugLogger.shared.error("Local API listener failed: \(error.localizedDescription)", source: "LocalAPIServer")
-            self.listener?.cancel()
-            self.listener = nil
+            self.stop()
         case .cancelled:
-            self.listener = nil
+            self.stop()
         default:
             break
         }
     }
+
+    #if DEBUG
+    // Transport seams exercise the same ownership/state callbacks without a listening socket.
+    func retainConnectionForTesting(_ handler: LocalAPIConnectionHandler) { self.retain(handler) }
+    var activeConnectionCountForTesting: Int { self.activeConnections.count }
+    func beginListenerGenerationForTesting() -> UUID {
+        let generation = UUID()
+        self.listenerGeneration = generation
+        return generation
+    }
+    var listenerGenerationForTesting: UUID? { self.listenerGeneration }
+    func handleStateForTesting(_ state: NWListener.State, generation: UUID) {
+        self.handleState(state, generation: generation)
+    }
+    func handleConnectionForTesting(_ connection: NWConnection, generation: UUID) {
+        self.handleConnection(connection, generation: generation)
+    }
+    #endif
 
     private nonisolated static func isLoopback(_ endpoint: NWEndpoint) -> Bool {
         guard case let .hostPort(host, _) = endpoint else { return false }
@@ -111,11 +149,15 @@ final class LocalAPIServer {
 }
 
 @MainActor
-private final class LocalAPIConnectionHandler {
+final class LocalAPIConnectionHandler {
+    typealias ReceiveCompletion = @Sendable (Data?, Bool, NWError?) -> Void
+    typealias SendCompletion = @Sendable (NWError?) -> Void
     private let connection: NWConnection
     private let router: LocalAPIRouter
     private var buffer = Data()
     private var isClosed = false
+    private var readEnded = false
+    private var routeTask: Task<Void, Never>?
     var onClose: (() -> Void)?
 
     init(connection: NWConnection, router: LocalAPIRouter) {
@@ -124,6 +166,14 @@ private final class LocalAPIConnectionHandler {
     }
 
     func start(on queue: DispatchQueue) {
+        self.connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled:
+                Task { @MainActor [weak self] in self?.close() }
+            default:
+                break
+            }
+        }
         self.connection.start(queue: queue)
         self.receive()
     }
@@ -132,11 +182,13 @@ private final class LocalAPIConnectionHandler {
         self.close()
     }
 
+    func waitForPendingRequest() async { await self.routeTask?.value }
+
     private func receive() {
-        self.connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, isComplete, error in
+        self.receiveBytes { [weak self] data, isComplete, error in
             Task { @MainActor in
-                guard let self else { return }
-                if error != nil || isComplete {
+                guard let self, !self.isClosed else { return }
+                if error != nil {
                     self.close()
                     return
                 }
@@ -144,6 +196,7 @@ private final class LocalAPIConnectionHandler {
                 if let data {
                     self.buffer.append(data)
                 }
+                self.readEnded = isComplete
 
                 guard self.buffer.count <= LocalAPI.maxRequestBytes else {
                     self.send(LocalAPI.error("Request too large.", status: 413))
@@ -152,18 +205,47 @@ private final class LocalAPIConnectionHandler {
 
                 switch self.parseRequestIfComplete() {
                 case let .request(request):
-                    let response = await self.router.route(request)
-                    self.send(response)
+                    self.routeTask = Task { @MainActor in
+                        defer {
+                            self.routeTask = nil
+                            self.finishCloseIfDrained()
+                        }
+                        guard !Task.isCancelled, !self.isClosed else { return }
+                        let response = await self.router.route(request)
+                        guard !Task.isCancelled, !self.isClosed else { return }
+                        self.send(response)
+                    }
+                    if !self.readEnded { self.watchForConnectionFailure() }
                 case let .failure(response):
                     self.send(response)
                 case .incomplete:
-                    self.receive()
+                    if self.readEnded {
+                        if self.buffer.isEmpty { self.close() }
+                        else { self.send(LocalAPI.error("Malformed request.", status: 400)) }
+                    } else {
+                        self.receive()
+                    }
                 }
             }
         }
     }
 
+    /// Observe definite connection errors while inference runs. TCP EOF only closes the
+    /// peer's sending direction; a valid half-closed request can still receive its response.
+    /// The API serves one request per connection; additional bytes are never routed again.
+    private func watchForConnectionFailure() {
+        self.receiveBytes { [weak self] _, isComplete, error in
+            Task { @MainActor [weak self] in
+                guard let self, !self.isClosed else { return }
+                if error != nil { self.close() }
+                else if isComplete { self.readEnded = true }
+                else { self.watchForConnectionFailure() }
+            }
+        }
+    }
+
     private func send(_ response: LocalAPI.Response) {
+        guard !self.isClosed else { return }
         let body = response.body
         var headers = response.headers
         headers["Content-Length"] = "\(body.count)"
@@ -177,20 +259,58 @@ private final class LocalAPIConnectionHandler {
         var data = Data((statusLine + headerLines + "\r\n").utf8)
         data.append(body)
 
-        self.connection.send(content: data, completion: .contentProcessed { [connection] _ in
-            connection.cancel()
+        self.sendBytes(data) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.close()
             }
-        })
+        }
     }
 
     private func close() {
         guard !self.isClosed else { return }
         self.isClosed = true
-        self.connection.cancel()
-        self.onClose?()
+        self.cancelConnection()
+        self.routeTask?.cancel()
+        self.finishCloseIfDrained()
     }
+
+    private func finishCloseIfDrained() {
+        guard self.isClosed, self.routeTask == nil else { return }
+        let completion = self.onClose
+        self.onClose = nil
+        completion?()
+    }
+
+    private func receiveBytes(_ completion: @escaping ReceiveCompletion) {
+        #if DEBUG
+        if let receiveForTesting { receiveForTesting(completion); return }
+        #endif
+        self.connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, complete, error in
+            completion(data, complete, error)
+        }
+    }
+
+    private func sendBytes(_ data: Data, completion: @escaping SendCompletion) {
+        #if DEBUG
+        if let sendForTesting { sendForTesting(data, completion); return }
+        #endif
+        self.connection.send(content: data, completion: .contentProcessed(completion))
+    }
+
+    private func cancelConnection() {
+        #if DEBUG
+        if let cancelForTesting { cancelForTesting(); return }
+        #endif
+        self.connection.cancel()
+    }
+
+    #if DEBUG
+    var receiveForTesting: ((@escaping ReceiveCompletion) -> Void)?
+    var sendForTesting: ((Data, @escaping SendCompletion) -> Void)?
+    var cancelForTesting: (() -> Void)?
+    var readEndedForTesting: Bool { self.readEnded }
+    func startForTesting() { self.receive() }
+    #endif
 
     private enum ParsedRequest {
         case incomplete
