@@ -32,6 +32,52 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertThrowsError(try PichiMeetingSummaryDocument.decode("Сделайте отчёт", turns: self.turns))
     }
 
+    func testOwnerAndDeadlineMustBeSupportedBySelectedExcerptRatherThanWholeTurn() throws {
+        let turns = [PichiMeetingSummaryTurn(id: self.id, seconds: 0, speaker: "Мария",
+            text: "Обсудили отчёт. Иван займётся другим проектом к пятнице.")]
+        let evidence = PichiMeetingSummaryEvidence(segmentID: self.id, quote: "Обсудили отчёт.")
+        var document = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили отчёт.", evidence: [evidence])],
+            decisions: [], actions: [.init(text: "Уточнить отчёт.", evidence: [evidence])], openQuestions: [])
+        document.actions[0].owner = "Иван"
+        XCTAssertThrowsError(try document.validated(against: turns)) {
+            XCTAssertEqual($0 as? PichiMeetingSummaryValidationIssue, .unsupportedOwner)
+        }
+        document.actions[0].owner = nil
+        document.actions[0].deadline = "к пятнице"
+        XCTAssertThrowsError(try document.validated(against: turns)) {
+            XCTAssertEqual($0 as? PichiMeetingSummaryValidationIssue, .unsupportedDeadline)
+        }
+        document.actions[0].deadline = nil
+        XCTAssertNoThrow(try document.validated(against: turns))
+    }
+
+    func testSpeakerMetadataCanSupportOwnerButCannotSupplyDeadline() throws {
+        let turns = [PichiMeetingSummaryTurn(id: self.id, seconds: 0, speaker: "Иван, к пятнице",
+            text: "Я подготовлю отчёт.")]
+        let evidence = PichiMeetingSummaryEvidence(segmentID: self.id, quote: turns[0].text)
+        var document = PichiMeetingSummaryDocument(summary: [.init(text: "Участник подготовит отчёт.", evidence: [evidence])],
+            decisions: [], actions: [.init(text: "Подготовить отчёт.", evidence: [evidence], owner: "Иван, к пятнице")], openQuestions: [])
+        XCTAssertNoThrow(try document.validated(against: turns))
+        document.actions[0].deadline = "к пятнице"
+        XCTAssertThrowsError(try document.validated(against: turns)) {
+            XCTAssertEqual($0 as? PichiMeetingSummaryValidationIssue, .unsupportedDeadline)
+        }
+    }
+
+    func testDeadlineCannotBeAssembledAcrossIndependentCitationBoundaries() {
+        let other = UUID()
+        let turns: [PichiMeetingSummaryTurn] = [
+            .init(id: self.id, seconds: 0, speaker: "Иван", text: "Подготовлю отчёт завтра"),
+            .init(id: other, seconds: 1, speaker: "после", text: "обеда обсудим другую тему"),
+        ]
+        let evidence = turns.map { PichiMeetingSummaryEvidence(segmentID: $0.id, quote: $0.text) }
+        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили отчёт.", evidence: [evidence[0]])],
+            decisions: [], actions: [.init(text: "Подготовить отчёт.", evidence: evidence, deadline: "завтра после обеда")], openQuestions: [])
+        XCTAssertThrowsError(try document.validated(against: turns)) {
+            XCTAssertEqual($0 as? PichiMeetingSummaryValidationIssue, .unsupportedDeadline)
+        }
+    }
+
     func testEmptyDecisionsAndTasksAreValidButEveryClaimNeedsEvidence() throws {
         var doc = self.document()
         doc.actions = []
@@ -54,7 +100,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let text = (0..<310).map { "Ёж \($0) сказал: \"съешь ещё\".\n" }.joined()
         let turns = [PichiMeetingSummaryTurn(id: self.id, seconds: 3, speaker: "Иван", text: text)]
         for chunk in PichiMeetingSummaryInput.chunks(turns) {
-            let choices = PichiMeetingSummaryInput.evidenceChoices(chunk)
+            let choices = PichiMeetingSummaryInput.evidenceChoices(chunk, maximumCharacters: 160)
             XCTAssertLessThanOrEqual(choices.count, 128)
             XCTAssertTrue(choices.allSatisfy { $0.segmentID == self.id && !$0.quote.isEmpty && $0.quote.count <= 160 && text.contains($0.quote) })
             XCTAssertEqual(PichiMeetingSummaryInput.normalized(choices.map(\.quote).joined(separator: " ")),
@@ -71,8 +117,28 @@ final class PichiMeetingSummaryTests: XCTestCase {
             XCTAssertNil(fields["segmentID"])
         }
         let longWord = PichiMeetingSummaryTurn(id: self.id, seconds: 0, speaker: "Иван", text: String(repeating: "Ж", count: 510))
-        let pieces = PichiMeetingSummaryInput.evidenceChoices([longWord])
+        let pieces = PichiMeetingSummaryInput.evidenceChoices([longWord], maximumCharacters: 160)
         XCTAssertEqual(pieces.map(\.quote.count), [160, 160, 160, 30], "Repeated passages and the final tail must remain in their original order")
+    }
+
+    func testDefaultEvidenceWindowPreservesTaskContextWithoutIncreasingRequestText() throws {
+        let text = "Обсуждаем подготовку. " + String(repeating: "Подробности. ", count: 11)
+            + "Иван, подготовь отчёт к пятнице. Согласен, подготовлю. "
+        let turns = [PichiMeetingSummaryTurn(id: self.id, seconds: 0, speaker: "Мария", text: text)]
+        let short = PichiMeetingSummaryInput.evidenceChoices(turns, maximumCharacters: 160)
+        let choices = PichiMeetingSummaryInput.evidenceChoices(turns)
+        XCTAssertGreaterThan(short.count, choices.count)
+        XCTAssertEqual(choices.count, 1)
+        XCTAssertTrue(choices[0].quote.contains("Иван, подготовь отчёт к пятнице. Согласен, подготовлю."))
+        XCTAssertEqual(PichiMeetingSummaryInput.normalized(choices.map(\.quote).joined(separator: " ")),
+                       PichiMeetingSummaryInput.normalized(text))
+        XCTAssertTrue(choices.allSatisfy { $0.quote.count <= 400 && text.contains($0.quote) })
+        let encode: ([PichiMeetingSummaryEvidence]) throws -> Int = { evidence in
+            try JSONEncoder().encode(evidence.enumerated().map { index, item in
+                PichiMeetingSummarySource(sourceIndex: index, id: self.id, seconds: 0, speaker: "Мария", text: item.quote)
+            }).count
+        }
+        XCTAssertLessThan(try encode(choices), try encode(short), "Same source text with fewer repeated metadata fields")
     }
 
     func testLedgerSchemaRestrictsSparseCandidateIDsAndEmptyBatches() throws {
@@ -162,10 +228,10 @@ final class PichiMeetingSummaryTests: XCTestCase {
 
     func testRepeatedSourcePassagesRemainInOrderInCompactInput() async throws {
         var session = self.session()
-        let agreement = "Решили выпустить релиз в пятницу. " + String(repeating: "А", count: 125) + " "
-        let cancellation = "Отменяем выпуск. " + String(repeating: "Б", count: 142) + " "
-        XCTAssertEqual(agreement.count, 160)
-        XCTAssertEqual(cancellation.count, 160)
+        let agreement = "Решили выпустить релиз в пятницу. " + String(repeating: "А", count: 365) + " "
+        let cancellation = "Отменяем выпуск. " + String(repeating: "Б", count: 382) + " "
+        XCTAssertEqual(agreement.count, 400)
+        XCTAssertEqual(cancellation.count, 400)
         session.transcriptSegments[0].text = agreement + cancellation + agreement
         let transport = RepairTransport(responses: [try self.referenceResponse(2)])
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
