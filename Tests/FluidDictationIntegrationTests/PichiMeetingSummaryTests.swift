@@ -491,6 +491,22 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNotNil(requests[0].extraParameters["response_format"])
     }
 
+    func testFixtureConsumesIDFreeWireAndRuntimeHydratesOriginalSource() async throws {
+        let session = self.session()
+        let transport = FixtureTransport()
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        let evidence = try XCTUnwrap(result.summary.first?.evidence.first)
+        XCTAssertEqual(evidence.segmentID, session.transcriptSegments[0].id)
+        XCTAssertEqual(evidence.quote, session.transcriptSegments[0].text)
+        XCTAssertFalse(result.summary[0].text.contains(session.transcriptSegments[0].id.uuidString))
+        let requests = await transport.requests
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(requests.first?.messages.last?["content"] as? String).utf8)) as? [String: Any])
+        let choices = try ModelSource.catalog(from: fields)
+        XCTAssertEqual(choices.map(\.sourceIndex), [0])
+        XCTAssertEqual(choices[0].speaker, "Иван")
+    }
+
     func testOtherCompatibleEndpointsKeepTheirExistingRequestFormat() async throws {
         let transport = RepairTransport(responses: [try self.referenceResponse(0)])
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
@@ -1048,10 +1064,13 @@ final class PichiMeetingSummaryTests: XCTestCase {
             var segment = template
             segment.id = UUID()
             segment.start = .init(value: Int64(index * 1000), timescale: 1000)
-            segment.text = "Пункт \(index). " + String(repeating: "Русская речь с Ё и ё. ", count: 25)
+            // Twelve intact sources still require multiple extraction recoveries.
+            // Their four 400-character recap witnesses also fit the same 1800-
+            // character input cap; no different citation or raised cap is needed.
+            segment.text = "Пункт \(index). " + String(repeating: "Русская речь с Ё и ё. ", count: 20)
             return segment
         }
-        let transport = OutputBudgetTransport(maximumSourceCharacters: 1800)
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 1800, originalTurns: PichiMeetingSummaryInput.turns(for: session))
         let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
             .generate(session: session, configuration: self.configuration())
         let successful = await transport.successfulExtractionSources
@@ -1087,7 +1106,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 second.text = "Отменяем выпуск релиза. " + String(repeating: "Другие подробности. ", count: 70)
                 session.transcriptSegments.append(second) // Different ID, same original time.
             }
-            let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+            let transport = OutputBudgetTransport(maximumSourceCharacters: 0, originalTurns: PichiMeetingSummaryInput.turns(for: session))
             do {
                 _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                     .generate(session: session, configuration: self.configuration())
@@ -1120,7 +1139,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         second.start = .init(value: 1000, timescale: 1000)
         second.text = String(repeating: "Второй пункт. ", count: 110)
         session.transcriptSegments.append(second)
-        let transport = OutputBudgetTransport(maximumSourceCharacters: 2000)
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 2000, originalTurns: PichiMeetingSummaryInput.turns(for: session))
         _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
             .generate(session: session, configuration: self.configuration())
         let visited = await transport.successfulExtractionSources
@@ -1142,7 +1161,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         // must see both together; splitting would repeat a stale earlier commitment.
         let source = self.cancellationSession()
         let transport = FixtureTransport(cancellationMode: true)
-        let calls = OutputBudgetTransport(maximumSourceCharacters: Int.max)
+        let calls = OutputBudgetTransport(maximumSourceCharacters: Int.max, originalTurns: PichiMeetingSummaryInput.turns(for: source))
         let generator = PichiMeetingSummaryGenerator { config in
             let input = config.messages.last?["content"] as? String ?? ""
             let fields = try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any]
@@ -1164,7 +1183,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         for count in [10, 20000] {
             var session = self.session()
             session.transcriptSegments[0].text = String(repeating: "Ж", count: count)
-            let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+            let transport = OutputBudgetTransport(maximumSourceCharacters: 0, originalTurns: PichiMeetingSummaryInput.turns(for: session))
             do {
                 _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                     .generate(session: session, configuration: self.configuration())
@@ -1185,7 +1204,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             segment.text = String(repeating: "Ж", count: 300)
             return segment
         }
-        let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 0, originalTurns: PichiMeetingSummaryInput.turns(for: session))
         do {
             _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                 .generate(session: session, configuration: self.configuration())
@@ -1196,10 +1215,11 @@ final class PichiMeetingSummaryTests: XCTestCase {
     }
 
     func testOutputLimitOnValidationRegenerationDoesNotSplitRejectedEvidence() async throws {
-        let transport = OutputBudgetTransport(maximumSourceCharacters: 0, invalidFirst: true)
+        let session = self.session()
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 0, originalTurns: PichiMeetingSummaryInput.turns(for: session), invalidFirst: true)
         do {
             _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
-                .generate(session: self.session(), configuration: self.configuration())
+                .generate(session: session, configuration: self.configuration())
             XCTFail("Regeneration exhaustion must reject rather than hide an evidence/schema rejection")
         } catch { guard case PichiMeetingSummaryError.outputLimit = error else { return XCTFail("Expected typed exhaustion") } }
         let count = await transport.requests.count
@@ -1216,7 +1236,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             segment.text = String(repeating: "Ж", count: 7000)
             return segment
         }
-        let transport = OutputBudgetTransport(maximumSourceCharacters: Int.max, invalidFirst: true, alternateInvalid: true)
+        let transport = OutputBudgetTransport(maximumSourceCharacters: Int.max, originalTurns: PichiMeetingSummaryInput.turns(for: session), invalidFirst: true, alternateInvalid: true)
         do {
             _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                 .generate(session: session, configuration: self.configuration())
@@ -1234,7 +1254,9 @@ final class PichiMeetingSummaryTests: XCTestCase {
         asr.meetingModelParticipantsForTesting = resources.participants
         let entered = expectation(description: "Budget-limited inference entered")
         let drain = SummaryInferenceDrain()
-        let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+        var session = self.session()
+        session.transcriptSegments[0].text = String(repeating: "Русская речь. ", count: 500)
+        let transport = OutputBudgetTransport(maximumSourceCharacters: 0, originalTurns: PichiMeetingSummaryInput.turns(for: session))
         let controller = PichiMeetingSummaryController(generator: .init { config in
             await resources.observeGeneration()
             entered.fulfill()
@@ -1242,8 +1264,6 @@ final class PichiMeetingSummaryTests: XCTestCase {
             await resources.observeInferenceReturn()
             return try await transport.complete(config)
         })
-        var session = self.session()
-        session.transcriptSegments[0].text = String(repeating: "Русская речь. ", count: 500)
         let task = Task { try await controller.generate(session: session, configuration: self.configuration(), asr: asr) }
         await fulfillment(of: [entered], timeout: 5)
         task.cancel()
@@ -1279,7 +1299,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let resources = SummaryResidentResources(owner: owner)
             let asr = ASRService(meetingModelResidency: owner)
             asr.meetingModelParticipantsForTesting = resources.participants
-            let transport = OutputBudgetTransport(maximumSourceCharacters: 0)
+            let transport = OutputBudgetTransport(maximumSourceCharacters: 0, originalTurns: PichiMeetingSummaryInput.turns(for: session))
             let controller = PichiMeetingSummaryController(generator: .init { try await transport.complete($0) })
             await controller.refresh(session: session, configuration: configuration)
             XCTAssertEqual(controller.document, prior)
@@ -1301,18 +1321,50 @@ final class PichiMeetingSummaryTests: XCTestCase {
         try await store.delete(id: session.id)
     }
 
+    /// The model sees this projection only. Persistence IDs belong to the runtime,
+    /// and private fixture catalogs must never be serialized into a request.
+    private nonisolated struct ModelSource: Decodable, Sendable {
+        let sourceIndex: Int
+        let seconds: TimeInterval
+        let speaker: String
+        let text: String
+
+        static func catalog(from fields: [String: Any]) throws -> [Self] {
+            func checkIdentityFields(_ value: Any) throws {
+                if let object = value as? [String: Any] {
+                    guard object["id"] == nil, object["segmentID"] == nil else {
+                        XCTFail("A persistence identity leaked into model-facing input")
+                        throw PichiMeetingSummaryError.invalidOutput
+                    }
+                    for child in object.values { try checkIdentityFields(child) }
+                } else if let array = value as? [Any] {
+                    for child in array { try checkIdentityFields(child) }
+                }
+            }
+            try checkIdentityFields(fields)
+            let choices = try XCTUnwrap(fields["sources"] as? [[String: Any]])
+            guard choices.allSatisfy({ Set($0.keys) == Set(["sourceIndex", "seconds", "speaker", "text"]) }) else {
+                XCTFail("Fake completions must consume the actual compact source projection")
+                throw PichiMeetingSummaryError.invalidOutput
+            }
+            return try JSONDecoder().decode([Self].self, from: JSONSerialization.data(withJSONObject: choices))
+        }
+    }
+
     private actor OutputBudgetTransport {
         var requests: [LLMClient.Config] = []
         var successfulExtractionSources: [PichiMeetingSummarySource] = []
         var truncations = 0
         let maximumSourceCharacters: Int
+        let originalTurns: [PichiMeetingSummaryTurn]
         var truncateFirstReduction: Bool
         let invalidFirst: Bool
         let alternateInvalid: Bool
 
-        init(maximumSourceCharacters: Int, truncateFirstReduction: Bool = false,
+        init(maximumSourceCharacters: Int, originalTurns: [PichiMeetingSummaryTurn], truncateFirstReduction: Bool = false,
              invalidFirst: Bool = false, alternateInvalid: Bool = false) {
             self.maximumSourceCharacters = maximumSourceCharacters
+            self.originalTurns = originalTurns
             self.truncateFirstReduction = truncateFirstReduction
             self.invalidFirst = invalidFirst
             self.alternateInvalid = alternateInvalid
@@ -1323,15 +1375,25 @@ final class PichiMeetingSummaryTests: XCTestCase {
             if self.invalidFirst, self.requests.count == 1 || (self.alternateInvalid && self.requests.count % 2 == 1) { return "{}" }
             let input = try XCTUnwrap(config.messages.last?["content"] as? String)
             let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
-            let data = try JSONSerialization.data(withJSONObject: XCTUnwrap(fields["sources"]))
-            let sources = try JSONDecoder().decode([PichiMeetingSummarySource].self, from: data)
+            let sources = try ModelSource.catalog(from: fields)
             let reducing = fields["recap"] != nil
             if sources.reduce(0, { $0 + $1.text.count }) > self.maximumSourceCharacters || (reducing && self.truncateFirstReduction) {
                 self.truncations += 1
                 self.truncateFirstReduction = false
                 throw PichiMeetingSummaryError.outputLimit
             }
-            if !reducing { self.successfulExtractionSources += sources }
+            if !reducing {
+                self.successfulExtractionSources += try sources.map { source in
+                    let matches = self.originalTurns.filter {
+                        $0.seconds == source.seconds && $0.speaker == source.speaker && $0.text.contains(source.text)
+                    }
+                    guard Set(matches.map(\.id)).count == 1, let original = matches.first else {
+                        XCTFail("Synthetic observations need an unambiguous original source; never fabricate a UUID")
+                        throw PichiMeetingSummaryError.invalidOutput
+                    }
+                    return .init(sourceIndex: source.sourceIndex, id: original.id, seconds: source.seconds, speaker: source.speaker, text: source.text)
+                }
+            }
             let response: [String: Any] = ["summary": [["text": "Обсудили пункт.", "evidence": [["sourceIndex": 0]]]],
                                            "decisions": [], "actions": [], "openQuestions": [], "changes": [], "answers": []]
             return String(decoding: try JSONSerialization.data(withJSONObject: response), as: UTF8.self)
@@ -1889,7 +1951,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let prompt = config.messages[0]["content"] as? String ?? ""
             let input = try XCTUnwrap(config.messages.last?["content"] as? String)
             let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
-            let sources = try JSONDecoder().decode([PichiMeetingSummarySource].self, from: JSONSerialization.data(withJSONObject: XCTUnwrap(fields["sources"])))
+            let sources = try ModelSource.catalog(from: fields)
             if prompt.contains("Reconcile meeting tasks") {
                 let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
                 let candidate = try XCTUnwrap(candidates.first { ($0["item"] as? [String: Any])?["status"] as? String == "agreed" })
@@ -1929,8 +1991,9 @@ final class PichiMeetingSummaryTests: XCTestCase {
             self.requests.append(config)
             let text = config.messages.last?["content"] as? String ?? ""
             let prompt = config.messages[0]["content"] as? String ?? ""
+            let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: request)
             if prompt.contains("Reconcile meeting") {
-                let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
                 let candidates = try XCTUnwrap(request["candidates"] as? [[String: Any]])
                 let events = try XCTUnwrap(request["changes"] as? [[String: Any]])
                 let updates = candidates.compactMap { candidate -> [String: Any]? in
@@ -1945,48 +2008,33 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 }
                 return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": updates]), as: UTF8.self)
             }
-            let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
-            let sourceObjects = try XCTUnwrap(request["sources"] as? [[String: Any]])
-            let sources = try JSONDecoder().decode([PichiMeetingSummarySource].self, from: JSONSerialization.data(withJSONObject: sourceObjects))
-            let item: PichiMeetingSummaryItem
+            let item: [String: Any]
             if prompt.contains("Condense") {
                 let wireItems = try XCTUnwrap(request["recap"] as? [[String: Any]])
-                let canonical = try wireItems.map { fields -> [String: Any] in
-                    var copy = fields
-                    let citations = try XCTUnwrap(fields["evidence"] as? [[String: Any]])
-                    copy["evidence"] = try citations.map { citation -> [String: Any] in
-                        let index = try XCTUnwrap(citation["sourceIndex"] as? Int)
-                        let source = try XCTUnwrap(sources.first { $0.sourceIndex == index })
-                        return ["segmentID": source.id.uuidString, "quote": source.text]
-                    }
-                    return copy
-                }
-                let items = try JSONDecoder().decode([PichiMeetingSummaryItem].self, from: JSONSerialization.data(withJSONObject: canonical))
-                item = try XCTUnwrap(self.cancellationMode || self.answerMode ? items.last : items.first)
+                item = try XCTUnwrap(self.cancellationMode || self.answerMode ? wireItems.last : wireItems.first)
             } else {
                 let source = try XCTUnwrap(sources.first)
-                let turn = PichiMeetingSummaryTurn(id: source.id, seconds: source.seconds, speaker: source.speaker, text: source.text)
-                item = .init(text: "Резюме \(turn.id)", evidence: [.init(segmentID: turn.id, quote: String(turn.text.prefix(100)))])
+                let evidence: [[String: Any]] = [["sourceIndex": source.sourceIndex]]
+                item = ["text": "Резюме \(source.seconds)", "evidence": evidence]
                 if self.answerMode {
-                    let questioning = turn.text.hasPrefix("Когда")
-                    let evidence = [PichiMeetingSummaryEvidence(segmentID: turn.id, quote: String(turn.text.prefix(34)))]
-                    let fact = PichiMeetingSummaryItem(text: questioning ? "Когда будет готов отчёт?" : "Отчёт будет готов в пятницу.", evidence: evidence)
-                    let document = PichiMeetingSummaryDocument(summary: [fact], decisions: [], actions: [],
-                                                               openQuestions: questioning ? [fact] : [], answers: questioning ? [] : [fact])
-                    return String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
+                    let questioning = source.text.hasPrefix("Когда")
+                    let fact: [String: Any] = ["text": questioning ? "Когда будет готов отчёт?" : "Отчёт будет готов в пятницу.", "evidence": evidence]
+                    let document: [String: Any] = ["summary": [fact], "decisions": [], "actions": [], "changes": [],
+                                                  "openQuestions": questioning ? [fact] : [], "answers": questioning ? [] : [fact]]
+                    return String(decoding: try JSONSerialization.data(withJSONObject: document), as: UTF8.self)
                 }
                 if self.cancellationMode {
-                    let cancelling = turn.text.hasPrefix("Отменяем")
-                    let evidence = [PichiMeetingSummaryEvidence(segmentID: turn.id, quote: String(turn.text.prefix(57)))]
-                    let fact = PichiMeetingSummaryItem(text: cancelling ? "Отменяем выпуск." : "Выпустить в пятницу.", evidence: evidence)
-                    let action = PichiMeetingSummaryItem(text: "Подготовить релиз.", evidence: evidence, owner: "Иван", deadline: "пятницу",
-                                                        title: "Подготовить релиз", status: .agreed, urgency: .unspecified)
-                    let document = PichiMeetingSummaryDocument(summary: [fact], decisions: [fact],
-                                                               actions: cancelling ? [] : [action], openQuestions: [], changes: cancelling ? [fact] : [])
-                    return String(decoding: try JSONEncoder().encode(document), as: UTF8.self)
+                    let cancelling = source.text.hasPrefix("Отменяем")
+                    let fact: [String: Any] = ["text": cancelling ? "Отменяем выпуск." : "Выпустить в пятницу.", "evidence": evidence]
+                    let action: [String: Any] = ["text": "Подготовить релиз.", "evidence": evidence, "owner": "Иван", "deadline": "пятницу",
+                                                "title": "Подготовить релиз", "status": "agreed", "urgency": "unspecified"]
+                    let document: [String: Any] = ["summary": [fact], "decisions": [fact], "actions": cancelling ? [] : [action],
+                                                  "openQuestions": [], "changes": cancelling ? [fact] : [], "answers": []]
+                    return String(decoding: try JSONSerialization.data(withJSONObject: document), as: UTF8.self)
                 }
             }
-            return String(decoding: try JSONEncoder().encode(PichiMeetingSummaryDocument(summary: [item], decisions: [], actions: [], openQuestions: [])), as: UTF8.self)
+            return String(decoding: try JSONSerialization.data(withJSONObject: ["summary": [item], "decisions": [], "actions": [],
+                                                                               "openQuestions": [], "changes": [], "answers": []]), as: UTF8.self)
         }
     }
 }
