@@ -160,7 +160,7 @@ struct OnboardingAIEnhancementStepView: View {
                                 .buttonStyle(.plain)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                                 .disabled(!self.canNavigate)
-                            self.action(id: "practice-next", title: self.practice.isLast ? "Finish setup" : "Next example", tone: .primary, width: 180) {
+                            self.action(id: "practice-next", title: self.practice.isLast ? "Finish setup" : "Next example", tone: .primary, width: 180, isEnabled: self.practice.result != nil) {
                                 guard self.canNavigate, self.practice.result != nil else { return }
                                 if self.practice.isLast {
                                     self.onFinishSetup()
@@ -168,7 +168,6 @@ struct OnboardingAIEnhancementStepView: View {
                                     self.practice.advance(isBusy: !self.canNavigate)
                                 }
                             }
-                            .disabled(self.practice.result == nil)
                         } else if self.isReady && !self.isShowingIntroduction {
                             if !self.reduceMotion {
                                 self.action(id: "intro-replay", title: "Replay", tone: .secondary, width: 132) {
@@ -301,7 +300,7 @@ struct OnboardingAIEnhancementStepView: View {
                 }
                 .buttonStyle(.plain)
                 .font(.fluidSystem(size: 15, weight: .medium))
-                .foregroundStyle(self.theme.palette.primaryText.opacity(self.canNavigate ? 1 : 0.4))
+                .foregroundStyle(self.canNavigate ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
                 .disabled(!self.canNavigate)
             }
 
@@ -494,18 +493,19 @@ struct OnboardingAIEnhancementStepView: View {
     }
 
     @ViewBuilder
-    private func action(id: String, title: String, tone: ButtonTone, width: CGFloat, action: @escaping () -> Void) -> some View {
+    private func action(id: String, title: String, tone: ButtonTone, width: CGFloat, isEnabled: Bool = true, action: @escaping () -> Void) -> some View {
+        let actionEnabled = isEnabled && self.canNavigate
         if #available(macOS 26, *), !self.reduceTransparency {
             Button(action: action) {
                 Text(PichiLocalization.text(title))
                     .font(.fluidSystem(size: 16, weight: .semibold))
-                    .foregroundStyle(tone == .primary ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
+                    .foregroundStyle(actionEnabled && tone == .primary ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
                     .frame(width: width - 32, height: 40)
             }
-            .fluidGlassAction(prominent: tone == .primary)
+            .fluidGlassAction(prominent: actionEnabled && tone == .primary)
             .font(.fluidSystem(size: 17, weight: .semibold))
-            .tint(tone == .primary ? self.theme.palette.accent : nil)
-            .disabled(!self.canNavigate)
+            .tint(actionEnabled && tone == .primary ? self.theme.palette.accent : nil)
+            .disabled(!actionEnabled)
         } else {
             self.pillButton(PillButtonConfiguration(
                 id: id,
@@ -515,7 +515,7 @@ struct OnboardingAIEnhancementStepView: View {
                 width: width,
                 height: 48,
                 fontSize: 16,
-                isEnabled: self.canNavigate
+                isEnabled: actionEnabled
             ), action: action)
         }
     }
@@ -536,15 +536,17 @@ struct OnboardingAIEnhancementStepView: View {
         let isPrimary = configuration.tone == .primary
         let isDestructive = configuration.tone == .destructive
         let fillColor: Color = {
+            guard !isDisabled else { return self.theme.palette.primaryText.opacity(0.045) }
             if isPrimary {
-                return accentColor.opacity(isDisabled ? 0.34 : 1)
+                return accentColor
             }
             if isDestructive {
-                return Color.red.opacity(isDisabled ? 0.045 : (isHovered ? 0.24 : 0.16))
+                return Color.red.opacity(isHovered ? 0.24 : 0.16)
             }
-            return self.theme.palette.primaryText.opacity(isDisabled ? 0.045 : (isHovered ? 0.11 : 0.07))
+            return self.theme.palette.primaryText.opacity(isHovered ? 0.11 : 0.07)
         }()
         let borderColor: Color = {
+            guard !isDisabled else { return self.theme.palette.cardBorder }
             if isPrimary {
                 return Color.white.opacity(isHovered ? 0.30 : 0)
             }
@@ -553,7 +555,7 @@ struct OnboardingAIEnhancementStepView: View {
             }
             return isHovered ? accentColor.opacity(0.30) : self.theme.palette.cardBorder
         }()
-        let foregroundOpacity = isDisabled ? 0.42 : 1.0
+        let foregroundColor = !isDisabled && isPrimary ? self.theme.palette.accentForeground : self.theme.palette.primaryText
         let shadowOpacity = isDisabled ? 0 : (isPrimary ? (isHovered ? 0.56 : 0.26) : (isHovered ? 0.12 : 0))
 
         return Button(action: action) {
@@ -568,7 +570,7 @@ struct OnboardingAIEnhancementStepView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
-            .foregroundStyle((isPrimary ? self.theme.palette.accentForeground : self.theme.palette.primaryText).opacity(foregroundOpacity))
+            .foregroundStyle(foregroundColor)
             .frame(width: configuration.width, height: configuration.height)
             .background(
                 shape

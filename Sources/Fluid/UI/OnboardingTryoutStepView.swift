@@ -210,7 +210,6 @@ struct OnboardingTryoutStepView: View {
         let isEnabled = !self.isRunning
         let title = self.isRecordingShortcut ? "Cancel" : "Change"
         let fillOpacity = isEnabled ? (self.isChangeHovered ? 0.11 : 0.07) : 0.045
-        let foregroundOpacity = isEnabled ? 1.0 : 0.42
         let ringOpacity = self.isChangeHovered && isEnabled ? 0.50 : 0
 
         return Button {
@@ -218,7 +217,7 @@ struct OnboardingTryoutStepView: View {
         } label: {
             Text(PichiLocalization.text(title))
                 .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.primaryText.opacity(foregroundOpacity))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
                 .frame(width: 72, height: 32)

@@ -1976,14 +1976,18 @@ struct OnboardingFlowView: View {
         }
         let isFilledTone = configuration.tone != .secondary
         let fillColor: Color = {
+            guard configuration.isEnabled else {
+                return self.theme.palette.primaryText.opacity(0.045)
+            }
             switch configuration.tone {
             case .primary, .destructive, .update:
-                return accentColor.opacity(configuration.isEnabled ? 1 : 0.34)
+                return accentColor
             case .secondary:
-                return self.theme.palette.primaryText.opacity(configuration.isEnabled ? (configuration.isHovered ? 0.11 : 0.07) : 0.045)
+                return self.theme.palette.primaryText.opacity(configuration.isHovered ? 0.11 : 0.07)
             }
         }()
         let borderColor: Color = {
+            guard configuration.isEnabled else { return self.theme.palette.cardBorder }
             switch configuration.tone {
             case .primary, .destructive, .update:
                 return self.theme.palette.primaryText.opacity(configuration.isHovered && configuration.isEnabled ? 0.30 : 0)
@@ -1991,7 +1995,12 @@ struct OnboardingFlowView: View {
                 return configuration.isHovered && configuration.isEnabled ? self.theme.palette.accent.opacity(0.30) : self.theme.palette.primaryText.opacity(0.07)
             }
         }()
-        let foregroundOpacity: Double = configuration.isEnabled ? (isFilledTone ? 1.0 : (configuration.isHovered ? 0.94 : 0.78)) : 0.42
+        let foregroundColor: Color = {
+            guard configuration.isEnabled else { return self.theme.palette.primaryText }
+            let color = configuration.tone == .primary ? self.theme.palette.accentForeground
+                : (isFilledTone ? Color.white : self.theme.palette.primaryText)
+            return color.opacity(isFilledTone ? 1.0 : (configuration.isHovered ? 0.94 : 0.78))
+        }()
         let shadowOpacity: Double = {
             guard configuration.isEnabled else { return 0 }
             switch configuration.tone {
@@ -2017,8 +2026,7 @@ struct OnboardingFlowView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
             }
-            .foregroundStyle((configuration.tone == .primary ? self.theme.palette.accentForeground
-                : (isFilledTone ? Color.white : self.theme.palette.primaryText)).opacity(foregroundOpacity))
+            .foregroundStyle(foregroundColor)
             .frame(width: configuration.width, height: configuration.height)
             .frame(maxWidth: configuration.width == nil ? .infinity : nil)
             .background(
