@@ -1,8 +1,34 @@
 import Foundation
+import PichiGigaAM
 @testable import FluidVoice_Debug
 import XCTest
 
 final class PichiGigaAMIntegrationTests: XCTestCase {
+    @MainActor
+    func testImportedExportControlsLibraryCapabilitiesAndMeasurementProvenance() throws {
+        let model = SettingsStore.SpeechModel.gigaam
+        let preferred = try XCTUnwrap(GigaAMModelCatalog.models.first)
+        let metadata = try XCTUnwrap(model.libraryMetadata)
+        XCTAssertEqual(metadata, preferred.libraryMetadata)
+        XCTAssertEqual(model.supportedLanguageCodes, "RU")
+        XCTAssertEqual(model.supportedLanguageNames, "Russian")
+        XCTAssertTrue(metadata.features.contains("Punctuation"))
+        XCTAssertTrue(metadata.features.contains("capitalization"))
+        XCTAssertTrue(metadata.features.contains("normalization"))
+        XCTAssertTrue(metadata.performance.explanation.contains("excluding model loading"))
+        XCTAssertTrue(metadata.performance.explanation.contains("has not been evaluated"))
+        XCTAssertFalse(model.hasPerformanceRatings, "Published base WER is not a relative product score")
+
+        for descriptor in GigaAMModelCatalog.models.dropFirst() {
+            let older = descriptor.libraryMetadata
+            XCTAssertNotEqual(older.size, metadata.size)
+            XCTAssertTrue(older.features.contains("does not add punctuation or capitalization"))
+            XCTAssertEqual(older.performance.speed, "CPU inference")
+            XCTAssertNotEqual(older.performance.accuracy, metadata.performance.accuracy)
+            XCTAssertTrue(older.performance.explanation.contains("has not been benchmarked"))
+        }
+    }
+
     @MainActor
     func testRealLocalAudioThroughProviderFilesAndAPIWhenEnabled() async throws {
         let environment = ProcessInfo.processInfo.environment

@@ -68,8 +68,7 @@
           }
         }
       }
-    }
-,
+    },
     "Invalid local model timeout.": {
       "extractionState": "manual",
       "localizations": {
@@ -222,8 +221,7 @@
           }
         }
       }
-    }
-,
+    },
     "Completed later": {
       "extractionState": "manual",
       "localizations": {
@@ -46343,6 +46341,261 @@
           "stringUnit": {
             "state": "translated",
             "value": "Откройте настройки и проверьте доступ к микрофону."
+          }
+        }
+      }
+    },
+    "4 GB+ RAM recommended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "4 GB+ RAM recommended"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуется от 4 GB RAM"
+          }
+        }
+      }
+    },
+    "8.8× real time": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8.8× real time"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В 8,8 раза быстрее речи"
+          }
+        }
+      }
+    },
+    "Apple Silicon / Intel CPU": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Silicon / Intel CPU"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU Apple Silicon / Intel"
+          }
+        }
+      }
+    },
+    "Base WER 12.0%": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Base WER 12.0%"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WER базы: 12,0%"
+          }
+        }
+      }
+    },
+    "Base WER 9.1%": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Base WER 9.1%"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WER базы: 9,1%"
+          }
+        }
+      }
+    },
+    "CPU inference": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU inference"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание на CPU"
+          }
+        }
+      }
+    },
+    "CPU speed / base WER": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU speed / base WER"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скорость CPU / WER базовой модели"
+          }
+        }
+      }
+    },
+    "CPU speed has not been benchmarked for this export. Accuracy: the publisher's average word error rate for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU speed has not been benchmarked for this export. Accuracy: the publisher's average word error rate for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скорость на CPU для этого варианта не измерена. Точность: средняя доля ошибок в словах базовой GigaAM v3 CTC по десяти наборам данных из оценки разработчика. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался. Эти показатели отличаются от относительных оценок других моделей."
+          }
+        }
+      }
+    },
+    "Local Russian speech recognition on Apple Silicon and Intel CPUs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Russian speech recognition on Apple Silicon and Intel CPUs."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальное распознавание русской речи на процессорах Apple Silicon и Intel."
+          }
+        }
+      }
+    },
+    "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пунктуация, заглавные буквы и нормализация текста. Оптимизация FP16 и обученный модуль определения конца фразы."
+          }
+        }
+      }
+    },
+    "Recommended system RAM, not measured model memory usage. The size above is disk space.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommended system RAM, not measured model memory usage. The size above is disk space."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуемый объём оперативной памяти системы. Потребление памяти моделью не измерено. Размер выше относится к месту на диске."
+          }
+        }
+      }
+    },
+    "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание русского языка с оптимизацией FP16 и обученным модулем определения конца фразы. Этот посимвольный вариант не добавляет пунктуацию и заглавные буквы."
+          }
+        }
+      }
+    },
+    "Speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. Accuracy: the publisher's average word error rate for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. Accuracy: the publisher's average word error rate for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скорость: 8,48 секунды синтетической русской речи обработаны за 0,97 секунды на CPU Apple M4 Max, без учёта загрузки модели. Точность: средняя доля ошибок в словах базовой GigaAM v3 E2E CTC по десяти наборам данных из оценки разработчика. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался. Эти показатели отличаются от относительных оценок других моделей."
+          }
+        }
+      }
+    },
+    "~428.8 MiB": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~428.8 MiB"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~428,8 MiB"
+          }
+        }
+      }
+    },
+    "~435.2 MiB": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~435.2 MiB"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~435,2 MiB"
           }
         }
       }

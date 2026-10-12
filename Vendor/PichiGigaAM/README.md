@@ -20,6 +20,19 @@ Meeting jobs can pin `installedModelFingerprint()` (export ID, model checksum, v
 
 The optimized weights include a private Pichi EOU head. Their download and distribution destination has not been published, so the app requires a verified local import and does not invent a public download URL. No weights, recordings or private training data are included in this package or Git.
 
+## Library characteristics
+
+The preferred E2E v5 export and its vocabulary occupy 456,341,702 bytes (435.2 MiB) on disk. The older character exports occupy about 428.8 MiB. The library separately shows the existing 4 GB system-RAM recommendation; this is not a measurement of model RAM consumption. Both Apple Silicon and Intel use CPU inference.
+
+E2E output includes punctuation, capitalization and text normalization. The FP16 conversion reduces weight storage, and Pichi's trained EOU head detects phrase completion using the shared speech encoder. The native provider does not include the browser/server domain-term spotter or a separate grammar-correction model. Older character exports do not produce the E2E formatting features. The installation snapshot supplies the imported descriptor's characteristics to the common library card without filesystem reads during rendering.
+
+The library distinguishes measured/reference characteristics from its inherited relative product ratings:
+
+- On October 12, 2026, the synthetic Russian prototype fixture (8.4765 seconds, 16 kHz mono) took 0.9674 seconds to transcribe with the preferred v5 export on an Apple M4 Max CPU, about 8.8 times real time. The model load took 0.8108 seconds and is excluded. This short warm inference measurement does not establish Intel, long-recording or concurrent-load performance.
+- The [publisher's evaluation](https://github.com/salute-developers/GigaAM/blob/main/evaluation.md) reports average normalized word error rate (WER) across ten Russian datasets: 12.0% for base v3 E2E CTC and 9.1% for base v3 CTC. Lower WER is better. These are reference values for the base models, not measurements of our optimized artifacts, and not the other cards' relative accuracy percentages.
+
+No ASR accuracy percentage is inferred from the EOU head's phrase-completion classification metrics.
+
 ## Inference contract
 
 `GigaAMRuntime` serializes one model session. Input is finite 16 kHz mono float PCM. The frontend uses a 320-point periodic bf16-rounded Hann window, 160-sample hop and 64 HTK mel filters, matching the browser implementation. The same decoder serves final and live updates.
