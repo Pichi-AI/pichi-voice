@@ -183,8 +183,27 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(document.actions[0].text, "Проверить *поля* и <данные>.")
         document.actions[0].superseded = true
         let historical = document.copyMarkdown(language: .english)
-        XCTAssertFalse(historical.contains("Status: Requested"), "A superseded entry must not advertise an unchanged current state")
+        XCTAssertFalse(historical.contains("Status\\: Requested"), "A superseded entry must not advertise an unchanged current state")
         XCTAssertTrue(historical.contains("Superseded"))
+    }
+
+    func testStructuredMarkdownEvidencePreservesLiteralHTMLURLsAndEscapes() {
+        for quote in [#"<a href="https://example.org">link</a> [x](https://example.org)"#,
+                      #"<https://example.org/a?q=1&b=2> &lt;tag&gt; &amp;"#,
+                      #"C:\reports\a.txt \\server\share `code` ``two ` ticks`` \`literal\`"#] {
+            let evidence = PichiMeetingSummaryEvidence(segmentID: self.id, quote: quote)
+            let document = PichiMeetingSummaryDocument(summary: [.init(text: "Проверить источник.", evidence: [evidence])],
+                                                       decisions: [], actions: [], openQuestions: [])
+            let source = PichiMeetingSummaryTurn(id: self.id, seconds: 65, speaker: "Иван [Speaker]", text: quote)
+            let blocks = CommandMarkdownParser.parse(document.copyMarkdown(language: .english, sources: [source]))
+            let sources: [AttributedString] = blocks.compactMap {
+                if case let .quote(text) = $0.content { return text }
+                return nil
+            }
+            XCTAssertEqual(sources.map { String($0.characters) }, ["1:05 · Иван [Speaker]", quote])
+            XCTAssertTrue(sources.allSatisfy { $0.runs.allSatisfy { $0.link == nil && $0.inlinePresentationIntent == nil } },
+                          "Evidence must retain literal punctuation without activating a link or inline formatting")
+        }
     }
 
     func testEmptyDecisionsAndTasksAreValidButEveryClaimNeedsEvidence() throws {

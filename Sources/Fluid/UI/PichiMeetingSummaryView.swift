@@ -323,7 +323,9 @@ extension PichiMeetingSummaryDocument {
     nonisolated func copyMarkdown(language: PichiInterfaceLanguage, bundle: Bundle = .main, sources: [PichiMeetingSummaryTurn] = []) -> String {
         func literal(_ value: String) -> String {
             value.reduce(into: "") { result, character in
-                if "\\`*_{}[]()#+-.!|><&".contains(character) { result.append("\\") }
+                // Escaping ':' also prevents Foundation's URL scanner from
+                // swallowing subsequent literal escapes in a URL or HTML tag.
+                if "\\`*_{}[]()#+-.!|><&:".contains(character) { result.append("\\") }
                 result.append(character)
             }
         }

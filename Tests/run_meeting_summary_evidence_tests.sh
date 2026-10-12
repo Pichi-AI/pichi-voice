@@ -25,6 +25,7 @@ pathlib.Path(sys.argv[1]).write_text(types + '\nnonisolated enum PichiMeetingSum
     + '\n'.join(methods) + '\n}\n' + source[start:end]
     + '\n' + exports)
 PY
+sed '/^@MainActor/,$d' Sources/Fluid/Views/CommandMarkdownContent.swift > "$task_test_dir/Markdown.swift"
 xcrun swiftc -parse-as-library Sources/Fluid/Localization/PichiLocalization.swift \
-    "$task_test_dir/SummaryEvidence.swift" Tests/MeetingSummaryEvidenceTests.swift -o "$task_test_dir/tests"
+    "$task_test_dir/SummaryEvidence.swift" "$task_test_dir/Markdown.swift" Tests/MeetingSummaryEvidenceTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"

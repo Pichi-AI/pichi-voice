@@ -43,10 +43,11 @@ struct MeetingSummaryEvidenceTests {
                                    title: "Уточнить [PX-17]", status: .requested, urgency: .unspecified)
         let markdown = document.copyMarkdown(language: .english, sources: [.init(id: id, seconds: 65, speaker: "Мария [Speaker]", text: source.text)])
         guard markdown.contains("### Уточнить \\[PX\\-17\\]"), markdown.contains("Проверить \\*поля\\* и \\<данные\\>\\."),
-              markdown.contains("1:05 · Мария \\[Speaker\\]"), markdown.contains("Status: Requested"), !markdown.contains(id.uuidString)
+              markdown.contains("1\\:05 · Мария \\[Speaker\\]"), markdown.contains("Status\\: Requested"), !markdown.contains(id.uuidString)
         else { throw Failure("Structured Markdown omitted fields, source time or safe literal punctuation") }
+        try literalMarkdownRoundTrip(id: id)
         document.actions[0].superseded = true
-        guard !document.copyMarkdown(language: .english).contains("Status: Requested")
+        guard !document.copyMarkdown(language: .english).contains("Status\\: Requested")
         else { throw Failure("Superseded action retained an advertised current state") }
         document.actions[0].superseded = nil
 
@@ -105,7 +106,48 @@ struct MeetingSummaryEvidenceTests {
                 else { throw Failure("Evidence or context admission bounds regressed") }
             }
         }
-        print("Meeting summary evidence checks passed: cited fields, source coverage, admission bounds, legacy/typed task metadata and structured Markdown.")
+        print("Meeting summary evidence checks passed: cited fields, source coverage, admission bounds, legacy/typed task metadata and literal structured Markdown round trips.")
+    }
+
+    static func literalMarkdownRoundTrip(id: UUID) throws {
+        for quote in [#"<a href="https://example.org">link</a> [x](https://example.org)"#,
+                      #"<https://example.org/a?q=1&b=2> &lt;tag&gt; &amp;"#,
+                      #"Paths: C:\reports\a.txt and \\server\share; `code`, ``two ` ticks`` and \`literal\`."#,
+                      #"**bold** _italic_ ![image](https://example.org/a.png) {x} [ ] # + - . ! | > &"#] {
+            let source = PichiMeetingSummaryTurn(id: id, seconds: 65, speaker: "Мария [Speaker]", text: quote)
+            let evidence = PichiMeetingSummaryEvidence(segmentID: id, quote: quote)
+            let document = PichiMeetingSummaryDocument(summary: [], decisions: [], actions: [
+                .init(text: "Проверить *поля* и <данные>.", evidence: [evidence], owner: "Иван [QA]",
+                      deadline: "к пятнице", title: "Уточнить [PX-17]", status: .requested, urgency: .unspecified),
+            ], openQuestions: [])
+            let blocks = CommandMarkdownParser.parse(document.copyMarkdown(language: .english, sources: [source]))
+            let quotes: [AttributedString] = blocks.compactMap {
+                if case let .quote(text) = $0.content { return text }
+                return nil
+            }
+            guard quotes.map({ String($0.characters) }) == ["1:05 · Мария [Speaker]", quote] else {
+                throw Failure("Exported evidence must render verbatim: \(quote); observed: \(quotes.map { String($0.characters) })")
+            }
+            guard quotes.allSatisfy({ text in text.runs.allSatisfy { $0.link == nil && $0.inlinePresentationIntent == nil } })
+            else { throw Failure("Literal evidence created a link or inline formatting") }
+            let headings: [(String, Int)] = blocks.compactMap {
+                if case let .heading(text, level) = $0.content { return (String(text.characters), level) }
+                return nil
+            }
+            guard headings.map(\.0) == ["Recap", "Decisions", "Action items", "Уточнить [PX-17]", "Questions and answers"],
+                  headings.map(\.1) == [2, 2, 2, 3, 2]
+            else { throw Failure("Literal export lost its generated section/task headings") }
+            let metadata: [String] = blocks.compactMap {
+                if case let .listItem(text, _, _) = $0.content { return String(text.characters) }
+                return nil
+            }
+            guard metadata == ["Status: Requested", "Urgency not specified", "Owner: Иван [QA]", "Due: к пятнице"]
+            else { throw Failure("Literal export lost its generated task metadata: \(metadata)") }
+            guard blocks.contains(where: {
+                if case let .paragraph(text) = $0.content { return String(text.characters) == document.actions[0].text }
+                return false
+            }) else { throw Failure("Literal export changed task text") }
+        }
     }
 
     static func reject(_ document: PichiMeetingSummaryDocument, turns: [PichiMeetingSummaryTurn], issue: PichiMeetingSummaryValidationIssue) throws {

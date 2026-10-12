@@ -63,6 +63,13 @@ struct CommandMarkdownParserTests {
         precondition(String(russianRows[0][1].characters) == "к пятнице")
         precondition(String(russianSource.characters) == "Алёна: Я подготовлю отчёт к пятнице.")
 
+        let links = CommandMarkdownParser.parse("[Example](https://example.org/docs?q=1&b=2) and <https://example.org> with **bold** and `code`.")
+        guard case let .paragraph(linkText) = links.first?.content else { preconditionFailure("Missing linked paragraph") }
+        precondition(String(linkText.characters) == "Example and https://example.org with bold and code.")
+        precondition(Set(linkText.runs.compactMap { $0.link?.absoluteString }) == ["https://example.org/docs?q=1&b=2", "https://example.org"])
+        precondition(linkText.runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true })
+        precondition(linkText.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
+
         let terminal = CommandToolOutput.parse("{\"success\":true,\"output\":\"hello\",\"executionTimeMs\":32}")
         precondition(terminal.success == true && terminal.output == "hello" && terminal.executionTime == 32)
         let error = CommandToolOutput.parse("{\"success\":false,\"output\":\"\",\"error\":\"Permission denied\"}")
@@ -70,6 +77,6 @@ struct CommandMarkdownParserTests {
         let unknown = "{\"new_tool_result\": [1, 2, 3]}"
         precondition(CommandToolOutput.parse(unknown).output == unknown, "Unknown result formats must remain inspectable")
         precondition(CommandToolOutput.parse("plain legacy output").output == "plain legacy output")
-        print("PASS: markdown structure, inline styles, nested lists, partial code fences, escaped table cells, bounded tables, Unicode, Russian summaries and sources, empty input, and legacy/unknown tool results")
+        print("PASS: markdown structure, inline styles and real links, nested lists, partial code fences, escaped table cells, bounded tables, Unicode, Russian summaries and sources, empty input, and legacy/unknown tool results")
     }
 }
