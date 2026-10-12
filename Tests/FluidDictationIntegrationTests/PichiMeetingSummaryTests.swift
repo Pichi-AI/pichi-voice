@@ -768,6 +768,54 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
+    func testLaterAcceptanceKeepsTheSameTaskCurrentWithoutADuplicateAction() async throws {
+        for initialStatus in [PichiMeetingSummaryActionStatus.requested, .proposed] {
+            let transport = AcceptanceStateTransport(initialStatus: initialStatus)
+            let session = self.acceptanceSession()
+            let output = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            XCTAssertEqual(output.actions.count, 1, "Acceptance in changes alone must preserve the original task")
+            let task = try XCTUnwrap(output.actions.first)
+            XCTAssertEqual(task.status, .agreed)
+            XCTAssertNil(task.superseded, "Accepted work remains current instead of being struck out")
+            XCTAssertEqual(task.owner, "Иван")
+            XCTAssertEqual(task.deadline, "к пятнице")
+            XCTAssertEqual(Set(task.evidence.map(\.segmentID)), Set(session.transcriptSegments.map(\.id)))
+            XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+            let markdown = output.copyMarkdown(language: .english)
+            XCTAssertTrue(markdown.contains("Status\\: Agreed"))
+            XCTAssertFalse(markdown.contains("Superseded"))
+            let states = await transport.reconciliationStates
+            XCTAssertEqual(states, [initialStatus])
+        }
+    }
+
+    func testAcceptedTaskRemainsEligibleForLaterCompletionOrCancellation() async throws {
+        for terminalStatus in [PichiMeetingSummaryActionStatus.completed, .cancelled] {
+            let transport = AcceptanceStateTransport(terminalStatus: terminalStatus)
+            let session = self.acceptanceSession(terminalStatus: terminalStatus)
+            let output = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            XCTAssertEqual(output.actions.count, 1, "Later changes need not repeat the task in actions")
+            let task = try XCTUnwrap(output.actions.first)
+            XCTAssertEqual(task.status, terminalStatus)
+            XCTAssertEqual(task.superseded, true, "Finished or cancelled work retains its source history")
+            XCTAssertEqual(task.owner, "Иван")
+            XCTAssertEqual(task.deadline, "к пятнице")
+            XCTAssertEqual(Set(task.evidence.map(\.segmentID)), Set(session.transcriptSegments.map(\.id)))
+            XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+            let states = await transport.reconciliationStates
+            XCTAssertEqual(states, [.requested, .agreed], "The next event batch must still receive the accepted task")
+            for request in await transport.requests {
+                let body = try XCTUnwrap(request.messages.last?["content"] as? String)
+                XCTAssertEqual(request.model, "fixture-model")
+                for segment in session.transcriptSegments {
+                    XCTAssertFalse(body.contains(segment.id.uuidString), "Persistence UUIDs stay outside the model input")
+                }
+            }
+        }
+    }
+
     func testCompletionUpdatesRejectMissingStatusAndEarlierEvidence() async throws {
         for earlier in [false, true] {
             var session = self.completionSession()
@@ -1833,6 +1881,23 @@ final class PichiMeetingSummaryTests: XCTestCase {
         return session
     }
 
+    private func acceptanceSession(terminalStatus: PichiMeetingSummaryActionStatus? = nil) -> MeetingSession {
+        var session = self.completionSession()
+        session.transcriptSegments[0].text = "Иван, подготовь отчёт к пятнице. " + String(repeating: "Детали. ", count: 965)
+        session.transcriptSegments[1].text = "Согласен, подготовлю этот отчёт к пятнице."
+        if let terminalStatus {
+            // A long, valid acceptance event fills the first ledger batch so the
+            // later terminal update observes the state produced by that batch.
+            session.transcriptSegments[1].text += " " + String(repeating: "Детали. ", count: 960)
+            var terminal = session.transcriptSegments[1]
+            terminal.id = UUID()
+            terminal.start = .init(value: 120_000, timescale: 1000)
+            terminal.text = terminalStatus == .completed ? "Отчёт готов. Я завершил подготовку отчёта." : "Отчёт отменён. Я больше не должен готовить этот отчёт."
+            session.transcriptSegments.append(terminal)
+        }
+        return session
+    }
+
     private func cancellationSession() -> MeetingSession {
         var session = self.session()
         var first = session.transcriptSegments[0]
@@ -1938,6 +2003,64 @@ final class PichiMeetingSummaryTests: XCTestCase {
             self.open = true
             for waiter in self.waiters { waiter.resume() }
             self.waiters.removeAll()
+        }
+    }
+
+    private actor AcceptanceStateTransport {
+        let initialStatus: PichiMeetingSummaryActionStatus
+        let terminalStatus: PichiMeetingSummaryActionStatus?
+        var reconciliationStates: [PichiMeetingSummaryActionStatus] = []
+        var requests: [LLMClient.Config] = []
+
+        init(initialStatus: PichiMeetingSummaryActionStatus = .requested, terminalStatus: PichiMeetingSummaryActionStatus? = nil) {
+            self.initialStatus = initialStatus
+            self.terminalStatus = terminalStatus
+        }
+
+        func complete(_ config: LLMClient.Config) throws -> String {
+            self.requests.append(config)
+            let prompt = config.messages[0]["content"] as? String ?? ""
+            let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            if prompt.contains("Reconcile meeting tasks") {
+                let candidate = try XCTUnwrap((fields["candidates"] as? [[String: Any]])?.first)
+                let item = try XCTUnwrap(candidate["item"] as? [String: Any])
+                let status = try XCTUnwrap(PichiMeetingSummaryActionStatus(rawValue: try XCTUnwrap(item["status"] as? String)))
+                self.reconciliationStates.append(status)
+                let events = try XCTUnwrap(fields["changes"] as? [[String: Any]])
+                let event = try XCTUnwrap(events.compactMap { $0["item"] as? [String: Any] }.first {
+                    let text = $0["text"] as? String ?? ""
+                    return text.hasPrefix("Иван согласился") || text.hasPrefix("Отчёт")
+                })
+                let accepting = (event["text"] as? String ?? "").hasPrefix("Иван согласился")
+                let next = accepting ? PichiMeetingSummaryActionStatus.agreed : try XCTUnwrap(self.terminalStatus)
+                let update: [String: Any] = ["index": try XCTUnwrap(candidate["index"] as? Int), "status": next.rawValue,
+                                             "evidence": try XCTUnwrap(event["evidence"] as? [[String: Any]])]
+                return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [update]]), as: UTF8.self)
+            }
+            let source = try XCTUnwrap(sources.first)
+            let evidence: [[String: Any]] = [["sourceIndex": source.sourceIndex]]
+            var result: [String: Any] = ["summary": [["text": "Обсудили подготовку отчёта.", "evidence": evidence]],
+                                        "decisions": [], "actions": [], "openQuestions": [], "changes": [], "answers": []]
+            if !prompt.contains("Condense") {
+                if source.text.hasPrefix("Иван,") {
+                    result["actions"] = [["title": "Подготовить отчёт", "text": "Подготовить отчёт.", "evidence": evidence,
+                                           "owner": "Иван", "deadline": "к пятнице", "status": self.initialStatus.rawValue, "urgency": "unspecified"]]
+                } else if source.text.hasPrefix("Согласен") {
+                    let changeEvidence = self.terminalStatus == nil ? evidence : sources.prefix(8).map { ["sourceIndex": $0.sourceIndex] }
+                    let text = "Иван согласился подготовить отчёт." + (self.terminalStatus == nil ? "" : String(repeating: " Детали.", count: 245))
+                    var changes: [[String: Any]] = [["text": text, "evidence": changeEvidence]]
+                    if self.terminalStatus != nil {
+                        changes.append(["text": "Обсудили дополнительные детали отчёта.",
+                                        "evidence": [["sourceIndex": try XCTUnwrap(sources.dropFirst(8).first?.sourceIndex)]]])
+                    }
+                    result["changes"] = changes
+                } else {
+                    result["changes"] = [["text": source.text, "evidence": evidence]]
+                }
+            }
+            return String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self)
         }
     }
 
