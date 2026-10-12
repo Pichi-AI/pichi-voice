@@ -568,6 +568,15 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
         let result = try await generator.generate(session: self.session(), configuration: self.configuration())
         XCTAssertEqual(result.summary[0].evidence, [.init(segmentID: self.id, quote: self.turns[0].text)])
+        let requests = await transport.requests
+        let body = try XCTUnwrap(requests.first?.messages.last?["content"] as? String)
+        let input = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+        let choices = try XCTUnwrap(input["sources"] as? [[String: Any]])
+        XCTAssertEqual(choices.count, 1)
+        XCTAssertEqual(Set(choices[0].keys), ["sourceIndex", "seconds", "speaker", "text"],
+                       "The model chooses compact references; persistent UUIDs remain app-owned")
+        XCTAssertEqual(choices[0]["text"] as? String, self.turns[0].text)
+        XCTAssertEqual(choices[0]["speaker"] as? String, self.turns[0].speaker)
         let canonical = try JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any]
         let summary = try XCTUnwrap(canonical?["summary"] as? [[String: Any]])
         let evidence = try XCTUnwrap(summary[0]["evidence"] as? [[String: Any]])
