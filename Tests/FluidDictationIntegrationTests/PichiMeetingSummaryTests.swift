@@ -315,8 +315,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         // This does not substitute for evaluating an actual model's response.
         for language in ["ru", "en"] {
             let transport = RepairTransport(responses: [try self.referenceResponse(0)])
-            var configuration = self.configuration()
-            configuration.language = language
+            let configuration = self.configuration(language: language)
             _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                 .generate(session: self.session(), configuration: configuration)
             let requests = await transport.requests
@@ -1967,8 +1966,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
-    private func configuration(endpoint: String = "http://127.0.0.1:11434/v1") -> PichiMeetingSummaryConfiguration {
-        .init(providerID: "fixture", modelID: "fixture-model", baseURL: endpoint, apiKey: "", language: "ru")
+    private func configuration(endpoint: String = "http://127.0.0.1:11434/v1", language: String = "ru") -> PichiMeetingSummaryConfiguration {
+        .init(providerID: "fixture", modelID: "fixture-model", baseURL: endpoint, apiKey: "", language: language)
     }
 
     private func session() -> MeetingSession {
