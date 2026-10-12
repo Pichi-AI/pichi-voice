@@ -153,26 +153,28 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(changed.inheritedFont, Font.system(.body, design: .rounded))
     }
 
-    func testProminentGlassFallbackUsesActiveThemeInsteadOfPackagedAccent() throws {
+    func testProminentGlassUsesActiveThemeInsteadOfPackagedAccent() throws {
         for scheme in [ColorScheme.light, .dark] {
-            for accent in [Color.green, .red] {
+            for green in [true, false] {
+                let accent = green ? Color.green : .red
                 let rendered = try self.prominentGlassColor(accent: accent, tone: nil, scheme: scheme)
-                let expected = try XCTUnwrap(NSColor(accent).usingColorSpace(.deviceRGB))
-                XCTAssertEqual(rendered.redComponent, expected.redComponent, accuracy: 0.08)
-                XCTAssertEqual(rendered.greenComponent, expected.greenComponent, accuracy: 0.08)
-                XCTAssertEqual(rendered.blueComponent, expected.blueComponent, accuracy: 0.08)
+                self.assertProminentGlassTone(rendered, green: green)
             }
         }
     }
 
-    func testProminentGlassFallbackKeepsExplicitSemanticTone() throws {
+    func testProminentGlassKeepsExplicitSemanticTone() throws {
         for scheme in [ColorScheme.light, .dark] {
             let rendered = try self.prominentGlassColor(accent: .green, tone: .red, scheme: scheme)
-            let expected = try XCTUnwrap(NSColor(Color.red).usingColorSpace(.deviceRGB))
-            XCTAssertEqual(rendered.redComponent, expected.redComponent, accuracy: 0.08)
-            XCTAssertEqual(rendered.greenComponent, expected.greenComponent, accuracy: 0.08)
-            XCTAssertEqual(rendered.blueComponent, expected.blueComponent, accuracy: 0.08)
+            self.assertProminentGlassTone(rendered, green: false)
         }
+    }
+
+    private func assertProminentGlassTone(_ color: NSColor, green: Bool, file: StaticString = #filePath, line: UInt = #line) {
+        // Native glass blends with its background; verify its hue, not opaque fallback RGB.
+        let chosen = green ? color.greenComponent : color.redComponent
+        let other = green ? color.redComponent : color.greenComponent
+        XCTAssertGreaterThan(chosen - max(other, color.blueComponent), 0.1, "The shared control must visibly use the selected tone", file: file, line: line)
     }
 
     private func prominentGlassColor(accent: Color, tone: Color?, scheme: ColorScheme) throws -> NSColor {
@@ -180,8 +182,10 @@ final class SettingsNavigationStateTests: XCTestCase {
         let content = Button { actions += 1 } label: { Color.clear.frame(width: 80, height: 20) }
             .fluidGlassAction(prominent: true, tone: tone)
             .appTheme(.adaptive(accent: accent, colorScheme: scheme, package: BrandPackage(profile: .neutral)))
-            .environment(\.accessibilityReduceTransparency, true)
-            .environment(\.accessibilityReduceMotion, true)
+            .transaction { transaction in
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
             .environment(\.colorScheme, scheme)
             .frame(width: 180, height: 80)
         let host = NSHostingView(rootView: content)
