@@ -429,7 +429,7 @@ final class LocalAPIRequestLifetimeTests: XCTestCase {
         func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response { await self.body(request) }
     }
 
-    private final class Transport {
+    @MainActor private final class Transport {
         let handler: LocalAPIConnectionHandler
         var receives: [LocalAPIConnectionHandler.ReceiveCompletion] = []
         var responses: [Data] = []
