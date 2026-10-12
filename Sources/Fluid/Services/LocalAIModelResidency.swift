@@ -34,7 +34,10 @@ nonisolated final class LocalAIModelResidencyPolicy: @unchecked Sendable {
               var endpoint = URLComponents(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines))
         else { return nil }
         endpoint.scheme = endpoint.scheme?.lowercased()
-        endpoint.host = endpoint.host?.lowercased()
+        // supports() accepts only the standard on-device daemon on port 11434.
+        // Its loopback aliases must share retention when a command/rewrite uses
+        // the built-in connection and dictation uses a saved connection.
+        endpoint.host = "localhost"
         endpoint.path = "/v1"
         guard let normalized = endpoint.string else { return nil }
         return SHA256.hash(data: Data("\(normalized)\n\(self.canonicalModel(model))".utf8))
@@ -52,6 +55,7 @@ final class LocalAIModelResidencyController {
         var warm: (DictationProviderRoute) async throws -> Void
         var isReady: (DictationProviderRoute) async throws -> Bool
         var release: (DictationProviderRoute) async -> Void
+        var releaseForTermination: ((DictationProviderRoute) async -> Void)? = nil
         var now: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
         var sleep: (TimeInterval) async throws -> Void = {
             try await Task.sleep(for: .seconds($0))
@@ -127,7 +131,7 @@ final class LocalAIModelResidencyController {
         // Each native handback has a five-second overall budget. Begin them in
         // parallel so past selections cannot multiply the termination deadline.
         let releaseTasks = self.pendingReleases.values.map { route in
-            Task { await self.dependencies.release(route) }
+            Task { await (self.dependencies.releaseForTermination ?? self.dependencies.release)(route) }
         }
         for task in releaseTasks { await task.value }
         self.pendingReleases.removeAll()
@@ -250,6 +254,33 @@ nonisolated enum LocalAIModelResidencyTransport {
             guard let expiry = fractional ?? formatter.date(from: rawExpiry) else { return false }
             return expiry.timeIntervalSince(now) > 24 * 60 * 60
         }
+    }
+
+    /// Ordinary selection changes keep admission across both the read-only ps
+    /// probe and the native empty chat. Summary takeover cancels and joins that
+    /// entire handback before it can resize or load a shared runner.
+    @MainActor
+    static func releaseWhileIdle(
+        _ route: DictationProviderRoute,
+        residency: MeetingModelResidencyCoordinator = .shared,
+        activity: MeetingSummaryActivityCoordinator = .shared,
+        work: @escaping @MainActor (DictationProviderRoute) async -> Void = { await Self.release($0) }
+    ) async {
+        let pending = Task {
+            try await residency.withBackgroundOperation(owner: "local-text", modelID: route.model) {
+                await work(route)
+            }
+        }
+        guard let token = activity.beginOptionalProcessing(cancelAndJoin: {
+            pending.cancel()
+            _ = await pending.result
+        }) else {
+            pending.cancel()
+            _ = await pending.result
+            return
+        }
+        defer { activity.endProcessing(token) }
+        await withTaskCancellationHandler { _ = await pending.result } onCancel: { pending.cancel() }
     }
 
     static func release(_ route: DictationProviderRoute, client: LLMClient = .shared) async {

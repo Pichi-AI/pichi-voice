@@ -48,18 +48,22 @@ final class AppServices: ObservableObject {
     // MARK: - Lazy Services
 
     private var _localAIModelResidency: LocalAIModelResidencyController?
+    private var localAIResidencySlot: SettingsStore.DictationShortcutSlot = .primary
 
     /// Window visibility does not own native model lifetime. Requests before the
     /// startup gate are fulfilled by signalUIReady's initial reconciliation.
-    func refreshLocalAIResidency() {
+    func refreshLocalAIResidency(for slot: SettingsStore.DictationShortcutSlot? = nil) {
         guard self.isUIReady else { return }
+        if let slot { self.localAIResidencySlot = slot }
         if self._localAIModelResidency == nil {
             DictationAppSession.shared.start()
             let controller = LocalAIModelResidencyController(dependencies: .init(
-                selectedRoute: {
+                selectedRoute: { [weak self] in
+                    guard let self else { return nil }
                     let appID = DictationAppSession.shared.appID
-                    guard DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appID) else { return nil }
-                    let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: .primary, appBundleID: appID)
+                    let slot = self.localAIResidencySlot
+                    guard DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appID) else { return nil }
+                    let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: slot, appBundleID: appID)
                     return OllamaChatAdapter.supports(route.baseURL) ? route : nil
                 },
                 canWarm: { [weak self] in
@@ -72,7 +76,8 @@ final class AppServices: ObservableObject {
                 },
                 warm: { try await DictationPostProcessingService.shared.prewarmLocalModel($0) },
                 isReady: { try await LocalAIModelResidencyTransport.isReady($0) },
-                release: { await LocalAIModelResidencyTransport.release($0) }
+                release: { await LocalAIModelResidencyTransport.releaseWhileIdle($0) },
+                releaseForTermination: { await LocalAIModelResidencyTransport.release($0) }
             ))
             self._localAIModelResidency = controller
             SettingsStore.shared.objectWillChange

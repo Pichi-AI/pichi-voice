@@ -20,6 +20,8 @@ final class LocalAIModelResidencyTests: XCTestCase {
         let policy = LocalAIModelResidencyPolicy()
         policy.pin(baseURL: " http://LOCALHOST:11434/v1/ ", model: " fixture ")
         XCTAssertTrue(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture:latest"))
+        XCTAssertTrue(policy.isPinned(baseURL: "http://127.0.0.1:11434/v1", model: "fixture:latest"))
+        XCTAssertTrue(policy.isPinned(baseURL: "http://[::1]:11434/v1", model: "fixture:latest"))
         XCTAssertFalse(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture:other"))
         policy.unpin(baseURL: "http://localhost:11434/v1", model: "fixture:latest")
         XCTAssertFalse(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture"))
@@ -194,6 +196,75 @@ final class LocalAIModelResidencyTests: XCTestCase {
         try await self.eventually { warms == 3 }
         await controller.shutdown()
     }
+
+    func testTerminationUsesHandbackWithoutOrdinaryAdmissionAfterGlobalTermination() async throws {
+        let selected = self.route("fixture")
+        let warmed = ResidencyLatch()
+        var ordinary = 0
+        var termination = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true }, warm: { _ in warmed.release() },
+            isReady: { _ in true }, release: { _ in ordinary += 1 },
+            releaseForTermination: { _ in termination += 1 }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        await warmed.wait()
+        await controller.shutdown()
+        XCTAssertEqual(ordinary, 0)
+        XCTAssertEqual(termination, 1)
+    }
+
+    func testOrdinaryHandbackProbeHoldsAdmissionUntilSummaryTakeoverCancellationDrains() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let activity = MeetingSummaryActivityCoordinator()
+        let audio = LocalAIHandbackActivity()
+        let probeEntered = ResidencyLatch()
+        let probeComplete = ResidencyLatch()
+        var chatStarted = false
+        var summaryStarted = false
+        let handback = Task {
+            await LocalAIModelResidencyTransport.releaseWhileIdle(self.route("fixture"), residency: owner, activity: activity) { _ in
+                probeEntered.release()
+                await probeComplete.wait() // Simulate ps waiting while takeover requests cancellation.
+                if !Task.isCancelled { chatStarted = true }
+            }
+        }
+        await probeEntered.wait()
+        XCTAssertTrue(activity.isProcessing)
+        do {
+            try await owner.withExclusive(attemptID: UUID(), participants: []) { XCTFail("Probe still owns local model admission") }
+            XCTFail("Expected busy")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        let summary = Task {
+            try await activity.withSummary(activity: audio) {
+                try await owner.withExclusive(attemptID: UUID(), participants: []) {
+                    summaryStarted = true
+                }
+            }
+        }
+        // Ordinary work cannot slip into the closed summary admission while its
+        // cancel-and-join waits for the held probe to return.
+        try await self.eventually {
+            if let token = activity.beginProcessing() { activity.endProcessing(token); return false }
+            return true
+        }
+        XCTAssertFalse(summaryStarted)
+        XCTAssertFalse(chatStarted)
+        probeComplete.release()
+        await handback.value
+        try await summary.value
+        XCTAssertTrue(summaryStarted)
+        XCTAssertFalse(chatStarted)
+        XCTAssertFalse(activity.isProcessing)
+    }
+}
+
+@MainActor
+private final class LocalAIHandbackActivity: ASRActivityLeasing {
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease { .init(id: UUID(), activity: activity) }
+    func releaseExclusiveActivity(_ lease: ASRActivityLease) {}
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {}
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {}
 }
 
 @MainActor
