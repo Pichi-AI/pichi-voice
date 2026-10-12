@@ -716,6 +716,13 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNoThrow(try output.validated(against: PichiMeetingSummaryInput.turns(for: session)))
         let requests = await transport.requests
         XCTAssertTrue(requests.allSatisfy { $0.model == "fixture-model" && $0.baseURL == self.configuration().baseURL })
+        for request in requests {
+            let body = try XCTUnwrap(request.messages.last?["content"] as? String)
+            for segment in session.transcriptSegments {
+                XCTAssertFalse(body.contains(segment.id.uuidString),
+                               "Earlier ledger witnesses and later source choices must both omit persistence UUIDs")
+            }
+        }
     }
 
     func testCompletionUpdatesRejectMissingStatusAndEarlierEvidence() async throws {

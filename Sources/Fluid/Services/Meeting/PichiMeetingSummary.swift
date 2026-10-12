@@ -642,8 +642,13 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         func references(_ value: Any) -> Any {
             if let fields = value as? [String: Any] {
                 if let id = fields["segmentID"] as? String, let uuid = UUID(uuidString: id),
-                   let quote = fields["quote"] as? String, let index = lookup[.init(segmentID: uuid, quote: quote)] {
-                    return ["sourceIndex": index]
+                   let quote = fields["quote"] as? String {
+                    if let index = lookup[.init(segmentID: uuid, quote: quote)] {
+                        return ["sourceIndex": index]
+                    }
+                    // Earlier ledger evidence is context, not a selectable later
+                    // update source. Keep its exact quote without a persistence ID.
+                    return ["quote": quote]
                 }
                 return fields.mapValues(references)
             }
