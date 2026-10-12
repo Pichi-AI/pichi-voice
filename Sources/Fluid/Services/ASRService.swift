@@ -2147,6 +2147,12 @@ final class ASRService: ObservableObject {
     private var inputFormat: AVAudioFormat?
     private var micPermissionGranted = false
     private var isRequestingMicrophoneAccess = false
+    #if DEBUG
+    // Permission routing fixtures must never prompt or change the host's system settings.
+    var microphoneAuthorizationStatusForTesting: (() -> AVAuthorizationStatus)?
+    var microphoneAccessRequesterForTesting: ((@escaping @Sendable (Bool) -> Void) -> Void)?
+    var microphoneSettingsOpenerForTesting: (() -> Void)?
+    #endif
 
     // Internal access for MeetingTranscriptionService to share models
     // Note: Only available when using FluidAudioProvider (Apple Silicon)
@@ -2663,7 +2669,32 @@ final class ASRService: ObservableObject {
                 return
             }
 
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+            // A cached onboarding status can lag a grant changed in System Settings or
+            // after an update. Route from the current OS status, not the displayed label.
+            #if DEBUG
+            let status = self.microphoneAuthorizationStatusForTesting?() ?? AVCaptureDevice.authorizationStatus(for: .audio)
+            #else
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            #endif
+            self.micStatus = status
+            self.micPermissionGranted = status == .authorized
+            switch status {
+            case .authorized:
+                self.isRequestingMicrophoneAccess = false
+                return
+            case .notDetermined:
+                break
+            case .denied, .restricted:
+                self.isRequestingMicrophoneAccess = false
+                self.openSystemSettingsForMic()
+                return
+            @unknown default:
+                self.isRequestingMicrophoneAccess = false
+                self.openSystemSettingsForMic()
+                return
+            }
+
+            self.requestMicrophoneAccess { [weak self] granted in
                 guard let self else { return }
                 Task { @MainActor in
                     self.isRequestingMicrophoneAccess = false
@@ -2675,6 +2706,16 @@ final class ASRService: ObservableObject {
                 }
             }
         }
+    }
+
+    private func requestMicrophoneAccess(_ completion: @escaping @Sendable (Bool) -> Void) {
+        #if DEBUG
+        if let requester = self.microphoneAccessRequesterForTesting {
+            requester(completion)
+            return
+        }
+        #endif
+        AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
     }
 
     func startMicrophonePreview() async {
@@ -2851,6 +2892,12 @@ final class ASRService: ObservableObject {
     }
 
     func openSystemSettingsForMic() {
+        #if DEBUG
+        if let opener = self.microphoneSettingsOpenerForTesting {
+            opener()
+            return
+        }
+        #endif
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
             NSWorkspace.shared.open(url)
         }

@@ -1204,9 +1204,7 @@ struct OnboardingFlowView: View {
                                 self.permissionRow(
                                     stepNumber: 1,
                                     title: self.isMicrophoneReady ? "Microphone access allowed" : "Allow microphone",
-                                    subtitle: self.isMicrophoneReady
-                                        ? AppBrand.text("Choose the microphone you want FluidVoice to use.")
-                                        : "macOS will ask once. Click Allow to start dictating.",
+                                    subtitle: self.microphonePermissionSubtitle,
                                     systemImage: "mic.fill",
                                     isReady: self.isMicrophoneReady,
                                     actionTitle: self.microphoneActionButtonTitle
@@ -1360,8 +1358,28 @@ struct OnboardingFlowView: View {
             return "Allow"
         case .denied, .restricted:
             return "Open Settings"
-        default:
+        case .authorized:
             return "Allow"
+        @unknown default:
+            return "Open Settings"
+        }
+    }
+
+    private var microphonePermissionSubtitle: String {
+        switch self.asr.micStatus {
+        case .authorized:
+            return AppBrand.text("Choose the microphone you want FluidVoice to use.")
+        case .notDetermined:
+            return "Click Allow when macOS asks for microphone access."
+        case .denied:
+            return PichiLocalization.format(
+                "Enable %@ in System Settings > Privacy & Security > Microphone. You may need to allow access again after an update.",
+                self.appDisplayName
+            )
+        case .restricted:
+            return "Microphone access is restricted by system policy."
+        @unknown default:
+            return "Open Settings to check microphone access."
         }
     }
 
@@ -2249,11 +2267,7 @@ struct OnboardingFlowView: View {
     }
 
     private func handleMicrophoneAction() {
-        if self.asr.micStatus == .notDetermined {
-            self.asr.requestMicAccess()
-        } else {
-            self.asr.openSystemSettingsForMic()
-        }
+        self.asr.requestMicAccess()
     }
 
     private func goBack() {

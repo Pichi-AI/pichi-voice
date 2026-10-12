@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import SwiftUI
 @testable import FluidVoice_Debug
@@ -408,5 +409,96 @@ final class SettingsNavigationStateTests: XCTestCase {
                 "\(target) is not rendered without Accessibility permission"
             )
         }
+    }
+}
+
+@MainActor
+final class ASRServiceMicrophonePermissionTests: XCTestCase {
+    func testFreshDeniedAndRestrictedStatusOpenSettingsInsteadOfRepeatingARequest() async {
+        await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled(delayNanoseconds: 0)
+        await AudioStartupGate.shared.waitUntilOpen()
+
+        for status in [AVAuthorizationStatus.denied, .restricted] {
+            let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+            service.micStatus = .notDetermined
+            service.microphoneAuthorizationStatusForTesting = { status }
+            var requests = 0
+            var settingsOpens = 0
+            let opened = self.expectation(description: "settings opened for \(status.rawValue)")
+            service.microphoneAccessRequesterForTesting = { _ in requests += 1 }
+            service.microphoneSettingsOpenerForTesting = {
+                settingsOpens += 1
+                opened.fulfill()
+            }
+
+            service.requestMicAccess()
+            await fulfillment(of: [opened], timeout: 2)
+
+            XCTAssertEqual(service.micStatus, status)
+            XCTAssertEqual(requests, 0, "A stale Allow label must not repeat an inert OS request")
+            XCTAssertEqual(settingsOpens, 1)
+        }
+    }
+
+    func testUndeterminedStatusRequestsOnceAndADeniedRetryOpensSettings() async {
+        await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled(delayNanoseconds: 0)
+        await AudioStartupGate.shared.waitUntilOpen()
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.micStatus = .denied
+        var status = AVAuthorizationStatus.notDetermined
+        service.microphoneAuthorizationStatusForTesting = { status }
+        var requests = 0
+        var completion: (@Sendable (Bool) -> Void)?
+        let requested = self.expectation(description: "first permission request")
+        let denied = self.expectation(description: "denied status published")
+        let opened = self.expectation(description: "denied retry opens settings")
+        let deniedObservation = service.$micStatus.dropFirst().filter { $0 == .denied }.prefix(1).sink { _ in
+            denied.fulfill()
+        }
+        service.microphoneAccessRequesterForTesting = { callback in
+            requests += 1
+            completion = callback
+            requested.fulfill()
+        }
+        service.microphoneSettingsOpenerForTesting = { opened.fulfill() }
+
+        service.requestMicAccess()
+        service.requestMicAccess()
+        await fulfillment(of: [requested], timeout: 2)
+        XCTAssertEqual(service.micStatus, .notDetermined, "Refresh a stale denied status before the genuine first request")
+        XCTAssertEqual(requests, 1, "Concurrent button clicks must not duplicate a pending request")
+
+        status = .denied
+        completion?(false)
+        await fulfillment(of: [denied], timeout: 2)
+        service.requestMicAccess()
+        await fulfillment(of: [opened], timeout: 2)
+
+        XCTAssertEqual(service.micStatus, .denied)
+        XCTAssertEqual(requests, 1)
+        withExtendedLifetime(deniedObservation) {}
+    }
+
+    func testAlreadyAuthorizedStatusRefreshesWithoutPromptingOrOpeningSettings() async {
+        await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled(delayNanoseconds: 0)
+        await AudioStartupGate.shared.waitUntilOpen()
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.microphoneAuthorizationStatusForTesting = { .authorized }
+        var requests = 0
+        var settingsOpens = 0
+        let refreshed = self.expectation(description: "authorized status refreshed")
+        let observation = service.$micStatus.filter { $0 == .authorized }.prefix(1).sink { _ in
+            refreshed.fulfill()
+        }
+        service.microphoneAccessRequesterForTesting = { _ in requests += 1 }
+        service.microphoneSettingsOpenerForTesting = { settingsOpens += 1 }
+
+        service.requestMicAccess()
+        await fulfillment(of: [refreshed], timeout: 2)
+
+        XCTAssertEqual(service.micStatus, .authorized)
+        XCTAssertEqual(requests, 0)
+        XCTAssertEqual(settingsOpens, 0)
+        withExtendedLifetime(observation) {}
     }
 }

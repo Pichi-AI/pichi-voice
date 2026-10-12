@@ -44469,24 +44469,6 @@
         }
       }
     },
-    "macOS will ask once. Click Allow to start dictating.": {
-      "comment": "Trusted first-run UI/configuration copy. Speech/API identifiers and explicit language choices remain data.",
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "macOS will ask once. Click Allow to start dictating."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "macOS запросит доступ один раз. Нажмите «Разрешить», чтобы начать диктовку."
-          }
-        }
-      }
-    },
     "medium": {
       "extractionState": "manual",
       "localizations": {
@@ -46310,6 +46292,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Для этой сборки не настроены подписанные обновления. Установите проверенную сборку вручную."
+          }
+        }
+      }
+    },
+    "Click Allow when macOS asks for microphone access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click Allow when macOS asks for microphone access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Когда macOS запросит доступ к микрофону, нажмите «Разрешить»."
+          }
+        }
+      }
+    },
+    "Enable %@ in System Settings > Privacy & Security > Microphone. You may need to allow access again after an update.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable %@ in System Settings > Privacy & Security > Microphone. You may need to allow access again after an update."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешите доступ для %@ в разделе «Системные настройки > Конфиденциальность и безопасность > Микрофон». После обновления разрешение может потребоваться снова."
+          }
+        }
+      }
+    },
+    "Open Settings to check microphone access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Settings to check microphone access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откройте настройки и проверьте доступ к микрофону."
           }
         }
       }
