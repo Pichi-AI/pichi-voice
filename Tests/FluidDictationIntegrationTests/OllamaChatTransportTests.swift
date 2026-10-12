@@ -34,7 +34,8 @@ final class OllamaChatTransportTests: XCTestCase {
         defer { context.cleanup() }
         var config = self.config(streaming: true, temperature: 0.2)
         config.maxTokens = 99999
-        config.extraParameters = ["options": ["num_ctx": 16384, "seed": 1729, "top_p": 0.85], "think": true, "stop": "Конец"]
+        let optionsInput: [String: Any] = ["num_ctx": 16384, "seed": 1729, "top_p": 0.85]
+        config.extraParameters = ["options": optionsInput, "think": true, "stop": "Конец"]
         let body = try OllamaTransportFixture.body(context.client.buildRequest(config))
         XCTAssertEqual(body["stream"] as? Bool, true)
         XCTAssertEqual(body["think"] as? Bool, true)
