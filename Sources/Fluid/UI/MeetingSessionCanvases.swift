@@ -15,7 +15,7 @@ struct MeetingRecordingCanvas: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Label(
-                        self.isStopping ? "Saving recording" : "Recording",
+                        self.isStopping ? PichiLocalization.text("Saving recording") : PichiLocalization.text("Recording"),
                         systemImage: self.isStopping ? "stop.circle.fill" : "record.circle.fill"
                     )
                     .font(self.theme.typography.captionStrong)
@@ -27,8 +27,9 @@ struct MeetingRecordingCanvas: View {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
-                    "\(self.isStopping ? "Meeting recording is stopping" : "Meeting recording in progress"), " +
-                        "\(Self.durationText(context.date.timeIntervalSince(self.session.startedAt))) elapsed"
+                    PichiLocalization.format("%@, %@ elapsed",
+                        PichiLocalization.text(self.isStopping ? "Meeting recording is stopping" : "Meeting recording in progress"),
+                        Self.durationText(context.date.timeIntervalSince(self.session.startedAt)))
                 )
             }
 
@@ -75,8 +76,8 @@ struct MeetingRecordingCanvas: View {
 
     private var recordingFooter: some View {
         Text(self.isStopping
-            ? "Saving your recording before transcription begins."
-            : "Speaker labels are added after recording.")
+            ? PichiLocalization.text("Saving your recording before transcription begins.")
+            : PichiLocalization.text("Speaker labels are added after recording."))
             .font(self.theme.typography.caption)
             .foregroundStyle(self.theme.palette.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
@@ -100,15 +101,15 @@ struct MeetingRecordingCanvas: View {
     @ViewBuilder
     private var sourceHealth: some View {
         if self.session.mode == .onlineCall {
-            MeetingTrackHealthRow(title: "Meeting audio", systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
+            MeetingTrackHealthRow(title: PichiLocalization.text("Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
         }
-        MeetingTrackHealthRow(title: "Microphone", systemImage: "mic", health: self.trackHealth[.microphone] ?? .waiting)
+        MeetingTrackHealthRow(title: PichiLocalization.text("Microphone"), systemImage: "mic", health: self.trackHealth[.microphone] ?? .waiting)
     }
 
     private var sourceSummary: String {
         let microphoneName = self.session.selectedMicrophone.displayName
         guard self.session.mode == .onlineCall else { return microphoneName }
-        let applicationName = self.session.capturedApplication?.displayName ?? "Meeting audio"
+        let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text("Meeting audio")
         return "\(applicationName) · \(microphoneName)"
     }
 
@@ -158,7 +159,7 @@ private struct MeetingLiveTranscriptCard: View {
             }
             if self.rows.isEmpty {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    Text(self.availabilityIndicator == nil ? "Listening for conversation" : "Waiting for captions")
+                    Text(self.availabilityIndicator == nil ? PichiLocalization.text("Listening for conversation") : PichiLocalization.text("Waiting for captions"))
                         .font(self.theme.typography.body)
                         .foregroundStyle(self.theme.palette.secondaryText)
                     Text("Your conversation will appear here as people speak.")
@@ -183,7 +184,7 @@ private struct MeetingLiveTranscriptCard: View {
         case .available:
             return nil
         case let .unavailable(reason), let .degraded(reason):
-            return reason
+            return MeetingUILocalization.captionAvailability(reason)
         }
     }
 
@@ -271,30 +272,30 @@ struct MeetingProcessingCanvas: View {
     }
 
     private func accessibilityStatus(for stage: MeetingProcessingStage, index: Int) -> String {
-        if self.stage == .completed || index < self.activeIndex { return "complete" }
-        if stage == self.stage { return "in progress" }
-        return "waiting"
+        if self.stage == .completed || index < self.activeIndex { return PichiLocalization.text("complete") }
+        if stage == self.stage { return PichiLocalization.text("in progress") }
+        return PichiLocalization.text("waiting")
     }
 
     private static func title(for stage: MeetingProcessingStage) -> String {
         switch stage {
-        case .pending: return "Waiting"
-        case .saving: return "Saving"
-        case .identifyingSpeakers: return "Identifying speakers"
-        case .transcribing: return "Transcribing"
-        case .finalizing: return "Finalizing"
-        case .completed: return "Complete"
+        case .pending: return PichiLocalization.text("Waiting")
+        case .saving: return PichiLocalization.text("Saving")
+        case .identifyingSpeakers: return PichiLocalization.text("Identifying speakers")
+        case .transcribing: return PichiLocalization.text("Transcribing")
+        case .finalizing: return PichiLocalization.text("Finalizing")
+        case .completed: return PichiLocalization.text("Complete")
         }
     }
 
     private static func detail(for stage: MeetingProcessingStage) -> String {
         switch stage {
-        case .pending: "Your recording is waiting to be processed."
-        case .saving: "Finishing and saving the captured audio."
-        case .identifyingSpeakers: "Finding the different voices in your meeting."
-        case .transcribing: "Turning your conversation into text."
-        case .finalizing: "Putting the transcript and speaker labels together."
-        case .completed: "Your transcript is ready."
+        case .pending: PichiLocalization.text("Your recording is waiting to be processed.")
+        case .saving: PichiLocalization.text("Finishing and saving the captured audio.")
+        case .identifyingSpeakers: PichiLocalization.text("Finding the different voices in your meeting.")
+        case .transcribing: PichiLocalization.text("Turning your conversation into text.")
+        case .finalizing: PichiLocalization.text("Putting the transcript and speaker labels together.")
+        case .completed: PichiLocalization.text("Your transcript is ready.")
         }
     }
 }
@@ -305,7 +306,7 @@ private struct MeetingCloseTranscriptButton: View {
 
     var body: some View {
         Button(action: self.action) {
-            MeetingDocumentActionLabel(title: "Close", symbol: "xmark")
+            MeetingDocumentActionLabel(title: PichiLocalization.text("Close"), symbol: "xmark")
         }
         .meetingGlassAction()
         .keyboardShortcut(.cancelAction)
@@ -360,6 +361,7 @@ struct MeetingResultCanvas: View {
     var summaryASRService: ASRService? = nil
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
     @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
     @State private var pendingRenameText = ""
@@ -372,6 +374,18 @@ struct MeetingResultCanvas: View {
     @State private var copied = false
     @State private var copyRevision = 0
     @State private var documentSection: MeetingDocumentSection = .transcript
+    @ObservedObject private var appServices = AppServices.shared
+
+    static func visibleDocumentSection(selected: MeetingDocumentSection, sessionID: MeetingSessionID,
+                                       activeSummarySessionID: MeetingSessionID?) -> MeetingDocumentSection {
+        activeSummarySessionID == sessionID ? .summary : selected
+    }
+
+    private var visibleDocumentSection: MeetingDocumentSection {
+        Self.visibleDocumentSection(selected: self.documentSection, sessionID: self.session.id,
+                                    activeSummarySessionID: self.appServices.activeMeetingSummarySession?.id)
+    }
+
     @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
 
     /// Naming is reached by clicking a speaker's name, so the sheet opens on the one clicked.
@@ -434,10 +448,10 @@ struct MeetingResultCanvas: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
-                    MeetingDocumentTabs(selection: self.$documentSection, isEnabled: self.summaryActivity.selectionLock == nil)
+                    MeetingDocumentTabs(selection: Binding(get: { self.visibleDocumentSection }, set: { self.documentSection = $0 }), isEnabled: self.summaryActivity.selectionLock == nil)
                 }
 
-                if self.documentSection == .summary {
+                if self.visibleDocumentSection == .summary {
                     MeetingSummaryView(session: self.session, asrService: self.summaryASRService, isQuiescent: self.isQuiescent)
                         .id("\(self.session.id)-\(self.session.updatedAt)")
                 } else {
@@ -477,7 +491,8 @@ struct MeetingResultCanvas: View {
                                     speakerName: MeetingTranscriptExporter.speakerLabel(
                                         for: row.segment,
                                         in: self.session,
-                                        speakerNames: speakerNames
+                                        speakerNames: speakerNames,
+                                        language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language
                                     ),
                                     speakerTint: row.segment.speakerID.flatMap { self.speakerTints[$0] },
                                     onRenameSpeakerTapped: {
@@ -519,6 +534,12 @@ struct MeetingResultCanvas: View {
                 },
                 onCancel: { self.pendingEditedSegment = nil }
             )
+        }
+        .onAppear {
+            self.documentSection = self.visibleDocumentSection
+        }
+        .onChange(of: self.appServices.activeMeetingSummarySession?.id) { _, _ in
+            self.documentSection = self.visibleDocumentSection
         }
         .onDisappear { self.playback.stop() }
         .onChange(of: self.session.id) { _, _ in self.playback.stop() }
@@ -576,7 +597,8 @@ struct MeetingResultCanvas: View {
         }
         // Prevents an echo toggle left on for one meeting from leaking into the next.
         .onChange(of: self.session.id) { _, _ in
-            self.documentSection = .transcript
+            self.documentSection = Self.visibleDocumentSection(selected: .transcript, sessionID: self.session.id,
+                activeSummarySessionID: self.appServices.activeMeetingSummarySession?.id)
             self.copied = false
             self.showsProbableEchoes = false
             self.isShowingAssignSpeakers = false
@@ -606,7 +628,7 @@ struct MeetingResultCanvas: View {
                         self.session.title,
                         id: String(describing: self.session.id),
                         enabled: self.isQuiescent,
-                        editorFont: .system(.largeTitle, design: .serif).weight(.medium),
+                        editorFont: .fluidSystem(.largeTitle, design: .serif).weight(.medium),
                         onRename: self.onRenameSession
                     )
                 self.meetingMetadata
@@ -636,9 +658,9 @@ struct MeetingResultCanvas: View {
     static func speakerAccuracyNote(speakerCount: Int) -> String? {
         guard speakerCount > 0 else { return nil }
         guard speakerCount > self.reliableSpeakerLimit else {
-            return "Speaker labels are automatic and may not be exact. Click a name to fix it."
+            return PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it.")
         }
-        return "\(speakerCount) speakers found. Above \(self.reliableSpeakerLimit), labels are less reliable: one person may show up twice, or two people as one."
+        return PichiLocalization.format("%lld speakers found. Above %lld, labels are less reliable: one person may show up twice, or two people as one.", speakerCount, self.reliableSpeakerLimit)
     }
 
     private func speakerAccuracyNoteView(_ note: String, speakerCount: Int) -> some View {
@@ -682,12 +704,12 @@ struct MeetingResultCanvas: View {
             self.copied = true
             self.copyRevision += 1
         } label: {
-            MeetingDocumentActionLabel(title: self.copied ? "Copied" : "Copy", symbol: self.copied ? "checkmark" : "doc.on.doc")
+            MeetingDocumentActionLabel(title: self.copied ? PichiLocalization.text("Copied") : PichiLocalization.text("Copy"), symbol: self.copied ? "checkmark" : "doc.on.doc")
         }
         .meetingGlassAction()
         .disabled(!hasText || self.documentSection != .transcript)
         .help("Copy transcript")
-        .accessibilityLabel(self.copied ? "Transcript copied" : "Copy transcript")
+        .accessibilityLabel(self.copied ? PichiLocalization.text("Transcript copied") : PichiLocalization.text("Copy transcript"))
         Menu {
             Menu("Export", systemImage: "square.and.arrow.up") {
                 Button("Text…") { self.onExportTranscript(self.session, .text, self.showsProbableEchoes) }
@@ -708,7 +730,7 @@ struct MeetingResultCanvas: View {
                     .keyboardShortcut(.cancelAction)
             }
         } label: {
-            MeetingDocumentActionLabel(title: "More", disclosure: true)
+            MeetingDocumentActionLabel(title: PichiLocalization.text("More"), disclosure: true)
         }
         .fluidGlassMenuAction()
         .meetingHoverFeedback()
@@ -754,7 +776,7 @@ struct MeetingResultCanvas: View {
         else {
             return speaker.displayName
         }
-        return "\(speaker.displayName) (You)"
+        return PichiLocalization.format("%@ (You)", speaker.displayName)
     }
 
     // Only explicitly persisted legacy ownership metadata receives the local-user treatment.
@@ -767,9 +789,9 @@ struct MeetingResultCanvas: View {
 
     private var meetingMetadata: some View {
         HStack(spacing: self.theme.metrics.spacing.md) {
-            Text(self.session.startedAt.formatted(date: .abbreviated, time: .omitted))
+            Text(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(PichiLocalization.locale)))
                 .fixedSize()
-                .help(self.session.startedAt.formatted(date: .complete, time: .shortened))
+                .help(self.session.startedAt.formatted(Date.FormatStyle(date: .complete, time: .shortened).locale(PichiLocalization.locale)))
             Text("·").accessibilityHidden(true)
             Label(Self.durationText(self.session.duration), systemImage: "clock")
                 .fixedSize()
@@ -782,39 +804,39 @@ struct MeetingResultCanvas: View {
         .foregroundStyle(self.theme.palette.secondaryText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(self.session.startedAt.formatted(date: .abbreviated, time: .shortened)), " +
+            "\(self.session.startedAt.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(PichiLocalization.locale))), " +
                 "\(Self.durationText(self.session.duration)), \(self.sourceName), " +
-                "microphone: \(self.session.selectedMicrophone.displayName)"
+                PichiLocalization.format("microphone: %@", self.session.selectedMicrophone.displayName)
         )
     }
 
     private var sourceName: String {
-        self.session.capturedApplication?.displayName ?? "In-room meeting"
+        self.session.capturedApplication?.displayName ?? PichiLocalization.text("In-room meeting")
     }
 
     private var emptyTranscriptDescription: String {
         if self.hasEchoSegments, !self.showsProbableEchoes {
-            return "All transcript turns are marked as probable echo. Choose Show probable echo from the More menu to view them."
+            return PichiLocalization.text("All transcript turns are marked as probable echo. Choose Show probable echo from the More menu to view them.")
         }
         if self.session.retention.audioDeletedAt != nil {
-            return "No transcript text is available. The captured audio has been deleted."
+            return PichiLocalization.text("No transcript text is available. The captured audio has been deleted.")
         }
         if self.session.hasRetryableAudio {
-            return "No transcript text is available. The captured audio is saved on this Mac."
+            return PichiLocalization.text("No transcript text is available. The captured audio is saved on this Mac.")
         }
         if self.session.hasFinalizedAudio {
-            return "No transcript text is available. Some captured audio is saved on this Mac."
+            return PichiLocalization.text("No transcript text is available. Some captured audio is saved on this Mac.")
         }
-        return "There is no transcript text or saved audio available for this meeting."
+        return PichiLocalization.text("There is no transcript text or saved audio available for this meeting.")
     }
 
     private var statusText: String {
         switch self.session.state {
-        case .completed: "Completed"
-        case .failed: "Failed"
-        case .interrupted: "Interrupted"
-        case .processing: "Processing"
-        case .recording, .recordingDegraded, .preparing, .stopping: "Recording"
+        case .completed: PichiLocalization.text("Completed")
+        case .failed: PichiLocalization.text("Failed")
+        case .interrupted: PichiLocalization.text("Interrupted")
+        case .processing: PichiLocalization.text("Processing")
+        case .recording, .recordingDegraded, .preparing, .stopping: PichiLocalization.text("Recording")
         }
     }
 
@@ -866,21 +888,21 @@ struct MeetingFailureCanvas: View {
     }
 
     private var title: String {
-        guard let session else { return "Meeting setup failed" }
+        guard let session else { return PichiLocalization.text("Meeting setup failed") }
         let lastFailureDomain = session.failures.last?.domain
         if lastFailureDomain == .processing ||
             (session.state == .interrupted && !session.processingAttempts.isEmpty)
         {
             return session.state == .interrupted
-                ? "Meeting transcription was interrupted"
-                : "Meeting transcription failed"
+                ? PichiLocalization.text("Meeting transcription was interrupted")
+                : PichiLocalization.text("Meeting transcription failed")
         }
         if self.hasRecoverableAudio {
             return session.state == .interrupted
-                ? "Meeting recording was interrupted"
-                : "Meeting recording failed"
+                ? PichiLocalization.text("Meeting recording was interrupted")
+                : PichiLocalization.text("Meeting recording failed")
         }
-        return "Meeting setup failed"
+        return PichiLocalization.text("Meeting setup failed")
     }
 
     var body: some View {
@@ -897,10 +919,10 @@ struct MeetingFailureCanvas: View {
                     }
                 }
             }
-            MeetingDocumentTitle(title: self.session?.title ?? "Recording setup")
+            MeetingDocumentTitle(title: self.session?.title ?? PichiLocalization.text("Recording setup"))
             Divider()
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-                Text(self.message)
+                Text(PichiLocalization.text(self.message))
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.primaryText)
                     .textSelection(.enabled)
@@ -964,15 +986,10 @@ private struct MeetingTrackHealthRow: View {
     let health: MeetingTrackHealth
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
 
     private var statusText: String {
-        switch self.health.status {
-        case .waiting: return "Waiting for audio"
-        case .healthy: return "Receiving audio"
-        case .degraded: return self.health.detail ?? "Audio source degraded"
-        case .unavailable: return self.health.detail ?? "Audio source unavailable"
-        case .stopped: return "Stopped"
-        }
+        self.health.localizedStatusText(language: PichiInterfaceLanguage(rawValue: self.locale.identifier) ?? PichiLocalization.language)
     }
 
     private var statusColor: Color {
@@ -1017,6 +1034,40 @@ private struct MeetingTrackHealthRow: View {
             }
         }
         .help("\(self.title): \(self.statusText)")
+    }
+}
+
+extension MeetingTrackHealth {
+    /// Fixed capture warnings are UI resources. Unstructured writer errors remain diagnostics.
+    /// Rendering never rewrites the English detail retained in the session manifest.
+    func localizedStatusText(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
+        switch self.status {
+        case .waiting: return PichiLocalization.text("Waiting for audio", language: language, bundle: bundle)
+        case .healthy: return PichiLocalization.text("Receiving audio", language: language, bundle: bundle)
+        case .stopped: return PichiLocalization.text("Stopped", language: language, bundle: bundle)
+        case .degraded, .unavailable:
+            guard let detail = self.detail else {
+                return self.status == .degraded
+                    ? PichiLocalization.text("Audio source degraded", language: language, bundle: bundle)
+                    : PichiLocalization.text("Audio source unavailable", language: language, bundle: bundle)
+            }
+            switch detail {
+            case "No meeting audio is being captured while your microphone is active.":
+                return PichiLocalization.text("No meeting audio is being captured while your microphone is active.", language: language, bundle: bundle)
+            case "Capture delivered an invalid audio sample.":
+                return PichiLocalization.text("Capture delivered an invalid audio sample.", language: language, bundle: bundle)
+            case "Capture delivered audio without a valid presentation timestamp.":
+                return PichiLocalization.text("Capture delivered audio without a valid presentation timestamp.", language: language, bundle: bundle)
+            case "Capture delivered audio from a retired producer epoch.":
+                return PichiLocalization.text("Capture delivered audio from a retired producer epoch.", language: language, bundle: bundle)
+            case "Capture audio could not be normalized onto the meeting timeline.":
+                return PichiLocalization.text("Capture audio could not be normalized onto the meeting timeline.", language: language, bundle: bundle)
+            case "Audio chunk timing was not monotonic.":
+                return PichiLocalization.text("Audio chunk timing was not monotonic.", language: language, bundle: bundle)
+            default:
+                return detail
+            }
+        }
     }
 }
 
@@ -1074,20 +1125,20 @@ private struct MeetingTranscriptSegmentRow: View {
                 HStack(spacing: self.theme.metrics.spacing.sm) {
                     self.speakerLabel
                     Spacer(minLength: self.theme.metrics.spacing.md)
-                    Button("Edit", systemImage: "pencil", action: self.onEditText)
+                    Button(PichiLocalization.text("action.edit", defaultValue: "Edit"), systemImage: "pencil", action: self.onEditText)
                         .fluidGlassAction()
                         .disabled(!self.isQuiescent)
                         .help("Edit text, or double-click this paragraph")
                     Button {
                         if self.isAudioExpanded { self.playback.stop() } else { self.onPlayAudio() }
                     } label: {
-                        Label(self.isAudioExpanded ? "Close" : "Audio", systemImage: self.isAudioExpanded ? "xmark" : "play.fill")
+                        Label(self.isAudioExpanded ? PichiLocalization.text("Close") : PichiLocalization.text("Audio"), systemImage: self.isAudioExpanded ? "xmark" : "play.fill")
                             .frame(minWidth: 54)
                     }
                     .fluidGlassAction()
                     .disabled(!self.canPlayAudio && !self.isAudioExpanded)
-                    .help(self.isAudioExpanded ? "Close audio player" : (self.canPlayAudio ? "Play this speaker chunk" : "Audio unavailable"))
-                    .accessibilityLabel(self.isAudioExpanded ? "Close audio player" : "Play audio chunk for \(self.speakerName)")
+                    .help(self.isAudioExpanded ? PichiLocalization.text("Close audio player") : (self.canPlayAudio ? PichiLocalization.text("Play this speaker chunk") : PichiLocalization.text("Audio unavailable")))
+                    .accessibilityLabel(self.isAudioExpanded ? PichiLocalization.text("Close audio player") : PichiLocalization.format("Play audio chunk for %@", self.speakerName))
                 }
                 .frame(minHeight: 28)
                 Text(self.segment.text)
@@ -1192,7 +1243,7 @@ struct MeetingTranscriptTextEditor: View {
                 .disabled(self.isSaving)
                 .accessibilityLabel("Transcript text")
             if let errorMessage {
-                Text(errorMessage)
+                Text(PichiLocalization.text(errorMessage))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.warning)
             }
@@ -1203,7 +1254,7 @@ struct MeetingTranscriptTextEditor: View {
                         .keyboardShortcut(.cancelAction)
                         .disabled(self.isSaving)
                     Spacer()
-                    Button(self.isSaving ? "Saving…" : "Save") {
+                    Button(self.isSaving ? PichiLocalization.text("Saving…") : PichiLocalization.text("Save")) {
                         guard !self.isSaving else { return }
                         self.isSaving = true
                         Task { @MainActor in

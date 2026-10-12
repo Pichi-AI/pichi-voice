@@ -40,7 +40,8 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         let defaults = settings.meetingRecordingDefaults
         self.autoDetectEnabled = settings.meetingAutoDetectEnabled
         self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
-        self.languageCode = defaults.languageCode ?? "en"
+        self.languageCode = defaults.languageCode
+            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "ru"
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.selectedApplicationID = nil
@@ -49,9 +50,9 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     }
 
     static func defaultTitle(mode: MeetingCaptureMode, applicationDisplayName: String?) -> String {
-        guard mode == .onlineCall else { return "In-room meeting" }
-        guard let applicationDisplayName, !applicationDisplayName.isEmpty else { return "Meeting" }
-        return "\(applicationDisplayName) call"
+        guard mode == .onlineCall else { return PichiLocalization.text("In-room meeting") }
+        guard let applicationDisplayName, !applicationDisplayName.isEmpty else { return PichiLocalization.text("Meeting") }
+        return PichiLocalization.format("%@ call", applicationDisplayName)
     }
 }
 
@@ -123,7 +124,7 @@ final class MeetingHistorySnapshot: ObservableObject {
                     self.hasLoaded = true
                 } catch {
                     guard !self.refreshRequested else { continue }
-                    self.errorMessage = "Meeting history could not be loaded."
+                    self.errorMessage = PichiLocalization.text("Meeting history could not be loaded.")
                     self.hasLoaded = true
                 }
             }
@@ -138,10 +139,12 @@ struct MeetingTranscriptionView: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var asrService: ASRService
     @ObservedObject private var appServices = AppServices.shared
+    @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var summaryActivity = MeetingSummaryActivityCoordinator.shared
     let onOpenVoiceEngine: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     @State private var setupDraft: MeetingTranscriptionSetupDraft
@@ -159,11 +162,13 @@ struct MeetingTranscriptionView: View {
     @State private var cachedMicrophoneStatus: AVAuthorizationStatus = .notDetermined
     @State private var cachedScreenCaptureAccess = false
     @State private var cachedModelReady = false
+    @State private var cachedSpeakerModelReady = false
     @State private var modelReadinessRevision = 0
-    @State private var cachedStorageStatus = "Checking…"
+    @State private var cachedStorageStatus: MeetingStorageStatus = .checking
     @State private var cachedStorageReady = false
     @ObservedObject var historySnapshot: MeetingHistorySnapshot
     @State private var selectedHistorySessionID: MeetingSessionID?
+    @State private var resumedSummarySession: MeetingSession?
     @State private var pendingDeleteSessionID: MeetingSessionID?
     @State private var pendingDeleteAudioSessionID: MeetingSessionID?
     @State private var draftMeetingAudioRetentionPolicy = SettingsStore.shared.meetingAudioRetentionPolicy
@@ -261,7 +266,7 @@ struct MeetingTranscriptionView: View {
                         )
                         .frame(width: min(272, geometry.size.width))
                         .disabled(self.summaryActivity.selectionLock != nil)
-                        .help(self.summaryActivity.selectionLock == nil ? "Meeting history" : "Finish or cancel the summary before switching meetings.")
+                        .help(self.summaryActivity.selectionLock == nil ? PichiLocalization.text("Meeting history") : PichiLocalization.text("Finish or cancel the summary before switching meetings."))
                         .overlay(alignment: .leading) {
                             Rectangle()
                                 .fill(self.theme.palette.separator)
@@ -293,13 +298,23 @@ struct MeetingTranscriptionView: View {
             )
         }
         .clipped()
+        .onAppear { self.reattachActiveSummary() }
+        .onChange(of: self.appServices.activeMeetingSummarySession?.id) { _, _ in self.reattachActiveSummary() }
         .task {
-            MeetingDiarizationModelStore.shared.prepareInBackground()
+            if CPUArchitecture.isAppleSilicon && !self.isRegisteredMeetingProviderSelected {
+                MeetingDiarizationModelStore.shared.prepareInBackground()
+            }
             async let sources: Void = self.refreshSources(requestPermissions: false)
             if self.isMeetingHistoryVisible {
                 await self.loadMeetingHistory()
             }
             await sources
+        }
+        .onChange(of: self.settings.selectedSpeechModel) { _, _ in
+            if self.settings.meetingRecordingDefaults.languageCode == nil, self.coordinator.isQuiescent {
+                self.setupDraft.languageCode = PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
+            }
+            Task { await self.refreshModelReadiness() }
         }
         .onChange(of: self.setupDraft.mode) { _, _ in
             Task { await self.refreshSources(requestPermissions: false) }
@@ -387,10 +402,13 @@ struct MeetingTranscriptionView: View {
     }
 
     private var canvasState: MeetingTranscriptionCanvasState {
+        // A live summary owns a frozen session even when history has not loaded yet.
+        // Reopening Meet must expose its progress and cancellation despite the lock.
+        if let active = self.appServices.activeMeetingSummarySession { return .result(active) }
         if let selectedHistorySession, self.canBrowseMeetingHistory {
             switch selectedHistorySession.state {
             case .failed:
-                let message = selectedHistorySession.failures.last?.message ?? "This meeting failed."
+                let message = selectedHistorySession.failures.last?.message ?? PichiLocalization.text("This meeting failed.")
                 return .failed(session: selectedHistorySession, message: message)
             case .interrupted:
                 let message = selectedHistorySession.endedAt != nil && !selectedHistorySession.processingAttempts.isEmpty
@@ -444,9 +462,25 @@ struct MeetingTranscriptionView: View {
         }
     }
 
+    static func summarySessionSelection(active: MeetingSession?, selectedID: MeetingSessionID?,
+                                        history: [MeetingSession], resumed: MeetingSession?) -> MeetingSession? {
+        if let active { return active }
+        guard let selectedID else { return nil }
+        return history.first(where: { $0.id == selectedID })
+            ?? (resumed?.id == selectedID ? resumed : nil)
+    }
+
     private var selectedHistorySession: MeetingSession? {
-        guard let selectedHistorySessionID else { return nil }
-        return self.historySnapshot.sessions.first(where: { $0.id == selectedHistorySessionID })
+        Self.summarySessionSelection(active: self.appServices.activeMeetingSummarySession,
+            selectedID: self.selectedHistorySessionID, history: self.historySnapshot.sessions,
+            resumed: self.resumedSummarySession)
+    }
+
+    private func reattachActiveSummary() {
+        guard let session = self.appServices.activeMeetingSummarySession else { return }
+        self.resumedSummarySession = session
+        self.selectedHistorySessionID = session.id
+        self.isMeetingHistoryVisible = false
     }
 
     /// Closing a history selection returns to whatever is underneath; closing the just-finished
@@ -497,55 +531,66 @@ struct MeetingTranscriptionView: View {
         let microphoneStatusText: String
         switch microphoneStatus {
         case .authorized:
-            microphoneStatusText = self.microphones.isEmpty ? "No microphone found" : "Ready"
+            microphoneStatusText = self.microphones.isEmpty ? PichiLocalization.text("No microphone found") : PichiLocalization.text("Ready")
         case .notDetermined:
-            microphoneStatusText = "Access required"
+            microphoneStatusText = PichiLocalization.text("Access required")
         case .denied:
-            microphoneStatusText = "Access denied"
+            microphoneStatusText = PichiLocalization.text("Access denied")
         case .restricted:
-            microphoneStatusText = "Access restricted"
+            microphoneStatusText = PichiLocalization.text("Access restricted")
         @unknown default:
-            microphoneStatusText = "Access unavailable"
+            microphoneStatusText = PichiLocalization.text("Access unavailable")
         }
 
         let blockingMessage: String?
         if self.isRefreshingSources {
-            blockingMessage = "Checking recording access and sources."
+            blockingMessage = PichiLocalization.text("Checking recording access and sources.")
         } else if let conflictingActivity {
-            blockingMessage = "Wait for the active \(conflictingActivity.displayName) to finish."
+            blockingMessage = PichiLocalization.format("Wait for the active %@ to finish.", PichiLocalization.text(conflictingActivity.displayName))
         } else if microphoneStatus == .restricted {
-            blockingMessage = "Microphone access is restricted by system policy."
+            blockingMessage = PichiLocalization.text("Microphone access is restricted by system policy.")
         } else if !microphoneReady {
-            blockingMessage = "Allow microphone access, then refresh sources."
+            blockingMessage = PichiLocalization.text("Allow microphone access, then refresh sources.")
         } else if self.microphones.isEmpty {
-            blockingMessage = "Connect a microphone, then refresh sources."
+            blockingMessage = PichiLocalization.text("Connect a microphone, then refresh sources.")
         } else if !meetingAudioReady {
-            blockingMessage = "Allow Screen & System Audio access, then refresh sources."
+            blockingMessage = PichiLocalization.text("Allow Screen & System Audio access, then refresh sources.")
         } else if !self.cachedStorageReady {
             let trackCount = MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode)
-            blockingMessage = "Free at least \(MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount)) of storage before recording."
-        } else if !CPUArchitecture.isAppleSilicon {
-            blockingMessage = "FluidMeet requires an Apple silicon Mac."
+            blockingMessage = PichiLocalization.format("Free at least %@ of storage before recording.", MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount))
+        } else if !CPUArchitecture.isAppleSilicon
+            && (!self.isRegisteredMeetingProviderSelected || self.settings.selectedSpeechModel.requiresAppleSilicon) {
+            blockingMessage = PichiLocalization.text("Select a compatible meeting model for Intel.")
         } else {
             blockingMessage = nil
         }
 
         return MeetingSetupReadiness(
             isCheckingSources: self.isRefreshingSources,
-            meetingAudioStatus: meetingAudioReady ? "Ready" : "Access required",
+            meetingAudioStatus: meetingAudioReady ? PichiLocalization.text("Ready") : PichiLocalization.text("Access required"),
             meetingAudioReady: meetingAudioReady,
             microphoneStatus: microphoneStatusText,
             microphoneReady: microphoneReady && !self.microphones.isEmpty,
-            modelStatus: modelReady ? "Speaker model installed · transcription prepares after Stop" : "Speaker model downloads before transcription",
+            modelStatus: self.isRegisteredMeetingProviderSelected
+                ? (modelReady
+                    ? (self.cachedSpeakerModelReady
+                        ? PichiLocalization.format("%@ and speaker model installed", self.settings.selectedSpeechModel.displayName)
+                        : PichiLocalization.format("%@ installed · automatic speaker separation unavailable", self.settings.selectedSpeechModel.displayName))
+                    : PichiLocalization.format("Import %@ in Voice Engine before transcription", self.settings.selectedSpeechModel.displayName))
+                : (modelReady ? PichiLocalization.text("Speaker model installed · transcription prepares after Stop") : PichiLocalization.text("Speaker model downloads before transcription")),
             modelReady: modelReady,
-            storageStatus: self.cachedStorageStatus,
+            storageStatus: self.cachedStorageStatus.text(language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian),
             storageReady: self.cachedStorageReady,
-            activityStatus: conflictingActivity.map { "Wait for \($0.displayName)" } ?? "Ready",
+            activityStatus: conflictingActivity.map { PichiLocalization.format("Wait for %@", PichiLocalization.text($0.displayName)) } ?? PichiLocalization.text("Ready"),
             activityReady: activityReady,
             showMicrophoneSettingsAction: microphoneStatus == .denied,
             showScreenRecordingSettingsAction: self.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess,
             blockingMessage: blockingMessage
         )
+    }
+
+    private var isRegisteredMeetingProviderSelected: Bool {
+        PichiMeetingProviderFactory.registeredLanguageCodes(for: self.settings.selectedSpeechModel.rawValue) != nil
     }
 
     private func refreshSourcesFromUserAction() {
@@ -556,12 +601,19 @@ struct MeetingTranscriptionView: View {
     private func refreshModelReadiness() async {
         self.modelReadinessRevision += 1
         let revision = self.modelReadinessRevision
-        let ready = await Task.detached(priority: .utility) {
-            CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
+        let selectedModelID = self.settings.selectedSpeechModel.rawValue
+        let registered = PichiMeetingProviderFactory.registeredBackendDescriptor(for: selectedModelID) != nil
+        let requiresAppleSilicon = self.settings.selectedSpeechModel.requiresAppleSilicon
+        let (ready, speakerReady) = await Task.detached(priority: .utility) {
+            let speakerReady = CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
+            let providerReady = registered ? (PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) ?? false) : speakerReady
+            return (providerReady && (!requiresAppleSilicon || CPUArchitecture.isAppleSilicon), speakerReady)
         }.value
         // An older check must not overwrite an import completion's newer result.
-        guard self.modelReadinessRevision == revision else { return }
+        guard self.modelReadinessRevision == revision,
+              self.settings.selectedSpeechModel.rawValue == selectedModelID else { return }
         self.cachedModelReady = ready
+        self.cachedSpeakerModelReady = speakerReady
     }
 
     @MainActor
@@ -682,7 +734,7 @@ struct MeetingTranscriptionView: View {
               readiness.meetingAudioReady,
               let configuration = self.captureConfiguration
         else {
-            self.actionErrorMessage = readiness.blockingMessage ?? "Finish meeting setup before recording."
+            self.actionErrorMessage = readiness.blockingMessage.map(PichiLocalization.text) ?? PichiLocalization.text("Finish meeting setup before recording.")
             return
         }
         self.isStarting = true
@@ -917,7 +969,7 @@ struct MeetingTranscriptionView: View {
 
     private func recordAgainConfiguration(from session: MeetingSession) -> MeetingCaptureConfiguration? {
         guard let microphone = self.resolvedMicrophone(for: session) else {
-            self.actionErrorMessage = "microphone unavailable"
+            self.actionErrorMessage = PichiLocalization.text("microphone unavailable")
             return nil
         }
         var application: MeetingApplicationIdentity?
@@ -925,7 +977,7 @@ struct MeetingTranscriptionView: View {
             guard let bundleIdentifier = session.capturedApplication?.bundleIdentifier,
                   let resolved = self.applications.first(where: { $0.identity.bundleIdentifier == bundleIdentifier })
             else {
-                self.actionErrorMessage = "app not running"
+                self.actionErrorMessage = PichiLocalization.text("app not running")
                 return nil
             }
             application = resolved.identity
@@ -962,29 +1014,29 @@ struct MeetingTranscriptionView: View {
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
                 guard let freshSession = try await MeetingSessionStore.shared.load(id: session.id) else {
-                    self.actionErrorMessage = "Captured audio could not be revealed: recording no longer on disk."
+                    self.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
                     return
                 }
                 guard freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
                 else {
-                    self.actionErrorMessage = "Captured audio could not be revealed: audio for this recording has been deleted."
+                    self.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: audio for this recording has been deleted.")
                     return
                 }
                 guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id) else {
-                    self.actionErrorMessage = "Captured audio could not be revealed: recording no longer on disk."
+                    self.actionErrorMessage = PichiLocalization.text("Captured audio could not be revealed: recording no longer on disk.")
                     return
                 }
                 guard let firstAudioURL = MeetingAudioPresentation.firstPlaybackURL(
                     in: freshSession,
                     directory: directory
                 ) else {
-                    self.actionErrorMessage = "Captured audio is still preparing or is no longer available on disk."
+                    self.actionErrorMessage = PichiLocalization.text("Captured audio is still preparing or is no longer available on disk.")
                     return
                 }
                 NSWorkspace.shared.activateFileViewerSelecting([firstAudioURL])
             } catch {
-                self.actionErrorMessage = "Captured audio could not be revealed: \(error.localizedDescription)"
+                self.actionErrorMessage = PichiLocalization.format("Captured audio could not be revealed: %@", error.localizedDescription)
             }
         }
     }
@@ -994,7 +1046,7 @@ struct MeetingTranscriptionView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Choose"
+        panel.prompt = PichiLocalization.text("Choose")
         guard panel.runModal() == .OK, let destinationFolder = panel.url else { return }
 
         self.actionErrorMessage = nil
@@ -1002,22 +1054,22 @@ struct MeetingTranscriptionView: View {
             do {
                 // Reload fresh: the passed-in session may predate a since-completed audio deletion.
                 guard let freshSession = try await MeetingSessionStore.shared.load(id: session.id) else {
-                    self.actionErrorMessage = "Export failed: recording no longer on disk."
+                    self.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
                     return
                 }
                 guard freshSession.retention.audioDeletedAt == nil,
                       freshSession.hasFinalizedAudio
                 else {
-                    self.actionErrorMessage = "Export failed: audio for this recording has been deleted."
+                    self.actionErrorMessage = PichiLocalization.text("Export failed: audio for this recording has been deleted.")
                     return
                 }
                 guard let sourceDirectory = try await MeetingSessionStore.shared.existingSessionDirectory(for: freshSession.id) else {
-                    self.actionErrorMessage = "Export failed: recording no longer on disk."
+                    self.actionErrorMessage = PichiLocalization.text("Export failed: recording no longer on disk.")
                     return
                 }
                 try await Self.exportAudioFiles(of: freshSession, from: sourceDirectory, into: destinationFolder)
             } catch {
-                self.actionErrorMessage = "Export failed: \(error.localizedDescription)"
+                self.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
             }
         }
     }
@@ -1080,7 +1132,7 @@ struct MeetingTranscriptionView: View {
     private nonisolated static func sanitizedExportName(_ title: String) -> String {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _.-")
         let sanitized = String(title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }.prefix(80))
-        return sanitized.isEmpty ? "Meeting" : sanitized
+        return sanitized.isEmpty ? PichiLocalization.text("Meeting") : sanitized
     }
 
     private nonisolated static func uniqueExportName(_ baseName: String, in folder: URL, fileManager: FileManager) -> String {
@@ -1112,7 +1164,8 @@ struct MeetingTranscriptionView: View {
         await self.historySnapshot.refresh()
         guard self.historySnapshot.errorMessage == nil else { return }
         if let selectedHistorySessionID,
-           !self.historySnapshot.sessions.contains(where: { $0.id == selectedHistorySessionID })
+           !self.historySnapshot.sessions.contains(where: { $0.id == selectedHistorySessionID }),
+           self.resumedSummarySession?.id != selectedHistorySessionID
         {
             self.selectedHistorySessionID = nil
         }
@@ -1182,7 +1235,7 @@ struct MeetingTranscriptionView: View {
     private func saveMeetingSettings() {
         if self.finishRestoredMeetingSettingsIfPending() { return }
         guard let microphone = self.microphones.first(where: { $0.id == self.setupDraft.selectedMicrophoneID }) else {
-            self.actionErrorMessage = "Choose an available microphone before saving."
+            self.actionErrorMessage = PichiLocalization.text("Choose an available microphone before saving.")
             return
         }
 
@@ -1192,7 +1245,7 @@ struct MeetingTranscriptionView: View {
         let previousDefaults = settings.meetingRecordingDefaults
         let application = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
         if self.setupDraft.mode == .onlineCall, !self.setupDraft.usesAutomaticApplication, application == nil {
-            self.actionErrorMessage = "Choose an available audio source or Automatic before saving."
+            self.actionErrorMessage = PichiLocalization.text("Choose an available audio source or Automatic before saving.")
             return
         }
 
@@ -1234,7 +1287,7 @@ struct MeetingTranscriptionView: View {
     private func exportTranscript(_ session: MeetingSession, format: MeetingTranscriptExportFormat, includeEchoes: Bool) {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "\(Self.sanitizedExportName(session.title)).\(format.fileExtension)"
-        panel.message = "Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."
+        panel.message = AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps.")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         self.actionErrorMessage = nil
         do {
@@ -1245,7 +1298,7 @@ struct MeetingTranscriptionView: View {
             }
             try data.write(to: url, options: .atomic)
         } catch {
-            self.actionErrorMessage = "Export failed: \(error.localizedDescription)"
+            self.actionErrorMessage = PichiLocalization.format("Export failed: %@", error.localizedDescription)
         }
     }
 
@@ -1267,7 +1320,7 @@ struct MeetingTranscriptionView: View {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
         else { return }
         PermissionDragGuideController.shared.present(
-            instruction: "Drag \(Bundle.main.fluidAppDisplayName) into the Screen & System Audio Recording list as shown",
+            instruction: PichiLocalization.format("Drag %@ into the Screen & System Audio Recording list as shown", Bundle.main.fluidAppDisplayName),
             settingsPaneURL: url,
             isGranted: { CGPreflightScreenCaptureAccess() },
             onGranted: { [self] in
@@ -1285,7 +1338,7 @@ struct MeetingTranscriptionView: View {
         self.cachedStorageReady = storage.ready
     }
 
-    private static func storageReadiness(trackCount: Int) -> (status: String, ready: Bool) {
+    private static func storageReadiness(trackCount: Int) -> (status: MeetingStorageStatus, ready: Bool) {
         guard let applicationSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -1294,12 +1347,26 @@ struct MeetingTranscriptionView: View {
                 forKeys: [.volumeAvailableCapacityForImportantUsageKey]
             ).volumeAvailableCapacityForImportantUsage
         else {
-            return ("Storage availability unavailable", false)
+            return (.unavailable, false)
         }
         let requiredBytes = MeetingPCMStoragePolicy.requiredFreeBytes(trackCount: trackCount)
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return ("\(formatter.string(fromByteCount: capacity)) available", capacity >= requiredBytes)
+        return (.available(bytes: capacity), capacity >= requiredBytes)
+    }
+}
+
+/// Capacity is captured once for readiness; its presentation follows the interface locale.
+nonisolated enum MeetingStorageStatus: Equatable, Sendable {
+    case checking, unavailable
+    case available(bytes: Int64)
+
+    func text(language: PichiInterfaceLanguage = PichiLocalization.language, bundle: Bundle = .main) -> String {
+        switch self {
+        case .checking: return PichiLocalization.text("Checking…", language: language, bundle: bundle)
+        case .unavailable: return PichiLocalization.text("Storage availability unavailable", language: language, bundle: bundle)
+        case let .available(bytes):
+            let size = bytes.formatted(.byteCount(style: .file).locale(language.locale))
+            return PichiLocalization.format("%@ available", language: language, bundle: bundle, arguments: [size])
+        }
     }
 }
 
@@ -1348,7 +1415,7 @@ struct MeetingTranscriptionCanvas: View {
     let onCopyTranscript: (MeetingSession, Bool) -> Void
     let onExportTranscript: (MeetingSession, MeetingTranscriptExportFormat, Bool) -> Void
     let onReassignSegment: (MeetingSessionID, MeetingTranscriptSegmentID, SessionSpeakerID) -> Void
-    var onEditTranscriptSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _, _ in "Transcript editing is unavailable." }
+    var onEditTranscriptSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String, Int) async -> String? = { _, _, _, _ in PichiLocalization.text("Transcript editing is unavailable.") }
     let onNameUnknownSegment: (MeetingSessionID, MeetingTranscriptSegmentID, String) -> Void
     let onRenameSpeaker: (MeetingSessionID, SessionSpeakerID, String) -> Void
     let onMergeSpeakers: (MeetingSessionID, SessionSpeakerID, SessionSpeakerID) -> Void
@@ -1432,13 +1499,20 @@ struct MeetingTranscriptionCanvas: View {
             case let .result(session):
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     if let errorMessage, !errorMessage.isEmpty {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        Label(PichiLocalization.text(errorMessage), systemImage: "exclamationmark.triangle.fill")
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.theme.palette.warning)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: 760, alignment: .leading)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .accessibilityIdentifier("meeting-result-action-error")
+                    }
+                    if PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(session.processingAttempts.last?.diarizationModel) {
+                        Label("Automatic speaker separation was unavailable. Source tracks and transcript timing are preserved.", systemImage: "person.crop.circle.badge.questionmark")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("meeting-speaker-separation-unavailable")
                     }
                     MeetingResultCanvas(
                         session: session,
@@ -1495,7 +1569,7 @@ private struct MeetingTranscriptionHeader: View {
             if self.canStartNewMeeting {
                 MeetingHeaderIconButton(
                     systemImage: "plus",
-                    label: "New Meeting",
+                    label: PichiLocalization.text("New Meeting"),
                     action: self.onNewMeeting
                 )
                 .keyboardShortcut("n", modifiers: .command)
@@ -1504,7 +1578,7 @@ private struct MeetingTranscriptionHeader: View {
 
             MeetingHeaderIconButton(
                 systemImage: "gearshape",
-                label: "FluidMeet settings",
+                label: AppBrand.text("FluidMeet settings"),
                 action: self.onOpenMeetingSettings
             )
             .disabled(!self.canEditSetup)
@@ -1514,7 +1588,7 @@ private struct MeetingTranscriptionHeader: View {
                 systemImage: self.isMeetingHistoryVisible
                     ? "rectangle.righthalf.inset.filled"
                     : "sidebar.right",
-                label: self.isMeetingHistoryVisible ? "Hide meeting history" : "Show meeting history",
+                label: self.isMeetingHistoryVisible ? PichiLocalization.text("Hide meeting history") : PichiLocalization.text("Show meeting history"),
                 isSelected: self.isMeetingHistoryVisible,
                 action: self.onToggleMeetingHistory
             )
@@ -1608,9 +1682,9 @@ private struct MeetingHistoryInspector: View {
     }
 
     private static func dayLabel(for date: Date, calendar: Calendar) -> String {
-        if calendar.isDateInToday(date) { return "Today" }
-        if calendar.isDateInYesterday(date) { return "Yesterday" }
-        return date.formatted(date: .abbreviated, time: .omitted)
+        if calendar.isDateInToday(date) { return PichiLocalization.text("Today") }
+        if calendar.isDateInYesterday(date) { return PichiLocalization.text("Yesterday") }
+        return date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(PichiLocalization.locale))
     }
 
     var body: some View {
@@ -1654,8 +1728,8 @@ private struct MeetingHistoryInspector: View {
             Divider()
 
             if let errorMessage, !self.sessions.isEmpty {
-                Text(errorMessage)
-                    .font(.caption)
+                Text(PichiLocalization.text(errorMessage))
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(.secondary)
                     .padding(self.theme.metrics.spacing.md)
             }
@@ -1664,18 +1738,18 @@ private struct MeetingHistoryInspector: View {
                 ContentUnavailableView(
                     "History unavailable",
                     systemImage: "exclamationmark.triangle",
-                    description: Text(errorMessage)
+                    description: Text(PichiLocalization.text(errorMessage))
                 )
             } else if self.isLoading, self.sessions.isEmpty {
                 ProgressView("Loading meetings…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if self.filteredSessions.isEmpty {
                 ContentUnavailableView(
-                    self.searchText.isEmpty ? "No meetings yet" : "No matching meetings",
+                    self.searchText.isEmpty ? PichiLocalization.text("No meetings yet") : PichiLocalization.text("No matching meetings"),
                     systemImage: self.searchText.isEmpty ? "person.2.wave.2" : "magnifyingglass",
                     description: Text(self.searchText.isEmpty
-                        ? "Completed meetings will appear here."
-                        : "Try a different title, app, or speaker.")
+                        ? PichiLocalization.text("Completed meetings will appear here.")
+                        : PichiLocalization.text("Try a different title, app, or speaker."))
                 )
             } else {
                 // Rows draw their own selection/hover fill (never the saturated system blue),
@@ -1923,7 +1997,7 @@ private struct MeetingHistoryRow: View {
     }
 
     private var timeText: String {
-        self.session.startedAt.formatted(date: .omitted, time: .shortened)
+        self.session.startedAt.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(PichiLocalization.locale))
     }
 
     private var secondaryTextParts: [String] {
@@ -1931,24 +2005,24 @@ private struct MeetingHistoryRow: View {
         case .completed:
             var parts = [self.timeText, Self.durationText(self.session.duration)]
             if !self.session.activeSpeakers.isEmpty {
-                parts.append(self.session.activeSpeakers.count == 1 ? "1 speaker" : "\(self.session.activeSpeakers.count) speakers")
+                parts.append(self.session.activeSpeakers.count == 1 ? PichiLocalization.text("1 speaker") : PichiLocalization.format("%lld speakers", self.session.activeSpeakers.count))
             }
             return parts
         case .interrupted:
-            return [self.timeText, "Interrupted"]
+            return [self.timeText, PichiLocalization.text("Interrupted")]
         case .failed:
-            return [self.timeText, "Failed"]
+            return [self.timeText, PichiLocalization.text("Failed")]
         case .processing:
-            return [self.timeText, "Processing"]
+            return [self.timeText, PichiLocalization.text("Processing")]
         case .recording, .recordingDegraded, .preparing, .stopping:
-            return [self.timeText, "Recording"]
+            return [self.timeText, PichiLocalization.text("Recording")]
         }
     }
 
     private var actionLabel: String? {
         switch self.session.state {
-        case .interrupted: return self.session.hasRetryableAudio ? "Retry" : nil
-        case .failed: return "Record again"
+        case .interrupted: return self.session.hasRetryableAudio ? PichiLocalization.text("Retry") : nil
+        case .failed: return PichiLocalization.text("Record again")
         default: return nil
         }
     }
@@ -1956,8 +2030,8 @@ private struct MeetingHistoryRow: View {
     /// The row shows "Retry" to fit a narrow sidebar; spoken output keeps the full sentence.
     private var actionAccessibilityLabel: String? {
         switch self.session.state {
-        case .interrupted: return self.session.hasRetryableAudio ? "Retry transcription" : nil
-        case .failed: return "Record again"
+        case .interrupted: return self.session.hasRetryableAudio ? PichiLocalization.text("Retry transcription") : nil
+        case .failed: return PichiLocalization.text("Record again")
         default: return nil
         }
     }
@@ -1973,16 +2047,16 @@ private struct MeetingHistoryRow: View {
     }
 
     private var sourceName: String {
-        self.session.capturedApplication?.displayName ?? "In-room"
+        self.session.capturedApplication?.displayName ?? PichiLocalization.text("In-room")
     }
 
     private var statusText: String {
         switch self.session.state {
-        case .completed: "Completed"
-        case .failed: "Failed"
-        case .interrupted: "Interrupted"
-        case .processing: "Processing"
-        case .recording, .recordingDegraded, .preparing, .stopping: "Recording"
+        case .completed: PichiLocalization.text("Completed")
+        case .failed: PichiLocalization.text("Failed")
+        case .interrupted: PichiLocalization.text("Interrupted")
+        case .processing: PichiLocalization.text("Processing")
+        case .recording, .recordingDegraded, .preparing, .stopping: PichiLocalization.text("Recording")
         }
     }
 
@@ -2005,9 +2079,9 @@ private struct MeetingHistoryRow: View {
     private static func durationText(_ duration: TimeInterval) -> String {
         let totalMinutes = max(0, Int(duration / 60))
         if totalMinutes >= 60 {
-            return "\(totalMinutes / 60)h \(totalMinutes % 60)m"
+            return PichiLocalization.format("%lldh %lldm", totalMinutes / 60, totalMinutes % 60)
         }
-        return "\(max(1, totalMinutes))m"
+        return PichiLocalization.format("%lldm", max(1, totalMinutes))
     }
 }
 
@@ -2045,29 +2119,29 @@ private struct MeetingSetupCanvas: View {
     }
 
     private var blockedHelp: String {
-        if let blockingMessage = readiness.blockingMessage { return blockingMessage }
-        if self.draft.selectedMicrophoneID == nil { return "Choose a microphone in Settings to continue." }
-        return "Check the recording setup."
+        if let blockingMessage = readiness.blockingMessage { return PichiLocalization.text(blockingMessage) }
+        if self.draft.selectedMicrophoneID == nil { return PichiLocalization.text("Choose a microphone in Settings to continue.") }
+        return PichiLocalization.text("Check the recording setup.")
     }
 
     private var planHeadline: String {
-        if let app = resolvedApplication { return "\(app.identity.displayName) is open." }
-        return self.draft.mode == .inRoom ? "In-person meeting." : "No call open."
+        if let app = resolvedApplication { return PichiLocalization.format("%@ is open.", app.identity.displayName) }
+        return PichiLocalization.text(self.draft.mode == .inRoom ? "In-person meeting." : "No call open.")
     }
 
     private var planDetail: String {
-        if let app = resolvedApplication { return "\(app.identity.displayName) and your mic will be recorded." }
-        if self.draft.mode == .inRoom { return "Your mic will record the room." }
+        if let app = resolvedApplication { return PichiLocalization.format("%@ and your mic will be recorded.", app.identity.displayName) }
+        if self.draft.mode == .inRoom { return PichiLocalization.text("Your mic will record the room.") }
         if self.readiness.showScreenRecordingSettingsAction {
-            return "Your mic will record the room. Allow Screen & System Audio access to capture meeting apps too."
+            return PichiLocalization.text("Your mic will record the room. Allow Screen & System Audio access to capture meeting apps too.")
         }
-        if self.applications.isEmpty { return "Your mic will record the room. No meeting apps are available to capture yet." }
-        return "Your mic will record the room. If a call is running, pick its app under Change."
+        if self.applications.isEmpty { return PichiLocalization.text("Your mic will record the room. No meeting apps are available to capture yet.") }
+        return PichiLocalization.text("Your mic will record the room. If a call is running, pick its app under Change.")
     }
 
     private var sourceLabel: String {
         if let app = resolvedApplication { return app.identity.displayName }
-        return self.draft.mode == .inRoom ? "In person" : "Automatic"
+        return self.draft.mode == .inRoom ? PichiLocalization.text("In person") : PichiLocalization.text("Automatic")
     }
 
     private var meetingApplications: [MeetingApplicationOption] {
@@ -2081,7 +2155,7 @@ private struct MeetingSetupCanvas: View {
     var body: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                MeetingDocumentTitle(title: "Be in the conversation.")
+                MeetingDocumentTitle(title: PichiLocalization.text("Be in the conversation."))
                 Text("Record your meeting. Come back to every word.")
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -2118,13 +2192,13 @@ private struct MeetingSetupCanvas: View {
 
     @ViewBuilder private var plan: some View {
         if self.readiness.isCheckingSources {
-            MeetingHomeStatus(kind: .checking, title: "Checking your setup…", detail: "This only takes a moment.")
+            MeetingHomeStatus(kind: .checking, title: PichiLocalization.text("Checking your setup…"), detail: PichiLocalization.text("This only takes a moment."))
         } else if !self.canStart {
-            MeetingHomeStatus(kind: .blocked, title: "One thing before recording", detail: self.blockedHelp)
+            MeetingHomeStatus(kind: .blocked, title: PichiLocalization.text("One thing before recording"), detail: self.blockedHelp)
         } else {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 Text(self.planHeadline)
-                    .font(.system(.title2, design: .serif).weight(.medium))
+                    .font(.fluidSystem(.title2, design: .serif).weight(.medium))
                     .foregroundStyle(self.theme.palette.primaryText)
                 Text(self.planDetail)
                     .font(self.theme.typography.body)
@@ -2143,11 +2217,11 @@ private struct MeetingSetupCanvas: View {
 
     private var sourceMenu: some View {
         Menu {
-            self.sourceEntry("In person · mic only", systemImage: "person.2", selected: self.draft.mode == .inRoom) {
+            self.sourceEntry(PichiLocalization.text("In person · mic only"), systemImage: "person.2", selected: self.draft.mode == .inRoom) {
                 self.draft.mode = .inRoom
             }
             self.sourceEntry(
-                "Automatic · follows a detected call",
+                PichiLocalization.text("Automatic · follows a detected call"),
                 systemImage: "wand.and.stars",
                 selected: self.draft.mode == .onlineCall && self.draft.usesAutomaticApplication
             ) {
@@ -2208,8 +2282,8 @@ private struct MeetingSetupCanvas: View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
             Label(
                 self.resolvedApplication != nil
-                    ? "Stays on this Mac. Use headphones for clearer speaker separation."
-                    : "Stays on this Mac. Place it where everyone can be heard.",
+                    ? PichiLocalization.text("Stays on this Mac. Use headphones for clearer speaker separation.")
+                    : PichiLocalization.text("Stays on this Mac. Place it where everyone can be heard."),
                 systemImage: "lock"
             )
             .font(self.theme.typography.caption)
@@ -2217,7 +2291,7 @@ private struct MeetingSetupCanvas: View {
             .fixedSize(horizontal: false, vertical: true)
 
             if let errorMessage, !errorMessage.isEmpty {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                Label(PichiLocalization.text(errorMessage), systemImage: "exclamationmark.triangle.fill")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2248,9 +2322,9 @@ private struct MeetingSetupCanvas: View {
                    !self.readiness.microphoneReady || self.draft.selectedMicrophoneID == nil))
         {
             Button(
-                self.readiness.showMicrophoneSettingsAction ? "Allow microphone access" :
-                    (self.readiness.showScreenRecordingSettingsAction ? "Allow meeting audio access" :
-                        "Set up microphone…"),
+                self.readiness.showMicrophoneSettingsAction ? PichiLocalization.text("Allow microphone access") :
+                    (self.readiness.showScreenRecordingSettingsAction ? PichiLocalization.text("Allow meeting audio access") :
+                        PichiLocalization.text("Set up microphone…")),
                 systemImage: self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction ? "arrow.up.right" : "gearshape",
                 action: self.onRepairSetup
             )
@@ -2261,7 +2335,7 @@ private struct MeetingSetupCanvas: View {
 
     private var startAction: some View {
         Button(action: self.onStart) {
-            Label(self.isStarting ? "Starting…" : "Start recording", systemImage: self.isStarting ? "hourglass" : "record.circle")
+            Label(self.isStarting ? PichiLocalization.text("Starting…") : PichiLocalization.text("Start recording"), systemImage: self.isStarting ? "hourglass" : "record.circle")
         }
         .meetingGlassAction(prominent: true, spacious: true)
         .disabled(!self.canStart || self.isStarting)

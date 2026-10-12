@@ -319,6 +319,35 @@ nonisolated struct TranscriptionResult: Identifiable, Sendable, Codable {
     }
 }
 
+/// Stable UI state survives interface-language changes while transcription continues.
+/// Only these known catalog keys are localized; file names and transcript content remain data.
+nonisolated enum FileTranscriptionStatus: Equatable, Sendable {
+    case idle, preparingModels, modelsReady, analyzingAudio, identifyingSpeakers, complete
+    case transcribingAudio(durationSeconds: Int?)
+    case transcribing(percent: Int)
+    case transcribingSpeakerSegments(index: Int, total: Int)
+
+    func text(language: PichiInterfaceLanguage = PichiLocalization.language, bundle: Bundle = .main) -> String {
+        switch self {
+        case .idle: return ""
+        case .preparingModels: return PichiLocalization.text("Preparing ASR models...", language: language, bundle: bundle)
+        case .modelsReady: return PichiLocalization.text("Models ready", language: language, bundle: bundle)
+        case .analyzingAudio: return PichiLocalization.text("Analyzing audio file...", language: language, bundle: bundle)
+        case .identifyingSpeakers: return PichiLocalization.text("Identifying speakers...", language: language, bundle: bundle)
+        case .complete: return PichiLocalization.text("Complete!", language: language, bundle: bundle)
+        case let .transcribingAudio(durationSeconds):
+            if let durationSeconds {
+                return PichiLocalization.format("Transcribing audio (%llds)...", language: language, bundle: bundle, arguments: [durationSeconds])
+            }
+            return PichiLocalization.text("Transcribing audio...", language: language, bundle: bundle)
+        case let .transcribing(percent):
+            return PichiLocalization.format("Transcribing... %lld%%", language: language, bundle: bundle, arguments: [percent])
+        case let .transcribingSpeakerSegments(index, total):
+            return PichiLocalization.format("Transcribing speaker segments (%lld/%lld)...", language: language, bundle: bundle, arguments: [index, total])
+        }
+    }
+}
+
 /// Service for transcribing complete audio/video files with optional speaker diarization
 /// NOTE: This service shares the ASR models with ASRService to avoid duplicate memory usage
 @MainActor
@@ -326,7 +355,8 @@ final class FileTranscriptionService: ObservableObject {
     @Published private(set) var currentFileURL: URL?
     @Published var isTranscribing: Bool = false
     @Published var progress: Double = 0.0
-    @Published var currentStatus: String = ""
+    @Published private(set) var status: FileTranscriptionStatus = .idle
+    var currentStatus: String { self.status.text() }
     @Published var error: String?
     @Published var result: TranscriptionResult?
     @Published var fallbackNotice: String?
@@ -390,13 +420,13 @@ final class FileTranscriptionService: ObservableObject {
     func initializeModels() async throws {
         guard !self.asrService.isAsrReady else { return }
 
-        self.currentStatus = "Preparing ASR models..."
+        self.status = .preparingModels
         self.progress = 0.1
 
         do {
             try await self.asrService.ensureAsrReady()
 
-            self.currentStatus = "Models ready"
+            self.status = .modelsReady
             self.progress = 0.0
         } catch {
             throw TranscriptionError.modelLoadFailed(error.localizedDescription)
@@ -459,7 +489,7 @@ final class FileTranscriptionService: ObservableObject {
             )
 
             // Get audio duration for progress display
-            self.currentStatus = "Analyzing audio file..."
+            self.status = .analyzingAudio
             self.progress = 0.2
 
             let asset = AVAsset(url: fileURL)
@@ -504,7 +534,7 @@ final class FileTranscriptionService: ObservableObject {
             }
 
             if provider.prefersNativeFileTranscription && !isVideoContainer {
-                self.currentStatus = duration > 0 ? "Transcribing audio (\(Int(duration))s)..." : "Transcribing audio..."
+                self.status = .transcribingAudio(durationSeconds: duration > 0 ? Int(duration) : nil)
                 self.progress = 0.3
 
                 DebugLogger.shared.info(
@@ -523,7 +553,7 @@ final class FileTranscriptionService: ObservableObject {
                     speakerLabelingNotice: self.fallbackNotice
                 )
 
-                self.currentStatus = "Complete!"
+                self.status = .complete
                 self.progress = 1.0
 
                 self.result = result
@@ -568,7 +598,7 @@ final class FileTranscriptionService: ObservableObject {
             let sourceFramesPerChunk = AVAudioFrameCount(Double(samplesPerChunk) / resampleRatio)
             var currentFrame: AVAudioFramePosition = 0
 
-            self.currentStatus = duration > 0 ? "Transcribing audio (\(Int(duration))s)..." : "Transcribing audio..."
+            self.status = .transcribingAudio(durationSeconds: duration > 0 ? Int(duration) : nil)
 
             while currentFrame < audioFile.length {
                 let remainingFrames = AVAudioFrameCount(audioFile.length - currentFrame)
@@ -587,7 +617,7 @@ final class FileTranscriptionService: ObservableObject {
                 }
 
                 // Convert buffer to 16kHz mono Float32 samples
-                let samples: [Float]
+                var samples: [Float]
                 do {
                     samples = try AudioBufferConverter.monoSamples(
                         from: buffer,
@@ -597,10 +627,14 @@ final class FileTranscriptionService: ObservableObject {
                     throw TranscriptionError.audioConversionFailed("Could not resample audio: \(error.localizedDescription)")
                 }
 
-                // Skip if chunk is too short (< 1 second)
-                guard samples.count >= Int(sampleRate) else {
+                // Keep short files and final tails. The existing ASR minimum is met with
+                // trailing silence, without dropping source audio or changing its duration.
+                guard !samples.isEmpty else {
                     currentFrame += AVAudioFramePosition(framesToRead)
                     continue
+                }
+                if samples.count < Int(sampleRate) {
+                    samples.append(contentsOf: repeatElement(Float(0), count: Int(sampleRate) - samples.count))
                 }
 
                 // Transcribe this chunk using the provider (works for both Parakeet and Whisper)
@@ -617,12 +651,12 @@ final class FileTranscriptionService: ObservableObject {
                 // Update progress
                 let progressPercent = Double(currentFrame) / Double(audioFile.length)
                 self.progress = 0.3 + (progressPercent * 0.6) // Progress from 30% to 90%
-                self.currentStatus = "Transcribing... \(Int(progressPercent * 100))%"
+                self.status = .transcribing(percent: Int(progressPercent * 100))
             }
 
             if allTranscriptions.isEmpty {
                 DebugLogger.shared.warning(
-                    "No audio chunks were long enough to transcribe (minimum 1 second required)",
+                    "No audio chunks produced recognized text",
                     source: "FileTranscriptionService"
                 )
             }
@@ -633,7 +667,7 @@ final class FileTranscriptionService: ObservableObject {
 
             let transcriptionResult = (text: finalText, confidence: avgConfidence)
 
-            self.currentStatus = "Complete!"
+            self.status = .complete
             self.progress = 1.0
 
             let processingTime = Date().timeIntervalSince(startTime)
@@ -683,7 +717,7 @@ final class FileTranscriptionService: ObservableObject {
         self.error = nil
         self.fallbackNotice = nil
         self.currentFileURL = nil
-        self.currentStatus = ""
+        self.status = .idle
         self.progress = 0.0
     }
 
@@ -699,7 +733,7 @@ final class FileTranscriptionService: ObservableObject {
         duration: Double,
         startTime: Date
     ) async -> TranscriptionResult? {
-        self.currentStatus = "Identifying speakers..."
+        self.status = .identifyingSpeakers
         self.progress = 0.25
 
         let expectedSpeakers = SettingsStore.shared.fileTranscriptionExpectedSpeakerCount
@@ -740,7 +774,7 @@ final class FileTranscriptionService: ObservableObject {
         var recognizedTurns: [SpeakerRecognizedTurn] = []
 
         for (index, turn) in turns.enumerated() {
-            self.currentStatus = "Transcribing speaker segments (\(index + 1)/\(turns.count))..."
+            self.status = .transcribingSpeakerSegments(index: index + 1, total: turns.count)
             self.progress = 0.3 + (Double(index) / Double(turns.count)) * 0.65
 
             let transcribed: SpeakerTurnTranscription
@@ -800,7 +834,7 @@ final class FileTranscriptionService: ObservableObject {
             speakerLabelingGaps: labeledTranscript.gaps
         )
 
-        self.currentStatus = "Complete!"
+        self.status = .complete
         self.progress = 1.0
 
         self.result = result

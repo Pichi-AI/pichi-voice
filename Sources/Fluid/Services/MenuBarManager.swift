@@ -94,6 +94,25 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
     override init() {
         super.init()
+        NotificationCenter.default.publisher(for: AppBrand.appearanceChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.statusItem?.button?.image = nil
+                self.updateMenuBarIcon()
+                self.buildMenuStructure()
+                self.hostedWindow?.title = AppBrand.appName
+            }
+            .store(in: &self.cancellables)
+        NotificationCenter.default.publisher(for: PichiLocalization.languageChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.buildMenuStructure()
+                self.statusItem?.button?.image = nil
+                self.updateMenuBarIcon()
+            }
+            .store(in: &self.cancellables)
         NotificationCenter.default.publisher(for: .openMicrophoneSettingsRequested)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -834,34 +853,34 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         // The template icon is identical in every state. Assigning a fresh
         // NSImage on each recording change forced a status item redraw plus a
         // WindowServer fence (about 200 ms measured) on every start and stop.
-        if let image = NSImage(named: "MenuBarIcon") {
+        if let image = PichiBrandMark.menuBarIcon {
             switch self.meetingMenuPresentation.activity {
             case .recording, .stopping:
                 statusItem.button?.image = self.menuBarActivityImage(baseImage: image, activity: .recording)
                 statusItem.button?.setAccessibilityLabel(
                     self.meetingMenuPresentation.activity == .stopping
-                        ? "FluidVoice, stopping meeting recording"
-                        : "FluidVoice, meeting recording"
+                        ? AppBrand.text("FluidVoice, stopping meeting recording")
+                        : AppBrand.text("FluidVoice, meeting recording")
                 )
             case .preparing, .processing:
                 statusItem.button?.image = self.menuBarActivityImage(baseImage: image, activity: .processing)
                 statusItem.button?.setAccessibilityLabel(
                     self.meetingMenuPresentation.activity == .preparing
-                        ? "FluidVoice, starting meeting recording"
-                        : "FluidVoice, transcribing meeting"
+                        ? AppBrand.text("FluidVoice, starting meeting recording")
+                        : AppBrand.text("FluidVoice, transcribing meeting")
                 )
             case .interrupted, .failed:
                 statusItem.button?.image = self.menuBarActivityImage(baseImage: image, activity: .interrupted)
                 let status = self.meetingMenuPresentation.attentionStatus ?? "Meeting needs attention"
-                statusItem.button?.setAccessibilityLabel("FluidVoice, \(status.lowercased())")
+                statusItem.button?.setAccessibilityLabel(PichiLocalization.format("%@, %@", AppBrand.appName, PichiLocalization.text(status)))
             case .inactive:
                 image.isTemplate = true
                 statusItem.button?.image = image
-                statusItem.button?.setAccessibilityLabel("FluidVoice")
+                statusItem.button?.setAccessibilityLabel(AppBrand.text("FluidVoice"))
             case .completed:
                 image.isTemplate = true
                 statusItem.button?.image = image
-                statusItem.button?.setAccessibilityLabel("FluidVoice, meeting transcription complete")
+                statusItem.button?.setAccessibilityLabel(AppBrand.text("FluidVoice, meeting transcription complete"))
             }
         }
     }
@@ -907,7 +926,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "FluidVoice meeting status"
+        image.accessibilityDescription = AppBrand.text("FluidVoice meeting status")
         return image
     }
 
@@ -917,7 +936,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         menu.removeAllItems()
 
         let startMeetingItem = NSMenuItem(
-            title: "Start Meeting Recording",
+            title: PichiLocalization.text("Start Meeting Recording"),
             action: #selector(startMeetingRecording),
             keyEquivalent: ""
         )
@@ -926,7 +945,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         self.startMeetingRecordingMenuItem = startMeetingItem
 
         let stopMeetingItem = NSMenuItem(
-            title: "Stop Meeting Recording",
+            title: PichiLocalization.text("Stop Meeting Recording"),
             action: #selector(stopMeetingRecording),
             keyEquivalent: ""
         )
@@ -940,7 +959,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         self.meetingStatusMenuItem = meetingStatusItem
 
         let openMeetingItem = NSMenuItem(
-            title: "Open FluidMeet",
+            title: AppBrand.text("Open FluidMeet"),
             action: #selector(openMeetingTranscription),
             keyEquivalent: ""
         )
@@ -960,7 +979,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
 
         let copyLastTranscriptItem = NSMenuItem(
-            title: "Copy Last Transcript",
+            title: PichiLocalization.text("Copy Last Transcript"),
             action: #selector(copyLastTranscript(_:)),
             keyEquivalent: ""
         )
@@ -971,26 +990,26 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         // Open Main Window
-        let openItem = NSMenuItem(title: "Open Fluid Voice", action: #selector(openMainWindow), keyEquivalent: "")
+        let openItem = NSMenuItem(title: AppBrand.text("Open FluidVoice"), action: #selector(openMainWindow), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
 
         // Preferences
-        let preferencesItem = NSMenuItem(title: "Settings...", action: #selector(openPreferences), keyEquivalent: ",")
+        let preferencesItem = NSMenuItem(title: PichiLocalization.text("Settings..."), action: #selector(openPreferences), keyEquivalent: ",")
         preferencesItem.target = self
         preferencesItem.keyEquivalentModifierMask = [.command]
         menu.addItem(preferencesItem)
 
         let customDictionaryItem = NSMenuItem(
-            title: "Custom Dictionary",
+            title: PichiLocalization.text("Custom Dictionary"),
             action: #selector(openCustomDictionary),
             keyEquivalent: ""
         )
         customDictionaryItem.target = self
         menu.addItem(customDictionaryItem)
 
-        let microphoneSubmenu = NSMenu(title: "Microphone")
-        let microphoneMenuItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        let microphoneSubmenu = NSMenu(title: PichiLocalization.text("Microphone"))
+        let microphoneMenuItem = NSMenuItem(title: PichiLocalization.text("Microphone"), action: nil, keyEquivalent: "")
         microphoneMenuItem.submenu = microphoneSubmenu
         menu.addItem(microphoneMenuItem)
         self.microphoneMenuItem = microphoneMenuItem
@@ -998,7 +1017,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         // Check for Updates
         let updateItem = NSMenuItem(
-            title: "Check for Updates...",
+            title: PichiLocalization.text("Check for Updates..."),
             action: #selector(checkForUpdates(_:)),
             keyEquivalent: ""
         )
@@ -1008,7 +1027,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         let rollbackMenuItem = NSMenuItem(
-            title: "Rollback to Previous Version...",
+            title: PichiLocalization.text("Rollback to Previous Version..."),
             action: #selector(rollbackToPreviousVersion(_:)),
             keyEquivalent: ""
         )
@@ -1021,7 +1040,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         // Quit
         let quitItem = NSMenuItem(
-            title: "Quit Fluid Voice",
+            title: AppBrand.text("Quit FluidVoice"),
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
@@ -1060,9 +1079,9 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         case .interrupted, .failed:
             self.meetingMenuPresentation.attentionStatus ?? "Meeting Needs Attention"
         case .inactive, .completed:
-            self.isRecording ? "Recording...\(hotkeyInfo)" : "Ready to Record\(hotkeyInfo)"
+            PichiLocalization.text(self.isRecording ? "Recording..." : "Ready to Record") + hotkeyInfo
         }
-        self.statusMenuItem?.title = statusTitle
+        self.statusMenuItem?.title = PichiLocalization.text(statusTitle)
         self.copyLastTranscriptMenuItem?.isEnabled = self.canCopyLastTranscript
         self.microphoneMenuItem?.isEnabled = true
 
@@ -1080,47 +1099,47 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         self.startMeetingRecordingMenuItem?.isEnabled = self.canStartMeetingRecording &&
             !self.meetingStartRequested && self.meetingCoordinator != nil
         self.startMeetingRecordingMenuItem?.title = self.meetingStartRequested
-            ? "Starting Meeting Recording…" : "Start Meeting Recording"
+            ? PichiLocalization.text("Starting Meeting Recording…") : PichiLocalization.text("Start Meeting Recording")
         self.stopMeetingRecordingMenuItem?.isHidden = !isRecording && !isStopping
         self.stopMeetingRecordingMenuItem?.isEnabled = isRecording &&
             !self.meetingStopRequested &&
             self.stopMeetingRecordingHandler != nil
         self.stopMeetingRecordingMenuItem?.title = isStopping
-            ? "Stopping Meeting Recording…"
-            : "Stop Meeting Recording"
+            ? PichiLocalization.text("Stopping Meeting Recording…")
+            : PichiLocalization.text("Stop Meeting Recording")
         self.meetingStatusMenuItem?.isHidden = !hasMeetingStatus || activity == .completed
         self.openMeetingTranscriptionMenuItem?.isHidden = !hasMeetingStatus
         self.meetingMenuSeparator?.isHidden = false
 
         switch activity {
         case .inactive:
-            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
+            self.openMeetingTranscriptionMenuItem?.title = AppBrand.text("Open FluidMeet")
         case .preparing:
-            self.meetingStatusMenuItem?.title = "Starting meeting recording…"
-            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
+            self.meetingStatusMenuItem?.title = PichiLocalization.text("Starting meeting recording…")
+            self.openMeetingTranscriptionMenuItem?.title = AppBrand.text("Open FluidMeet")
         case .recording:
-            let source = self.meetingMenuPresentation.sourceName ?? "Meeting"
+            let source = self.meetingMenuPresentation.sourceName ?? PichiLocalization.text("Meeting")
             let elapsed = self.meetingMenuPresentation.startedAt.map { Self.elapsedText(now.timeIntervalSince($0)) } ?? "0:00"
-            self.meetingStatusMenuItem?.title = "Recording \(source) · \(elapsed)"
-            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
+            self.meetingStatusMenuItem?.title = PichiLocalization.format("Recording %@ · %@", source, elapsed)
+            self.openMeetingTranscriptionMenuItem?.title = AppBrand.text("Open FluidMeet")
         case .stopping:
-            self.meetingStatusMenuItem?.title = "Finalizing meeting audio…"
-            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
+            self.meetingStatusMenuItem?.title = PichiLocalization.text("Finalizing meeting audio…")
+            self.openMeetingTranscriptionMenuItem?.title = AppBrand.text("Open FluidMeet")
         case .processing:
-            self.meetingStatusMenuItem?.title = "Transcribing meeting…"
-            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
+            self.meetingStatusMenuItem?.title = PichiLocalization.text("Transcribing meeting…")
+            self.openMeetingTranscriptionMenuItem?.title = AppBrand.text("Open FluidMeet")
         case .interrupted:
-            self.meetingStatusMenuItem?.title = self.meetingMenuPresentation.attentionStatus ?? "Recording interrupted"
-            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
+            self.meetingStatusMenuItem?.title = PichiLocalization.text(self.meetingMenuPresentation.attentionStatus ?? "Recording interrupted")
+            self.openMeetingTranscriptionMenuItem?.title = AppBrand.text("Open FluidMeet")
         case .failed:
-            self.meetingStatusMenuItem?.title = self.meetingMenuPresentation.attentionStatus ?? "Meeting setup failed"
-            self.openMeetingTranscriptionMenuItem?.title = "Open FluidMeet"
+            self.meetingStatusMenuItem?.title = PichiLocalization.text(self.meetingMenuPresentation.attentionStatus ?? "Meeting setup failed")
+            self.openMeetingTranscriptionMenuItem?.title = AppBrand.text("Open FluidMeet")
         case .completed:
-            self.openMeetingTranscriptionMenuItem?.title = "Open Latest Meeting Transcript"
+            self.openMeetingTranscriptionMenuItem?.title = PichiLocalization.text("Open Latest Meeting Transcript")
         }
         if let error = self.meetingStartError {
             self.meetingStatusMenuItem?.isHidden = false
-            self.meetingStatusMenuItem?.title = "Could not start: \(error)"
+            self.meetingStatusMenuItem?.title = PichiLocalization.format("Could not start: %@", error)
             self.meetingStatusMenuItem?.toolTip = error
         } else {
             self.meetingStatusMenuItem?.toolTip = nil
@@ -1150,7 +1169,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         guard let submenu = self.microphoneSubmenu else { return }
 
         submenu.removeAllItems()
-        let loadingItem = NSMenuItem(title: "Loading...", action: nil, keyEquivalent: "")
+        let loadingItem = NSMenuItem(title: PichiLocalization.text("Loading..."), action: nil, keyEquivalent: "")
         loadingItem.isEnabled = false
         submenu.addItem(loadingItem)
 
@@ -1174,7 +1193,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         submenu.removeAllItems()
 
         guard !inputDevices.isEmpty else {
-            let emptyItem = NSMenuItem(title: "No microphones found", action: nil, keyEquivalent: "")
+            let emptyItem = NSMenuItem(title: PichiLocalization.text("No microphones found"), action: nil, keyEquivalent: "")
             emptyItem.isEnabled = false
             submenu.addItem(emptyItem)
             return
@@ -1187,7 +1206,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         )?.uid
 
         guard SettingsStore.shared.microphonePriority.isEmpty == false else {
-            let emptyItem = NSMenuItem(title: "No microphones in priority", action: nil, keyEquivalent: "")
+            let emptyItem = NSMenuItem(title: PichiLocalization.text("No microphones in priority"), action: nil, keyEquivalent: "")
             emptyItem.isEnabled = false
             submenu.addItem(emptyItem)
             return
@@ -1202,7 +1221,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
                   microphonePreferenceCoordinator.isInputDeviceAvailable(device)
             else {
                 let item = NSMenuItem(
-                    title: "\(index + 1). \(entry.name) (Unavailable)",
+                    title: PichiLocalization.format("%lld. %@ (Unavailable)", index + 1, entry.name),
                     action: nil,
                     keyEquivalent: ""
                 )
@@ -1221,7 +1240,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
 
         if self.isRecording {
             submenu.addItem(.separator())
-            let recordingItem = NSMenuItem(title: "Unavailable while recording", action: nil, keyEquivalent: "")
+            let recordingItem = NSMenuItem(title: PichiLocalization.text("Unavailable while recording"), action: nil, keyEquivalent: "")
             recordingItem.isEnabled = false
             submenu.addItem(recordingItem)
         }
@@ -1262,11 +1281,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         let availableVersion = SimpleUpdater.shared.latestRollbackVersion() ?? ""
         guard !availableVersion.isEmpty else {
             let msg = NSAlert()
-            msg.messageText = "No rollback backup found"
-            msg.informativeText = "No previous version backup is available on this device."
+            msg.messageText = PichiLocalization.text("No rollback backup found")
+            msg.informativeText = PichiLocalization.text("No previous version backup is available on this device.")
             msg.alertStyle = .informational
-            msg.addButton(withTitle: "Get Previous Builds")
-            msg.addButton(withTitle: "Cancel")
+            msg.addButton(withTitle: PichiLocalization.text("Get Previous Builds"))
+            msg.addButton(withTitle: PichiLocalization.text("Cancel"))
             if msg.runModal() == .alertFirstButtonReturn {
                 self.openPreviousBuildPicker()
             }
@@ -1274,11 +1293,11 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
 
         let confirm = NSAlert()
-        confirm.messageText = "Rollback to \(availableVersion)?"
-        confirm.informativeText = "This will restore the backup and relaunch FluidVoice."
+        confirm.messageText = PichiLocalization.format("Rollback to %@?", availableVersion)
+        confirm.informativeText = AppBrand.text("This will restore the backup and relaunch FluidVoice.")
         confirm.alertStyle = .warning
-        confirm.addButton(withTitle: "Rollback")
-        confirm.addButton(withTitle: "Cancel")
+        confirm.addButton(withTitle: PichiLocalization.text("Rollback"))
+        confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
 
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
@@ -1286,28 +1305,28 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             do {
                 try await SimpleUpdater.shared.rollbackToLatestBackup()
                 let success = NSAlert()
-                success.messageText = "Rollback Successful"
-                success.informativeText = "Rolled back to \(availableVersion). FluidVoice will relaunch shortly."
+                success.messageText = PichiLocalization.text("Rollback Successful")
+                success.informativeText = AppBrand.format("Rolled back to %@. FluidVoice will relaunch shortly.", availableVersion)
                 success.alertStyle = .informational
-                success.addButton(withTitle: "Report Bug")
-                success.addButton(withTitle: "OK")
+                success.addButton(withTitle: PichiLocalization.text("Report Bug"))
+                success.addButton(withTitle: PichiLocalization.text("OK"))
                 let response = success.runModal()
                 if response == .alertFirstButtonReturn {
                     self.openIssueReportingPage()
                 }
             } catch {
                 let fail = NSAlert()
-                fail.messageText = "Rollback Failed"
+                fail.messageText = PichiLocalization.text("Rollback Failed")
                 fail.informativeText = error.localizedDescription
                 fail.alertStyle = .critical
-                fail.addButton(withTitle: "OK")
+                fail.addButton(withTitle: PichiLocalization.text("OK"))
                 fail.runModal()
             }
         }
     }
 
     private func openIssueReportingPage() {
-        guard let url = URL(string: "https://github.com/altic-dev/Fluid-oss/issues/new/choose") else { return }
+        guard let url = URL(string: AppBrand.supportURL.absoluteString) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1315,8 +1334,8 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         Task { @MainActor in
             do {
                 let options = try await SimpleUpdater.shared.fetchRecentReleaseBuildOptions(
-                    owner: "altic-dev",
-                    repo: "Fluid-oss",
+                    owner: AppBrand.repositoryOwner,
+                    repo: AppBrand.repositoryName,
                     limit: 3,
                     includePrerelease: SettingsStore.shared.betaReleasesEnabled
                 )
@@ -1334,15 +1353,15 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         }
 
         let picker = NSAlert()
-        picker.messageText = "Download Previous Build"
-        picker.informativeText = "Choose one of the latest release builds to install manually."
+        picker.messageText = PichiLocalization.text("Download Previous Build")
+        picker.informativeText = PichiLocalization.text("Choose one of the latest release builds to install manually.")
         picker.alertStyle = .informational
 
         for option in options {
             picker.addButton(withTitle: option.version)
         }
-        picker.addButton(withTitle: "All Releases")
-        picker.addButton(withTitle: "Cancel")
+        picker.addButton(withTitle: PichiLocalization.text("All Releases"))
+        picker.addButton(withTitle: PichiLocalization.text("Cancel"))
 
         let response = picker.runModal()
         let first = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
@@ -1358,7 +1377,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
     }
 
     private func openAllReleasesPage() {
-        guard let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") else { return }
+        guard let url = URL(string: "\(AppBrand.repositoryURL.absoluteString)/releases") else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1411,7 +1430,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
         guard window.styleMask.contains(.titled) else { return false }
         guard window.canBecomeKey else { return false }
         guard window.isMiniaturized == false else { return false }
-        return window.title == "FluidVoice" || window.title.contains("FluidVoice")
+        return window.title == AppBrand.text("FluidVoice") || window.title.contains(AppBrand.text("FluidVoice"))
     }
 
     @objc private func openPreferences() {
@@ -1525,7 +1544,7 @@ final class MenuBarManager: NSObject, ObservableObject, NSMenuDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "FluidVoice"
+        window.title = AppBrand.text("FluidVoice")
         // Match the SwiftUI main scene when recreating a closed window.
         window.toolbarStyle = .unified
         window.animationBehavior = .none

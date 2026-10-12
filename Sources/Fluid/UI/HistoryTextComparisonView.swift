@@ -14,8 +14,8 @@ struct HistoryTextComparisonView: View {
             if self.entry.wasAIProcessed {
                 HStack {
                     if self.showChanges, let message = self.comparisonMessage {
-                        Text(message).foregroundStyle(.secondary)
-                            .lineLimit(1).help(message)
+                        Text(PichiLocalization.text(message)).foregroundStyle(.secondary)
+                            .lineLimit(1).help(PichiLocalization.text(message))
                     }
                     Spacer()
                     Toggle("Show changes", isOn: self.$showChanges).toggleStyle(.switch).controlSize(.small)
@@ -49,7 +49,7 @@ struct HistoryTextComparisonView: View {
     private func section(title: String, content: String, isOriginal: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 8) {
-                Text(title).font(self.theme.typography.bodyStrong)
+                Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong)
                 if !isOriginal, self.entry.wasAIProcessed {
                     Text("AI enhanced").font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.accent)
@@ -59,8 +59,8 @@ struct HistoryTextComparisonView: View {
                 Spacer()
                 Button { self.copy(content) } label: { Image(systemName: "doc.on.doc") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help(isOriginal ? "Copy raw text" : "Copy final text")
-                    .accessibilityLabel(isOriginal ? "Copy raw text" : "Copy final text")
+                    .help(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
+                    .accessibilityLabel(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
             }
             self.text(content, isOriginal: isOriginal)
                 .font(self.theme.typography.body).lineSpacing(5)

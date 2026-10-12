@@ -1,0 +1,114 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSAccessibilityUsageDescription": {
+      "comment": "System permission purpose string. The OS identifies the app using its trusted bundle display name; keep this copy generic across brand packages.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accessibility access lets the app respond to global shortcuts and type recognized text into other apps."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Универсальный доступ позволяет приложению реагировать на глобальные сочетания клавиш и вводить распознанный текст в другие приложения."
+          }
+        }
+      }
+    },
+    "NSMicrophoneUsageDescription": {
+      "comment": "System permission purpose string. The OS identifies the app using its trusted bundle display name; keep this copy generic across brand packages.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone access records your voice for transcription on this Mac. Optional AI enhancement may use the provider you configure."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к микрофону нужен для записи и распознавания вашей речи на этом Mac. Дополнительная обработка ИИ может использовать выбранного вами провайдера."
+          }
+        }
+      }
+    },
+    "NSAudioCaptureUsageDescription": {
+      "comment": "System permission purpose string. The OS identifies the app using its trusted bundle display name; keep this copy generic across brand packages.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio access records the meeting application you select. Meeting audio stays on this Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к системному звуку нужен для записи выбранного вами приложения встречи. Аудиозапись встречи остаётся на этом Mac."
+          }
+        }
+      }
+    },
+    "NSScreenCaptureUsageDescription": {
+      "comment": "System permission purpose string. The OS identifies the app using its trusted bundle display name; keep this copy generic across brand packages.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen & System Audio access lets the app record audio from the meeting application you select."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к записи экрана и системного звука позволяет записывать звук выбранного вами приложения встречи."
+          }
+        }
+      }
+    },
+    "NSAppleEventsUsageDescription": {
+      "comment": "System permission purpose string. The OS identifies the app using its trusted bundle display name; keep this copy generic across brand packages.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permission to control system events is used to manage launch at startup settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ к системным событиям нужен для управления настройками автозапуска."
+          }
+        }
+      }
+    },
+    "NSSpeechRecognitionUsageDescription": {
+      "comment": "System permission purpose string. The OS identifies the app using its trusted bundle display name; keep this copy generic across brand packages.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On-device speech recognition transcribes voice commands and text on this Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание речи на устройстве преобразует голосовые команды и речь в текст на этом Mac."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

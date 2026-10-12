@@ -4,6 +4,10 @@ import Foundation
 import SwiftUI
 import XCTest
 
+#if DEBUG && arch(arm64)
+import FluidAudio
+#endif
+
 @MainActor
 private final class DeletionFixtureProvider: TranscriptionProvider {
     let name = "Deletion fixture"
@@ -34,6 +38,118 @@ private final class DeletionFixtureProvider: TranscriptionProvider {
         self.isReady = false
     }
 }
+
+#if DEBUG && arch(arm64)
+@MainActor
+final class NemotronProviderResidencyTests: XCTestCase {
+    private func makeCache() throws -> (directory: URL, marker: URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NemotronResidencyTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let marker = directory.appendingPathComponent("synthetic-artifact.txt")
+        try Data("owned cache fixture".utf8).write(to: marker)
+        self.addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        return (directory, marker)
+    }
+
+    func testReleaseDestroysNativeManagerWhileRetainingProviderAndDiskCache() async throws {
+        for mode: NemotronProvider.Mode in [.offline, .streaming, .streaming320] {
+            let cache = try self.makeCache()
+            let provider = NemotronProvider(mode: mode)
+            weak var manager: NemotronStreamingAsrManager?
+            do {
+                let resident = NemotronStreamingAsrManager()
+                manager = resident
+                provider.installManagerForTesting(resident, cacheDirectory: cache.directory)
+            }
+            XCTAssertTrue(provider.isReady)
+            XCTAssertNotNil(manager)
+
+            await provider.releaseResidency()
+
+            XCTAssertNil(manager, "A cached provider must not retain its native model owner after retirement")
+            XCTAssertFalse(provider.isReady)
+            XCTAssertEqual(try String(contentsOf: cache.marker, encoding: .utf8), "owned cache fixture")
+            do {
+                _ = try await provider.transcribeFinal([])
+                XCTFail("A retired provider must require preparation again")
+            } catch {
+                XCTAssertEqual((error as NSError).domain, "NemotronProvider")
+            }
+            await provider.releaseResidency()
+            XCTAssertFalse(provider.isReady, "Repeated retirement is harmless")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: cache.marker.path))
+        }
+    }
+
+    func testCancelledCleanupJoinsProfilingAndCacheDeletion() async throws {
+        let cache = try self.makeCache()
+        let provider = NemotronProvider(mode: .streaming)
+        weak var manager: NemotronStreamingAsrManager?
+        do {
+            let resident = NemotronStreamingAsrManager()
+            manager = resident
+            provider.installManagerForTesting(resident, cacheDirectory: cache.directory)
+        }
+        let key = "ASRComponentProfilingEnabled"
+        let oldValue = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let oldValue { UserDefaults.standard.set(oldValue, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.set(true, forKey: key)
+        // Empty streaming input starts the real profiling lifecycle but never predicts or loads models.
+        let preview = try await provider.transcribeStreaming([])
+        XCTAssertTrue(preview.text.isEmpty)
+        XCTAssertNotNil(manager)
+
+        let cleanup = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await provider.clearCache()
+        }
+        try await cleanup.value
+
+        XCTAssertNil(manager, "Cancellation must not abandon awaited actor cleanup")
+        XCTAssertFalse(provider.isReady)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cache.directory.path))
+    }
+
+    func testOrdinaryModelSwitchRetiresManagerInRetainedNemotronProvider() async throws {
+        let settings = SettingsStore.shared
+        let selected = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = selected }
+        settings.selectedSpeechModel = .nemotronOffline
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let provider = try XCTUnwrap(asr.fileTranscriptionProvider as? NemotronProvider)
+        let cache = try self.makeCache()
+        weak var manager: NemotronStreamingAsrManager?
+        do {
+            let resident = NemotronStreamingAsrManager()
+            manager = resident
+            provider.installManagerForTesting(resident, cacheDirectory: cache.directory)
+        }
+        asr.isAsrReady = true
+        let successor = DeletionFixtureProvider()
+        asr.modelProvidersForTesting[.gigaam] = successor
+        settings.selectedSpeechModel = .gigaam
+        asr.resetTranscriptionProvider()
+        let deadline = ContinuousClock.now + .seconds(3)
+        while asr.activeExclusiveActivity != nil, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+
+        XCTAssertNil(asr.activeExclusiveActivity, "The existing reset must join residency release")
+        XCTAssertNil(manager)
+        XCTAssertFalse(provider.isReady)
+        XCTAssertFalse(asr.isAsrReady)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cache.marker.path))
+        XCTAssertEqual(successor.prepareCalls + successor.clearCalls, 0)
+        settings.selectedSpeechModel = .nemotronOffline
+        XCTAssertTrue((asr.fileTranscriptionProvider as? NemotronProvider) === provider,
+                      "ASR retains the lightweight provider, so retirement must release its manager")
+    }
+}
+#endif
 
 @MainActor
 final class VoiceModelDeletionTests: XCTestCase {
@@ -1081,3 +1197,263 @@ final class VoiceModelDeletionTests: XCTestCase {
         XCTAssertFalse(asr.hasActiveModelDownload)
     }
 }
+
+#if DEBUG
+/// The central import owns admission until native cleanup completes. Fixtures install only
+/// synthetic provider state; the source directory is never opened by these fake providers.
+@MainActor
+final class ASRServiceFolderImportTests: XCTestCase {
+    private enum ImportFailure: Error { case invalidArtifact }
+
+    @MainActor private final class Gate {
+        var isOpen: Bool
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        init(open: Bool = false) { self.isOpen = open }
+        func wait() async {
+            if self.isOpen { return }
+            await withCheckedContinuation { self.waiters.append($0) }
+        }
+        func open() {
+            self.isOpen = true
+            let waiters = self.waiters
+            self.waiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    @MainActor private final class ImportProvider: TranscriptionProvider {
+        let name = "Synthetic folder import"
+        let isAvailable = true
+        var isReady = true
+        var installed = false
+        var importFails = false
+        var importedDirectories: [URL] = []
+        var releaseCalls = 0
+        var clearCalls = 0
+        var prepareCalls = 0
+        var probeCalls = 0
+        var releaseWasCancelled = false
+        var events: [String] = []
+        let importEntered = Gate()
+        let importGate = Gate(open: true)
+        let releaseEntered = Gate()
+        let releaseGate = Gate(open: true)
+
+        func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
+            self.prepareCalls += 1
+        }
+        func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            ASRTranscriptionResult(text: "", confidence: 0)
+        }
+        func importModel(from directory: URL) async throws {
+            self.importedDirectories.append(directory)
+            self.events.append("import")
+            self.importEntered.open()
+            await self.importGate.wait()
+            try Task.checkCancellation()
+            if self.importFails { throw ImportFailure.invalidArtifact }
+            self.installed = true
+            self.events.append("published")
+        }
+        func releaseResidency() async {
+            self.releaseCalls += 1
+            self.events.append("release:start")
+            self.releaseEntered.open()
+            await self.releaseGate.wait()
+            self.releaseWasCancelled = Task.isCancelled
+            self.isReady = false
+            self.events.append("release:end")
+        }
+        func modelsExistOnDisk() -> Bool {
+            self.probeCalls += 1
+            self.events.append("probe")
+            return self.installed
+        }
+        func clearCache() async throws { self.clearCalls += 1 }
+        func openGates() { self.importGate.open(); self.releaseGate.open() }
+    }
+
+    private let sourceDirectory = URL(fileURLWithPath: "/fixture/synthetic-import-source")
+
+    private func makeProvider() -> ImportProvider {
+        let provider = ImportProvider()
+        self.addTeardownBlock { @MainActor in provider.openGates() }
+        return provider
+    }
+
+    private func waitUntil(_ predicate: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(3)
+        while !predicate(), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        return predicate()
+    }
+
+    func testFolderImportRejectsActiveActivitiesBeforeCallingProvider() async throws {
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let provider = self.makeProvider()
+        service.modelProvidersForTesting[.gigaam] = provider
+        XCTAssertTrue(SettingsStore.SpeechModel.gigaam.supportsFolderImport)
+        XCTAssertFalse(SettingsStore.SpeechModel.whisperTiny.supportsFolderImport)
+        let prompt = SettingsStore.SpeechModel.gigaam.importFolderPrompt
+        XCTAssertTrue(prompt.contains("%@"), "Folder import instructions must retain the trusted engine placeholder")
+        XCTAssertTrue(String(format: prompt, "Synthetic engine").contains("Synthetic engine"))
+
+        for activity in [ASRExclusiveActivity.dictation, .fileTranscription, .localAPI, .meeting, .settingsRestore, .modelMaintenance] {
+            let lease = try service.acquireExclusiveActivity(activity)
+            defer { service.releaseExclusiveActivity(lease) }
+            do {
+                try await service.importModel(.gigaam, from: self.sourceDirectory)
+                XCTFail("Folder import must not interrupt \(activity)")
+            } catch let error as ASRActivityError {
+                guard case let .activityInProgress(blocked) = error else {
+                    return XCTFail("Expected the existing activity admission error, got \(error)")
+                }
+                XCTAssertEqual(blocked, activity)
+            }
+            XCTAssertEqual(service.activeExclusiveActivity, activity)
+            XCTAssertFalse(service.hasActiveModelDownload)
+        }
+        XCTAssertTrue(provider.importedDirectories.isEmpty)
+        XCTAssertEqual(provider.releaseCalls, 0)
+        XCTAssertEqual(provider.clearCalls, 0)
+        XCTAssertEqual(provider.prepareCalls, 0)
+    }
+
+    func testSuccessfulImportDoesNotSelectAnUnselectedModelOrDeleteCache() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .whisperTiny
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let provider = self.makeProvider()
+        service.modelProvidersForTesting[.gigaam] = provider
+        service.isAsrReady = true
+
+        try await service.importModel(.gigaam, from: self.sourceDirectory)
+
+        XCTAssertEqual(provider.importedDirectories, [self.sourceDirectory])
+        XCTAssertEqual(provider.events, ["import", "published", "release:start", "release:end"])
+        XCTAssertEqual(provider.releaseCalls, 1)
+        XCTAssertEqual(provider.clearCalls, 0)
+        XCTAssertEqual(provider.prepareCalls, 0)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+        XCTAssertTrue(service.isAsrReady, "Installing another model must preserve current readiness")
+        XCTAssertNil(service.activeExclusiveActivity)
+        XCTAssertFalse(service.hasActiveModelDownload)
+        XCTAssertNil(service.modelPreparationPhase)
+        XCTAssertFalse(service.isCancellingModelDownload)
+    }
+
+    func testSelectedImportWaitsForReleaseAndCompletesResetAndArtifactProbeBeforeReturning() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = previous }
+        settings.selectedSpeechModel = .gigaam
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let provider = self.makeProvider()
+        provider.releaseGate.isOpen = false
+        service.modelProvidersForTesting[.gigaam] = provider
+        service.isAsrReady = true
+        var finished = false
+        let operation = Task {
+            try await service.importModel(.gigaam, from: self.sourceDirectory)
+            finished = true
+        }
+        let didEnterRelease = await self.waitUntil { provider.releaseEntered.isOpen }
+        XCTAssertTrue(didEnterRelease)
+        XCTAssertFalse(finished)
+        XCTAssertEqual(service.activeExclusiveActivity, .modelMaintenance)
+        XCTAssertTrue(service.hasActiveModelDownload, "The owned import task must include native cleanup")
+        XCTAssertTrue(service.isAsrReady, "Selected cache reset must follow successful joined cleanup")
+        XCTAssertEqual(provider.probeCalls, 0)
+        provider.releaseGate.open()
+        let didFinish = await self.waitUntil { finished }
+        guard didFinish else {
+            operation.cancel()
+            return XCTFail("Import must finish its reset without nesting the maintenance lease")
+        }
+        try await operation.value
+
+        XCTAssertEqual(provider.releaseCalls, 1)
+        XCTAssertFalse(provider.releaseWasCancelled)
+        XCTAssertEqual(provider.clearCalls, 0)
+        XCTAssertEqual(provider.prepareCalls, 0)
+        XCTAssertGreaterThan(provider.probeCalls, 0)
+        let released = try XCTUnwrap(provider.events.firstIndex(of: "release:end"))
+        let probed = try XCTUnwrap(provider.events.firstIndex(of: "probe"))
+        XCTAssertLessThan(released, probed)
+        XCTAssertTrue(service.modelsExistOnDisk)
+        XCTAssertFalse(service.isAsrReady)
+        XCTAssertEqual(settings.selectedSpeechModel, .gigaam)
+        XCTAssertNil(service.activeExclusiveActivity)
+        XCTAssertFalse(service.hasActiveModelDownload)
+        XCTAssertFalse(service.hasActiveModelPreparation)
+        XCTAssertNil(service.modelPreparationPhase)
+        let lease = try service.acquireExclusiveActivity(.dictation)
+        service.releaseExclusiveActivity(lease)
+    }
+
+    func testFailedAndCancelledImportsKeepAdmissionUntilUncancelledReleaseFinishes() async throws {
+        for failure in [false, true] {
+            let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+            let provider = self.makeProvider()
+            provider.importFails = failure
+            provider.importGate.isOpen = false
+            provider.releaseGate.isOpen = false
+            service.modelProvidersForTesting[.gigaam] = provider
+            var finished = false
+            let operation = Task {
+                defer { finished = true }
+                try await service.importModel(.gigaam, from: self.sourceDirectory)
+            }
+            let didEnterImport = await self.waitUntil { provider.importEntered.isOpen }
+            XCTAssertTrue(didEnterImport)
+            if !failure { operation.cancel() }
+            provider.importGate.open()
+            let didEnterRelease = await self.waitUntil { provider.releaseEntered.isOpen }
+            XCTAssertTrue(didEnterRelease)
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            XCTAssertFalse(finished, "Failure and cancellation must remain joined to native cleanup")
+            XCTAssertEqual(service.activeExclusiveActivity, .modelMaintenance)
+            XCTAssertTrue(service.hasActiveModelDownload)
+            XCTAssertThrowsError(try service.acquireExclusiveActivity(.dictation))
+            var competitorFinished = false
+            var competitorRejected = false
+            let competitor = Task {
+                do { try await service.downloadModel(.gigaam, progressHandler: nil) }
+                catch { competitorRejected = true }
+                competitorFinished = true
+            }
+            let rejectedBeforeCleanup = await self.waitUntil { competitorFinished }
+            XCTAssertTrue(rejectedBeforeCleanup, "Competing work must reject rather than join a parked import")
+            XCTAssertTrue(competitorRejected)
+            XCTAssertEqual(provider.prepareCalls, 0)
+            // Open the cleanup gate before joining either caller, even when admission regresses
+            // to waiting for the import. This keeps the regression test bounded.
+            provider.releaseGate.open()
+            do {
+                try await operation.value
+                XCTFail("Expected import \(failure ? "failure" : "cancellation")")
+            } catch ImportFailure.invalidArtifact {
+                XCTAssertTrue(failure)
+            } catch is CancellationError {
+                XCTAssertFalse(failure)
+            }
+            await competitor.value
+
+            XCTAssertTrue(finished)
+            XCTAssertFalse(provider.releaseWasCancelled)
+            XCTAssertEqual(provider.releaseCalls, 1)
+            XCTAssertEqual(provider.clearCalls, 0)
+            XCTAssertFalse(provider.installed)
+            XCTAssertNil(service.activeExclusiveActivity)
+            XCTAssertFalse(service.hasActiveModelDownload)
+            XCTAssertNil(service.modelPreparationPhase)
+            XCTAssertFalse(service.isCancellingModelDownload)
+            let lease = try service.acquireExclusiveActivity(.dictation)
+            service.releaseExclusiveActivity(lease)
+        }
+    }
+}
+#endif

@@ -121,7 +121,7 @@ actor DictionaryMatchPlayground {
         let allProfiles = await PronunciationDictionaryStore.shared.allProfiles()
         var compatibleModelKeys: Set<String> = ["parakeet-v2", "parakeet-v3"]
         for descriptor in [ParakeetSpeechModelCatalog.mini, ParakeetSpeechModelCatalog.pico] {
-            let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+            let directory = AppModelPaths.parakeet(for: descriptor.asrModelVersion)
             if let hash = descriptor.installedArchiveSHA256(at: directory) {
                 compatibleModelKeys.insert(descriptor.modelID + ":sha256:" + hash)
             }
@@ -139,7 +139,7 @@ actor DictionaryMatchPlayground {
             throw DictionaryMatchPlaygroundError.unavailable("This pronunciation model is unavailable.")
         }
         let version = descriptor.asrModelVersion
-        let directory = AsrModels.defaultCacheDirectory(for: version)
+        let directory = AppModelPaths.parakeet(for: version)
         guard descriptor.installationRevisionMatches(at: directory),
               descriptor.variant == .v2 || descriptor.variant == .v3 || descriptor.installedArchiveSHA256(at: directory) == descriptor.archiveSHA256
         else {

@@ -6,6 +6,6 @@ extension Bundle {
         let bundleName = self.object(forInfoDictionaryKey: "CFBundleName") as? String
         return [displayName, bundleName]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty } ?? "FluidVoice"
+            .first { !$0.isEmpty } ?? AppBrand.appName
     }
 }

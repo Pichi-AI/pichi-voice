@@ -207,7 +207,7 @@ struct MeetingFloatingCaptionsContent: View {
     @Environment(\.theme) private var theme
     @State private var isStopping = false
 
-    private static let fluidVoiceIcon: NSImage = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage
+    private static var fluidVoiceIcon: NSImage { PichiBrandMark.appIcon }
 
     private var rows: [MeetingLiveBubbleComposer.Row] {
         MeetingLiveBubbleComposer.rows(for: self.coordinator.liveTranscript)
@@ -247,7 +247,7 @@ struct MeetingFloatingCaptionsContent: View {
             if active { self.isStopping = false }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("FluidMeet live captions")
+        .accessibilityLabel(AppBrand.text("FluidMeet live captions"))
     }
 
     private var header: some View {
@@ -258,7 +258,7 @@ struct MeetingFloatingCaptionsContent: View {
                 .frame(width: 18, height: 18)
                 .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 .accessibilityHidden(true)
-            Text("FluidMeet")
+            Text(verbatim: AppBrand.meetingName)
                 .font(self.theme.typography.captionStrong)
                 .foregroundStyle(self.theme.palette.primaryText)
             Spacer(minLength: 8)

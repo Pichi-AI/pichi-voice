@@ -12,6 +12,12 @@ struct VoiceEngineLanguage: Identifiable, Equatable {
     var popularDisplayName: String {
         self.id == "zh" ? "Mandarin" : self.displayName
     }
+
+    /// Only the visible language name is localized; engine/API IDs remain unchanged.
+    func localizedDisplayName(locale: Locale) -> String {
+        locale.localizedString(forIdentifier: self.id)?.capitalized(with: locale)
+            ?? PichiLocalization.text(self.displayName, locale: locale)
+    }
 }
 
 struct VoiceEngineLanguageRoute: Identifiable, Equatable {
@@ -49,7 +55,7 @@ struct VoiceEngineLanguageRoute: Identifiable, Equatable {
     var badgeText: String? {
         switch self.model {
         case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
-            return "Optimized for FluidVoice"
+            return AppBrand.text("Optimized for FluidVoice")
         default:
             return nil
         }
@@ -60,27 +66,85 @@ enum VoiceEngineLanguageCatalog {
     static func allLanguages(
         availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
     ) -> [VoiceEngineLanguage] {
-        self.languageDefinitions.filter { language in
-            !Self.routes(for: language, availableModels: availableModels).isEmpty
+        let languages = self.availableDefinitions(availableModels: availableModels)
+        let primaryIDs = Set(self.primaryDefinitions(from: languages).map(\.id))
+        return languages.map { language in
+            VoiceEngineLanguage(id: language.id, displayName: language.displayName, aliases: language.aliases,
+                                isPopular: primaryIDs.contains(language.id))
         }
     }
 
     static func popularLanguages(
         availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
     ) -> [VoiceEngineLanguage] {
-        self.allLanguages(availableModels: availableModels).filter(\.isPopular)
+        self.primaryDefinitions(from: self.availableDefinitions(availableModels: availableModels)).map { language in
+            VoiceEngineLanguage(id: language.id, displayName: language.displayName, aliases: language.aliases, isPopular: true)
+        }
+    }
+
+    static var defaultOnboardingLanguageID: String { self.defaultOnboardingLanguage()?.id ?? "en" }
+
+    static func defaultOnboardingLanguage(
+        availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
+    ) -> VoiceEngineLanguage? {
+        guard let language = self.resolvedDefaultLanguage(in: self.availableDefinitions(availableModels: availableModels)) else { return nil }
+        return VoiceEngineLanguage(id: language.id, displayName: language.displayName, aliases: language.aliases, isPopular: true)
+    }
+
+    private static func availableDefinitions(availableModels: [SettingsStore.SpeechModel]) -> [VoiceEngineLanguage] {
+        self.languageDefinitions.filter { !Self.routes(for: $0, availableModels: availableModels).isEmpty }
+    }
+
+    // The existing onboarding grid has eleven language cards plus Other in four rows.
+    // Promote any configured available default while retaining that bounded layout.
+    private static let primaryLanguageCapacity = 11
+
+    private static func primaryDefinitions(from languages: [VoiceEngineLanguage]) -> [VoiceEngineLanguage] {
+        self.primaryLanguages(in: languages,
+                              configuredLanguageID: AppBrand.package.style?.defaultOnboardingLanguageID,
+                              packagedLanguageID: AppBrand.packagedPackage.style?.defaultOnboardingLanguageID)
+    }
+
+    /// Pure catalog presentation policy; production supplies active/package configuration explicitly.
+    static func primaryLanguages(in languages: [VoiceEngineLanguage], configuredLanguageID: String?,
+                                 packagedLanguageID: String?) -> [VoiceEngineLanguage] {
+        let candidates = languages.filter(\.isPopular)
+        guard let primary = self.resolveDefaultLanguage(in: languages, configuredLanguageID: configuredLanguageID,
+                                                       packagedLanguageID: packagedLanguageID) else {
+            return Array(candidates.prefix(self.primaryLanguageCapacity))
+        }
+        return Array(([primary] + candidates.filter { $0.id != primary.id }).prefix(self.primaryLanguageCapacity))
+    }
+
+    private static func resolvedDefaultLanguage(in languages: [VoiceEngineLanguage]) -> VoiceEngineLanguage? {
+        self.resolveDefaultLanguage(in: languages,
+                                    configuredLanguageID: AppBrand.package.style?.defaultOnboardingLanguageID,
+                                    packagedLanguageID: AppBrand.packagedPackage.style?.defaultOnboardingLanguageID)
+    }
+
+    /// A configured locale may be unknown to this speech catalog or unavailable on this platform.
+    /// Use the packaged available choice, then the existing catalog's neutral fallback/order.
+    static func resolveDefaultLanguage(in languages: [VoiceEngineLanguage], configuredLanguageID: String?,
+                                       packagedLanguageID: String?) -> VoiceEngineLanguage? {
+        for candidate in [configuredLanguageID, packagedLanguageID].compactMap({ $0 }) {
+            guard let identifier = PichiInterfaceLanguage(rawValue: candidate)?.languageCode else { continue }
+            if let language = languages.first(where: { $0.id == identifier }) { return language }
+        }
+        return languages.first(where: { $0.id == "en" }) ?? languages.first
     }
 
     static func searchableLanguages(
         query: String,
-        availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels
+        availableModels: [SettingsStore.SpeechModel] = SettingsStore.SpeechModel.availableModels,
+        locale: Locale = PichiLocalization.locale
     ) -> [VoiceEngineLanguage] {
         let languages = Self.allLanguages(availableModels: availableModels)
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedQuery.isEmpty else { return languages }
 
         return languages.filter { language in
-            language.displayName.lowercased().contains(normalizedQuery) ||
+            language.localizedDisplayName(locale: locale).lowercased().contains(normalizedQuery) ||
+                language.displayName.lowercased().contains(normalizedQuery) ||
                 language.id.lowercased().contains(normalizedQuery) ||
                 language.aliases.contains { $0.lowercased().contains(normalizedQuery) }
         }
@@ -120,6 +184,56 @@ enum VoiceEngineLanguageCatalog {
         return Self.routes(for: language, availableModels: availableModels)
     }
 
+    /// Describe the active engine, not an earlier onboarding choice. A multilingual
+    /// automatic route has no forced language, whereas a single-language engine does.
+    static func currentLanguage(settings: SettingsStore = .shared) -> VoiceEngineLanguage? {
+        var bindings: [VoiceEngineLanguageRoute.LanguageBinding] = [
+            .appleSpeech(localeIdentifier: settings.selectedAppleSpeechLocaleIdentifier),
+            .cohere(settings.selectedCohereLanguage),
+            .nemotron(settings.selectedNemotronLanguage),
+        ]
+        if let languageCode = settings.selectedWhisperLanguageCode {
+            bindings.append(.whisper(languageCode: languageCode))
+        }
+        return self.currentLanguage(for: settings.selectedSpeechModel, matchingBindings: bindings)
+    }
+
+    static func currentLanguage(for model: SettingsStore.SpeechModel,
+                                matchingBindings: [VoiceEngineLanguageRoute.LanguageBinding]) -> VoiceEngineLanguage? {
+        // The onboarding shortlist intentionally omits some installed Whisper sizes.
+        // Their actual language preference still uses the complete existing catalog.
+        if model.isWhisperModel {
+            for binding in matchingBindings {
+                if case let .whisper(languageCode) = binding {
+                    return self.whisperLanguage(forCode: languageCode)
+                }
+            }
+            return nil
+        }
+        let routes = self.allLanguages(availableModels: [model]).flatMap {
+            self.routes(for: $0, availableModels: [model])
+        }
+        // Native Speech supports locales outside the onboarding shortlist. An explicit
+        // locale still identifies a language; it must not be shown as auto-detection.
+        if model.provider == .apple {
+            for binding in matchingBindings {
+                if case let .appleSpeech(localeIdentifier) = binding {
+                    if let route = routes.first(where: { $0.binding == binding }) { return route.language }
+                    guard let identifier = PichiInterfaceLanguage(rawValue: localeIdentifier)?.languageCode else { return nil }
+                    return self.languageDefinitions.first(where: { $0.id == identifier })
+                        ?? VoiceEngineLanguage(id: identifier,
+                            displayName: Locale(identifier: "en").localizedString(forIdentifier: identifier) ?? identifier,
+                            aliases: [], isPopular: false)
+                }
+            }
+            return nil
+        }
+        let selected = routes.filter { matchingBindings.contains($0.binding) }
+        if selected.count == 1 { return selected.first?.language }
+        let automatic = routes.filter { $0.binding == .automatic }
+        return automatic.count == 1 ? automatic.first?.language : nil
+    }
+
     static func apply(_ route: VoiceEngineLanguageRoute, to settings: SettingsStore = .shared) {
         settings.onboardingSelectedLanguageID = route.language.id
         settings.selectedSpeechModel = route.model
@@ -140,6 +254,10 @@ enum VoiceEngineLanguageCatalog {
 
     private static func routeCandidates(for language: VoiceEngineLanguage) -> [VoiceEngineLanguageRoute] {
         var routes: [VoiceEngineLanguageRoute] = []
+
+        if language.id == "ru" {
+            routes.append(Self.route(language, .gigaam, .automatic))
+        }
 
         if language.id == "en" {
             routes.append(Self.route(language, .parakeetTDTv2, .automatic))
@@ -215,6 +333,7 @@ enum VoiceEngineLanguageCatalog {
     }
 
     private static let popularLanguageIDs: Set<String> = [
+        "ru",
         "en",
         "es",
         "fr",

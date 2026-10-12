@@ -88,7 +88,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
         }
         guard self.canDownload() else {
             let error = MeetingNemotronModelReadinessError.invalidModelPackage(reason: "developmentOverrideInvalid")
-            self.state = .failed(message: "The development model path is missing or invalid. Remove the override and restart FluidVoice.")
+            self.state = .failed(message: AppBrand.text("The development model path is missing or invalid. Remove the override and restart FluidVoice."))
             throw error
         }
 

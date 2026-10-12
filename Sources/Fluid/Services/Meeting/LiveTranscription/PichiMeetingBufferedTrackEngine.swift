@@ -1,0 +1,429 @@
+import AVFoundation
+import CoreMedia
+import Foundation
+import os
+
+nonisolated struct PichiMeetingCaptionRecognition: Sendable {
+    let text: String
+    let endOfUtteranceProbability: Float?
+}
+
+/// One shared, serialized model capability; each capture track owns its own audio/turn buffers.
+nonisolated protocol PichiMeetingCaptionRecognizing: Sendable {
+    func prepare() async throws
+    func recognize(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition
+    func unload() async
+}
+
+/// Both online-call tracks share this provider, so loading live captions retains one set of
+/// weights. Partial captions are periodic batch hypotheses, then replaced by the final pipeline.
+@MainActor
+final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
+    private var provider: (any TranscriptionProvider)?
+    private var preparation: Task<Void, Error>?
+    private var isStopped = false
+    private var inference: Task<PichiMeetingCaptionRecognition, Error>?
+
+    init(modelID: String, languageCode: String, artifactFingerprint: String? = nil) throws {
+        let configuration = PichiMeetingProviderFactory.configuration(
+            asrModel: modelID,
+            languageCode: languageCode,
+            artifactFingerprintOverride: artifactFingerprint
+        )
+        self.provider = try PichiMeetingProviderFactory.make(configuration)
+    }
+
+    /// A fixed provider can be supplied by an existing composition boundary or deterministic test.
+    /// This recognizer owns its preparation and joined release; it must not borrow another owner's runtime.
+    init(provider: any TranscriptionProvider) { self.provider = provider }
+
+    @MainActor func prepare() async throws {
+        guard !self.isStopped, let provider else { throw CancellationError() }
+        if let preparation {
+            try await withTaskCancellationHandler {
+                try await preparation.value
+                try Task.checkCancellation()
+            } onCancel: {
+                preparation.cancel()
+            }
+            return
+        }
+        let preparation = Task { @MainActor in
+            try await provider.prepare(progressHandler: nil)
+        }
+        self.preparation = preparation
+        try await withTaskCancellationHandler {
+            try await preparation.value
+            try Task.checkCancellation()
+        } onCancel: {
+            preparation.cancel()
+        }
+    }
+
+    @MainActor func recognize(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition {
+        guard !self.isStopped, let provider else { throw CancellationError() }
+        let previous = self.inference
+        let work = Task { @MainActor in
+            _ = await previous?.result
+            try Task.checkCancellation()
+            let result = try await provider.transcribeStreaming(samples)
+            return PichiMeetingCaptionRecognition(text: result.text, endOfUtteranceProbability: result.endOfUtteranceProbability)
+        }
+        self.inference = work
+        return try await withTaskCancellationHandler {
+            try await work.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    /// Called once by the coordinator after both track workers have drained.
+    @MainActor func unload() async {
+        self.isStopped = true
+        self.preparation?.cancel()
+        _ = await self.preparation?.result
+        self.preparation = nil
+        self.inference?.cancel()
+        _ = await self.inference?.result
+        self.inference = nil
+        await self.provider?.releaseResidency()
+        self.provider = nil
+    }
+}
+
+/// The capture callback can invalidate an era even while the actor is suspended in inference.
+final nonisolated class PichiMeetingCaptionInputEpoch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    var current: UInt64 { self.lock.withLock { self.value } }
+    func advance() { self.lock.withLock { self.value &+= 1 } }
+}
+
+/// Bounded buffered captions for models without the upstream native English streaming decoder.
+/// Capture only enqueues copied PCM. Resampling, inference and endpointing run on this actor.
+actor PichiMeetingBufferedTrackEngine {
+    typealias PartialHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
+    typealias UtteranceHandler = @Sendable (MeetingAudioTrackKind, UUID, String, CMTime, CMTime) -> Void
+    typealias DegradedHandler = @Sendable (MeetingAudioTrackKind, String) -> Void
+    typealias ReadyHandler = @Sendable (MeetingAudioTrackKind) -> Void
+
+    private nonisolated struct Input: Sendable {
+        let sample: MeetingLiveSampleCopy.Sample
+        let epoch: UInt64
+    }
+    private nonisolated let queue = MeetingLiveBoundedQueue<Input>(capacity: 512)
+    private nonisolated let inputEpoch = PichiMeetingCaptionInputEpoch()
+    private var activeInputEpoch: UInt64?
+    private static let sampleRate: Double = 16_000
+    private static let blockSamples = 1600
+    private static let minimumTurnSamples = 5600
+    private static let partialIntervalSamples = 20_000
+    private static let maximumTurnSamples = 320_000
+    private static let preRollSamples = 2400
+    private static let pauseSamples = 11_200
+    /// A conservative energy gate avoids decoding pure silence. It is not speaker/VAD evidence.
+    private static let energyThreshold: Float = 0.006
+    private static let eouThreshold: Float = 0.5
+
+    private let kind: MeetingAudioTrackKind
+    private let recognizer: any PichiMeetingCaptionRecognizing
+    private let targetFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
+        // This fixed valid PCM format is the app's existing ASR contract.
+        // swiftlint:disable:next force_unwrapping
+    )!
+    private var converter: AVAudioConverter?
+    private var converterSourceFormat: AVAudioFormat?
+    private var loadTask: Task<Void, Never>?
+    private var drainTask: Task<Void, Never>?
+    private var isReady = false
+    private var hasStarted = false
+    private var isStopped = false
+    private var generation = 0
+    private var preRoll: [Float] = []
+    private var samples: [Float] = []
+    private var quietSamples = 0
+    private var lastRecognitionSampleCount = 0
+    private var lastRecognition: PichiMeetingCaptionRecognition?
+    private var turnID: UUID?
+    private var startPTS: CMTime?
+    private var endPTS: CMTime?
+    private var lastBufferEndPTS: CMTime?
+    private var onPartial: PartialHandler?
+    private var onUtterance: UtteranceHandler?
+    private var onDegraded: DegradedHandler?
+    private var onReady: ReadyHandler?
+
+    init(kind: MeetingAudioTrackKind, recognizer: any PichiMeetingCaptionRecognizing) {
+        self.kind = kind
+        self.recognizer = recognizer
+    }
+
+    func configure(
+        onPartial: @escaping PartialHandler,
+        onUtterance: @escaping UtteranceHandler,
+        onDegraded: @escaping DegradedHandler,
+        onReady: @escaping ReadyHandler
+    ) {
+        guard !self.isStopped else { return }
+        self.onPartial = onPartial
+        self.onUtterance = onUtterance
+        self.onDegraded = onDegraded
+        self.onReady = onReady
+    }
+
+    func start() {
+        guard !self.hasStarted, !self.isStopped else { return }
+        self.hasStarted = true
+        self.loadTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.recognizer.prepare()
+                try Task.checkCancellation()
+                await self.markReady()
+            } catch {
+                guard !Task.isCancelled else { return }
+                await self.markLoadFailed(error)
+            }
+        }
+        self.drainTask = Task { [weak self] in await self?.drainLoop() }
+    }
+
+    nonisolated func offer(_ sample: MeetingLiveSampleCopy.Sample) {
+        self.queue.enqueue(Input(sample: sample, epoch: self.inputEpoch.current))
+    }
+
+    /// Synchronous capture-era barrier. Old queued/batched PCM and late inference are discarded.
+    nonisolated func requestReset() { self.inputEpoch.advance() }
+
+    func reset() {
+        self.clearTurn()
+        self.preRoll.removeAll(keepingCapacity: true)
+        self.lastBufferEndPTS = nil
+    }
+
+    func stop() async {
+        self.isStopped = true
+        self.generation &+= 1
+        self.loadTask?.cancel()
+        self.drainTask?.cancel()
+        await self.loadTask?.value
+        await self.drainTask?.value
+        self.loadTask = nil
+        self.drainTask = nil
+        self.isReady = false
+        _ = self.queue.drainAll()
+        self.clearTurn()
+        self.preRoll.removeAll()
+        self.converter = nil
+        self.onPartial = nil
+        self.onUtterance = nil
+        self.onDegraded = nil
+        self.onReady = nil
+    }
+
+    private func markReady() {
+        guard !self.isStopped else { return }
+        self.isReady = true
+        self.onReady?(self.kind)
+    }
+
+    private func markLoadFailed(_ error: Error) {
+        guard !self.isStopped else { return }
+        self.onDegraded?(self.kind, "Buffered captions could not load: \(error.localizedDescription)")
+    }
+
+    private func drainLoop() async {
+        while !Task.isCancelled {
+            guard self.isReady else {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                continue
+            }
+            let dropped = self.queue.takeDroppedCount()
+            if dropped > 0 {
+                self.reset()
+                self.onDegraded?(self.kind, "Live captions dropped audio and resynced. The recording is preserved.")
+            }
+            let batch = self.queue.drainAll()
+            guard !batch.isEmpty else {
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                continue
+            }
+            for input in batch where !Task.isCancelled {
+                await self.consume(input)
+            }
+        }
+    }
+
+    private func consume(_ input: Input) async {
+        guard input.epoch == self.inputEpoch.current else { return }
+        if self.activeInputEpoch != input.epoch {
+            self.reset()
+            self.activeInputEpoch = input.epoch
+        }
+        let sample = input.sample
+        guard !self.isStopped, let converted = self.convert(sample.buffer), !converted.isEmpty else { return }
+        if let previous = self.lastBufferEndPTS,
+           abs((sample.pts - previous).seconds) > 0.25 {
+            self.reset()
+        }
+        self.lastBufferEndPTS = sample.pts + sample.duration
+        var offset = 0
+        while offset < converted.count {
+            guard !Task.isCancelled, !self.isStopped, input.epoch == self.inputEpoch.current else { return }
+            let room = Self.maximumTurnSamples - self.samples.count
+            let upper = min(converted.count, offset + min(Self.blockSamples, max(1, room)))
+            let block = Array(converted[offset..<upper])
+            let start = sample.pts + CMTime(
+                seconds: sample.duration.seconds * Double(offset) / Double(converted.count),
+                preferredTimescale: 1_000_000_000
+            )
+            let end = sample.pts + CMTime(
+                seconds: sample.duration.seconds * Double(upper) / Double(converted.count),
+                preferredTimescale: 1_000_000_000
+            )
+            await self.consumeBlock(block, start: start, end: end)
+            offset = upper
+        }
+    }
+
+    private func consumeBlock(_ block: [Float], start: CMTime, end: CMTime) async {
+        guard block.allSatisfy(\.isFinite) else { self.reset(); return }
+        let squareMean = block.reduce(Float(0)) { $0 + $1 * $1 } / Float(block.count)
+        let active = squareMean.squareRoot() >= Self.energyThreshold
+        if self.turnID == nil {
+            guard active else {
+                self.preRoll.append(contentsOf: block)
+                self.preRoll = Array(self.preRoll.suffix(Self.preRollSamples))
+                return
+            }
+            self.turnID = UUID()
+            self.startPTS = start - CMTime(seconds: Double(self.preRoll.count) / Self.sampleRate, preferredTimescale: 16_000)
+            self.samples = self.preRoll
+            self.preRoll.removeAll(keepingCapacity: true)
+        }
+        self.samples.append(contentsOf: block)
+        self.endPTS = end
+        self.quietSamples = active ? 0 : self.quietSamples + block.count
+        let shouldFinish = self.quietSamples >= Self.pauseSamples || self.samples.count >= Self.maximumTurnSamples
+        if shouldFinish {
+            await self.finishTurn()
+            return
+        }
+        if self.samples.count >= Self.minimumTurnSamples,
+           self.samples.count - self.lastRecognitionSampleCount >= Self.partialIntervalSamples {
+            await self.recognizePartial()
+        }
+    }
+
+    private func recognizePartial() async {
+        let generation = self.generation
+        let input = self.samples
+        do {
+            let result = try await self.recognizer.recognize(input)
+            guard !self.isStopped, !Task.isCancelled, self.generation == generation,
+                  self.activeInputEpoch == self.inputEpoch.current,
+                  let turnID, let startPTS, let endPTS else { return }
+            self.lastRecognition = result
+            self.lastRecognitionSampleCount = input.count
+            self.onPartial?(self.kind, turnID, result.text, startPTS, endPTS)
+            // The model head sees only this current utterance. Require a small acoustic pause,
+            // and retain a silence/duration fallback for artifacts without an EOU head.
+            if (result.endOfUtteranceProbability ?? 0) >= Self.eouThreshold, self.quietSamples >= 2400 {
+                await self.finishTurn()
+            }
+        } catch {
+            guard !self.isStopped, !Task.isCancelled else { return }
+            self.onDegraded?(self.kind, "Buffered captions hit an error and resynced.")
+            self.reset()
+        }
+    }
+
+    private func finishTurn() async {
+        guard let turnID, let startPTS, let endPTS else { return }
+        let generation = self.generation
+        do {
+            let result: PichiMeetingCaptionRecognition
+            if self.lastRecognitionSampleCount == self.samples.count, let cached = self.lastRecognition {
+                result = cached
+            } else {
+                result = try await self.recognizer.recognize(self.samples)
+            }
+            guard !self.isStopped, !Task.isCancelled, self.generation == generation,
+                  self.activeInputEpoch == self.inputEpoch.current else { return }
+            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { self.onUtterance?(self.kind, turnID, text, startPTS, endPTS) }
+            self.clearTurn()
+        } catch {
+            guard !self.isStopped, !Task.isCancelled else { return }
+            self.onDegraded?(self.kind, "Buffered captions hit an error and resynced.")
+            self.reset()
+        }
+    }
+
+    private func clearTurn() {
+        if let turnID, let startPTS {
+            self.onPartial?(self.kind, turnID, "", startPTS, self.endPTS ?? startPTS)
+        }
+        self.generation &+= 1
+        self.samples.removeAll(keepingCapacity: true)
+        self.quietSamples = 0
+        self.lastRecognitionSampleCount = 0
+        self.lastRecognition = nil
+        self.turnID = nil
+        self.startPTS = nil
+        self.endPTS = nil
+    }
+
+    /// Identical target contract to the upstream live engine, with a persistent converter.
+    private func convert(_ source: AVAudioPCMBuffer) -> [Float]? {
+        let format = source.format
+        let buffer: AVAudioPCMBuffer
+        if format == self.targetFormat {
+            buffer = source
+        } else {
+            if self.converter == nil || self.converterSourceFormat != format {
+                self.converterSourceFormat = format
+                self.converter = AVAudioConverter(from: format, to: self.targetFormat)
+            }
+            guard let converter else { return nil }
+            let capacity = AVAudioFrameCount((Double(source.frameLength) * Self.sampleRate / format.sampleRate).rounded(.up)) + 16
+            guard let output = AVAudioPCMBuffer(pcmFormat: self.targetFormat, frameCapacity: capacity) else { return nil }
+            let supplied = OSAllocatedUnfairLock(initialState: false)
+            var error: NSError?
+            let status = converter.convert(to: output, error: &error) { _, inputStatus in
+                let alreadySupplied = supplied.withLock { state in
+                    defer { state = true }
+                    return state
+                }
+                inputStatus.pointee = alreadySupplied ? .noDataNow : .haveData
+                return alreadySupplied ? nil : source
+            }
+            guard status != .error else { return nil }
+            buffer = output
+        }
+        guard let channel = buffer.floatChannelData?[0] else { return nil }
+        return Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+    }
+
+    #if DEBUG
+    func consumeForTesting(_ sample: MeetingLiveSampleCopy.Sample) async {
+        await self.consume(Input(sample: sample, epoch: self.inputEpoch.current))
+    }
+    func bufferedSampleCountForTesting() -> Int { self.samples.count }
+    #endif
+}
+
+/// Live recognition yields to durable recording under pressure. No capture writer is stopped.
+final nonisolated class PichiMeetingCaptionMemoryMonitor: @unchecked Sendable {
+    private let source: any DispatchSourceMemoryPressure
+
+    init(onPressure: @escaping @Sendable () -> Void) {
+        self.source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .global(qos: .utility))
+        self.source.setEventHandler(handler: onPressure)
+        self.source.resume()
+    }
+
+    func stop() { self.source.cancel() }
+    deinit { self.source.cancel() }
+}

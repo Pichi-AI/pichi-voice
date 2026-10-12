@@ -29,23 +29,27 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         analysisSampleRate: 16_000
     )
 
-    var descriptor: MeetingBackendDescriptor {
-        Self.descriptor
-    }
+    let descriptor: MeetingBackendDescriptor
+    var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { MeetingTextOverlapEchoVerdictProvider() }
 
     private let runtimeFactory: MeetingParakeetNemotronRuntimeFactory
     private let modelLocator: any MeetingNemotronModelLocating
     private let materializer: any MeetingEpochAudioMaterializing
-    private var plannedArtifact: (attemptID: UUID, artifact: MeetingNemotronModelArtifact)?
+    private let diarizationPolicy: MeetingBackendDiarizationPolicy
+    private var plannedArtifact: (attemptID: UUID, artifact: MeetingNemotronModelArtifact?)?
 
     init(
         runtimeFactory: @escaping MeetingParakeetNemotronRuntimeFactory,
         modelLocator: any MeetingNemotronModelLocating = MeetingNemotronModelLocator(),
-        materializer: any MeetingEpochAudioMaterializing = MeetingEpochAudioMaterializer()
+        materializer: any MeetingEpochAudioMaterializing = MeetingEpochAudioMaterializer(),
+        descriptor: MeetingBackendDescriptor = MeetingParakeetNemotronBackend.descriptor,
+        diarizationPolicy: MeetingBackendDiarizationPolicy = .required
     ) {
         self.runtimeFactory = runtimeFactory
         self.modelLocator = modelLocator
         self.materializer = materializer
+        self.descriptor = descriptor
+        self.diarizationPolicy = diarizationPolicy
     }
 
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
@@ -62,7 +66,19 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         // (plan §5): no coercion of another model or feature into this backend.
         _ = try MeetingProviderOptions.resolve(request.configuration)
         // Model readiness is a precondition of planning; execute performs no downloads.
-        let artifact = try self.modelLocator.locate()
+        let artifact: MeetingNemotronModelArtifact?
+        switch self.diarizationPolicy {
+        case .required:
+            artifact = try self.modelLocator.locate()
+        case .ifInstalled:
+            do {
+                artifact = try self.modelLocator.locate()
+            } catch MeetingNemotronModelReadinessError.modelNotInstalled {
+                artifact = nil
+            }
+        case .disabled:
+            artifact = nil
+        }
         let plan = MeetingBackendPlan(request: request, descriptor: self.descriptor)
         guard !plan.trackKindsByID.isEmpty else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: self.descriptor.id)
@@ -91,18 +107,20 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 defect: .attemptIdentity
             )
         }
-        let artifact = try self.modelLocator.recheck(plannedArtifact.artifact)
+        let artifact = try plannedArtifact.artifact.map { try self.modelLocator.recheck($0) }
         self.plannedArtifact = nil
         // The host hands out the runtime only for the exact frozen request.
         let runtime = try self.runtimeFactory(plan.request)
         let materializer = self.materializer
         let request = plan.request
+        let backendID = self.descriptor.id
         let work = Task.detached(priority: .userInitiated) {
             try await Self.runAttempt(
                 request: request,
                 manifest: validatedManifest,
                 runtime: runtime,
                 artifact: artifact,
+                backendID: backendID,
                 materializer: materializer,
                 progress: progress
             )
@@ -171,7 +189,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         request: MeetingBackendRequest,
         manifest: MeetingAnalysisManifest,
         runtime: any MeetingParakeetNemotronRunning,
-        artifact: MeetingNemotronModelArtifact,
+        artifact: MeetingNemotronModelArtifact?,
+        backendID: MeetingBackendID,
         materializer: any MeetingEpochAudioMaterializing,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingCanonicalResultBundle {
@@ -194,8 +213,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         // Phase A: Nemotron diarization, one continuous state per track, then drained. A track's
         // epochs are diarized in order as one stream, so a voice keeps its slot across a reset;
         // each epoch still maps its own segments back through its own spans.
-        await progress(.identifyingSpeakers)
-        let phaseA = try await runtime.withNemotronDiarization(artifact: artifact) { factory in
+        if artifact != nil { await progress(.identifyingSpeakers) }
+        let phaseA = try await Self.withOptionalDiarization(runtime: runtime, artifact: artifact) { factory in
             var result = MeetingNemotronPhaseResult()
             for track in manifest.tracks {
                 var pieces: [(work: EpochWork, materialized: MeetingMaterializedEpoch, offset: Int)] = []
@@ -335,8 +354,19 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             manifest: manifest,
             epochWork: epochWork,
             phaseA: phaseA,
-            phaseB: phaseB
+            phaseB: phaseB,
+            backendID: backendID
         )
+    }
+
+    private nonisolated static func withOptionalDiarization(
+        runtime: any MeetingParakeetNemotronRunning,
+        artifact: MeetingNemotronModelArtifact?,
+        body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult
+    ) async throws -> MeetingNemotronPhaseResult {
+        // Transcript-only processing retains track/timing evidence without claiming speaker IDs.
+        guard let artifact else { return MeetingNemotronPhaseResult() }
+        return try await runtime.withNemotronDiarization(artifact: artifact, body)
     }
 
     private nonisolated static func materialize(
@@ -382,7 +412,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         manifest: MeetingAnalysisManifest,
         epochWork: [EpochWork],
         phaseA: MeetingNemotronPhaseResult,
-        phaseB: MeetingParakeetPhaseResult
+        phaseB: MeetingParakeetPhaseResult,
+        backendID: MeetingBackendID
     ) throws -> MeetingCanonicalResultBundle {
         let outputsByEpoch = Dictionary(
             phaseB.outputs.map { ($0.epochID, $0) },
@@ -418,7 +449,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         return MeetingCanonicalResultBundle(
             evidence: MeetingFinalTranscriptEvidence(
-                backendID: .parakeetNemotron,
+                backendID: backendID,
                 attemptID: request.attemptID,
                 units: units,
                 speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },

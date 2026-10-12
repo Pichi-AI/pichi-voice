@@ -119,7 +119,7 @@ struct OnboardingTryoutStepView: View {
 
     private var promptText: String {
         if self.exampleTexts.isEmpty {
-            return "Say anything you'd want to dictate in \(self.language.displayName)."
+            return PichiLocalization.format("Say anything you'd want to dictate in %@.", PichiLocalization.text(self.language.displayName))
         }
         return "Try this, or say anything you'd want to dictate."
     }
@@ -134,7 +134,7 @@ struct OnboardingTryoutStepView: View {
 
     private var placeholderText: String {
         if self.isReady {
-            return "Click here to test FluidVoice"
+            return AppBrand.text("Click here to test FluidVoice")
         }
         return self.isRunning ? "Listening..." : "Your dictation will appear here..."
     }
@@ -143,9 +143,9 @@ struct OnboardingTryoutStepView: View {
         VStack(spacing: 12) {
             self.keyboardCard
 
-            Text(self.footerHint ?? "Feels slow or inaccurate? Go back and try another model for \(self.language.displayName).")
+            Text(self.footerHint.map(PichiLocalization.text) ?? PichiLocalization.format("Feels slow or inaccurate? Go back and try another model for %@.", PichiLocalization.text(self.language.displayName)))
                 .font(self.theme.typography.captionStrong)
-                .foregroundStyle(Color.white.opacity(0.44))
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
         }
@@ -180,7 +180,7 @@ struct OnboardingTryoutStepView: View {
             {
                 Label(shortcutRecordingMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(Color.orange.opacity(0.92))
+                    .foregroundStyle(self.theme.palette.warning)
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
             }
@@ -192,11 +192,11 @@ struct OnboardingTryoutStepView: View {
         .padding(.bottom, 18)
         .background(
             shape
-                .fill(Color.white.opacity(0.040))
-                .overlay(shape.stroke(Color.white.opacity(0.11), lineWidth: 1))
+                .fill(self.theme.palette.primaryText.opacity(0.040))
+                .overlay(shape.stroke(self.theme.palette.cardBorder, lineWidth: 1))
                 .overlay(
                     shape.stroke(
-                        FluidOnboardingLandingColors.blue.opacity(self.isShortcutGlowActive ? 0.30 : 0.12),
+                        self.theme.palette.accent.opacity(self.isShortcutGlowActive ? 0.30 : 0.12),
                         lineWidth: self.isShortcutGlowActive ? 1.3 : 1
                     )
                 )
@@ -210,28 +210,27 @@ struct OnboardingTryoutStepView: View {
         let isEnabled = !self.isRunning
         let title = self.isRecordingShortcut ? "Cancel" : "Change"
         let fillOpacity = isEnabled ? (self.isChangeHovered ? 0.11 : 0.07) : 0.045
-        let foregroundOpacity = isEnabled ? (self.isChangeHovered ? 0.94 : 0.78) : 0.42
         let ringOpacity = self.isChangeHovered && isEnabled ? 0.50 : 0
 
         return Button {
             self.onToggleShortcut()
         } label: {
-            Text(title)
+            Text(PichiLocalization.text(title))
                 .font(self.theme.typography.captionStrong)
-                .foregroundStyle(.white.opacity(foregroundOpacity))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
                 .frame(width: 72, height: 32)
                 .background(
                     shape
-                        .fill(Color.white.opacity(fillOpacity))
-                        .overlay(shape.stroke(self.isChangeHovered && isEnabled ? FluidOnboardingLandingColors.blue.opacity(0.30) : Color.white.opacity(0.07), lineWidth: 1))
+                        .fill(self.theme.palette.primaryText.opacity(fillOpacity))
+                        .overlay(shape.stroke(self.isChangeHovered && isEnabled ? self.theme.palette.accent.opacity(0.30) : self.theme.palette.cardBorder, lineWidth: 1))
                         .overlay(
                             shape
-                                .stroke(FluidOnboardingLandingColors.blue.opacity(ringOpacity), lineWidth: self.isChangeHovered && isEnabled ? 1.4 : 1)
+                                .stroke(self.theme.palette.accent.opacity(ringOpacity), lineWidth: self.isChangeHovered && isEnabled ? 1.4 : 1)
                                 .padding(-2)
                         )
-                        .shadow(color: FluidOnboardingLandingColors.blue.opacity(self.isChangeHovered && isEnabled ? 0.08 : 0), radius: 16, x: 0, y: 6)
+                        .shadow(color: self.theme.palette.accent.opacity(self.isChangeHovered && isEnabled ? 0.08 : 0), radius: 16, x: 0, y: 6)
                 )
                 .contentShape(shape)
         }
@@ -255,7 +254,7 @@ struct OnboardingTryoutStepView: View {
     private var actionHintRow: some View {
         Text("Press once to start. Press again to stop.")
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(Color.white.opacity(0.62))
+            .foregroundStyle(self.theme.palette.primaryText)
             .multilineTextAlignment(.center)
             .lineLimit(1)
             .minimumScaleFactor(0.82)
@@ -268,30 +267,30 @@ struct OnboardingTryoutStepView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             if !examples.isEmpty {
-                Text(self.promptText)
+                Text(PichiLocalization.text(self.promptText))
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(Color.white.opacity(0.58))
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 ForEach(examples, id: \.self) { example in
                     self.examplePill(example)
                 }
             } else {
-                self.examplePill("Say anything in \(self.language.displayName).")
+                self.examplePill(PichiLocalization.format("Say anything in %@.", PichiLocalization.text(self.language.displayName)))
             }
 
             ZStack(alignment: .topLeading) {
                 TextEditor(text: self.$finalText)
                     .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(self.theme.palette.primaryText)
                     .frame(height: 108)
                     .padding(10)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.white.opacity(self.isRunning ? 0.075 : 0.045))
+                            .fill(self.theme.palette.primaryText.opacity(self.isRunning ? 0.075 : 0.045))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                                     .stroke(
-                                        self.isRunning ? FluidOnboardingLandingColors.blue.opacity(0.46) : Color.white.opacity(0.08),
+                                        self.isRunning ? self.theme.palette.accent.opacity(0.46) : self.theme.palette.cardBorder,
                                         lineWidth: self.isRunning ? 1.4 : 1
                                     )
                             )
@@ -300,9 +299,9 @@ struct OnboardingTryoutStepView: View {
                     .focused(self.$isEditorFocused)
 
                 if self.shouldShowPlaceholder {
-                    Text(self.placeholderText)
+                    Text(PichiLocalization.text(self.placeholderText))
                         .font(self.theme.typography.bodySmallStrong)
-                        .foregroundStyle(Color.white.opacity(0.38))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 17)
@@ -319,8 +318,8 @@ struct OnboardingTryoutStepView: View {
             .fill(
                 LinearGradient(
                     colors: [
-                        Color.white.opacity(0.055),
-                        Color.white.opacity(0.020),
+                        self.theme.palette.primaryText.opacity(0.055),
+                        self.theme.palette.primaryText.opacity(0.020),
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -328,7 +327,7 @@ struct OnboardingTryoutStepView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .stroke(self.theme.palette.cardBorder, lineWidth: 1)
             )
             .frame(width: 88, height: 66)
     }
@@ -340,7 +339,7 @@ struct OnboardingTryoutStepView: View {
     private func examplePill(_ text: String) -> some View {
         Text(text)
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(Color.white.opacity(0.72))
+            .foregroundStyle(self.theme.palette.primaryText)
             .lineLimit(2)
             .minimumScaleFactor(0.82)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -348,10 +347,10 @@ struct OnboardingTryoutStepView: View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(FluidOnboardingLandingColors.blue.opacity(0.08))
+                    .fill(self.theme.palette.accent.opacity(0.08))
                     .overlay(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .stroke(FluidOnboardingLandingColors.blue.opacity(0.16), lineWidth: 1)
+                            .stroke(self.theme.palette.accent.opacity(0.16), lineWidth: 1)
                     )
             )
     }

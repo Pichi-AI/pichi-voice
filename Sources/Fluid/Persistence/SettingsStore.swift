@@ -1458,6 +1458,12 @@ final class SettingsStore: ObservableObject {
         static let disabled = ModelReasoningConfig(parameterName: "", parameterValue: "", isEnabled: false)
     }
 
+    /// Nonsecret protocol parameters only. API credentials remain in Keychain.
+    var providerConnectionOptions: [String: [String: String]] {
+        get { CloudTextProvider.sanitizedOptions(self.defaults.dictionary(forKey: "ProviderConnectionOptionsV1") as? [String: [String: String]] ?? [:]) }
+        set { self.objectWillChange.send(); self.defaults.set(CloudTextProvider.sanitizedOptions(newValue), forKey: "ProviderConnectionOptionsV1") }
+    }
+
     struct SavedProvider: Codable, Identifiable, Hashable {
         let id: String
         let name: String
@@ -1516,18 +1522,20 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Detailed anonymous analytics toggle (default: ON). The daily activity signal is always enabled.
-    /// Uses default-true semantics so existing installs upgrading to analytics do not default to OFF.
+    /// Detailed analytics requires an explicit preference. Existing saved choices
+    /// keep their legacy key; the basic daily activity policy remains separate.
     var shareDetailedAnalytics: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.shareAnonymousAnalytics)
-            if value == nil { return true }
-            return self.defaults.bool(forKey: Keys.shareAnonymousAnalytics)
-        }
+        get { Self.detailedAnalyticsEnabled(in: self.defaults) }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.shareAnonymousAnalytics)
         }
+    }
+
+    /// Allows preference tests to use an isolated suite without initializing the
+    /// settings singleton, its Keychain migrations or login-item operations.
+    static func detailedAnalyticsEnabled(in defaults: UserDefaults) -> Bool {
+        defaults.bool(forKey: Keys.shareAnonymousAnalytics)
     }
 
     var privateAIInterestCaptured: Bool {
@@ -2533,6 +2541,7 @@ final class SettingsStore: ObservableObject {
     // MARK: - Preferences Settings
 
     enum AccentColorOption: String, CaseIterable, Identifiable, Codable {
+        case brand = "Brand"
         case cyan = "Cyan"
         case green = "Green"
         case blue = "Blue"
@@ -2545,6 +2554,7 @@ final class SettingsStore: ObservableObject {
 
         var hex: String {
             switch self {
+            case .brand: return AppBrand.profile.accentLight
             case .cyan: return "#3AC8C6"
             case .green: return "#22C55E"
             case .blue: return "#3B82F6"
@@ -2603,11 +2613,11 @@ final class SettingsStore: ObservableObject {
         var displayName: String {
             switch self {
             case .none: return "None"
-            case .fluidSfx0: return "Fluid SFX 0"
-            case .fluidSfx1: return "Fluid SFX 1"
-            case .fluidSfx2: return "Fluid SFX 2"
-            case .fluidSfx3: return "Fluid SFX 3"
-            case .fluidSfx4: return "Fluid SFX 4"
+            case .fluidSfx0: return PichiLocalization.format("Sound %lld", 0)
+            case .fluidSfx1: return PichiLocalization.format("Sound %lld", 1)
+            case .fluidSfx2: return PichiLocalization.format("Sound %lld", 2)
+            case .fluidSfx3: return PichiLocalization.format("Sound %lld", 3)
+            case .fluidSfx4: return PichiLocalization.format("Sound %lld", 4)
             }
         }
 
@@ -2635,7 +2645,7 @@ final class SettingsStore: ObservableObject {
             guard let raw = self.defaults.string(forKey: Keys.accentColorOption),
                   let option = AccentColorOption(rawValue: raw)
             else {
-                return .cyan
+                return .brand
             }
             return option
         }
@@ -2646,7 +2656,18 @@ final class SettingsStore: ObservableObject {
     }
 
     var accentColor: Color {
-        Color(hex: self.accentColorOption.hex) ?? Color(red: 0.227, green: 0.784, blue: 0.776)
+        Color(hex: self.accentColorOption.hex) ?? Color(red: 0.404, green: 0.286, blue: 0.757)
+    }
+
+    var interfaceLanguage: PichiInterfaceLanguage {
+        get { .stored(in: self.defaults) }
+        set {
+            guard newValue != self.interfaceLanguage else { return }
+            objectWillChange.send()
+            newValue.persist(in: self.defaults)
+            PichiLocalization.configureApplicationLanguage()
+            NotificationCenter.default.post(name: PichiLocalization.languageChanged, object: nil)
+        }
     }
 
     var themePreference: ThemePreference {
@@ -2661,6 +2682,7 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue.rawValue, forKey: Keys.themePreference)
+            NSApplication.shared.appearance = BrandAppearanceController.nativeAppearance(for: newValue.preferredColorScheme)
         }
     }
 
@@ -2917,19 +2939,19 @@ final class SettingsStore: ObservableObject {
     }
 
     var onboardingSelectedLanguageID: String {
-        get {
-            let stored = self.defaults.string(forKey: Keys.onboardingSelectedLanguageID)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let stored, !stored.isEmpty {
-                return stored
-            }
-            return "en"
-        }
+        get { Self.onboardingLanguagePreference(in: self.defaults, defaultLanguageID: VoiceEngineLanguageCatalog.defaultOnboardingLanguageID) }
         set {
             objectWillChange.send()
             let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.defaults.set(normalized.isEmpty ? "en" : normalized, forKey: Keys.onboardingSelectedLanguageID)
+            if normalized.isEmpty { self.defaults.removeObject(forKey: Keys.onboardingSelectedLanguageID) }
+            else { self.defaults.set(normalized, forKey: Keys.onboardingSelectedLanguageID) }
         }
+    }
+
+    /// Read an explicit choice before applying the distribution's first-run default.
+    static func onboardingLanguagePreference(in defaults: UserDefaults, defaultLanguageID: String) -> String {
+        let stored = defaults.string(forKey: Keys.onboardingSelectedLanguageID)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return stored.flatMap { $0.isEmpty ? nil : $0 } ?? defaultLanguageID
     }
 
     var selectedAppleSpeechLocaleIdentifier: String {
@@ -2968,40 +2990,41 @@ final class SettingsStore: ObservableObject {
 
     func bootstrapOnboardingState(isTrueFirstOpen: Bool) {
         guard self.defaults.object(forKey: Keys.onboardingCompleted) == nil else { return }
-
         objectWillChange.send()
+        Self.bootstrapOnboardingState(in: self.defaults, isTrueFirstOpen: isTrueFirstOpen,
+                                      hasLegacyUsageSignals: self.hasLegacyUsageSignals(),
+                                      defaultLanguageID: VoiceEngineLanguageCatalog.defaultOnboardingLanguageID)
+    }
 
-        let hasLegacyUsageSignals = self.hasLegacyUsageSignals()
+    /// Isolated preference transition shared by production bootstrap and regression tests.
+    static func bootstrapOnboardingState(in defaults: UserDefaults, isTrueFirstOpen: Bool,
+                                         hasLegacyUsageSignals: Bool, defaultLanguageID: String) {
+        guard defaults.object(forKey: Keys.onboardingCompleted) == nil else { return }
         let shouldShowForThisInstall = isTrueFirstOpen && !hasLegacyUsageSignals
-
-        if shouldShowForThisInstall {
-            self.defaults.set(false, forKey: Keys.onboardingCompleted)
-            self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-            self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-            self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
-        } else {
-            self.defaults.set(true, forKey: Keys.onboardingCompleted)
-            self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-            self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-            self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-            self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
-        }
+        defaults.set(!shouldShowForThisInstall, forKey: Keys.onboardingCompleted)
+        defaults.set(0, forKey: Keys.onboardingCurrentStep)
+        defaults.set(false, forKey: Keys.onboardingAISkipped)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+        let choice = Self.onboardingLanguagePreference(in: defaults, defaultLanguageID: defaultLanguageID)
+        defaults.set(choice, forKey: Keys.onboardingSelectedLanguageID)
     }
 
     func resetOnboardingProgress() {
         objectWillChange.send()
-        self.defaults.set(false, forKey: Keys.onboardingCompleted)
-        self.defaults.set(true, forKey: Keys.manualOnboardingResetRequested)
-        self.defaults.set(Date(), forKey: Keys.manualOnboardingResetRequestedAt)
-        self.defaults.set(0, forKey: Keys.onboardingCurrentStep)
-        self.defaults.set(false, forKey: Keys.onboardingAISkipped)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
-        self.defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
-        self.defaults.set("en", forKey: Keys.onboardingSelectedLanguageID)
-        self.defaults.set(false, forKey: Keys.playgroundUsed)
+        Self.resetOnboardingProgress(in: self.defaults)
+    }
+
+    /// Replay clears wizard progress while retaining the user's explicit speech-language choice.
+    static func resetOnboardingProgress(in defaults: UserDefaults) {
+        defaults.set(false, forKey: Keys.onboardingCompleted)
+        defaults.set(true, forKey: Keys.manualOnboardingResetRequested)
+        defaults.set(Date(), forKey: Keys.manualOnboardingResetRequestedAt)
+        defaults.set(0, forKey: Keys.onboardingCurrentStep)
+        defaults.set(false, forKey: Keys.onboardingAISkipped)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundValidated)
+        defaults.set(false, forKey: Keys.onboardingPlaygroundSkipped)
+        defaults.set(false, forKey: Keys.playgroundUsed)
     }
 
     private func repairForcedOnboardingResetIfNeeded() {
@@ -3684,7 +3707,8 @@ final class SettingsStore: ObservableObject {
             fileTranscriptionExpectedSpeakerCount: self.fileTranscriptionExpectedSpeakerCount,
             meetingRecordingDefaults: self.meetingRecordingDefaults,
             privateAIIdleUnload: self.privateAIIdleUnload,
-            dictationPromptConfigurations: self.dictationPromptConfigurations
+            dictationPromptConfigurations: self.dictationPromptConfigurations,
+            providerConnectionOptions: self.providerConnectionOptions
         )
     }
 
@@ -3698,6 +3722,7 @@ final class SettingsStore: ObservableObject {
         appPromptBindings: [AppPromptBinding]
     ) {
         self.savedProviders = payload.savedProviders
+        if let options = payload.providerConnectionOptions { self.providerConnectionOptions = options }
         self.selectedProviderID = payload.selectedProviderID
         self.selectedModelByProvider = payload.selectedModelByProvider
         self.modelReasoningConfigs = payload.modelReasoningConfigs
@@ -4322,7 +4347,7 @@ final class SettingsStore: ObservableObject {
         let apiKey = (self.getAPIKey(for: trimmed) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard ModelRepository.shared.isLocalEndpoint(baseURL) || !apiKey.isEmpty else { return false }
 
-        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey) == stored
+        return self.providerFingerprint(baseURL: baseURL, apiKey: apiKey, connectionOptions: self.providerConnectionOptions[trimmed] ?? [:]) == stored
     }
 
     private func providerBaseURLForVerification(for providerID: String) -> String {
@@ -4337,14 +4362,8 @@ final class SettingsStore: ObservableObject {
         return ""
     }
 
-    private func providerFingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAPIKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBaseURL.isEmpty else { return nil }
-
-        let input = "\(trimmedBaseURL)|\(trimmedAPIKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    private func providerFingerprint(baseURL: String, apiKey: String, connectionOptions: [String: String] = [:]) -> String? {
+        CloudTextProvider.connectionFingerprint(baseURL: baseURL, apiKey: apiKey, options: connectionOptions)
     }
 
     private func syncLinkedProviderSelections(to providerID: String) {
@@ -5076,6 +5095,10 @@ final class SettingsStore: ObservableObject {
         case nemotronStreaming = "nemotron-3.5-streaming"
         case nemotronStreaming320 = "nemotron-3.5-streaming-320"
 
+        // MARK: - Pichi Russian Models
+
+        case gigaam = "gigaam-v3-eou"
+
         // MARK: - Apple Native
 
         case appleSpeech = "apple-speech"
@@ -5096,6 +5119,7 @@ final class SettingsStore: ObservableObject {
 
         /// Relative product ratings for display and sorting, not benchmark accuracy.
         var hasPerformanceRatings: Bool {
+            if self == .gigaam { return false }
             guard let descriptor = self.parakeetDescriptor else { return true }
             return descriptor.performanceRatings != nil
         }
@@ -5104,10 +5128,17 @@ final class SettingsStore: ObservableObject {
             rawValue
         }
 
+        /// Installation transport is engine metadata; common screens call the same service API.
+        var supportsFolderImport: Bool { self == .gigaam }
+
+        /// Trusted localization template. The picker inserts the model name exactly once.
+        var importFolderPrompt: String { "Choose the folder containing the %@ model files." }
+
         // MARK: - Display Properties
 
         var displayName: String {
             switch self {
+            case .gigaam: return "Pichi GigaAM v3"
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.displayName ?? self.rawValue
             case .parakeetRealtime: return "Parakeet Flash (Beta)"
             case .qwen3Asr: return "Qwen3 ASR (Beta)"
@@ -5128,6 +5159,7 @@ final class SettingsStore: ObservableObject {
 
         var languageSupport: String {
             switch self {
+            case .gigaam: return "Russian"
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.languageSupport ?? "English Only"
             case .parakeetRealtime: return "English Only (Live Streaming)"
             case .qwen3Asr: return "30 Languages"
@@ -5142,6 +5174,7 @@ final class SettingsStore: ObservableObject {
 
         var downloadSize: String {
             switch self {
+            case .gigaam: return "Import local model"
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.downloadSize ?? ""
             case .parakeetRealtime: return "~428.4 MiB"
             case .qwen3Asr: return "~2.0 GiB"
@@ -5162,6 +5195,7 @@ final class SettingsStore: ObservableObject {
 
         var expectedDownloadBytes: Int64 {
             switch self {
+            case .gigaam: return 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.expectedDownloadBytes ?? 0
             case .parakeetRealtime: return 449_190_189
             case .qwen3Asr: return 2000 * 1024 * 1024
@@ -5187,6 +5221,7 @@ final class SettingsStore: ObservableObject {
 
         var isWhisperModel: Bool {
             switch self {
+            case .gigaam: return false
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
                  .appleSpeechAnalyzer: return false
             default: return true
@@ -5303,6 +5338,7 @@ final class SettingsStore: ObservableObject {
         /// Human-readable marketing name for the card UI
         var humanReadableName: String {
             switch self {
+            case .gigaam: return "GigaAM - Russian"
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.humanReadableName ?? self.rawValue
             case .parakeetRealtime: return "Flash Dictation"
             case .qwen3Asr: return "Qwen3 - Multilingual"
@@ -5324,6 +5360,7 @@ final class SettingsStore: ObservableObject {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
+            case .gigaam: return "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection."
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
@@ -5360,6 +5397,7 @@ final class SettingsStore: ObservableObject {
         /// Minimum recommended RAM in GB for this model to run safely
         var requiredMemoryGB: Double {
             switch self {
+            case .gigaam: return 4.0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
                 return 4.0
             case .qwen3Asr:
@@ -5404,6 +5442,7 @@ final class SettingsStore: ObservableObject {
         /// Speed rating (1-5, higher is faster)
         var speedRating: Int {
             switch self {
+            case .gigaam: return 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedRating ?? 0
             case .parakeetRealtime: return 5
             case .qwen3Asr: return 3
@@ -5424,6 +5463,7 @@ final class SettingsStore: ObservableObject {
         /// Accuracy rating (1-5, higher is more accurate)
         var accuracyRating: Int {
             switch self {
+            case .gigaam: return 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyRating ?? 0
             case .parakeetRealtime: return 4
             case .qwen3Asr: return 4
@@ -5444,6 +5484,7 @@ final class SettingsStore: ObservableObject {
         /// Exact speed percentage (0.0 - 1.0) for the liquid bars
         var speedPercent: Double {
             switch self {
+            case .gigaam: return 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedPercent ?? 0
             case .parakeetRealtime: return 1.0
             case .qwen3Asr: return 0.45
@@ -5464,6 +5505,7 @@ final class SettingsStore: ObservableObject {
         /// Exact accuracy percentage (0.0 - 1.0) for the liquid bars
         var accuracyPercent: Double {
             switch self {
+            case .gigaam: return 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyPercent ?? 0
             case .parakeetRealtime: return 0.75
             case .qwen3Asr: return 0.90
@@ -5484,8 +5526,9 @@ final class SettingsStore: ObservableObject {
         /// Optional badge text for the card (e.g., "FluidVoice Pick")
         var badgeText: String? {
             switch self {
-            case .parakeetTDT: return "FluidVoice Pick"
-            case .parakeetTDTv2: return "FluidVoice Pick"
+            case .gigaam: return "Pichi"
+            case .parakeetTDT: return AppBrand.text("FluidVoice Pick")
+            case .parakeetTDTv2: return AppBrand.text("FluidVoice Pick")
             case .fluidParakeetMini, .fluidParakeetPico: return "New"
             case .parakeetRealtime: return "Beta"
             case .qwen3Asr: return "Beta"
@@ -5534,6 +5577,7 @@ final class SettingsStore: ObservableObject {
         /// Models without native incremental decoding should use a slower interval.
         var streamingPreviewIntervalSeconds: Double {
             switch self {
+            case .gigaam: return 0.5
             case .parakeetRealtime:
                 return 0.2
             case .nemotronStreaming, .nemotronStreaming320:
@@ -5549,6 +5593,7 @@ final class SettingsStore: ObservableObject {
         /// Cohere performs better with a slightly larger prefix than the default 1 second.
         var minimumStreamingPreviewSeconds: Double {
             switch self {
+            case .gigaam: return 0.5
             case .parakeetRealtime:
                 return 0.2
             case .nemotronStreaming, .nemotronStreaming320:
@@ -5562,6 +5607,7 @@ final class SettingsStore: ObservableObject {
 
         /// Provider category for tab grouping
         enum Provider: String, CaseIterable {
+            case pichi = "Pichi"
             case nvidia = "NVIDIA"
             case apple = "Apple"
             case openai = "OpenAI"
@@ -5572,6 +5618,7 @@ final class SettingsStore: ObservableObject {
         /// Which provider this model belongs to
         var provider: Provider {
             switch self {
+            case .gigaam: return .pichi
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
                 return .nvidia
             case .appleSpeech, .appleSpeechAnalyzer:
@@ -5593,6 +5640,7 @@ final class SettingsStore: ObservableObject {
         /// Whether this model is built-in or already downloaded on disk
         var isInstalled: Bool {
             switch self {
+            case .gigaam: return PichiGigaAMModelStore.shared.modelsExistOnDisk()
             case .appleSpeech, .appleSpeechAnalyzer:
                 return true
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
@@ -5633,7 +5681,7 @@ final class SettingsStore: ObservableObject {
                 default:
                     hint = "nemotron-3.5-asr-streaming320-int8-CoreML"
                 }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+                let directory: URL? = AppBrand.cachesDirectory
                     .appendingPathComponent(hint, isDirectory: true)
                 #if arch(arm64)
                 return directory.map { NemotronProvider.artifactsAreComplete(at: $0) } ?? false
@@ -5643,7 +5691,7 @@ final class SettingsStore: ObservableObject {
             default:
                 // Whisper models
                 guard let whisperFile = self.whisperModelFile else { return false }
-                let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+                let directory: URL? = AppBrand.cachesDirectory
                     .appendingPathComponent("WhisperModels")
                 let modelURL = directory?.appendingPathComponent(whisperFile)
                 guard
@@ -5660,13 +5708,13 @@ final class SettingsStore: ObservableObject {
 
         #if canImport(FluidAudio)
         private static func parakeetModelsExist(descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
-            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let modelsDirectory = AppBrand.modelsDirectory
             let directory = descriptor.cacheDirectory(in: modelsDirectory)
             return descriptor.artifactsAreComplete(at: directory)
         }
 
         private static func parakeetRealtimeModelsExist() -> Bool {
-            let modelsDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+            let modelsDirectory = AppBrand.modelsDirectory
             let modelDirectory = modelsDirectory
                 .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
                 .appendingPathComponent(Repo.parakeetEou160.folderName, isDirectory: true)
@@ -5684,6 +5732,7 @@ final class SettingsStore: ObservableObject {
         /// Brand/provider name for the model (NVIDIA, Apple, OpenAI)
         var brandName: String {
             switch self {
+            case .gigaam: return "Pichi"
             case .fluidParakeetMini, .fluidParakeetPico:
                 return "FluidVoice"
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
@@ -5710,6 +5759,7 @@ final class SettingsStore: ObservableObject {
         /// Brand color for the provider badge
         var brandColorHex: String {
             switch self {
+            case .gigaam: return AppBrand.profile.accentLight
             case .fluidParakeetMini, .fluidParakeetPico:
                 return "#1A75FF" // FluidBrandColors.blue
             case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
@@ -6360,7 +6410,7 @@ extension SettingsStore {
             return URL(fileURLWithPath: storedPath, isDirectory: true)
         }
 
-        let cachesDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        let cachesDirectory: URL? = AppBrand.cachesDirectory
         let fallback = cachesDirectory?.appendingPathComponent(spec.artifactFolderHint, isDirectory: true)
         guard let fallback else { return nil }
         if FileManager.default.fileExists(atPath: fallback.path) {

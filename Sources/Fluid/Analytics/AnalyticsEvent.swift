@@ -1,7 +1,7 @@
 import Foundation
 
 /// Allowed analytics event names.
-enum AnalyticsEvent: String {
+nonisolated enum AnalyticsEvent: String {
     case activeUser = "active_user"
     case usageDailySummary = "usage_daily_summary"
     case modelUsageDailySummary = "model_usage_daily_summary"
@@ -107,14 +107,36 @@ enum AnalyticsInsertionOutcome: String {
     case pasteNotLanded = "paste_not_landed"
 }
 
-struct AnalyticsModelDescriptor: Equatable {
+nonisolated struct AnalyticsModelDescriptor: Equatable, Sendable {
     let provider: String
     let model: String
 
     init(provider: String, model: String) {
-        self.provider = Self.normalized(provider)
-        self.model = Self.normalized(model)
+        let provider = Self.normalized(provider)
+        let model = Self.normalized(model)
+        self.provider = Self.approvedProviders.contains(provider) ? provider : "custom_provider"
+        self.model = Self.approvedModels.contains(model) ? model : "custom_model"
     }
+
+    // Custom endpoint labels, locally served model names and paths can contain
+    // customer names or private project data. Only shipped public identifiers
+    // are analytics dimensions. New providers/models require explicit review.
+    private static let approvedProviders: Set<String> = [
+        "pichi", "nvidia", "apple", "openai", "qwen", "cohere", "fluid_audio",
+        "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
+        "fluid", "custom_provider", "unknown",
+    ]
+    private static let approvedModels: Set<String> = [
+        "parakeet-tdt", "parakeet-tdt-v2", "parakeet_tdt", "fluid-parakeet-mini", "fluid-parakeet-pico",
+        "parakeet-realtime", "qwen3-asr", "cohere-transcribe-6bit", "nemotron-3.5-offline",
+        "nemotron-3.5-streaming", "nemotron-3.5-streaming-320", "gigaam-v3-eou",
+        "apple-speech", "apple-speech-analyzer", "whisper-tiny", "whisper-base", "whisper-small",
+        "whisper-medium", "whisper-large-turbo", "whisper-large",
+        "fluid-1-pico-96k-dflash", "fluid-1-mini-96k-dflash",
+        "gpt-4.1", "claude-sonnet-4-20250514", "grok-3-fast", "openai/gpt-oss-120b",
+        "gpt-oss-120b", "gemini-2.5-flash", "openai/gpt-oss-20b", "qwen3.5:4b",
+        "unknown", "custom_model",
+    ]
 
     private static func normalized(_ value: String) -> String {
         let normalized = value

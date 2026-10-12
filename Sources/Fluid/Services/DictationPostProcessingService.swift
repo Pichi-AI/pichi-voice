@@ -6,6 +6,17 @@ struct DictationProviderRoute: Equatable {
     let baseURL: String
     let model: String
     let apiKey: String
+    let connectionOptions: [String: String]
+
+    init(providerID: String, providerKey: String, baseURL: String, model: String, apiKey: String,
+         connectionOptions: [String: String] = [:]) {
+        self.providerID = providerID
+        self.providerKey = providerKey
+        self.baseURL = baseURL
+        self.model = model
+        self.apiKey = apiKey
+        self.connectionOptions = connectionOptions
+    }
 
     var usesPrivateAI: Bool {
         self.providerID == PrivateAIProviderFeature.shared.providerID ||
@@ -67,7 +78,8 @@ struct DictationProviderRoute: Equatable {
                 providerKey: key,
                 baseURL: saved.baseURL,
                 model: configuredModel ?? selectedModels[key] ?? saved.models.first ?? "",
-                apiKey: providerKeys[key] ?? providerKeys[selectedProviderID] ?? ""
+                apiKey: providerKeys[key] ?? providerKeys[selectedProviderID] ?? "",
+                connectionOptions: settings.providerConnectionOptions[selectedProviderID] ?? [:]
             )
         }
 
@@ -77,7 +89,8 @@ struct DictationProviderRoute: Equatable {
                 providerKey: selectedProviderID,
                 baseURL: ModelRepository.shared.defaultBaseURL(for: selectedProviderID),
                 model: configuredModel ?? selectedModels[selectedProviderID] ?? ModelRepository.shared.defaultModels(for: selectedProviderID).first ?? "",
-                apiKey: providerKeys[selectedProviderID] ?? ""
+                apiKey: providerKeys[selectedProviderID] ?? "",
+                connectionOptions: settings.providerConnectionOptions[selectedProviderID] ?? [:]
             )
         }
 
@@ -86,7 +99,8 @@ struct DictationProviderRoute: Equatable {
             providerKey: selectedProviderID,
             baseURL: "",
             model: configuredModel ?? selectedModels[selectedProviderID] ?? "",
-            apiKey: providerKeys[selectedProviderID] ?? ""
+            apiKey: providerKeys[selectedProviderID] ?? "",
+            connectionOptions: settings.providerConnectionOptions[selectedProviderID] ?? [:]
         )
     }
 
@@ -146,7 +160,8 @@ struct DictationProviderRoute: Equatable {
                 providerKey: key,
                 baseURL: saved.baseURL,
                 model: trimmedModel,
-                apiKey: providerKeys[key] ?? providerKeys[trimmedProviderID] ?? ""
+                apiKey: providerKeys[key] ?? providerKeys[trimmedProviderID] ?? "",
+                connectionOptions: settings.providerConnectionOptions[trimmedProviderID] ?? [:]
             )
         }
         return Self(
@@ -154,7 +169,8 @@ struct DictationProviderRoute: Equatable {
             providerKey: trimmedProviderID,
             baseURL: ModelRepository.shared.defaultBaseURL(for: trimmedProviderID),
             model: trimmedModel,
-            apiKey: providerKeys[trimmedProviderID] ?? ""
+            apiKey: providerKeys[trimmedProviderID] ?? "",
+            connectionOptions: settings.providerConnectionOptions[trimmedProviderID] ?? [:]
         )
     }
 
@@ -199,6 +215,51 @@ final class DictationPostProcessingService {
     static let shared = DictationPostProcessingService()
 
     private init() {}
+
+    /// Dictation is interactive; meeting reasoning remains a separate per-attempt
+    /// policy. Apply this to UI and API calls without changing model preferences.
+    nonisolated static func configureInteractiveLocalRequest(_ config: inout LLMClient.Config) {
+        guard OllamaChatAdapter.supports(config.baseURL) else { return }
+        for key in ["think", "enable_thinking", "thinking", "reasoning", "reasoning_effort"] {
+            config.extraParameters.removeValue(forKey: key)
+        }
+        config.extraParameters["think"] = false
+        config.extraParameters["keep_alive"] = 30 * 60
+        config.timeoutSeconds = 30
+        config.maxRetries = 1
+    }
+
+    /// Empty native chat loads only the selected artifact, without sending user
+    /// content or generating a synthetic answer. The caller owns and joins this
+    /// work; the existing admission token remains held until transport drains.
+    func prewarmLocalModel(_ route: DictationProviderRoute, client: LLMClient = .shared) async throws {
+        guard OllamaChatAdapter.supports(route.baseURL), !route.model.isEmpty else { throw LLMError.invalidURL }
+        try Task.checkCancellation()
+        var config = LLMClient.Config(messages: [], model: route.model, baseURL: route.baseURL,
+                                      apiKey: route.apiKey, streaming: false,
+                                      benchmarkID: "warm-\(UUID().uuidString)")
+        config.providerOptions = route.connectionOptions
+        Self.configureInteractiveLocalRequest(&config)
+        let request = config
+        let pending = Task { @MainActor in
+            try await MeetingModelResidencyCoordinator.shared.withBackgroundOperation(owner: "local-text", modelID: route.model) {
+                _ = try await client.call(request)
+            }
+        }
+        guard let activity = MeetingSummaryActivityCoordinator.shared.beginOptionalProcessing(cancelAndJoin: {
+            pending.cancel()
+            _ = await pending.result
+        }) else {
+            pending.cancel()
+            _ = await pending.result
+            throw MeetingModelResidencyError.busy
+        }
+        defer { MeetingSummaryActivityCoordinator.shared.endProcessing(activity) }
+        try await withTaskCancellationHandler {
+            try await pending.value
+            try Task.checkCancellation()
+        } onCancel: { pending.cancel() }
+    }
 
     struct Result {
         let text: String
@@ -298,7 +359,9 @@ final class DictationPostProcessingService {
             temperature: settings.isTemperatureUnsupported(resolved.model) ? nil : 0.2,
             extraParameters: extraParams
         )
+        config.providerOptions = resolved.connectionOptions
         config.timeoutSeconds = 120
+        Self.configureInteractiveLocalRequest(&config)
 
         let response = try await LLMClient.shared.call(config)
         guard !response.content.isEmpty else {

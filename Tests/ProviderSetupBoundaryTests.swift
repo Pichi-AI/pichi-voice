@@ -35,6 +35,7 @@ final class SettingsStore {
         var shortcut = "keep-shortcut"
     }
 
+    var providerConnectionOptions: [String: [String: String]] = [:]
     var selectedProviderID = "fluid"
     var selectedModel: String? = "mini"
     var rewriteModeSelectedProviderID = ""

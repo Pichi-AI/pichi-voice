@@ -82,6 +82,30 @@ final class AppServices: ObservableObject {
         return service
     }
 
+    // Active summaries outlive navigation. Idle controllers belong to their views;
+    // weak lookup preserves identity across multiple views without retaining every
+    // meeting document visited during the app's lifetime.
+    private struct SummaryControllerReference {
+        weak var value: PichiMeetingSummaryController?
+    }
+    private var summaryControllers: [UUID?: SummaryControllerReference] = [:]
+    private var activeSummaryControllers: [UUID?: PichiMeetingSummaryController] = [:]
+    @Published private(set) var activeMeetingSummarySession: MeetingSession?
+
+    func meetingSummaryController(for sessionID: UUID?) -> PichiMeetingSummaryController {
+        self.summaryControllers = self.summaryControllers.filter { $0.value.value != nil }
+        if let existing = self.summaryControllers[sessionID]?.value { return existing }
+        let controller = PichiMeetingSummaryController(sessionID: sessionID)
+        controller.generationStateChanged = { [weak self] controller in
+            // Selection/activity admission already permits only one active attempt.
+            // Release ownership only after inference and resource restoration joined.
+            self?.activeSummaryControllers[sessionID] = controller.generating ? controller : nil
+            self?.activeMeetingSummarySession = controller.generating ? controller.sourceSession : nil
+        }
+        self.summaryControllers[sessionID] = SummaryControllerReference(value: controller)
+        return controller
+    }
+
     private var _microphonePreferenceCoordinator: MicrophonePreferenceCoordinator?
     var microphonePreferenceCoordinator: MicrophonePreferenceCoordinator {
         if let existing = self._microphonePreferenceCoordinator {
@@ -125,9 +149,17 @@ final class AppServices: ObservableObject {
             // The speaker model is only needed after Stop, so a missing model never blocks
             // recording; final processing waits for `MeetingDiarizationModelStore` instead.
             validateRecordingModels: {
-                guard CPUArchitecture.isAppleSilicon else {
-                    throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
+                let model = SettingsStore.shared.selectedSpeechModel
+                let registered = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue) != nil
+                guard CPUArchitecture.isAppleSilicon || (registered && !model.requiresAppleSilicon) else {
+                    throw MeetingProviderOptionsError.unsupportedArchitecture
                 }
+            },
+            validateFrozenRecordingConfiguration: { configuration in
+                try PichiMeetingProviderFactory.validateRecordingConfiguration(
+                    configuration,
+                    isAppleSilicon: CPUArchitecture.isAppleSilicon
+                )
             }
         )
         self._meetingSessionCoordinator = coordinator

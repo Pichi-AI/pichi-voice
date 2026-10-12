@@ -20,20 +20,23 @@ nonisolated enum MeetingTranscriptExporter {
     static func speakerLabel(
         for segment: MeetingTranscriptSegment,
         in session: MeetingSession,
-        speakerNames: [SessionSpeakerID: String]
+        speakerNames: [SessionSpeakerID: String],
+        // Stable fallback for exports and summary fingerprints; UI passes its locale explicitly.
+        language: PichiInterfaceLanguage = .english,
+        bundle: Bundle = .main
     ) -> String {
         guard let state = segment.attributionState else {
             if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames) {
                 return name
             }
-            return "Unknown speaker"
+            return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         }
         switch state {
         case .assigned:
             return Self.resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames)
-                ?? "Unknown speaker"
+                ?? PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         case .overlappingSpeakers, .unassigned, .timingUncertain:
-            return "Unknown speaker"
+            return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         }
     }
 

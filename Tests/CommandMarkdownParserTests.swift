@@ -46,6 +46,30 @@ struct CommandMarkdownParserTests {
         guard case let .paragraph(value) = literal.first?.content else { preconditionFailure("Literal text misclassified") }
         precondition(String(value.characters) == "#not-heading\n2.not-list\n日本語 👨‍👩‍👧‍👦")
 
+        let russianSummary = CommandMarkdownParser.parse("## Краткий итог\n\nОбсудили **ежедневный отчёт** и `API v2`.\n\n- Подготовить отчёт к пятнице.\n\n| Исполнитель | Срок |\n| --- | --- |\n| Алёна | к пятнице |\n\n> Алёна: Я подготовлю отчёт к пятнице.")
+        precondition(russianSummary.count == 5, "Russian summary paragraphs, tasks and sources must retain Markdown structure")
+        guard case let .heading(russianHeading, _) = russianSummary[0].content,
+              case let .paragraph(russianParagraph) = russianSummary[1].content,
+              case let .listItem(russianTask, _, _) = russianSummary[2].content,
+              case let .table(russianHeaders, russianRows) = russianSummary[3].content,
+              case let .quote(russianSource) = russianSummary[4].content
+        else { preconditionFailure("Russian summary structure was lost") }
+        precondition(String(russianHeading.characters) == "Краткий итог")
+        precondition(String(russianParagraph.characters) == "Обсудили ежедневный отчёт и API v2.")
+        precondition(russianParagraph.runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true })
+        precondition(russianParagraph.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
+        precondition(String(russianTask.characters) == "Подготовить отчёт к пятнице.")
+        precondition(String(russianHeaders[0].characters) == "Исполнитель" && String(russianRows[0][0].characters) == "Алёна")
+        precondition(String(russianRows[0][1].characters) == "к пятнице")
+        precondition(String(russianSource.characters) == "Алёна: Я подготовлю отчёт к пятнице.")
+
+        let links = CommandMarkdownParser.parse("[Example](https://example.org/docs?q=1&b=2) and <https://example.org> with **bold** and `code`.")
+        guard case let .paragraph(linkText) = links.first?.content else { preconditionFailure("Missing linked paragraph") }
+        precondition(String(linkText.characters) == "Example and https://example.org with bold and code.")
+        precondition(Set(linkText.runs.compactMap { $0.link?.absoluteString }) == ["https://example.org/docs?q=1&b=2", "https://example.org"])
+        precondition(linkText.runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true })
+        precondition(linkText.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
+
         let terminal = CommandToolOutput.parse("{\"success\":true,\"output\":\"hello\",\"executionTimeMs\":32}")
         precondition(terminal.success == true && terminal.output == "hello" && terminal.executionTime == 32)
         let error = CommandToolOutput.parse("{\"success\":false,\"output\":\"\",\"error\":\"Permission denied\"}")
@@ -53,6 +77,6 @@ struct CommandMarkdownParserTests {
         let unknown = "{\"new_tool_result\": [1, 2, 3]}"
         precondition(CommandToolOutput.parse(unknown).output == unknown, "Unknown result formats must remain inspectable")
         precondition(CommandToolOutput.parse("plain legacy output").output == "plain legacy output")
-        print("PASS: markdown structure, inline styles, nested lists, partial code fences, escaped table cells, bounded tables, Unicode, empty input, and legacy/unknown tool results")
+        print("PASS: markdown structure, inline styles and real links, nested lists, partial code fences, escaped table cells, bounded tables, Unicode, Russian summaries and sources, empty input, and legacy/unknown tool results")
     }
 }

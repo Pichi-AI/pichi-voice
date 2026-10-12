@@ -15,9 +15,9 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
         var errorDescription: String? {
             switch self {
             case .timedOut, .recovering, .deviceStopped:
-                "The microphone is not responding. Try again shortly. If it remains unavailable, quit and reopen FluidVoice."
+                AppBrand.text("The microphone is not responding. Try again shortly. If it remains unavailable, quit and reopen FluidVoice.")
             case .cleanupFailed:
-                "The microphone could not be reset safely. Quit and reopen FluidVoice before recording again."
+                AppBrand.text("The microphone could not be reset safely. Quit and reopen FluidVoice before recording again.")
             }
         }
     }

@@ -366,6 +366,8 @@ final class RewriteModeService: ObservableObject {
             extraParameters: extraParams
         )
 
+        config.providerOptions = settings.providerConnectionOptions[providerID] ?? [:]
+
         // Add real-time streaming callbacks for UI updates
         if enableStreaming {
             // Thinking tokens callback
@@ -451,13 +453,8 @@ final class RewriteModeService: ObservableObject {
         return ""
     }
 
-    private func providerFingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBase.isEmpty else { return nil }
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    private func providerFingerprint(baseURL: String, apiKey: String, connectionOptions: [String: String] = [:]) -> String? {
+        CloudTextProvider.connectionFingerprint(baseURL: baseURL, apiKey: apiKey, options: connectionOptions)
     }
 
     private func isProviderVerified(_ providerID: String, settings: SettingsStore) -> Bool {
@@ -466,7 +463,7 @@ final class RewriteModeService: ObservableObject {
         guard let stored = settings.verifiedProviderFingerprints[key] else { return false }
         let baseURL = self.providerBaseURL(for: providerID, settings: settings)
         let apiKey = settings.getAPIKey(for: providerID) ?? ""
-        let current = self.providerFingerprint(baseURL: baseURL, apiKey: apiKey)
+        let current = self.providerFingerprint(baseURL: baseURL, apiKey: apiKey, connectionOptions: settings.providerConnectionOptions[providerID] ?? [:])
         return current == stored
     }
 

@@ -388,7 +388,7 @@ final class PrivateAISettingsController: ObservableObject {
         self.privateAILoadState = .idle
         Task { @MainActor in
             defer { self.session.finish(operation) }
-            await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: "Fluid Intelligence verification reset")
+            await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: AppBrand.text("Fluid Intelligence verification reset"))
             if PrivateAIIntegrationService.isModelInstalled(model) {
                 self.privateAILoadState = .idle
             }
@@ -485,7 +485,7 @@ final class PrivateAISettingsController: ObservableObject {
         Task { @MainActor in
             defer { self.session.finish(operation) }
             await PrivateAIIntegrationService.shared.unloadCachedRuntime(
-                reason: "Fluid Intelligence backend changed to \(preference.displayName)"
+                reason: AppBrand.text("Fluid Intelligence backend changed to \(preference.displayName)")
             )
             guard self.privateAISelectedModelID == modelID else { return }
             let model = self.selectedPrivateAIModel
@@ -536,7 +536,7 @@ final class PrivateAISettingsController: ObservableObject {
         Task { @MainActor in
             defer { self.session.finish(operation) }
             await PrivateAIIntegrationService.shared.unloadCachedRuntime(
-                reason: "Fluid Intelligence context changed"
+                reason: AppBrand.text("Fluid Intelligence context changed")
             )
             self.viewModel.refreshProviderItems()
         }

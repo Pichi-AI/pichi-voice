@@ -54,17 +54,17 @@ struct FluidIntelligenceDemoView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Fluid Intelligence", systemImage: "sparkles").font(self.theme.typography.captionStrong).foregroundStyle(self.theme.palette.accent)
+                    Label(AppBrand.text("Fluid Intelligence"), systemImage: "sparkles").font(self.theme.typography.captionStrong).foregroundStyle(self.theme.palette.accent)
                     Text("Your words, ready to use.").font(.fluidSystem(size: 30, weight: .regular, design: .serif))
                 }
                 Spacer()
                 Button { self.dismiss() } label: {
                     Image(systemName: "xmark").frame(width: 32, height: 32).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).disabled(self.busy).accessibilityLabel("Close demo")
+                .buttonStyle(.plain).disabled(self.busy).accessibilityLabel(PichiLocalization.text("Close demo"))
             }
             Picker("Example", selection: self.$selected) {
-                ForEach(Self.examples.indices, id: \.self) { index in Text(Self.examples[index].title).tag(index) }
+                ForEach(Self.examples.indices, id: \.self) { index in Text(PichiLocalization.text(Self.examples[index].title)).tag(index) }
             }
             .pickerStyle(.segmented).disabled(self.busy)
             ScrollView {
@@ -73,12 +73,12 @@ struct FluidIntelligenceDemoView: View {
                     self.textPanel(self.result.isEmpty ? "Example result" : "Your result", text: self.result.isEmpty ? Self.examples[self.selected].expected : self.result, accented: true)
                     Text("Illustrative examples. Run one to see your model’s actual output.")
                         .font(self.theme.typography.caption).foregroundStyle(.secondary)
-                    if !self.error.isEmpty { Text(self.error).font(self.theme.typography.bodySmall).foregroundStyle(.red) }
+                    if !self.error.isEmpty { Text(PichiLocalization.text(self.error)).font(self.theme.typography.bodySmall).foregroundStyle(.red) }
                 }
                 .id(self.selected)
             }
             if self.busy {
-                Label(self.asr.isRunning ? "Listening — stop when you’re finished" : "Preparing your result…", systemImage: self.asr.isRunning ? "waveform" : "sparkles")
+                Label(PichiLocalization.text(self.asr.isRunning ? "Listening — stop when you’re finished" : "Preparing your result…"), systemImage: self.asr.isRunning ? "waveform" : "sparkles")
                     .font(self.theme.typography.bodySmall)
             }
             FluidGlassControlGroup {
@@ -89,7 +89,7 @@ struct FluidIntelligenceDemoView: View {
                         ProgressView("Checking model…").controlSize(.small)
                     } else if let modelID {
                         Button("Try example") { self.tryExample(modelID: modelID) }.fluidGlassAction().disabled(self.busy)
-                        Button(self.asr.isRunning ? "Stop and polish" : "Try with your voice", systemImage: self.asr.isRunning ? "stop.fill" : "mic") {
+                        Button(PichiLocalization.text(self.asr.isRunning ? "Stop and polish" : "Try with your voice"), systemImage: self.asr.isRunning ? "stop.fill" : "mic") {
                             if self.asr.isRunning {
                                 self.stoppingVoice = true
                                 Task {
@@ -105,11 +105,11 @@ struct FluidIntelligenceDemoView: View {
                         .disabled(self.runningSample || self.stoppingVoice || self.overlay.isProcessing || self.sandbox.isProcessing || self.asr.isStarting || !self.asr.isAsrReady || self.asr
                             .micStatus != .authorized)
                     } else {
-                        Button("Set up Fluid Intelligence", action: self.onSetup).fluidGlassAction(prominent: true)
+                        Button(AppBrand.text("Set up Fluid Intelligence"), action: self.onSetup).fluidGlassAction(prominent: true)
                     }
                 }
             }
-            Text(self.modelID == nil ? "A local Fluid Intelligence model is needed to try these examples." : "Practice stays here. Nothing is typed into another app or saved to history.")
+            Text(self.modelID == nil ? AppBrand.text("A local Fluid Intelligence model is needed to try these examples.") : PichiLocalization.text("Practice stays here. Nothing is typed into another app or saved to history."))
                 .font(self.theme.typography.caption).foregroundStyle(.secondary)
             if self.modelID != nil, !self.asr.isAsrReady || self.asr.micStatus != .authorized {
                 Text("Voice practice needs a ready Voice Engine model and microphone access. You can still try the written examples.")
@@ -147,7 +147,7 @@ struct FluidIntelligenceDemoView: View {
 
     private func textPanel(_ title: String, text: String, accented: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(self.theme.typography.captionStrong).foregroundStyle(accented ? self.theme.palette.accent : self.theme.palette.secondaryText)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.captionStrong).foregroundStyle(accented ? self.theme.palette.accent : self.theme.palette.secondaryText)
             Text(text).font(self.theme.typography.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)

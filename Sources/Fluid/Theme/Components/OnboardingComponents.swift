@@ -7,19 +7,20 @@ enum FluidOnboardingLayout {
 }
 
 struct OnboardingModelInfoTooltip: View {
+    @Environment(\.theme) private var theme
     let text: String
     let font: Font
 
     var body: some View {
         Text(self.text)
             .font(self.font)
-            .foregroundStyle(.white.opacity(0.92))
+            .foregroundStyle(self.theme.palette.primaryText.opacity(0.92))
             .fixedSize(horizontal: false, vertical: true)
             .padding(12)
             .frame(width: 260, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(red: 0.075, green: 0.085, blue: 0.11))
+                    .fill(self.theme.palette.elevatedCardBackground)
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.16), lineWidth: 1))
             )
             .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
@@ -29,6 +30,7 @@ struct OnboardingModelInfoTooltip: View {
 }
 
 struct FluidOnboardingLandingHero<Actions: View>: View {
+    @Environment(\.locale) private var locale
     @Environment(\.theme) private var theme
 
     let eyebrow: String
@@ -69,14 +71,14 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
             }
 
             VStack(spacing: 4) {
-                Text(self.title)
-                    .font(.fluidSystem(size: 52, weight: .semibold))
-                    .foregroundStyle(.white)
+                Text(PichiLocalization.text(self.title, locale: self.locale))
+                    .font(.fluidSystem(size: 52, weight: .semibold, role: .title))
+                    .foregroundStyle(self.theme.palette.primaryText)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.82)
 
-                Text(self.accentTitle)
-                    .font(.fluidSystem(size: 50, weight: .semibold))
+                Text(PichiLocalization.text(self.accentTitle, locale: self.locale))
+                    .font(.fluidSystem(size: 50, weight: .semibold, role: .title))
                     .italic()
                     .foregroundStyle(FluidOnboardingLandingColors.blue)
                     .multilineTextAlignment(.center)
@@ -88,10 +90,10 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
 
             VStack(spacing: 8) {
                 Text(self.firstDetail)
-                Text(self.secondDetail)
+                Text(PichiLocalization.text(self.secondDetail, locale: self.locale))
             }
             .font(.fluidSystem(size: 22, weight: .medium))
-            .foregroundStyle(Color.white.opacity(0.70))
+            .foregroundStyle(self.theme.palette.secondaryText)
             .multilineTextAlignment(.center)
             .lineLimit(1)
             .minimumScaleFactor(0.82)
@@ -105,6 +107,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
 }
 
 struct FluidOnboardingLandingBackdrop: View {
+    @Environment(\.theme) private var theme
     let glowCenter: UnitPoint
 
     init(glowCenter: UnitPoint = UnitPoint(x: 0.5, y: 0.18)) {
@@ -116,13 +119,13 @@ struct FluidOnboardingLandingBackdrop: View {
             Rectangle()
                 .fill(.ultraThinMaterial)
 
-            Color(red: 0.012, green: 0.019, blue: 0.031)
+            self.theme.palette.windowBackground
                 .opacity(0.88)
 
             RadialGradient(
                 colors: [
                     FluidOnboardingLandingColors.blue.opacity(0.18),
-                    Color(red: 0.014, green: 0.032, blue: 0.068).opacity(0.30),
+                    self.theme.palette.cardBackground.opacity(0.30),
                     .clear,
                 ],
                 center: self.glowCenter,
@@ -245,9 +248,6 @@ struct FluidOnboardingCompactProgress: View {
 }
 
 struct FluidOnboardingCompactAppIconMark: View {
-    private static let appIconImage: NSImage = NSApplication.shared.applicationIconImage
-        ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-
     let size: CGFloat
 
     init(size: CGFloat = 66) {
@@ -255,7 +255,7 @@ struct FluidOnboardingCompactAppIconMark: View {
     }
 
     var body: some View {
-        Image(nsImage: Self.appIconImage)
+        Image(nsImage: PichiBrandMark.appIcon)
             .resizable()
             .interpolation(.high)
             .aspectRatio(contentMode: .fit)
@@ -344,6 +344,7 @@ struct FluidOnboardingLandingHoverTracker: NSViewRepresentable {
 }
 
 struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
+    @Environment(\.locale) private var locale
     static let size = CGSize(width: 236, height: 56)
 
     let title: String
@@ -363,8 +364,8 @@ struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
         button.focusRingType = .none
         button.keyEquivalent = "\r"
         button.keyEquivalentModifierMask = []
-        button.setAccessibilityLabel(self.title)
-        button.update(title: self.title, isHighlighted: false)
+        button.setAccessibilityLabel(PichiLocalization.text(self.title, locale: self.locale))
+        button.update(title: PichiLocalization.text(self.title, locale: self.locale), isHighlighted: false)
         return button
     }
 
@@ -372,13 +373,13 @@ struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
         context.coordinator.action = self.action
 
         guard let button = button as? LandingPrimaryNSButton else {
-            button.title = self.title
-            button.setAccessibilityLabel(self.title)
+            button.title = PichiLocalization.text(self.title, locale: self.locale)
+            button.setAccessibilityLabel(PichiLocalization.text(self.title, locale: self.locale))
             return
         }
 
-        button.setAccessibilityLabel(self.title)
-        button.update(title: self.title, isHighlighted: button.isHighlighted)
+        button.setAccessibilityLabel(PichiLocalization.text(self.title, locale: self.locale))
+        button.update(title: PichiLocalization.text(self.title, locale: self.locale), isHighlighted: button.isHighlighted)
     }
 
     final class Coordinator: NSObject {
@@ -395,9 +396,9 @@ struct FluidOnboardingLandingPrimaryButton: NSViewRepresentable {
 }
 
 private final class LandingPrimaryNSButton: NSButton {
-    private static let normalColor = NSColor(srgbRed: 0.16, green: 0.49, blue: 1.0, alpha: 1.0)
-    private static let highlightedColor = NSColor(srgbRed: 0.10, green: 0.40, blue: 0.92, alpha: 1.0)
-    private static let hoverColor = NSColor(srgbRed: 0.20, green: 0.54, blue: 1.0, alpha: 1.0)
+    private static var normalColor: NSColor { NSColor(FluidOnboardingLandingColors.blue) }
+    private static var highlightedColor: NSColor { self.normalColor.blended(withFraction: 0.12, of: .black) ?? self.normalColor }
+    private static var hoverColor: NSColor { self.normalColor.blended(withFraction: 0.10, of: .white) ?? self.normalColor }
     private var trackingArea: NSTrackingArea?
     private var isHovering = false
 
@@ -455,7 +456,7 @@ private final class LandingPrimaryNSButton: NSButton {
             string: title,
             attributes: [
                 .font: NSFont.fluidSystemFont(ofSize: 18, weight: .semibold),
-                .foregroundColor: NSColor.white,
+                .foregroundColor: NSColor(FluidOnboardingLandingColors.foreground),
             ]
         )
         self.alignment = .center
@@ -478,9 +479,6 @@ private final class LandingPrimaryNSButton: NSButton {
 }
 
 private struct FluidOnboardingAppIconMark: View {
-    private static let appIconImage: NSImage = NSApplication.shared.applicationIconImage
-        ?? NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-
     var body: some View {
         ZStack {
             Circle()
@@ -492,7 +490,7 @@ private struct FluidOnboardingAppIconMark: View {
             FluidOnboardingPortalGlow()
                 .offset(y: 58)
 
-            Image(nsImage: Self.appIconImage)
+            Image(nsImage: PichiBrandMark.appIcon)
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
@@ -538,7 +536,15 @@ private struct FluidOnboardingPortalGlow: View {
 }
 
 enum FluidOnboardingLandingColors {
-    static let blue = FluidBrandColors.blue
+    private static var dark: Bool {
+        SettingsStore.shared.themePreference == .dark || (SettingsStore.shared.themePreference == .system
+            && NSApplication.shared.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+    }
+    static var blue: Color { Color(hex: self.dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? FluidBrandColors.blue }
+    static var foreground: Color {
+        let accent = self.dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight
+        return BrandPalette.luminance(accent) > 0.179 ? .black : .white
+    }
 }
 
 private struct OnboardingSelectableSurfaceModifier: ViewModifier {

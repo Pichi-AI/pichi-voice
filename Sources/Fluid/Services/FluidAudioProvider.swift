@@ -114,14 +114,29 @@ nonisolated enum CompactSpeechModelRuntimeCheck {
 }
 
 /// Rejection of a meeting ASR configuration outside the fixed supported policy.
-nonisolated enum MeetingProviderOptionsError: Error, Equatable {
+nonisolated enum MeetingProviderOptionsError: LocalizedError, Equatable {
     case unsupportedASRModel(String)
     case unsupportedLanguageCode(String)
     case unsupportedFeature(String)
+    case unsupportedArchitecture
+
+    var errorDescription: String? {
+        switch self {
+        case let .unsupportedASRModel(model):
+            return "The meeting backend cannot use the requested speech model (\(model))."
+        case let .unsupportedLanguageCode(language):
+            return "The selected speech model does not support meeting language \(language). Choose a compatible model or change the meeting language."
+        case let .unsupportedFeature(feature):
+            return "Meeting transcription does not support \(feature)."
+        case .unsupportedArchitecture:
+            return AppBrand.text("The selected meeting model requires Apple Silicon.")
+        }
+    }
 }
 
 /// Immutable provider options for the opt-in meeting post-processing path. Only the fixed
 /// Parakeet TDT v2 handles English; v3 handles its supported multilingual languages.
+/// The Pichi factory additionally selects GigaAM for Russian, without coercing FluidAudio.
 /// Unsupported model/language combinations and enhancement features are rejected.
 nonisolated struct MeetingProviderOptions: Equatable, Sendable {
     let model: SettingsStore.SpeechModel
@@ -135,11 +150,15 @@ nonisolated struct MeetingProviderOptions: Equatable, Sendable {
     ) throws -> MeetingProviderOptions {
         guard let model = SettingsStore.SpeechModel(rawValue: configuration.asrModel),
               model == .parakeetTDTv2 || model == .parakeetTDT
+                || PichiMeetingProviderFactory.registeredLanguageCodes(for: configuration.asrModel) != nil
         else {
             throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
         }
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode),
-              model != .parakeetTDTv2 || configuration.languageCode == "en"
+        let languageSupported = PichiMeetingProviderFactory.registeredLanguageCodes(for: configuration.asrModel)
+            .map { $0.contains(configuration.languageCode) }
+            ?? (VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(configuration.languageCode)
+                && (model != .parakeetTDTv2 || configuration.languageCode == "en"))
+        guard languageSupported
         else {
             throw MeetingProviderOptionsError.unsupportedLanguageCode(configuration.languageCode)
         }
@@ -313,6 +332,9 @@ final class FluidAudioProvider: TranscriptionProvider {
     /// live settings. Unsupported configurations are rejected, never silently coerced.
     init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
         let options = try MeetingProviderOptions.resolve(configuration)
+        guard options.model == .parakeetTDTv2 || options.model == .parakeetTDT else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
+        }
         self.modelOverride = options.model
         self.configureWordBoosting = false
         self.updateCompactWeights = false
@@ -433,9 +455,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         let asrModelVersion = descriptor.asrModelVersion
         let modelVersion = descriptor.variant.rawValue
         #if DEBUG
-        let cacheDirectory = self.modelCacheRootForTesting ?? AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let cacheDirectory = self.modelCacheRootForTesting ?? AppBrand.modelsDirectory
         #else
-        let cacheDirectory = AsrModels.defaultCacheDirectory().deletingLastPathComponent()
+        let cacheDirectory = AppBrand.modelsDirectory
         #endif
         let modelCacheDirectory = descriptor.cacheDirectory(in: cacheDirectory)
         DebugLogger.shared.info(
@@ -534,6 +556,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                 models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
             } else {
                 models = try await AsrModels.downloadAndLoad(
+                    to: modelCacheDirectory,
                     version: asrModelVersion,
                     progressHandler: fluidAudioProgressHandler
                 )
@@ -1731,9 +1754,9 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
         #if DEBUG
         let directory = self.modelCacheRootForTesting.map { descriptor.cacheDirectory(in: $0) }
-            ?? AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+            ?? descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
         #else
-        let directory = AsrModels.defaultCacheDirectory(for: descriptor.asrModelVersion)
+        let directory = descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
         #endif
         try await Task.detached(priority: .userInitiated) {
             if FileManager.default.fileExists(atPath: directory.path) {
@@ -1818,7 +1841,10 @@ final class FluidAudioProvider: TranscriptionProvider {
 
     init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
         // Intel stub - validates the meeting policy but never loads FluidAudio models
-        _ = try MeetingProviderOptions.resolve(configuration)
+        let options = try MeetingProviderOptions.resolve(configuration)
+        guard options.model == .parakeetTDTv2 || options.model == .parakeetTDT else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
+        }
     }
 
     func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {

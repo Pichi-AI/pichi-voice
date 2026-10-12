@@ -45,7 +45,7 @@ struct FluidOutlinedButtonStyle: ButtonStyle {
             let pressed = self.isEnabled && self.configuration.isPressed
             let destructive = self.configuration.role == .destructive
             let tone = destructive ? Color(nsColor: .systemRed) : self.theme.palette.accent
-            let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+            let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
             self.configuration.label
                 .font(self.theme.typography.bodySmall)
                 .fontWeight(.medium)

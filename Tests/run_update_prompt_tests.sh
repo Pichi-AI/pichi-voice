@@ -6,7 +6,7 @@ export DEVELOPER_DIR="$task_developer_dir"
 task_repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 task_test_dir=$(mktemp -d /tmp/fluidvoice-update-prompt-tests.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
-xcrun swiftc "$task_repo_dir/Sources/Fluid/Theme/FluidTypography.swift" "$task_repo_dir/Sources/Fluid/UI/UpdatePromptPresenter.swift" "$task_repo_dir/Tests/UpdatePromptTests.swift" -o "$task_test_dir/update-prompt-tests"
+xcrun swiftc "$task_repo_dir/Sources/Fluid/Localization/PichiLocalization.swift" "$task_repo_dir/Sources/Fluid/Branding/AppBrand.swift" "$task_repo_dir/Sources/Fluid/Branding/BrandPackage.swift" "$task_repo_dir/Sources/Fluid/Branding/BrandDistribution.swift" "$task_repo_dir/Sources/Fluid/Theme/FluidTypography.swift" "$task_repo_dir/Sources/Fluid/UI/UpdatePromptPresenter.swift" "$task_repo_dir/Tests/UpdatePromptTests.swift" -o "$task_test_dir/update-prompt-tests"
 "$task_test_dir/update-prompt-tests"
 python3 - "$task_repo_dir" <<'PYTEST'
 from pathlib import Path

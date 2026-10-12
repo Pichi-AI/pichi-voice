@@ -2,6 +2,13 @@
 import XCTest
 
 final class MeetingProcessingConfigurationTests: XCTestCase {
+    func testASRArtifactChangesInvalidateConfigurationWithoutChangingLegacyDefaults() {
+        let first = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", asrArtifactFingerprint: "v5:hash-a", languageCode: "ru")
+        let second = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", asrArtifactFingerprint: "v3:hash-b", languageCode: "ru")
+        XCTAssertNotEqual(first.identityFingerprint, second.identityFingerprint)
+        XCTAssertFalse(MeetingFinalProcessingConfiguration().identityFingerprint.contains("asrArtifact"))
+    }
+
     func testFinalConfigurationDefaultsAreParakeetTDTv2EnglishWithoutPostProcessing() {
         let config = MeetingFinalProcessingConfiguration()
         XCTAssertEqual(config.asrModel, "parakeet-tdt-v2")

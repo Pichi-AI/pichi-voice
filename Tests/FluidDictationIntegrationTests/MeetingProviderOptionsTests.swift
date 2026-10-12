@@ -85,6 +85,38 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertNotEqual(configuration.identityFingerprint, MeetingFinalProcessingConfiguration().identityFingerprint)
     }
 
+    @MainActor
+    func testGigaAMMeetingPolicyPinsRussianAndRejectsOtherLanguages() throws {
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru")
+        let options = try MeetingProviderOptions.resolve(configuration)
+        XCTAssertEqual(options.model.rawValue, "gigaam-v3-eou")
+        XCTAssertTrue(try PichiMeetingProviderFactory.make(configuration) is PichiGigaAMProvider)
+        XCTAssertThrowsError(try FluidAudioProvider(meetingConfiguration: configuration)) { error in
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel("gigaam-v3-eou"))
+        }
+        XCTAssertThrowsError(try MeetingProviderOptions.resolve(
+            MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "en")
+        )) { error in
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode("en"))
+        }
+        XCTAssertNotEqual(configuration.identityFingerprint, MeetingFinalProcessingConfiguration(languageCode: "ru").identityFingerprint)
+    }
+
+    func testRecordingBackendPinIsBackwardCompatibleAndPersisted() throws {
+        var session = MeetingSession(configuration: MeetingCaptureConfiguration(
+            mode: .inRoom, title: "Russian meeting", languageCode: "ru",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")
+        ), timebase: .init(startedHostTime: 1, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        session.recordingBackendID = MeetingBackendID.gigaam.rawValue
+        let encoder = JSONEncoder()
+        let restored = try JSONDecoder().decode(MeetingSession.self, from: encoder.encode(session))
+        XCTAssertEqual(restored.recordingBackendID, MeetingBackendID.gigaam.rawValue)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(session)) as? [String: Any])
+        object.removeValue(forKey: "recordingBackendID")
+        let legacy = try JSONDecoder().decode(MeetingSession.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(legacy.recordingBackendID)
+    }
+
     func testLegacyDefaultsDecodeWithoutLanguageAndNewDefaultsPersistIt() throws {
         let encoder = JSONEncoder()
         let original = MeetingRecordingDefaults.unconfigured

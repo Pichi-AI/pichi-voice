@@ -49,6 +49,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.applicationIconImage = PichiBrandMark.appIcon
+        NSApplication.shared.appearance = BrandAppearanceController.nativeAppearance(for: SettingsStore.shared.themePreference.preferredColorScheme)
         AccessibilityMessagingTimeout.configure()
         #if DEBUG
         self.updateUISimulationObserver = UpdatePromptSimulation.register(self)
@@ -440,7 +442,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private func isMainWindow(_ window: NSWindow) -> Bool {
         guard window.level == .normal else { return false }
         guard window.styleMask.contains(.titled) else { return false }
-        return window.title == "FluidVoice" || window.title.contains("FluidVoice")
+        return window.title == AppBrand.text("FluidVoice") || window.title.contains(AppBrand.text("FluidVoice"))
     }
 
     // MARK: - Periodic Update Checks
@@ -504,7 +506,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             SimpleUpdater.shared.simulationHasUpdate = false
             self.checkForUpdatesManually()
         case "progress":
-            Task { try? await SimpleUpdater.shared.checkAndUpdate(owner: "altic-dev", repo: "Fluid-oss") }
+            Task { try? await SimpleUpdater.shared.checkAndUpdate(owner: AppBrand.repositoryOwner, repo: AppBrand.repositoryName) }
         case "failure":
             SimpleUpdater.shared.finishSimulatedUpdate()
             self.showUpdateAlert(title: "Update Check Failed", message: "Simulated download failure. No update was downloaded or installed.")

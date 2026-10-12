@@ -14,11 +14,38 @@ final class ModelRepository {
 
     private init() {}
 
+    lazy var localTextModels: LocalTextModelCatalog = {
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle.main
+        #endif
+        return LocalTextModelCatalog.load(from: bundle.url(forResource: "local-text-models", withExtension: "json"))
+    }()
+
+    /// Local model tags are endpoint-specific; discovery never chooses a model
+    /// or replaces an explicit selection that is temporarily unavailable.
+    static func selectionAfterRefresh(preferred: String, models: [String], isLocal: Bool) -> String {
+        if isLocal || models.contains(preferred) { return preferred }
+        return models.first ?? ""
+    }
+
+    /// Catalog tags describe a provider's local protocol, not a server's readiness.
+    func localTextModelProvider(for baseURL: String) -> String? {
+        guard self.isLocalEndpoint(baseURL), let url = URL(string: baseURL) else { return nil }
+        return Self.builtInProviderIDs.first { providerID in
+            guard !self.localTextModels.models(for: providerID).isEmpty,
+                  let defaultURL = URL(string: self.defaultBaseURL(for: providerID)) else { return false }
+            return url.port == defaultURL.port
+        }
+    }
+
     /// All built-in provider IDs (not including custom/saved providers)
     static var builtInProviderIDs: [String] {
         var providers = [
             "openai", "anthropic", "xai", "groq", "cerebras", "google", "openrouter", "ollama", "lmstudio",
-        ]
+        ] + CloudTextProvider.registered.map(\.id)
+
         if PrivateFeatures.privateAIProvider {
             providers.insert(PrivateAIProviderFeature.shared.providerID, at: 0)
         }
@@ -74,6 +101,7 @@ final class ModelRepository {
 
     /// Returns the default base URL for a given provider ID.
     func defaultBaseURL(for providerID: String) -> String {
+        if let provider = CloudTextProvider.descriptor(for: providerID) { return provider.baseURL }
         switch providerID {
         case "openai":
             return "https://api.openai.com/v1"
@@ -100,6 +128,7 @@ final class ModelRepository {
 
     /// Returns the display name for a provider ID
     func displayName(for providerID: String) -> String {
+        if let provider = CloudTextProvider.descriptor(for: providerID) { return provider.name }
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.providerName
         }
@@ -126,6 +155,7 @@ final class ModelRepository {
     /// Returns the website URL for getting an API key or downloading the provider software.
     /// Returns nil for providers that don't have a relevant URL.
     func providerWebsiteURL(for providerID: String) -> (url: String, label: String)? {
+        if let provider = CloudTextProvider.descriptor(for: providerID) { return (provider.website, "Setup Guide") }
         switch providerID {
         case "openai":
             return ("https://platform.openai.com/api-keys", "Get API Key")
@@ -179,6 +209,7 @@ final class ModelRepository {
             ("lmstudio", "LM Studio"),
         ]
 
+        list += CloudTextProvider.registered.map { ($0.id, $0.name) }
         if PrivateFeatures.privateAIProvider {
             list.insert((PrivateAIProviderFeature.shared.providerID, PrivateAIProviderFeature.shared.providerName), at: 0)
         }
@@ -238,11 +269,14 @@ final class ModelRepository {
     ///   - baseURL: The base URL for the API (e.g., "https://api.openai.com/v1")
     ///   - apiKey: Optional API key for authentication
     /// - Returns: Array of model IDs sorted alphabetically
-    func fetchModels(for providerID: String, baseURL: String, apiKey: String?) async throws -> [String] {
+    func fetchModels(for providerID: String, baseURL: String, apiKey: String?, session: URLSession? = nil, connectionOptions: [String: String] = [:]) async throws -> [String] {
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return PrivateAIProviderFeature.shared.modelIDs()
         }
 
+        let cloud = CloudTextProvider.descriptor(forEndpoint: baseURL)
+        let session = session ?? (cloud == nil ? .shared : CloudTextProviderTransport.session)
+        let authorization = session === CloudTextProviderTransport.session ? CloudTextProviderAuthorization.shared : CloudTextProviderAuthorization(session: session)
         let isAnthropic = providerID == "anthropic" || baseURL.contains("anthropic.com")
 
         // Construct the models endpoint URL
@@ -278,8 +312,21 @@ final class ModelRepository {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            if let cloud {
+                let headers = try await authorization.headers(for: cloud, credential: apiKey ?? "", options: connectionOptions)
+                for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+            }
+            var result = try await session.data(for: request)
+            if let cloud, case .oauth = cloud.authorization, (result.1 as? HTTPURLResponse)?.statusCode == 401 {
+                let headers = try await authorization.headers(for: cloud, credential: apiKey ?? "", options: connectionOptions, rejecting: request.value(forHTTPHeaderField: "Authorization"))
+                for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+                result = try await session.data(for: request)
+            }
+            (data, response) = result
+            try Task.checkCancellation()
         } catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            if cloud != nil, let safe = error as? CloudTextProviderError { throw safe }
             let errorDetails = self.detailedNetworkError(error)
             DebugLogger.shared.error(
                 "fetchModels: Network error for '\(providerID)': \(errorDetails)",
@@ -290,6 +337,7 @@ final class ModelRepository {
 
         // Check for HTTP errors and preserve the provider body for the UI.
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+            if cloud != nil { throw CloudTextProviderError.http(httpResponse.statusCode) }
             let bodyString = String(data: data, encoding: .utf8) ?? "<unable to decode response body>"
             let errorDetails = self.rawHTTPErrorDetails(responseBody: bodyString)
             DebugLogger.shared.error(
@@ -301,6 +349,7 @@ final class ModelRepository {
 
         // Parse the response - OpenAI format: { "data": [{ "id": "model-name" }, ...] }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            if cloud != nil { throw CloudTextProviderError.invalidResponse }
             let bodyPreview = String(data: data, encoding: .utf8)?.prefix(300) ?? "<binary data>"
             DebugLogger.shared.error(
                 "fetchModels: Failed to parse JSON for '\(providerID)'. Response preview: \(bodyPreview)",
@@ -335,6 +384,7 @@ final class ModelRepository {
             return models.sorted()
         }
 
+        if cloud != nil { throw CloudTextProviderError.invalidResponse }
         // Log what we actually received
         let topLevelKeys = json.keys.joined(separator: ", ")
         DebugLogger.shared.error(

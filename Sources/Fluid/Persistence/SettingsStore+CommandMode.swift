@@ -160,7 +160,7 @@ extension SettingsStore {
         let baseURL = self.commandModeProviderBaseURL(for: providerID)
         // Match getAPIKey exactly: the registered ID takes precedence, then its canonical key.
         let apiKey = apiKeys[providerID] ?? apiKeys[key] ?? ""
-        return self.commandModeProviderFingerprint(baseURL: baseURL, apiKey: apiKey) == stored
+        return self.commandModeProviderFingerprint(baseURL: baseURL, apiKey: apiKey, connectionOptions: self.providerConnectionOptions[providerID] ?? [:]) == stored
     }
 
     private func commandModeSavedProvider(for providerID: String) -> SavedProvider? {
@@ -178,13 +178,8 @@ extension SettingsStore {
         return ""
     }
 
-    private func commandModeProviderFingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBase.isEmpty else { return nil }
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    private func commandModeProviderFingerprint(baseURL: String, apiKey: String, connectionOptions: [String: String] = [:]) -> String? {
+        CloudTextProvider.connectionFingerprint(baseURL: baseURL, apiKey: apiKey, options: connectionOptions)
     }
 
     private func isPrivateAIProviderID(_ providerID: String) -> Bool {

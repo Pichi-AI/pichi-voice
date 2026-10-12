@@ -23,20 +23,25 @@ enum SidebarItem: Hashable {
     case rewriteMode
 
     var title: String {
+        self.title(profile: AppBrand.profile, language: PichiLocalization.language)
+    }
+
+    /// Resolve UI keys before branding. Consumers display this result verbatim.
+    func title(profile: BrandProfile, language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
         switch self {
-        case .welcome: "Dashboard"
-        case .voiceEngine: "Voice Engine"
-        case .aiEnhancements: "AI Providers"
-        case .cleanupStyles: "Cleanup Styles"
-        case .fileTranscription: "File Transcription"
-        case .meetingTranscription: "FluidMeet"
-        case .customDictionary: "Custom Dictionary"
-        case .stats: "Stats"
-        case .history: "History"
-        case .changelog: "Change logs"
-        case .feedback: "Feedback"
-        case .commandMode: "Command Mode"
-        case .rewriteMode: "Edit Mode"
+        case .welcome: PichiLocalization.text("Dashboard", language: language, bundle: bundle)
+        case .voiceEngine: PichiLocalization.text("Voice Engine", language: language, bundle: bundle)
+        case .aiEnhancements: PichiLocalization.text("AI Providers", language: language, bundle: bundle)
+        case .cleanupStyles: PichiLocalization.text("Cleanup Styles", language: language, bundle: bundle)
+        case .fileTranscription: PichiLocalization.text("File Transcription", language: language, bundle: bundle)
+        case .meetingTranscription: AppBrand.text("FluidMeet", profile: profile, language: language, bundle: bundle)
+        case .customDictionary: PichiLocalization.text("Custom Dictionary", language: language, bundle: bundle)
+        case .stats: PichiLocalization.text("Stats", language: language, bundle: bundle)
+        case .history: PichiLocalization.text("History", language: language, bundle: bundle)
+        case .changelog: PichiLocalization.text("Change logs", language: language, bundle: bundle)
+        case .feedback: PichiLocalization.text("Feedback", language: language, bundle: bundle)
+        case .commandMode: PichiLocalization.text("Command Mode", language: language, bundle: bundle)
+        case .rewriteMode: PichiLocalization.text("Edit Mode", language: language, bundle: bundle)
         }
     }
 }
@@ -69,15 +74,15 @@ enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .general: return "General"
-        case .dictation: return "Dictation"
-        case .dictationFormatting: return "Dictation Formatting"
-        case .shortcuts: return "Shortcuts"
-        case .notifications: return "Notifications"
-        case .audio: return "Audio"
-        case .overlay: return "Overlay"
-        case .dataAndDiagnostics: return "Data & Diagnostics"
-        case .experimental: return "Experimental"
+        case .general: return PichiLocalization.text("General")
+        case .dictation: return PichiLocalization.text("Dictation")
+        case .dictationFormatting: return PichiLocalization.text("Dictation Formatting")
+        case .shortcuts: return PichiLocalization.text("Shortcuts")
+        case .notifications: return PichiLocalization.text("Notifications")
+        case .audio: return PichiLocalization.text("Audio")
+        case .overlay: return PichiLocalization.text("Overlay")
+        case .dataAndDiagnostics: return PichiLocalization.text("Data & Diagnostics")
+        case .experimental: return PichiLocalization.text("Experimental")
         }
     }
 

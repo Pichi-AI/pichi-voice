@@ -88,7 +88,7 @@ struct CommandModelPicker: View {
             TextField("Search all models…", text: self.$searchText)
                 .textFieldStyle(.plain)
                 .focused(self.$searchFocused)
-                .accessibilityLabel("Search models from all verified providers")
+                .accessibilityLabel(PichiLocalization.text("Search models from all verified providers"))
                 .onSubmit(self.selectHighlighted)
                 .onKeyPress(.upArrow) {
                     self.moveHighlight(by: -1)
@@ -107,7 +107,7 @@ struct CommandModelPicker: View {
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear model search")
+                .accessibilityLabel(PichiLocalization.text("Clear model search"))
             }
         }
         .font(self.theme.typography.bodySmall)
@@ -214,8 +214,8 @@ struct CommandModelPicker: View {
 
     private func emptyState(title: String, message: String) -> some View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
-            Text(title).font(self.theme.typography.bodySmallStrong)
-            Text(message)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.bodySmallStrong)
+            Text(PichiLocalization.text(message))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }

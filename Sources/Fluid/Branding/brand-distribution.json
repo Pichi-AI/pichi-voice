@@ -1,0 +1,9 @@
+{
+  "formatVersion": 1,
+  "repository": "https://github.com/Pichi-AI/pichi-voice",
+  "appIconAsset": "PichiAppIcon",
+  "markAsset": "PichiBrandMark",
+  "menuBarAsset": "PichiMenuBarIcon",
+  "localizePackagedTagline": true,
+  "updatesEnabled": false
+}

@@ -12,7 +12,7 @@ struct MeetingBubbleStyle {
 
     static func final(fill: Color, foreground: Color) -> MeetingBubbleStyle {
         MeetingBubbleStyle(
-            font: .system(size: 15, design: .monospaced),
+            font: .fluidSystem(size: 15, design: .monospaced),
             lineSpacing: 5,
             horizontalPadding: 18,
             verticalPadding: 12,
@@ -43,6 +43,7 @@ struct MeetingLiveBubbleScrollList: View {
     var documentStyle = false
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
 
@@ -58,7 +59,8 @@ struct MeetingLiveBubbleScrollList: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                         ForEach(self.rows) { row in
-                            MeetingLiveBubbleRow(row: row, hidesPartialFromAccessibility: self.hidesPartialFromAccessibility, documentStyle: self.documentStyle)
+                            MeetingLiveBubbleRow(row: row, hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
+                                                 documentStyle: self.documentStyle, interfaceLanguageID: self.locale.identifier)
                                 .equatable()
                                 .id(row.id)
                                 .transition(.opacity)
@@ -94,6 +96,8 @@ struct MeetingLiveBubbleScrollList: View {
                             .background(self.theme.palette.contentBackground, in: Circle())
                     }
                     .buttonStyle(.plain)
+                    .help("Jump to latest captions")
+                    .accessibilityLabel("Jump to latest captions")
                     .padding(6)
                 }
             }
@@ -121,17 +125,19 @@ struct MeetingLiveBubbleRow: View, Equatable {
     let row: MeetingLiveBubbleComposer.Row
     var hidesPartialFromAccessibility: Bool = true
     var documentStyle = false
+    var interfaceLanguageID = PichiLocalization.language.rawValue
 
     @Environment(\.theme) private var theme
 
     static func == (lhs: MeetingLiveBubbleRow, rhs: MeetingLiveBubbleRow) -> Bool {
-        lhs.row == rhs.row && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility && lhs.documentStyle == rhs.documentStyle
+        lhs.row == rhs.row && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility
+            && lhs.documentStyle == rhs.documentStyle && lhs.interfaceLanguageID == rhs.interfaceLanguageID
     }
 
     private var isMicrophone: Bool { self.row.speaker == .you }
 
     private var sourceLabel: String {
-        self.isMicrophone ? "Microphone" : "Meeting audio"
+        self.isMicrophone ? PichiLocalization.text("Microphone") : PichiLocalization.text("Meeting audio")
     }
 
     /// Distinguish capture sources without claiming that either source belongs to a person.

@@ -16,7 +16,7 @@ struct OverlayAppearanceEditor: View {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Make it yours")
-                        .font(.fluidSystem(size: 26, weight: .bold))
+                        .font(.fluidSystem(size: 26, weight: .bold, role: .title))
                     Text("A little personality for every thought.")
                         .font(.fluidSystem(size: 13))
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -102,7 +102,7 @@ struct OverlayAppearanceEditor: View {
             .frame(maxWidth: 720)
             .frame(maxWidth: .infinity, alignment: .center)
 
-            Text(self.settings.overlayMaterial.detail)
+            Text(PichiLocalization.text(self.settings.overlayMaterial.detail))
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
 
@@ -141,7 +141,7 @@ struct OverlayAppearanceEditor: View {
                                 .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(tint.rawValue.capitalized)
+                        .accessibilityLabel(PichiLocalization.text(tint.rawValue.capitalized))
                         .accessibilityAddTraits(self.settings.overlayTint == tint ? .isSelected : [])
                     }
                 }
@@ -207,7 +207,7 @@ struct OverlayAppearanceEditor: View {
                 Image(systemName: symbol)
                     .font(.fluidSystem(size: 12, weight: .semibold))
                     .foregroundStyle(selected ? (value == 1 ? Color.orange : Color.indigo) : self.theme.palette.secondaryText)
-                Text(title)
+                Text(PichiLocalization.text(value == 1 ? "backdrop.light" : "backdrop.dark", defaultValue: title))
                     .font(.fluidSystem(size: 12, weight: .semibold))
             }
             .foregroundStyle(selected ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
@@ -223,29 +223,29 @@ struct OverlayAppearanceEditor: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title) sample backdrop")
+        .accessibilityLabel(PichiLocalization.format("%@ sample backdrop", PichiLocalization.text(value == 1 ? "backdrop.light" : "backdrop.dark", defaultValue: title)))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func knob(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, low: String, high: String) -> some View {
         VStack(spacing: 6) {
             HStack {
-                Text(title).font(self.theme.typography.bodySmall)
+                Text(PichiLocalization.text(title)).font(self.theme.typography.bodySmall)
                 Spacer()
                 Text("\(Int((value.wrappedValue * 100).rounded()))%")
                     .font(self.theme.typography.caption.monospacedDigit()).foregroundStyle(self.theme.palette.secondaryText)
             }
             HStack {
-                Text(low).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .leading)
-                Slider(value: value, in: range, step: 0.05).accessibilityLabel(title)
-                Text(high).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .trailing)
+                Text(PichiLocalization.text(low)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .leading)
+                Slider(value: value, in: range, step: 0.05).accessibilityLabel(PichiLocalization.text(title))
+                Text(PichiLocalization.text(high)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .trailing)
             }
         }
     }
 }
 
 private struct OverlayAppearanceSample: View {
-    private static let appIcon = NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage ?? NSImage(size: NSSize(width: 32, height: 32))
+    private static let appIcon = PichiBrandMark.appIcon
     let size: SettingsStore.OverlaySize
     let appearance: BottomOverlayAppearance
 
@@ -254,7 +254,7 @@ private struct OverlayAppearanceSample: View {
     var body: some View {
         VStack(alignment: .leading, spacing: self.layout.vPadding / 2) {
             if self.layout.showsPreview {
-                Text(self.size == .large ? "A little space for your next big idea.\nMake every word feel like you." : "Make every word feel like you.")
+                Text(PichiLocalization.text(self.size == .large ? "A little space for your next big idea.\nMake every word feel like you." : "Make every word feel like you."))
                     .font(.fluidSystem(size: self.layout.transFontSize, weight: .medium))
                     .foregroundStyle(.white.opacity(0.96))
                     .lineLimit(self.size == .small ? 1 : 3)
@@ -266,7 +266,7 @@ private struct OverlayAppearanceSample: View {
                     .interpolation(.high)
                     .scaledToFit()
                     .frame(width: self.layout.iconSize, height: self.layout.iconSize)
-                    .accessibilityLabel("FluidVoice")
+                    .accessibilityLabel(AppBrand.text("FluidVoice"))
                 Spacer(minLength: 4)
                 HStack(spacing: self.layout.barSpacing) {
                     ForEach(0..<self.layout.barCount, id: \.self) { index in

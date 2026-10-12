@@ -7,6 +7,17 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FD1100000000000000000002 /* PichiMeetingSummaryLifetimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */; };
+		EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA200000000000000000001 /* CloudTextProviderTests.swift */; };
+		C71A40000000000000000002 /* OllamaChatTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C71A40000000000000000001 /* OllamaChatTransportTests.swift */; };
+		793D196E690048D89D679409 /* PichiLocalizationPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */; };
+		EC546646745D49A49C8EDC02 /* PichiLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */; };
+		C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */; };
+		C41C41000000000000000003 /* PichiGigaAM in Frameworks */ = {isa = PBXBuildFile; productRef = C41C41000000000000000002 /* PichiGigaAM */; };
+		C41C41000000000000000004 /* PichiGigaAM in Frameworks */ = {isa = PBXBuildFile; productRef = C41C41000000000000000002 /* PichiGigaAM */; };
+		EAA100000000000000000002 /* PichiTextModelEvalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAA100000000000000000001 /* PichiTextModelEvalTests.swift */; };
+		F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */; };
+		5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */; };
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
 		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
 		B51B7EE5BA8CE09BC09A47DB /* ProgressiveFileDownloaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */; };
@@ -174,6 +185,16 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryLifetimeTests.swift; sourceTree = "<group>"; };
+		EAA200000000000000000001 /* CloudTextProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTextProviderTests.swift; sourceTree = "<group>"; };
+		C71A40000000000000000001 /* OllamaChatTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllamaChatTransportTests.swift; sourceTree = "<group>"; };
+		3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiLocalizationPresentationTests.swift; sourceTree = "<group>"; };
+		3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiLocalizationTests.swift; sourceTree = "<group>"; };
+		C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiGigaAMIntegrationTests.swift; sourceTree = "<group>"; };
+		EAA100000000000000000001 /* PichiTextModelEvalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiTextModelEvalTests.swift; sourceTree = "<group>"; };
+		F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryTests.swift; sourceTree = "<group>"; };
+		F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTextModelDiscoveryTests.swift; sourceTree = "<group>"; };
+		B12A00000000000000000001 /* PichiBrand.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration/PichiBrand.xcconfig; sourceTree = SOURCE_ROOT; };
 		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
 		7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechModelInstallationSnapshotTests.swift; sourceTree = "<group>"; };
 		70362FCD2F941BFB800AD8E8 /* ProgressiveFileDownloaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressiveFileDownloaderTests.swift; sourceTree = "<group>"; };
@@ -319,6 +340,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */,
+				C41C41000000000000000003 /* PichiGigaAM in Frameworks */,
 				7C3697892ED70F9C005874CE /* DynamicNotchKit in Frameworks */,
 				7C5AF14B2F15041600DE21B0 /* MediaRemoteAdapter in Frameworks */,
 				7C9A71022F58B00000FB7CAF /* TranscribeCpp in Frameworks */,
@@ -341,6 +363,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */,
+				C41C41000000000000000004 /* PichiGigaAM in Frameworks */,
 				A5B000000000000000000014 /* DynamicNotchKit in Frameworks */,
 				A5B000000000000000000015 /* MediaRemoteAdapter in Frameworks */,
 				A5B000000000000000000016 /* TranscribeCpp in Frameworks */,
@@ -426,6 +449,7 @@
 				2E9B0000000000000000000A /* AppSearchServiceTests.swift */,
 				A62300000000000000000001 /* AudioBufferConverterTests.swift */,
 				D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */,
+				C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */,
 				D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */,
 				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
 				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
@@ -438,6 +462,14 @@
 				FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */,
 				AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */,
 				AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */,
+				FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */,
+				F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */,
+				EAA200000000000000000001 /* CloudTextProviderTests.swift */,
+				C71A40000000000000000001 /* OllamaChatTransportTests.swift */,
+				F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */,
+				EAA100000000000000000001 /* PichiTextModelEvalTests.swift */,
+				3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */,
+				3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */,
 				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
 				D9B100000000000000000001 /* VoiceModelDeletionTests.swift */,
 				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
@@ -564,6 +596,7 @@
 			name = fluid;
 			packageProductDependencies = (
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
+				C41C41000000000000000002 /* PichiGigaAM */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
@@ -617,6 +650,7 @@
 			name = FluidASRBaselineHost;
 			packageProductDependencies = (
 				AEC300000000000000000002 /* FluidAEC3Bridge */,
+				C41C41000000000000000002 /* PichiGigaAM */,
 				7C078DA42E3B386A00FB7CAC /* FluidAudio */,
 				7C3697882ED70F9C005874CE /* DynamicNotchKit */,
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
@@ -678,12 +712,14 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				ru,
 				Base,
 			);
 			mainGroup = 7C078D862E3B339200FB7CAC;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */,
+				C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */,
 				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
@@ -809,7 +845,16 @@
 				FEA4AB111222333444555502 /* MeetingSpeakerVoiceMatcherTests.swift in Sources */,
 				FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */,
 				AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */,
+				C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */,
 				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
+				FD1100000000000000000002 /* PichiMeetingSummaryLifetimeTests.swift in Sources */,
+				F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */,
+				EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */,
+				C71A40000000000000000002 /* OllamaChatTransportTests.swift in Sources */,
+				5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */,
+				EAA100000000000000000002 /* PichiTextModelEvalTests.swift in Sources */,
+				793D196E690048D89D679409 /* PichiLocalizationPresentationTests.swift in Sources */,
+				EC546646745D49A49C8EDC02 /* PichiLocalizationTests.swift in Sources */,
 				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
 				D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */,
 				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
@@ -903,6 +948,7 @@
 /* Begin XCBuildConfiguration section */
 		7C078D982E3B339300FB7CAC /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B12A00000000000000000001 /* PichiBrand.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
@@ -969,6 +1015,7 @@
 		};
 		7C078D992E3B339300FB7CAC /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B12A00000000000000000001 /* PichiBrand.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
@@ -1030,7 +1077,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Fluid.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -1065,11 +1112,12 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = "1.6.10-beta.8";
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app.debug;
-				PRODUCT_NAME = "FluidVoice Debug";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER).debug";
+				PRODUCT_MODULE_NAME = FluidVoice_Debug;
+				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME) Debug";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
@@ -1085,7 +1133,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Fluid.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -1120,11 +1168,12 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MARKETING_VERSION = "1.6.10-beta.8";
-				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.app;
-				PRODUCT_NAME = FluidVoice;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = FluidVoice;
+				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Fluid/Fluid-Bridging-Header.h";
@@ -1141,7 +1190,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME) Debug.app/Contents/MacOS/$(PICHI_PRODUCT_NAME) Debug";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1157,7 +1206,7 @@
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice Debug.app/Contents/MacOS/FluidVoice Debug";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME) Debug.app/Contents/MacOS/$(PICHI_PRODUCT_NAME) Debug";
 			};
 			name = Debug;
 		};
@@ -1166,7 +1215,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ARCHS = "$(ARCHS_STANDARD)";
-				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				BUNDLE_LOADER = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME).app/Contents/MacOS/$(PICHI_PRODUCT_NAME)";
 				CLANG_ENABLE_MODULES = YES;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -1181,7 +1230,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.FluidApp.FluidDictationIntegrationTests;
 				PRODUCT_NAME = FluidDictationIntegrationTests;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FluidVoice.app/Contents/MacOS/FluidVoice";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(PICHI_PRODUCT_NAME).app/Contents/MacOS/$(PICHI_PRODUCT_NAME)";
 			};
 			name = Release;
 		};
@@ -1189,7 +1238,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -1214,7 +1263,7 @@
 				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
 				PRODUCT_NAME = FluidASRBaselineHost;
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -1230,7 +1279,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(PICHI_APP_ICON)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Tests/FluidASRBaselineHost/FluidASRBaselineHost.entitlements;
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
@@ -1255,7 +1304,7 @@
 				PRODUCT_MODULE_NAME = FluidASRBaselineHost;
 				PRODUCT_NAME = FluidASRBaselineHost;
 				PROVISIONING_PROFILE_SPECIFIER = "";
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) ARCH_ARM64 FLUID_ASR_BASELINE";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -1368,6 +1417,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/PichiGigaAM;
+		};
 		AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/WebRTCAudioProcessing;
@@ -1428,6 +1481,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C41C41000000000000000002 /* PichiGigaAM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C41C41000000000000000001 /* XCLocalSwiftPackageReference "PichiGigaAM" */;
+			productName = PichiGigaAM;
+		};
 		AEC300000000000000000002 /* FluidAEC3Bridge */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AEC300000000000000000001 /* XCLocalSwiftPackageReference "WebRTCAudioProcessing" */;

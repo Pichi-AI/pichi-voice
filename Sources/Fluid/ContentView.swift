@@ -62,7 +62,10 @@ nonisolated enum DictationAIFailurePresentationPolicy {
 }
 
 nonisolated enum DictationStreamingFallbackPolicy {
-    static func shouldRetryWithoutStreaming(after error: Error) -> Bool {
+    static func shouldRetryWithoutStreaming(after error: Error, baseURL: String? = nil) -> Bool {
+        // Native chat explicitly supports streaming. Re-running local inference
+        // after a failure would double the interactive response budget.
+        if let baseURL, OllamaChatAdapter.supports(baseURL) { return false }
         if error is CancellationError || error is URLError {
             return false
         }
@@ -371,6 +374,9 @@ struct ContentView: View {
     @State private var accessibilityGuideMonitorTask: Task<Void, Never>?
     @State private var accessibilityGuideRequestID: UUID?
     @State private var prewarmDictationTask: Task<Void, Never>?
+    @State private var prewarmDictationRequestID: UUID?
+    @State private var prewarmDictationRoute: DictationProviderRoute?
+    @State private var prewarmDictationVerifiedUntil: TimeInterval = 0
     @State private var overlayLifecycleID: UInt64 = 0
     @State private var spokenSendAutoStopTask: Task<Void, Never>?
     @State private var spokenSendAutoStopTriggered = false
@@ -495,6 +501,7 @@ struct ContentView: View {
             .environment(\.fluidToolbarTrailingInset, self.toolbarTrailingInset)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 self.refreshAccessibilityPermissionState()
+                self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .openCustomDictionaryFromVoiceEngine)) { _ in
                 self.navigateToApp(.customDictionary)
@@ -506,11 +513,11 @@ struct ContentView: View {
                 self.hotkeyManager?.updatePromptShortcutAssignments(SettingsStore.shared.dictationPromptShortcutAssignments())
             }
             // Local UI diagnostics, same defaults gate as GlobalHotkeyManager+DebugTrigger.
-            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.toggleSidebar"))) { _ in
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("\(AppBrand.bundleIdentifier).debug.toggleSidebar"))) { _ in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
                 self.toggleSidebar()
             }
-            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("com.FluidApp.debug.openSettings"))) { _ in
+            .onReceive(DistributedNotificationCenter.default().publisher(for: Notification.Name("\(AppBrand.bundleIdentifier).debug.openSettings"))) { _ in
                 guard UserDefaults.standard.bool(forKey: "FluidDebugRemoteToggleEnabled") else { return }
                 self.menuBarManager.openPreferencesFromUI()
             }
@@ -627,6 +634,12 @@ struct ContentView: View {
             }
             .onChange(of: self.selectedProviderID) { _, newValue in
                 SettingsStore.shared.selectedProviderID = newValue
+            }
+            .onChange(of: self.localDictationWarmupRoute) { _, _ in
+                self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
+            }
+            .onReceive(self.asr.$activeExclusiveActivity) { activity in
+                if activity != nil, activity != .dictation { self.cancelPrewarmDictationIfNeeded() }
             }
             .onChange(of: self.activeShortcutRecordingTarget) { _, _ in
                 self.hotkeyManager?.resetModifierOnlyShortcutTracking()
@@ -764,6 +777,7 @@ struct ContentView: View {
         }
 
         self.loadProviderState()
+        self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
         self.installShortcutCaptureMonitor()
     }
 
@@ -1399,12 +1413,12 @@ struct ContentView: View {
     }
 
     private func openIssueReportingPage() {
-        guard let url = URL(string: "https://github.com/altic-dev/Fluid-oss/issues/new/choose") else { return }
+        guard let url = URL(string: AppBrand.supportURL.absoluteString) else { return }
         NSWorkspace.shared.open(url)
     }
 
     private func openHelpDocumentation() {
-        guard let url = URL(string: "https://docs.altic.dev/") else { return }
+        guard let url = URL(string: AppBrand.websiteURL.absoluteString) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1477,39 +1491,38 @@ struct ContentView: View {
     private var appSidebarSections: some View {
         List(selection: self.$selectedSidebarItem) {
             Section {
-                self.sidebarNavigationLink(.welcome, title: "Dashboard", systemImage: "house.fill")
-                self.sidebarNavigationLink(.history, title: "History", systemImage: "clock.arrow.circlepath")
-                self.sidebarNavigationLink(.stats, title: "Stats", systemImage: "chart.bar.fill")
+                self.sidebarNavigationLink(.welcome, systemImage: "house.fill")
+                self.sidebarNavigationLink(.history, systemImage: "clock.arrow.circlepath")
+                self.sidebarNavigationLink(.stats, systemImage: "chart.bar.fill")
             } header: {
-                self.sidebarSectionHeader("Activity")
+                self.sidebarSectionHeader(PichiLocalization.text("Activity"))
             }
 
             Section {
-                self.sidebarNavigationLink(.voiceEngine, title: "Voice Engine", systemImage: "waveform")
-                self.sidebarNavigationLink(.aiEnhancements, title: "AI Providers", systemImage: "cpu")
-                self.sidebarNavigationLink(.cleanupStyles, title: "Cleanup Styles", systemImage: "wand.and.stars")
-                self.sidebarNavigationLink(.customDictionary, title: "Custom Dictionary", systemImage: "text.book.closed.fill")
+                self.sidebarNavigationLink(.voiceEngine, systemImage: "waveform")
+                self.sidebarNavigationLink(.aiEnhancements, systemImage: "cpu")
+                self.sidebarNavigationLink(.cleanupStyles, systemImage: "wand.and.stars")
+                self.sidebarNavigationLink(.customDictionary, systemImage: "text.book.closed.fill")
             } header: {
-                self.sidebarSectionHeader("Configure")
+                self.sidebarSectionHeader(PichiLocalization.text("navigation.configure.section", defaultValue: "Configure"))
             }
 
             Section {
-                self.sidebarNavigationLink(.commandMode, title: "Command Mode", systemImage: "terminal.fill")
-                self.sidebarNavigationLink(.fileTranscription, title: "File Transcription", systemImage: "doc.text.fill")
+                self.sidebarNavigationLink(.commandMode, systemImage: "terminal.fill")
+                self.sidebarNavigationLink(.fileTranscription, systemImage: "doc.text.fill")
                 self.sidebarNavigationLink(
                     .meetingTranscription,
-                    title: "FluidMeet",
                     systemImage: "person.2.fill"
                 )
             } header: {
-                self.sidebarSectionHeader("Use")
+                self.sidebarSectionHeader(PichiLocalization.text("Use"))
             }
 
             Section {
-                self.sidebarNavigationLink(.changelog, title: "Change logs", systemImage: "doc.text.magnifyingglass")
-                self.sidebarNavigationLink(.feedback, title: "Feedback", systemImage: "envelope.fill")
+                self.sidebarNavigationLink(.changelog, systemImage: "doc.text.magnifyingglass")
+                self.sidebarNavigationLink(.feedback, systemImage: "envelope.fill")
             } header: {
-                self.sidebarSectionHeader("Help")
+                self.sidebarSectionHeader(PichiLocalization.text("Help"))
             }
         }
         .listStyle(.sidebar)
@@ -1590,8 +1603,8 @@ struct ContentView: View {
                 reduceMotion: self.accessibilityReduceMotion
             ))
             .onHover { self.isSettingsBackHovered = $0 }
-            .help("Back to FluidVoice")
-            .accessibilityLabel("Back to FluidVoice")
+            .help(AppBrand.text("Back to FluidVoice"))
+            .accessibilityLabel(AppBrand.text("Back to FluidVoice"))
 
             SidebarSearchField(
                 text: Binding(
@@ -1622,11 +1635,11 @@ struct ContentView: View {
                         HStack(spacing: self.theme.metrics.spacing.sm) {
                             Image(systemName: section.systemImage)
                                 .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                                 .frame(width: 18)
 
                             Text(section.title)
-                                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
                         }
                         .font(self.theme.typography.sidebarItem)
                     }
@@ -1723,7 +1736,7 @@ struct ContentView: View {
             Button("What’s new", systemImage: "gift") { self.showsReleaseHighlights = true }
                 .disabled(self.asr.isRunningOrStarting || self.asr.activeExclusiveActivity != nil || NotchContentState.shared.isProcessing)
             if PrivateAIProviderFeature.shared.isAvailable {
-                Button("Try Fluid Intelligence", systemImage: "sparkles") { self.showsFluidIntelligenceDemo = true }
+                Button(AppBrand.text("Try Fluid Intelligence"), systemImage: "sparkles") { self.showsFluidIntelligenceDemo = true }
                     .disabled(self.asr.isRunningOrStarting || NotchContentState.shared.isProcessing || DictationPromptTestCoordinator.shared.isActive)
             }
             Button("Replay onboarding", systemImage: "arrow.counterclockwise") {
@@ -1759,9 +1772,9 @@ struct ContentView: View {
             reduceMotion: self.accessibilityReduceMotion
         ))
         .onHover { self.isHelpEntryHovered = $0 }
-        .help("Open FluidVoice Help")
+        .help(AppBrand.text("Open FluidVoice Help"))
         .accessibilityLabel("Help")
-        .accessibilityHint("What’s new, documentation, Fluid Intelligence demo, and replay onboarding")
+        .accessibilityHint(AppBrand.text("What’s new, documentation, Fluid Intelligence demo, and replay onboarding"))
     }
 
     private var modeTransitionAnimation: Animation {
@@ -1784,7 +1797,7 @@ struct ContentView: View {
             .padding(.bottom, self.theme.metrics.spacing.xs)
     }
 
-    private func sidebarNavigationLink(_ item: SidebarItem, title: String, systemImage: String) -> some View {
+    private func sidebarNavigationLink(_ item: SidebarItem, systemImage: String) -> some View {
         let isSelected = self.selectedSidebarItem == item
         return NavigationLink(value: item) {
             HStack(spacing: self.theme.metrics.spacing.sm) {
@@ -1792,12 +1805,12 @@ struct ContentView: View {
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.9) : Color.secondary)
+                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
 
-                Text(title)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                Text(item.title)
+                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.vertical, self.theme.metrics.spacing.xs / 2)
@@ -1815,7 +1828,7 @@ struct ContentView: View {
             Image(systemName: self.settings.themePreference.systemImageName)
                 .fluidToolbarIcon()
         }
-        .help("Theme: \(self.settings.themePreference.displayName)")
+        .help(PichiLocalization.format("Theme: %@", PichiLocalization.text(self.settings.themePreference.displayName)))
         .accessibilityLabel("Theme")
     }
 
@@ -2152,8 +2165,8 @@ struct ContentView: View {
                     self.instructionStep(number: "2", text: "Choose **Allow** in the system dialog")
                 } else if self.asr.micStatus == .denied {
                     self.instructionStep(number: "1", text: "Click **Open Settings** above")
-                    self.instructionStep(number: "2", text: "Find **FluidVoice** in the microphone list")
-                    self.instructionStep(number: "3", text: "Toggle **FluidVoice ON** to allow access")
+                    self.instructionStep(number: "2", text: AppBrand.text("Find **FluidVoice** in the microphone list"))
+                    self.instructionStep(number: "3", text: AppBrand.text("Toggle **FluidVoice ON** to allow access"))
                 }
             }
             .padding(.leading, 4)
@@ -2913,6 +2926,8 @@ struct ContentView: View {
             extraParameters: extraParams,
             benchmarkID: benchmarkID
         )
+        config.providerOptions = route.connectionOptions
+        DictationPostProcessingService.configureInteractiveLocalRequest(&config)
         if enableStreaming {
             config.onContentChunk = { chunk in
                 streamHandler?(chunk)
@@ -2926,7 +2941,7 @@ struct ContentView: View {
             do {
                 response = try await LLMClient.shared.call(config)
             } catch {
-                guard DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error) else {
+                guard DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error, baseURL: config.baseURL) else {
                     self.appBench("ai_streaming_fallback_skipped reason=transport_or_cancel")
                     throw error
                 }
@@ -2935,7 +2950,7 @@ struct ContentView: View {
                     "Streaming dictation post-processing failed; retrying without streaming: \(error.localizedDescription)",
                     source: "ContentView"
                 )
-                let fallbackConfig = LLMClient.Config(
+                var fallbackConfig = LLMClient.Config(
                     messages: messages,
                     model: derivedSelectedModel,
                     baseURL: derivedBaseURL,
@@ -2946,6 +2961,8 @@ struct ContentView: View {
                     extraParameters: extraParams,
                     benchmarkID: benchmarkID
                 )
+                fallbackConfig.providerOptions = config.providerOptions
+                DictationPostProcessingService.configureInteractiveLocalRequest(&fallbackConfig)
                 response = try await LLMClient.shared.call(fallbackConfig)
             }
         } else {
@@ -4532,7 +4549,10 @@ struct ContentView: View {
     /// the warm prefix cache the prewarm prime.
     private func cancelPrewarmDictationIfNeeded() {
         self.prewarmDictationTask?.cancel()
-        self.prewarmDictationTask = nil
+        // Retain the task until its transport returns so a replacement can join
+        // it. Clearing this reference here could overlap two native model loads.
+        self.prewarmDictationRoute = nil
+        self.prewarmDictationVerifiedUntil = 0
     }
 
     private func handleLivePromptModeSwitch(_ mode: SettingsStore.PromptMode) {
@@ -4658,7 +4678,7 @@ struct ContentView: View {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
-                self.prewarmPrivateAIDictationIfNeeded(for: .primary)
+                self.prewarmAIDictationIfNeeded(for: .primary)
                 DebugLogger.shared.benchmark(
                     "APP_BENCH",
                     message: "overlay_phase phase=recording trigger=first_pcm",
@@ -4722,7 +4742,14 @@ struct ContentView: View {
         return true
     }
 
-    private func prewarmPrivateAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
+    private var localDictationWarmupRoute: DictationProviderRoute? {
+        let appID = DictationAppSession.shared.appID
+        guard DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appID) else { return nil }
+        let route = DictationProviderRoute.resolve(settings: self.settings, dictationSlot: .primary, appBundleID: appID)
+        return OllamaChatAdapter.supports(route.baseURL) ? route : nil
+    }
+
+    private func prewarmAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot, localOnly: Bool = false) {
         let appBundleID = self.asr.isRunningOrStarting ? self.recordingAppInfo?.bundleId : DictationAppSession.shared.appID
         let settings = SettingsStore.shared
         let route = DictationProviderRoute.resolve(
@@ -4730,28 +4757,61 @@ struct ContentView: View {
             dictationSlot: slot,
             appBundleID: appBundleID
         )
-        guard route.usesPrivateAI,
-              DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appBundleID)
-        else { return }
+        let nativeLocal = OllamaChatAdapter.supports(route.baseURL)
+        guard nativeLocal || (!localOnly && route.usesPrivateAI),
+              DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appBundleID),
+              self.asr.activeExclusiveActivity == nil || self.asr.activeExclusiveActivity == .dictation
+        else {
+            if localOnly, self.prewarmDictationRoute != nil { self.cancelPrewarmDictationIfNeeded() }
+            return
+        }
+
+        // Settings redraws, activation and recording can request the same warmup.
+        // Coalesce pending work and a short verified interval; there is no timer
+        // that repeatedly warms an idle app or loads all configured models.
+        if nativeLocal, self.prewarmDictationRoute == route,
+           self.prewarmDictationTask != nil || ProcessInfo.processInfo.systemUptime < self.prewarmDictationVerifiedUntil {
+            return
+        }
 
         // Cancel any prior prewarm so rapid start/stop doesn't queue duplicate
         // actor work on PrivateAIIntegrationService.
-        self.prewarmDictationTask?.cancel()
+        let previous = self.prewarmDictationTask
+        previous?.cancel()
+        let requestID = UUID()
+        self.prewarmDictationRequestID = requestID
+        self.prewarmDictationRoute = nativeLocal ? route : nil
         let warmupGeneration = MeetingModelResidencyCoordinator.shared.warmupGeneration
         self.prewarmDictationTask = Task {
-            guard !Task.isCancelled, MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
+            await previous?.value
+            defer {
+                if self.prewarmDictationRequestID == requestID { self.prewarmDictationTask = nil }
+            }
+            guard !Task.isCancelled,
+                  self.asr.activeExclusiveActivity == nil || self.asr.activeExclusiveActivity == .dictation,
+                  MeetingModelResidencyCoordinator.shared.canRunWarmup(warmupGeneration) else { return }
             DebugLogger.shared.debug(
                 "ContentView: AI dictation prewarm started slot=\(slot.rawValue)",
                 source: "ContentView"
             )
-            await PrivateAIIntegrationService.shared.prewarmDictation()
+            if nativeLocal {
+                do {
+                    try await DictationPostProcessingService.shared.prewarmLocalModel(route)
+                    guard !Task.isCancelled, self.prewarmDictationRequestID == requestID else { return }
+                    self.prewarmDictationVerifiedUntil = ProcessInfo.processInfo.systemUptime + 30
+                } catch {
+                    if !Task.isCancelled {
+                        DebugLogger.shared.debug("Local dictation prewarm unavailable; normal dictation remains available", source: "ContentView")
+                    }
+                    return
+                }
+            } else {
+                await PrivateAIIntegrationService.shared.prewarmDictation()
+            }
             DebugLogger.shared.debug(
                 "AI dictation prewarm complete slot=\(slot.rawValue)",
                 source: "ContentView"
             )
-            if !Task.isCancelled {
-                self.prewarmDictationTask = nil
-            }
         }
     }
 
@@ -4895,7 +4955,7 @@ struct ContentView: View {
             let slot = self.activeDictationShortcutSlot ?? .primary
             DictationAppSession.shared.select(selection, slot: slot, appID: DictationAppSession.shared.appID)
             self.applyDictationShortcutSelectionContext(for: slot)
-            self.prewarmPrivateAIDictationIfNeeded(for: slot)
+            self.prewarmAIDictationIfNeeded(for: slot)
         }
 
         guard self.hotkeyManager == nil else { return }
@@ -5430,7 +5490,7 @@ extension ContentView {
                     TranscriptionSoundPlayer.shared.playStartSound()
                 }
                 self.captureRecordingContext()
-                self.prewarmPrivateAIDictationIfNeeded(for: slot)
+                self.prewarmAIDictationIfNeeded(for: slot)
                 self.appBench("overlay_phase phase=recording trigger=first_pcm")
             })
             guard !Task.isCancelled else {
@@ -5645,7 +5705,7 @@ extension ContentView {
     private func positionWindowBesideSystemSettings(requestID: UUID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             guard self.accessibilityGuideRequestID == requestID else { return }
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == "FluidVoice" }) ?? NSApp.keyWindow else {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title == AppBrand.text("FluidVoice") }) ?? NSApp.keyWindow else {
                 return
             }
 
@@ -5774,16 +5834,18 @@ extension ContentView {
             panel.hasShadow = true
             panel.hidesOnDeactivate = false
             panel.contentView = NSHostingView(
-                rootView: AccessibilitySettingsFloatingGuideView(
-                    appURL: self.draggableAccessibilityAppURL,
-                    appName: self.accessibilityAppDisplayName,
-                    onReturnToApp: {
-                        self.cancelAccessibilityPermissionFlow()
-                    },
-                    onClose: {
-                        self.cancelAccessibilityPermissionFlow()
-                    }
-                )
+                rootView: PichiLocalizedContent {
+                    AccessibilitySettingsFloatingGuideView(
+                        appURL: self.draggableAccessibilityAppURL,
+                        appName: self.accessibilityAppDisplayName,
+                        onReturnToApp: {
+                            self.cancelAccessibilityPermissionFlow()
+                        },
+                        onClose: {
+                            self.cancelAccessibilityPermissionFlow()
+                        }
+                    )
+                }
             )
             panel.setFrame(frame, display: true, animate: self.accessibilityGuidePanel != nil)
             panel.orderFrontRegardless()
@@ -5814,7 +5876,7 @@ extension ContentView {
     private func cancelAccessibilityPermissionFlow() {
         self.finishAccessibilityPermissionFlow()
         NSApp.activate(ignoringOtherApps: true)
-        (NSApp.windows.first { $0.isVisible && $0.title == "FluidVoice" } ?? NSApp.keyWindow)?
+        (NSApp.windows.first { $0.isVisible && $0.title == AppBrand.text("FluidVoice") } ?? NSApp.keyWindow)?
             .makeKeyAndOrderFront(nil)
     }
 
@@ -5879,7 +5941,7 @@ extension ContentView {
             return runningAppURL
         }
 
-        let installedURL = URL(fileURLWithPath: "/Applications/FluidVoice.app")
+        let installedURL = URL(fileURLWithPath: "/Applications/\(Bundle.main.fluidAppDisplayName).app")
         if FileManager.default.fileExists(atPath: installedURL.path) {
             return installedURL
         }

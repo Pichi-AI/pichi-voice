@@ -61,12 +61,12 @@ extension VoiceEngineSettingsView {
                             .fluidDropdownStyle()
                             Menu {
                                 ForEach(ModelSortOption.allCases) { option in
-                                    Button(option.rawValue) {
+                                    Button(PichiLocalization.text(option.rawValue)) {
                                         self.viewModel.modelSortOption = option
                                     }
                                 }
                             } label: {
-                                Text("Sort by: \(self.viewModel.modelSortOption.rawValue)")
+                                Text("Sort by: \(PichiLocalization.text(self.viewModel.modelSortOption.rawValue))")
                             }
                             .fluidDropdownStyle()
                         }
@@ -86,8 +86,8 @@ extension VoiceEngineSettingsView {
                                         .font(self.theme.typography.sectionTitle)
                                         .foregroundStyle(self.voiceEngineTitleText)
                                     Label(
-                                        self.viewModel.installations.isChecking ? "Checking downloaded models…"
-                                            : (self.viewModel.installations.state == .failed ? "Couldn't check downloaded models. Try again." : "No active model yet. Download and activate one below."),
+                                        PichiLocalization.text(self.viewModel.installations.isChecking ? "Checking downloaded models…"
+                                            : (self.viewModel.installations.state == .failed ? "Couldn't check downloaded models. Try again." : "No active model yet. Download and activate one below.")),
                                         systemImage: self.viewModel.installations.canUseModelActions ? "arrow.down.circle" : "info.circle"
                                     )
                                     .font(self.theme.typography.bodySmall)
@@ -102,7 +102,7 @@ extension VoiceEngineSettingsView {
                             Divider().padding(.vertical, 2)
 
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(hasActiveModel ? "Other Models" : "Available Models")
+                                Text(PichiLocalization.text(hasActiveModel ? "Other Models" : "Available Models"))
                                     .font(self.theme.typography.sectionTitle)
                                     .foregroundStyle(self.voiceEngineTitleText)
                                 VStack(spacing: 8) {
@@ -140,33 +140,34 @@ extension VoiceEngineSettingsView {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 20) {
+                self.speechModelLogoView(for: model, size: 36)
                 VStack(alignment: .leading, spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text(model.humanReadableName)
+                            Text(LocalizedStringKey(model.humanReadableName))
                                 .font(.fluidSystem(size: 16, weight: .bold))
                                 .foregroundStyle(self.theme.palette.primaryText)
 
                             if let badge = model.badgeText {
-                                Text(badge)
+                                Text(PichiLocalization.text(badge))
                                     .font(.fluidSystem(.caption2))
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(Capsule().fill(badge == "FluidVoice Pick" ? .cyan.opacity(0.2) : .orange.opacity(0.2)))
-                                    .foregroundStyle(badge == "FluidVoice Pick" ? .cyan : .orange)
+                                    .background(Capsule().fill(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent.opacity(0.2) : .orange.opacity(0.2)))
+                                    .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent : .orange)
                             }
 
                             Spacer()
                         }
 
-                        Text(model.cardDescription)
+                        Text(LocalizedStringKey(model.cardDescription))
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
 
                         if let descriptor = model.parakeetDescriptor {
-                            Text(descriptor.creditLine)
+                            Text(PichiLocalization.text(descriptor.creditLine))
                                 .font(self.theme.typography.caption)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -174,7 +175,7 @@ extension VoiceEngineSettingsView {
                     }
 
                     HStack(spacing: 8) {
-                        Label(self.viewModel.speechModelDownloadSize(model), systemImage: "internaldrive")
+                        Label(PichiLocalization.text(self.viewModel.speechModelDownloadSize(model)), systemImage: "internaldrive")
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
 
@@ -187,7 +188,7 @@ extension VoiceEngineSettingsView {
                                 .foregroundStyle(self.theme.palette.accent)
                         }
 
-                        Text(model.languageSupport)
+                        Text(LocalizedStringKey(model.languageSupport))
                             .font(self.theme.typography.bodySmallStrong)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -210,7 +211,7 @@ extension VoiceEngineSettingsView {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(.orange)
-                            Text(memoryWarning)
+                            Text(PichiLocalization.text(memoryWarning))
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(.orange)
                         }
@@ -249,6 +250,8 @@ extension VoiceEngineSettingsView {
                     .frame(width: 140, alignment: .center)
                     .help("Relative ratings for comparing models, not measured transcription accuracy.")
                     .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
+                } else {
+                    self.unratedModelLabel.frame(width: 140, alignment: .center)
                 }
             }
         }
@@ -273,10 +276,10 @@ extension VoiceEngineSettingsView {
                 .frame(width: 28, height: 28)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.humanReadableName)
+                Text(LocalizedStringKey(model.humanReadableName))
                     .font(self.theme.typography.bodyStrong)
                     .foregroundStyle(self.voiceEngineTitleText)
-                Text(self.speechModelSubtitle(for: model))
+                self.speechModelSubtitle(for: model)
                     .font(self.theme.typography.body)
                     .foregroundStyle(self.voiceEngineSecondaryText)
 
@@ -299,6 +302,8 @@ extension VoiceEngineSettingsView {
                                 .font(self.theme.typography.bodyStrong)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                         }
+                    } else {
+                        self.unratedModelLabel
                     }
 
                     if isSelected && !isActive {
@@ -319,6 +324,19 @@ extension VoiceEngineSettingsView {
                         .foregroundStyle(self.voiceEngineSecondaryText)
                 }
                 .accessibilityLabel("Deleting \(model.humanReadableName)")
+            } else if self.viewModel.importingModel == model {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text(PichiLocalization.text(self.viewModel.isCancellingModelImport ? "Cancelling…" : "Importing..."))
+                        .font(self.theme.typography.bodySmall)
+                        .foregroundStyle(self.voiceEngineSecondaryText)
+                    Button(PichiLocalization.text(self.viewModel.isCancellingModelImport ? "Cancelling…" : "Cancel")) {
+                        self.viewModel.cancelModelImport()
+                    }
+                    .fluidOutlinedButton()
+                    .controlSize(.small)
+                    .disabled(self.viewModel.isCancellingModelImport)
+                }
             } else if self.viewModel.downloadingModel == model {
                 // This specific model is currently being downloaded
                 HStack(spacing: 8) {
@@ -341,13 +359,13 @@ extension VoiceEngineSettingsView {
                         } else {
                             ProgressView()
                                 .controlSize(.mini)
-                            Text(self.viewModel.asr.modelPreparationStatusText)
+                            Text(PichiLocalization.text(self.viewModel.asr.modelPreparationStatusText))
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                         }
                     }
 
-                    Button(self.viewModel.isCancellingModelDownload ? "Cancelling…" : "Cancel") {
+                    Button(PichiLocalization.text(self.viewModel.isCancellingModelDownload ? "Cancelling…" : "Cancel")) {
                         self.viewModel.cancelSpeechModelDownload()
                     }
                     .fluidOutlinedButton()
@@ -382,13 +400,13 @@ extension VoiceEngineSettingsView {
                         } else {
                             ProgressView()
                                 .controlSize(.mini)
-                            Text(self.viewModel.asr.modelPreparationStatusText)
+                            Text(PichiLocalization.text(self.viewModel.asr.modelPreparationStatusText))
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                         }
                     }
 
-                    Button(self.viewModel.asr.isCancellingModelPreparation ? "Cancelling…" : "Cancel") {
+                    Button(PichiLocalization.text(self.viewModel.asr.isCancellingModelPreparation ? "Cancelling…" : "Cancel")) {
                         self.viewModel.cancelActiveModelPreparation()
                     }
                     .fluidOutlinedButton()
@@ -455,7 +473,13 @@ extension VoiceEngineSettingsView {
                 }
             } else {
                 ZStack(alignment: .trailing) {
-                    if model.requiresExternalArtifacts {
+                    if model.supportsFolderImport {
+                        Button("Import model folder") {
+                            self.viewModel.importSpeechModel(model)
+                        }
+                        .fluidGlassAction(prominent: true)
+                        .disabled(self.viewModel.areSpeechModelActionsBlocked)
+                    } else if model.requiresExternalArtifacts {
                         HStack(spacing: 8) {
                             if model.externalCoreMLSpec?.sourceURL != nil {
                                 Button {
@@ -639,7 +663,7 @@ extension VoiceEngineSettingsView {
 
     private func whisperLanguagePickerRow(title: String, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
-            Text(title)
+            Text(PichiLocalization.text(title))
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(.primary)
             Spacer(minLength: 12)
@@ -657,7 +681,7 @@ extension VoiceEngineSettingsView {
     private func languageChipLabel(_ title: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "globe").foregroundStyle(self.theme.palette.accent)
-            Text(title).lineLimit(1)
+            Text(PichiLocalization.text(title)).lineLimit(1)
             FluidDropdownChevron()
         }
         .font(self.theme.typography.bodySmall)
@@ -666,15 +690,18 @@ extension VoiceEngineSettingsView {
         .fluidDropdownSurface()
     }
 
-    private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> String {
+    @ViewBuilder
+    private func speechModelSubtitle(for model: SettingsStore.SpeechModel) -> some View {
         if model == .fluidParakeetMini || model == .fluidParakeetPico {
-            return model.languageSupport
-        }
-        switch model {
-        case .nemotronStreaming, .nemotronStreaming320:
-            return "Nemotron Speech 3.5 - Streaming Capable"
-        default:
-            return model.displayName
+            // Declared language-support copy is a UI key; Text observes the inherited locale.
+            Text(LocalizedStringKey(model.languageSupport))
+        } else {
+            switch model {
+            case .nemotronStreaming, .nemotronStreaming320:
+                Text("Nemotron Speech 3.5 - Streaming Capable")
+            default:
+                Text(model.displayName)
+            }
         }
     }
 
@@ -796,64 +823,17 @@ extension VoiceEngineSettingsView {
 
     // MARK: - Speech Model Logo View
 
-    private func speechModelLogoView(for model: SettingsStore.SpeechModel) -> some View {
-        let bgColor = self.speechModelBackgroundColor(for: model)
-        let imageName = self.speechModelImageName(for: model)
-        let isNvidia = model.brandName.lowercased().contains("nvidia")
-
-        return ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(bgColor)
-
-            if model.brandName == "FluidVoice" {
-                FluidVoiceBrandIcon(size: 28)
-            } else if model.usesAppleLogo {
-                Image(systemName: "apple.logo")
-                    .font(.fluidSystem(size: 14, weight: .medium))
-                    .foregroundStyle(.primary)
-            } else if let imageName {
-                Image(imageName)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    // NVIDIA logo larger to fill more of the container
-                    .frame(width: isNvidia ? 24 : 18, height: isNvidia ? 24 : 18)
-            } else {
-                Text(String(model.brandName.prefix(2)).uppercased())
-                    .font(.fluidSystem(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(self.theme.palette.primaryText)
-            }
-        }
-        .frame(width: 28, height: 28)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    private func speechModelLogoView(for model: SettingsStore.SpeechModel, size: CGFloat = 28) -> some View {
+        SpeechModelProviderMark(presentation: model.provider.presentation,
+            providerColor: Color(hex: model.brandColorHex), size: size)
     }
 
-    private func speechModelBackgroundColor(for model: SettingsStore.SpeechModel) -> Color {
-        let brand = model.brandName.lowercased()
-
-        // Both NVIDIA and OpenAI use white/light gray bg (transparent logos)
-        if brand.contains("nvidia") || brand.contains("openai") || brand.contains("whisper") {
-            return Color(red: 0.97, green: 0.97, blue: 0.97)
-        }
-        if brand.contains("apple") || model.usesAppleLogo {
-            return self.theme.palette.cardBackground.opacity(0.9)
-        }
-        return Color(hex: model.brandColorHex)?.opacity(0.2) ?? self.theme.palette.cardBackground
+    private var unratedModelLabel: some View {
+        Label(PichiLocalization.text("Ratings unavailable"), systemImage: "chart.bar")
+            .font(self.theme.typography.caption)
+            .foregroundStyle(self.voiceEngineSecondaryText)
     }
 
-    private func speechModelImageName(for model: SettingsStore.SpeechModel) -> String? {
-        let brand = model.brandName.lowercased()
-
-        if brand.contains("nvidia") {
-            return "Provider_NVIDIA"
-        }
-        if brand.contains("cohere") {
-            return "Provider_Cohere"
-        }
-        if brand.contains("openai") || brand.contains("whisper") {
-            return "Provider_OpenAI"
-        }
-        return nil
-    }
 }
 
 extension Notification.Name {

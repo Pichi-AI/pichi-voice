@@ -128,7 +128,7 @@ struct MeetingAssignSpeakersSheet: View {
                         .keyboardShortcut(.cancelAction)
                         .disabled(self.isSaving)
                     Spacer()
-                    Button(self.isSaving ? "Saving…" : "Save names") { Task { await self.save() } }
+                    Button(self.isSaving ? PichiLocalization.text("Saving…") : PichiLocalization.text("Save names")) { Task { await self.save() } }
                         .meetingGlassAction(prominent: true)
                         .keyboardShortcut(.defaultAction)
                         .disabled(self.isSaving)
@@ -222,7 +222,7 @@ struct MeetingAssignSpeakersSheet: View {
             current: self.speakers.map { (id: $0.id, displayName: $0.displayName) },
             drafts: self.drafts
         ) {
-            self.errorMessage = "Two speakers are both named \"\(duplicate)\". Give them different names, or merge them from the transcript."
+            self.errorMessage = PichiLocalization.format("Two speakers are both named \"%@\". Give them different names, or merge them from the transcript.", duplicate)
             return
         }
 

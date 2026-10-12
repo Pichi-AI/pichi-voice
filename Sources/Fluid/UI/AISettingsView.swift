@@ -69,13 +69,14 @@ enum ModelSortOption: String, CaseIterable, Identifiable {
 
 enum SpeechProviderFilter: String, CaseIterable, Identifiable {
     case all = "All"
+    case pichi = "Pichi"
     case nvidia = "NVIDIA"
     case apple = "Apple"
     case cohere = "Cohere"
     case openai = "OpenAI"
 
     var id: String { self.rawValue }
-    var displayName: String { self == .nvidia ? "FluidVoice / NVIDIA" : self.rawValue }
+    var displayName: String { self == .nvidia ? AppBrand.text("FluidVoice / NVIDIA") : PichiLocalization.text(self.rawValue) }
 }
 
 enum AISettingsLayout {

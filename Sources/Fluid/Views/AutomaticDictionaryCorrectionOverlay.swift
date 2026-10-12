@@ -13,7 +13,8 @@ final class DictionaryCorrectionOverlayController {
     private static let dismissalDuration: TimeInterval = 0.05
 
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<AutomaticDictionaryCorrectionOverlayView>?
+    private var hostingView: NSHostingView<PichiLocalizedContent<AutomaticDictionaryCorrectionOverlayView>>?
+    private var languageCancellable: AnyCancellable?
     private var session: AutomaticDictionaryTrainingSession?
     private var sessionCancellable: AnyCancellable?
     private var dismissTask: Task<Void, Never>?
@@ -74,7 +75,7 @@ final class DictionaryCorrectionOverlayController {
         )
 
         if let hostingView = self.hostingView {
-            hostingView.rootView = rootView
+            hostingView.rootView = PichiLocalizedContent { rootView }
         } else {
             self.createPanel(rootView: rootView)
         }
@@ -197,13 +198,18 @@ final class DictionaryCorrectionOverlayController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = NSHostingView(rootView: PichiLocalizedContent { rootView })
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = .clear
         panel.contentView = hostingView
 
         self.panel = panel
         self.hostingView = hostingView
+        self.languageCancellable = NotificationCenter.default.publisher(for: PichiLocalization.languageChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.transientOverlayLayoutDidChange() }
+            }
     }
 
     private func resizeAndPositionPanel(animated: Bool) {
@@ -260,12 +266,13 @@ final class MicrophoneChangeOverlayController {
     static let shared = MicrophoneChangeOverlayController()
 
     private static let displayDurationNanoseconds: UInt64 = 5_000_000_000
-    private static let supportedBundleIdentifiers = [
-        "com.FluidApp.app",
-        "com.FluidApp.app.debug",
+    private nonisolated static let supportedBundleIdentifiers = [
+        AppBrand.releaseBundleIdentifier,
+        AppBrand.releaseBundleIdentifier + ".debug",
     ]
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<MicrophoneChangeOverlayView>?
+    private var hostingView: NSHostingView<PichiLocalizedContent<MicrophoneChangeOverlayView>>?
+    private var languageCancellable: AnyCancellable?
     private var dismissTask: Task<Void, Never>?
     private var generation: UInt64 = 0
 
@@ -293,7 +300,7 @@ final class MicrophoneChangeOverlayController {
             onDismiss: { [weak self] in self?.hide() }
         )
         if let hostingView = self.hostingView {
-            hostingView.rootView = rootView
+            hostingView.rootView = PichiLocalizedContent { rootView }
         } else {
             self.createPanel(rootView: rootView)
         }
@@ -363,6 +370,8 @@ final class MicrophoneChangeOverlayController {
     }
 
     private func releasePanel() {
+        self.languageCancellable?.cancel()
+        self.languageCancellable = nil
         self.panel?.orderOut(nil)
         self.panel?.contentView = nil
         self.hostingView = nil
@@ -390,12 +399,21 @@ final class MicrophoneChangeOverlayController {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
 
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = NSHostingView(rootView: PichiLocalizedContent { rootView })
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = .clear
         panel.contentView = hostingView
         self.panel = panel
         self.hostingView = hostingView
+        self.languageCancellable = NotificationCenter.default.publisher(for: PichiLocalization.languageChanged)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, self.panel?.isVisible == true else { return }
+                    self.resizeAndPositionPanel()
+                    DictionaryCorrectionOverlayController.shared.transientOverlayLayoutDidChange()
+                }
+            }
     }
 
     private func resizeAndPositionPanel() {
@@ -446,6 +464,7 @@ private struct MicrophoneChangeOverlayView: View {
     let onDismiss: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var interfaceLocale
     @State private var isCloseHovered = false
     @State private var isDisableHovered = false
     @State private var isSettingsHovered = false
@@ -458,7 +477,7 @@ private struct MicrophoneChangeOverlayView: View {
                     .foregroundStyle(.white.opacity(0.78))
                     .frame(width: 24, height: 24)
 
-                Text(self.title)
+                Text(PichiLocalization.text(self.title, locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.72))
 
@@ -486,7 +505,7 @@ private struct MicrophoneChangeOverlayView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 8) {
-                Text(self.explanation)
+                Text(PichiLocalization.text(self.explanation, locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 11))
                     .foregroundStyle(.white.opacity(0.58))
                     .lineLimit(1)
@@ -529,11 +548,11 @@ private struct MicrophoneChangeOverlayView: View {
         case let (previous?, current?):
             return "\(previous)  →  \(current)"
         case let (previous?, nil):
-            return "\(previous) is no longer available"
+            return PichiLocalization.format("%@ is no longer available", language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian, bundle: .main, arguments: [previous])
         case let (nil, current?):
-            return "Now using \(current)"
+            return PichiLocalization.format("Now using %@", language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian, bundle: .main, arguments: [current])
         case (nil, nil):
-            return "Connect or restore a microphone in Settings"
+            return PichiLocalization.text("Connect or restore a microphone in Settings", locale: self.interfaceLocale)
         }
     }
 
@@ -549,12 +568,12 @@ private struct MicrophoneChangeOverlayView: View {
             return "Choose an available microphone in Settings."
         }
         if self.notice.presentation == .startupSelection {
-            return "FluidVoice will try this microphone first when you dictate."
+            return AppBrand.text("FluidVoice will try this microphone first when you dictate.")
         }
         if self.notice.presentation == .selectionChange {
-            return "FluidVoice selected this microphone for capture."
+            return AppBrand.text("FluidVoice selected this microphone for capture.")
         }
-        return "FluidVoice confirmed this microphone is capturing audio."
+        return AppBrand.text("FluidVoice confirmed this microphone is capturing audio.")
     }
 }
 
@@ -646,6 +665,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     let onDisableSuggestions: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var interfaceLocale
     @State private var isDismissHovered = false
     @State private var progress: CGFloat = 1
 
@@ -694,7 +714,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             return "Confirm only if you said a different word, not a spelling change."
         }
         return self.pronunciationEnabled
-            ? "Save only this correction, or teach FluidVoice other pronunciations."
+            ? AppBrand.text("Save only this correction, or teach FluidVoice other pronunciations.")
             : "Save this text correction to your dictionary."
     }
 
@@ -704,7 +724,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
             self.correctionPair
 
-            Text(self.correctionChoiceDescription)
+            Text(PichiLocalization.text(self.correctionChoiceDescription, locale: self.interfaceLocale))
                 .font(.fluidSystem(size: 11))
                 .foregroundStyle(.white.opacity(0.58))
                 .lineLimit(1)
@@ -737,7 +757,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 }
             }
             if self.session.hasError {
-                Text(self.session.statusMessage).font(.fluidSystem(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                Text(PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale)).font(.fluidSystem(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }
         .transition(.opacity)
@@ -754,9 +774,9 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                         self.startProgressAnimation()
                     } label: {
                         if self.settings.automaticDictionarySuggestionFrequency == frequency {
-                            Label(frequency.displayName, systemImage: "checkmark")
+                            Label(PichiLocalization.text(frequency.displayName, locale: self.interfaceLocale), systemImage: "checkmark")
                         } else {
-                            Text(frequency.displayName)
+                            Text(PichiLocalization.text(frequency.displayName, locale: self.interfaceLocale))
                         }
                     }
                 }
@@ -785,12 +805,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             self.correctionPair
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("Teach FluidVoice your pronunciation")
+                Text(AppBrand.text("Teach FluidVoice your pronunciation"))
                     .font(.fluidSystem(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.94))
 
                 if self.session.isReady {
-                    Label("FluidVoice got it right 3 times in a row.", systemImage: "checkmark.circle.fill")
+                    Label(AppBrand.text("FluidVoice got it right 3 times in a row."), systemImage: "checkmark.circle.fill")
                         .font(.fluidSystem(size: 10.5, weight: .medium))
                         .foregroundStyle(self.accent)
                 } else {
@@ -798,7 +818,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                         self.trainingInstruction(number: 1, text: "Press Start once.")
                         self.trainingInstruction(
                             number: 2,
-                            text: "Say the word, then pause. FluidVoice captures it and listens again."
+                            text: AppBrand.text("Say the word, then pause. FluidVoice captures it and listens again.")
                         )
                         self.trainingInstruction(number: 3, text: "Repeat naturally until the circle reaches 3/3.")
                     }
@@ -839,7 +859,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
             if self.session.capturePhase == .idle, self.session.hasError, !self.session.statusMessage.isEmpty {
                 Label(
-                    self.session.statusMessage,
+                    PichiLocalization.text(self.session.statusMessage, locale: self.interfaceLocale),
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.fluidSystem(size: 10.5, weight: .medium))
@@ -862,13 +882,13 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 
     private var overlayReadinessCaption: String {
         if self.session.isReady {
-            return "Ready. Add Replacement is unlocked."
+            return PichiLocalization.text("Ready. Add Replacement is unlocked.", locale: self.interfaceLocale)
         }
         let remaining = max(
             0,
             CustomDictionaryTrainingMerge.readyCoveredCount - self.session.readinessProgress
         )
-        return "\(remaining) correct \(remaining == 1 ? "try" : "tries") to unlock Add Replacement."
+        return PichiLocalization.format(remaining == 1 ? "%lld correct try to unlock Add Replacement." : "%lld correct tries to unlock Add Replacement.", language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian, bundle: .main, arguments: [remaining])
     }
 
     private func trainingInstruction(number: Int, text: String) -> some View {
@@ -878,7 +898,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 .foregroundStyle(self.accent)
                 .frame(width: 14)
 
-            Text(text)
+            Text(PichiLocalization.text(text, locale: self.interfaceLocale))
                 .font(.fluidSystem(size: 10.5))
                 .foregroundStyle(.white.opacity(0.58))
                 .fixedSize(horizontal: false, vertical: true)
@@ -897,7 +917,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(self.session.successTitle)
+                Text(PichiLocalization.text(self.session.successTitle, locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                 Text("“\(self.session.candidate.heardText)” will become “\(self.session.candidate.correctedText)”.")
@@ -933,7 +953,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .frame(width: 24, height: 24)
             }
 
-            Text(title)
+            Text(PichiLocalization.text(title, locale: self.interfaceLocale))
                 .font(.fluidSystem(size: 12, weight: .medium))
                 .foregroundStyle(.white.opacity(0.72))
 
@@ -980,7 +1000,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 Text("Final output")
                     .font(.fluidSystem(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.46))
-                Text(self.session.finalOutputText)
+                Text(self.session.lastOutput.isEmpty ? PichiLocalization.text("Record to check", locale: self.interfaceLocale) : self.session.finalOutputText)
                     .font(.fluidSystem(size: 12, weight: .semibold))
                     .foregroundStyle(.white.opacity(self.session.lastOutput.isEmpty ? 0.48 : 0.9))
                     .lineLimit(1)
@@ -1040,6 +1060,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
 }
 
 private struct CorrectionOverlayReadinessRing: View {
+    @Environment(\.locale) private var interfaceLocale
     let progress: Int
     let total: Int
     let isReady: Bool
@@ -1069,7 +1090,7 @@ private struct CorrectionOverlayReadinessRing: View {
                     .foregroundStyle(self.isReady ? self.accent : .white.opacity(0.92))
                     .monospacedDigit()
 
-                Text(self.isReady ? "Ready" : "correct")
+                Text(PichiLocalization.text(self.isReady ? "Ready" : "correct", locale: self.interfaceLocale))
                     .font(.fluidSystem(size: 8.5, weight: .medium))
                     .foregroundStyle(.white.opacity(0.46))
             }
@@ -1098,6 +1119,7 @@ private struct CorrectionOverlayActionButton: View {
     let action: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.locale) private var interfaceLocale
     @State private var isHovered = false
     @State private var isGlowExpanded = false
 
@@ -1107,7 +1129,7 @@ private struct CorrectionOverlayActionButton: View {
 
     var body: some View {
         Button(action: self.action) {
-            Label(self.title, systemImage: self.systemImage)
+            Label(PichiLocalization.text(self.title, locale: self.interfaceLocale), systemImage: self.systemImage)
                 .font(.fluidSystem(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(self.isEnabled ? 0.94 : 0.42))
                 .frame(maxWidth: .infinity)
@@ -1180,6 +1202,7 @@ private struct CorrectionOverlayActionButton: View {
 }
 
 private struct CorrectionOverlayRecordButton: View {
+    @Environment(\.locale) private var interfaceLocale
     let title: String
     let isStop: Bool
     let isEnabled: Bool
@@ -1190,7 +1213,7 @@ private struct CorrectionOverlayRecordButton: View {
 
     var body: some View {
         Button(action: self.action) {
-            Label(self.title, systemImage: self.isStop ? "stop.fill" : "mic.fill")
+            Label(PichiLocalization.text(self.title, locale: self.interfaceLocale), systemImage: self.isStop ? "stop.fill" : "mic.fill")
                 .font(.fluidSystem(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(self.isEnabled ? 0.95 : 0.4))
                 .padding(.horizontal, 13)

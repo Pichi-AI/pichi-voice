@@ -48,7 +48,7 @@ struct RecordingView: View {
                                     .fill(self.asr.isRunning ? .red : self.asr.isAsrReady ? Color.fluidGreen : .secondary)
                                     .frame(width: 8, height: 8)
 
-                                Text(self.asr.isRunning ? "Recording..." : self.asr.isAsrReady ? "Ready to record" : "Model not ready")
+                                Text(PichiLocalization.text(self.asr.isRunning ? "Recording..." : self.asr.isAsrReady ? "Ready to record" : "Model not ready"))
                                     .font(.fluidSystem(.subheadline))
                                     .foregroundStyle(self.asr.isRunning ? .red : self.asr.isAsrReady ? Color.fluidGreen : .secondary)
                             }
@@ -66,7 +66,7 @@ struct RecordingView: View {
                                 HStack {
                                     Image(systemName: self.asr.isRunning ? "stop.fill" : "mic.fill")
                                         .font(.fluidSystem(size: 16, weight: .semibold))
-                                    Text(self.asr.isRunning ? "Stop Recording" : "Start Recording")
+                                    Text(PichiLocalization.text(self.asr.isRunning ? "Stop Recording" : "Start Recording"))
                                 }
                                 .frame(maxWidth: .infinity)
                             }

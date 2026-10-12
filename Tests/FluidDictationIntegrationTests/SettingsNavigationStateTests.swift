@@ -1,4 +1,7 @@
 import AppKit
+import AVFoundation
+import Combine
+import SwiftUI
 @testable import FluidVoice_Debug
 import XCTest
 
@@ -79,6 +82,162 @@ final class SettingsNavigationStateTests: XCTestCase {
         SidebarSearchField.resignFocusIfNeeded(from: searchField, isActive: false)
 
         XCTAssertNil(searchField.currentEditor())
+    }
+
+    func testNativeSidebarSearchUpdatesLocaleWithoutReplacingFieldEditorOrQuery() async throws {
+        for (source, russian) in [("Search", "Поиск"), ("Search Settings", "Поиск по настройкам")] {
+            let state = SearchLocaleFixture()
+            let host = NSHostingView(rootView: SearchLocaleHost(state: state, source: source))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer { window.close() }
+            let found = try await self.waitForSearch(in: host, placeholder: source, query: state.query)
+            let field = try XCTUnwrap(found)
+            XCTAssertEqual(field.identifier?.rawValue, "FluidVoice.SidebarSearchField")
+            XCTAssertTrue(window.makeFirstResponder(field))
+            let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+            editor.setSelectedRange(NSRange(location: 2, length: 3))
+            let selection = editor.selectedRange()
+            state.locale = Locale(identifier: "ru")
+            let updatedField = try await self.waitForSearch(in: host, placeholder: russian, query: state.query)
+            let updated = try XCTUnwrap(updatedField)
+            XCTAssertTrue(updated === field, "A locale change must update the same native field")
+            XCTAssertTrue(updated.currentEditor() === editor)
+            XCTAssertEqual(editor.selectedRange(), selection)
+            XCTAssertEqual(updated.accessibilityLabel(), russian)
+            XCTAssertEqual(updated.stringValue, "Settings Иван")
+            XCTAssertEqual(state.query, "Settings Иван", "The query is user data, not a localization key")
+            state.locale = Locale(identifier: "en")
+            let restoredField = try await self.waitForSearch(in: host, placeholder: source, query: state.query)
+            let restored = try XCTUnwrap(restoredField)
+            XCTAssertTrue(restored === field)
+            XCTAssertEqual(restored.accessibilityLabel(), source)
+            XCTAssertEqual(restored.stringValue, "Settings Иван")
+        }
+    }
+
+    func testNativeTranscriptLocaleChangesOnlyAccessibilityChrome() async throws {
+        let state = SearchLocaleFixture()
+        let entryID = UUID()
+        let text = "Settings. Личная расшифровка остаётся дословной."
+        let host = NSHostingView(rootView: TranscriptLocaleHost(state: state, entryID: entryID, text: text))
+        host.frame = NSRect(x: 0, y: 0, width: 300, height: 180)
+        let found = try await self.waitForTranscript(in: host, label: "Transcript")
+        let scroll = try XCTUnwrap(found)
+        let editor = try XCTUnwrap(scroll.documentView as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 10, length: 6))
+        let selection = editor.selectedRange()
+        let offset = scroll.contentView.bounds.origin
+        state.locale = Locale(identifier: "ru")
+        let updatedScroll = try await self.waitForTranscript(in: host, label: "Расшифровка")
+        let updated = try XCTUnwrap(updatedScroll)
+        XCTAssertTrue(updated === scroll)
+        XCTAssertTrue(updated.documentView === editor)
+        XCTAssertEqual(editor.string, text)
+        XCTAssertEqual(editor.selectedRange(), selection)
+        XCTAssertEqual(updated.contentView.bounds.origin, offset)
+    }
+
+    func testBrandTypographyRecomputesExistingSemanticRoles() {
+        let original = AppTheme.Typography.standard(style: nil)
+        let style = BrandStyle(bodyFontDesign: .rounded, titleFontDesign: .serif)
+        let changed = AppTheme.Typography.standard(style: style)
+        // SwiftUI distinguishes an omitted design from an explicit native default.
+        XCTAssertEqual(original.body, .system(size: 14, weight: .regular, design: .default))
+        XCTAssertEqual(changed.body, .system(size: 14, weight: .regular, design: .rounded))
+        XCTAssertEqual(changed.title, .system(size: 22, weight: .bold, design: .serif))
+        XCTAssertEqual(changed.sectionTitle, .system(size: 15, weight: .semibold, design: .serif))
+        XCTAssertEqual(changed.codeCaption, original.codeCaption)
+        XCTAssertEqual(changed.metricTiny, original.metricTiny)
+        XCTAssertNil(original.inheritedFont)
+        XCTAssertEqual(changed.inheritedFont, Font.system(.body, design: .rounded))
+    }
+
+    func testNativeSearchBrandTypographyKeepsEditorQueryAndSelection() async throws {
+        let state = SearchLocaleFixture()
+        let host = NSHostingView(rootView: SearchLocaleHost(state: state, source: "Search"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        let found = try await self.waitForSearch(in: host, placeholder: "Search", query: state.query)
+        let field = try XCTUnwrap(found)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 2, length: 3))
+        let selection = editor.selectedRange()
+        for style in [BrandStyle(bodyFontDesign: .rounded), BrandStyle(bodyFontDesign: .serif), BrandStyle()] {
+            state.style = style
+            let expected = NSFont.fluidSystemFont(ofSize: 14, style: style)
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if field.font == expected { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let updated = try XCTUnwrap(self.descendants(of: NSSearchField.self, in: host).first)
+            XCTAssertTrue(updated === field, "Importing typography must preserve the native subtree")
+            XCTAssertEqual(updated.font, expected)
+            XCTAssertTrue(updated.currentEditor() === editor)
+            XCTAssertEqual(editor.font, expected)
+            XCTAssertEqual(editor.selectedRange(), selection)
+            XCTAssertEqual(updated.stringValue, "Settings Иван")
+            XCTAssertEqual(state.query, "Settings Иван")
+        }
+    }
+
+    private final class SearchLocaleFixture: ObservableObject {
+        @Published var locale = Locale(identifier: "en")
+        @Published var query = "Settings Иван"
+        @Published var style: BrandStyle? = nil
+    }
+
+    private struct SearchLocaleHost: View {
+        @ObservedObject var state: SearchLocaleFixture
+        let source: String
+        var body: some View {
+            SidebarSearchField(text: self.$state.query, placeholder: self.source, isActive: true)
+                .appTheme(AppTheme.adaptive(accent: .purple, colorScheme: .light, package: BrandPackage(profile: .neutral, style: self.state.style)))
+                .environment(\.locale, self.state.locale)
+        }
+    }
+
+    private struct TranscriptLocaleHost: View {
+        @ObservedObject var state: SearchLocaleFixture
+        let entryID: UUID
+        let text: String
+        var body: some View {
+            FileTranscriptTextView(entryID: self.entryID, text: self.text)
+                .environment(\.locale, self.state.locale)
+        }
+    }
+
+    private func descendants<T: NSView>(of type: T.Type, in root: NSView) -> [T] {
+        var result = (root as? T).map { [$0] } ?? []
+        for child in root.subviews { result += self.descendants(of: type, in: child) }
+        return result
+    }
+
+    private func waitForSearch(in root: NSView, placeholder: String, query: String) async throws -> NSSearchField? {
+        for _ in 0..<100 {
+            root.layoutSubtreeIfNeeded()
+            if let field = self.descendants(of: NSSearchField.self, in: root).first(where: { $0.placeholderString == placeholder && $0.stringValue == query }) {
+                return field
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return nil
+    }
+
+    private func waitForTranscript(in root: NSView, label: String) async throws -> FileTranscriptScrollView? {
+        for _ in 0..<100 {
+            root.layoutSubtreeIfNeeded()
+            if let scroll = self.descendants(of: FileTranscriptScrollView.self, in: root).first(where: { $0.documentView?.accessibilityLabel() == label }) {
+                return scroll
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return nil
     }
 
     func testCommandModeOnlyOwnsRecordingItStarted() {
@@ -250,5 +409,96 @@ final class SettingsNavigationStateTests: XCTestCase {
                 "\(target) is not rendered without Accessibility permission"
             )
         }
+    }
+}
+
+@MainActor
+final class ASRServiceMicrophonePermissionTests: XCTestCase {
+    func testFreshDeniedAndRestrictedStatusOpenSettingsInsteadOfRepeatingARequest() async {
+        await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled(delayNanoseconds: 0)
+        await AudioStartupGate.shared.waitUntilOpen()
+
+        for status in [AVAuthorizationStatus.denied, .restricted] {
+            let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+            service.micStatus = .notDetermined
+            service.microphoneAuthorizationStatusForTesting = { status }
+            var requests = 0
+            var settingsOpens = 0
+            let opened = self.expectation(description: "settings opened for \(status.rawValue)")
+            service.microphoneAccessRequesterForTesting = { _ in requests += 1 }
+            service.microphoneSettingsOpenerForTesting = {
+                settingsOpens += 1
+                opened.fulfill()
+            }
+
+            service.requestMicAccess()
+            await fulfillment(of: [opened], timeout: 2)
+
+            XCTAssertEqual(service.micStatus, status)
+            XCTAssertEqual(requests, 0, "A stale Allow label must not repeat an inert OS request")
+            XCTAssertEqual(settingsOpens, 1)
+        }
+    }
+
+    func testUndeterminedStatusRequestsOnceAndADeniedRetryOpensSettings() async {
+        await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled(delayNanoseconds: 0)
+        await AudioStartupGate.shared.waitUntilOpen()
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.micStatus = .denied
+        var status = AVAuthorizationStatus.notDetermined
+        service.microphoneAuthorizationStatusForTesting = { status }
+        var requests = 0
+        var completion: (@Sendable (Bool) -> Void)?
+        let requested = self.expectation(description: "first permission request")
+        let denied = self.expectation(description: "denied status published")
+        let opened = self.expectation(description: "denied retry opens settings")
+        let deniedObservation = service.$micStatus.dropFirst().filter { $0 == .denied }.prefix(1).sink { _ in
+            denied.fulfill()
+        }
+        service.microphoneAccessRequesterForTesting = { callback in
+            requests += 1
+            completion = callback
+            requested.fulfill()
+        }
+        service.microphoneSettingsOpenerForTesting = { opened.fulfill() }
+
+        service.requestMicAccess()
+        service.requestMicAccess()
+        await fulfillment(of: [requested], timeout: 2)
+        XCTAssertEqual(service.micStatus, .notDetermined, "Refresh a stale denied status before the genuine first request")
+        XCTAssertEqual(requests, 1, "Concurrent button clicks must not duplicate a pending request")
+
+        status = .denied
+        completion?(false)
+        await fulfillment(of: [denied], timeout: 2)
+        service.requestMicAccess()
+        await fulfillment(of: [opened], timeout: 2)
+
+        XCTAssertEqual(service.micStatus, .denied)
+        XCTAssertEqual(requests, 1)
+        withExtendedLifetime(deniedObservation) {}
+    }
+
+    func testAlreadyAuthorizedStatusRefreshesWithoutPromptingOrOpeningSettings() async {
+        await AudioStartupGate.shared.scheduleOpenAfterInitialUISettled(delayNanoseconds: 0)
+        await AudioStartupGate.shared.waitUntilOpen()
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.microphoneAuthorizationStatusForTesting = { .authorized }
+        var requests = 0
+        var settingsOpens = 0
+        let refreshed = self.expectation(description: "authorized status refreshed")
+        let observation = service.$micStatus.filter { $0 == .authorized }.prefix(1).sink { _ in
+            refreshed.fulfill()
+        }
+        service.microphoneAccessRequesterForTesting = { _ in requests += 1 }
+        service.microphoneSettingsOpenerForTesting = { settingsOpens += 1 }
+
+        service.requestMicAccess()
+        await fulfillment(of: [refreshed], timeout: 2)
+
+        XCTAssertEqual(service.micStatus, .authorized)
+        XCTAssertEqual(requests, 0)
+        XCTAssertEqual(settingsOpens, 0)
+        withExtendedLifetime(observation) {}
     }
 }

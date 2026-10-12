@@ -1015,6 +1015,8 @@ final class CommandModeService: ObservableObject {
             extraParameters: extraParams
         )
 
+        config.providerOptions = settings.providerConnectionOptions[providerID] ?? [:]
+
         // Keep retry logic (exponential backoff)
         config.maxRetries = 3
         config.retryDelayMs = 200

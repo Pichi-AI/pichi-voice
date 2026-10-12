@@ -15,7 +15,7 @@ struct MeetingSummaryComingSoon: View {
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 Text("Your meeting, summed up.")
-                    .font(.system(.title, design: .serif).weight(.medium))
+                    .font(.fluidSystem(.title, design: .serif).weight(.medium))
                     .foregroundStyle(self.theme.palette.primaryText)
                     .accessibilityAddTraits(.isHeader)
                 Text("The recap, the decisions, and the follow-ups—without rereading the transcript.")
@@ -25,11 +25,11 @@ struct MeetingSummaryComingSoon: View {
             .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
-                self.feature("text.alignleft", title: "Catch up quickly", detail: "Get a short recap or a detailed summary of the discussion.")
+                self.feature("text.alignleft", title: PichiLocalization.text("Catch up quickly"), detail: PichiLocalization.text("Get a short recap or a detailed summary of the discussion."))
                 Divider()
-                self.feature("checkmark.circle", title: "See what was decided", detail: "Find the key decisions and outcomes in one place.")
+                self.feature("checkmark.circle", title: PichiLocalization.text("See what was decided"), detail: PichiLocalization.text("Find the key decisions and outcomes in one place."))
                 Divider()
-                self.feature("checklist", title: "Know what happens next", detail: "See action items and who owns them, when mentioned.")
+                self.feature("checklist", title: PichiLocalization.text("Know what happens next"), detail: PichiLocalization.text("See action items and who owns them, when mentioned."))
             }
             .padding(self.theme.metrics.spacing.xl)
             .background(self.theme.palette.primaryText.opacity(0.025), in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg))

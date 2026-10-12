@@ -129,6 +129,33 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
         }
     }
 
+    private final class EchoCapableFixtureBackend: MeetingTranscriptionBackend {
+        private let backend: any MeetingTranscriptionBackend
+        let echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)?
+
+        var descriptor: MeetingBackendDescriptor { self.backend.descriptor }
+
+        init(
+            backend: any MeetingTranscriptionBackend,
+            echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)?
+        ) {
+            self.backend = backend
+            self.echoVerdictProvider = echoVerdictProvider
+        }
+
+        func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
+            try self.backend.plan(request)
+        }
+
+        func execute(
+            plan: MeetingBackendPlan,
+            manifest: MeetingAnalysisManifest?,
+            progress: @escaping @MainActor (MeetingProcessingStage) -> Void
+        ) async throws -> MeetingBackendOutcome {
+            try await self.backend.execute(plan: plan, manifest: manifest, progress: progress)
+        }
+    }
+
     private func makeChunk(sequence: Int, start: Double, end: Double) -> MeetingAudioChunk {
         MeetingAudioChunk(
             id: UUID(),
@@ -279,7 +306,7 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
     }
 
     private func makeCanonicalPipeline(
-        backend: CanonicalFixtureBackend,
+        backend: any MeetingTranscriptionBackend,
         observer: any MeetingChunkAudioObserving,
         echoProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         probe: ((MeetingResultSidecarReference) -> Void)? = nil
@@ -719,6 +746,43 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
     }
 
     // MARK: - Fail-closed echo evidence
+
+    func testCanonicalCustomBackendEchoCapabilityAllowsOnlineMicrophonePublication() async throws {
+        let chunk = self.makeChunk(sequence: 0, start: 100, end: 110)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .onlineCall, tracks: [track])
+        let directory = try self.makeTempSessionDirectory()
+        let echoProvider = FixtureEchoProvider(verdicts: ["unit-0": .notEcho])
+        let canonical = CanonicalFixtureBackend { plan, manifest in
+            self.standardBundle(plan: plan, manifest: manifest)
+        }
+        let backend = EchoCapableFixtureBackend(backend: canonical, echoVerdictProvider: echoProvider)
+        var verifiedReference: MeetingResultSidecarReference?
+        // No pipeline override: the custom registry backend supplies this capability.
+        let pipeline = self.makeCanonicalPipeline(
+            backend: backend,
+            observer: FixtureObserver(results: [
+                MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id):
+                    self.makeObserved(chunk, duration: 10),
+            ]),
+            probe: { verifiedReference = $0 }
+        )
+
+        let result = try await pipeline.process(
+            session: session, sessionDirectory: directory, progress: { _ in }
+        )
+
+        XCTAssertEqual(echoProvider.callCount, 1, "The pipeline must request the custom backend's echo capability")
+        XCTAssertEqual(canonical.executeCallCount, 1)
+        XCTAssertEqual(result.segments.map(\.text), ["hello"])
+        XCTAssertEqual(result.segments.first?.sourceTrackID, track.id)
+        XCTAssertTrue(result.isComplete)
+        XCTAssertEqual(result.attempt.stage, .completed)
+        XCTAssertEqual(result.attempt.backendID, Self.canonicalBackendID.rawValue)
+        let reference = try XCTUnwrap(result.resultSidecarReference)
+        XCTAssertEqual(verifiedReference, reference, "Publication must follow sidecar verification")
+        XCTAssertEqual(self.sidecarFiles(in: directory).count, 1)
+    }
 
     func testCanonicalOnlineMicrophoneWithoutEchoVerdictsFailsWithoutPublication() async throws {
         let chunk = self.makeChunk(sequence: 0, start: 100, end: 110)

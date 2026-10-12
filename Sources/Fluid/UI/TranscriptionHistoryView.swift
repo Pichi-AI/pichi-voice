@@ -30,6 +30,7 @@ struct TranscriptionHistoryView: View {
     @ObservedObject private var historyStore = TranscriptionHistoryStore.shared
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
 
     @State private var searchQuery: String = ""
     @State private var pinnedOnly = false
@@ -78,7 +79,11 @@ struct TranscriptionHistoryView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     self.searchBar
-                    FluidDropdownPicker("History filter", selectedTitle: self.pinnedOnly ? "Pinned" : "All", selection: self.$pinnedOnly) {
+                    FluidDropdownPicker(
+                        PichiLocalization.text("History filter"),
+                        selectedTitle: PichiLocalization.text(self.pinnedOnly ? "Pinned" : "All"),
+                        selection: self.$pinnedOnly
+                    ) {
                         Text("All").tag(false)
                         Text("Pinned").tag(true)
                     }
@@ -180,7 +185,7 @@ struct TranscriptionHistoryView: View {
         .alert("Report Sent", isPresented: self.$showReportConfirmation) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Thank you for helping improve FluidVoice dictation.")
+            Text(AppBrand.text("Thank you for helping improve FluidVoice dictation."))
         }
         .sheet(item: self.$selectedReportEntry) { entry in
             TranscriptionFeedbackReportSheet(entry: entry) {
@@ -286,7 +291,7 @@ struct TranscriptionHistoryView: View {
                         HStack(spacing: 8) {
                             HistoryAppIcon(appName: entry.appName)
                             Spacer(minLength: 4)
-                            Text(entry.relativeTimeString)
+                            Text(self.relativeDate(entry.timestamp))
                                 .font(self.theme.typography.caption).foregroundStyle(.secondary)
                         }
                         .padding(.trailing, 36)
@@ -298,12 +303,12 @@ struct TranscriptionHistoryView: View {
                             if let model = self.recordedModel(entry) {
                                 Label(model, systemImage: "sparkles")
                                     .lineLimit(1).truncationMode(.middle)
-                                    .help("Recorded AI model: \(model)")
+                                    .help(PichiLocalization.format("Recorded AI model: %@", model))
                             } else if entry.wasAIProcessed {
                                 Label("AI enhanced", systemImage: "sparkles")
                             }
                             if self.hasAudio(entry) {
-                                Image(systemName: "waveform").accessibilityLabel("Saved audio")
+                                Image(systemName: "waveform").accessibilityLabel(PichiLocalization.text("Saved audio"))
                             }
                             if entry.aiProcessingError != nil {
                                 Image(systemName: "exclamationmark.triangle")
@@ -316,7 +321,7 @@ struct TranscriptionHistoryView: View {
                                     .foregroundStyle(self.theme.palette.accent)
                                     .monospacedDigit()
                                     .fixedSize()
-                                    .help("AI generation speed, in tokens per second—not total processing time")
+                                    .help(PichiLocalization.text("AI generation speed, in tokens per second—not total processing time"))
                             }
                         }
                         .font(self.theme.typography.caption).foregroundStyle(.secondary)
@@ -331,11 +336,11 @@ struct TranscriptionHistoryView: View {
                     self.selectedEntryID = entry.id
                     self.copyFinalText(entry)
                 })
-                .help("Double-click to copy final text")
+                .help(PichiLocalization.text("Double-click to copy final text"))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
                 .accessibilityAction(named: Text("Copy final text")) { self.copyFinalText(entry) }
                 .accessibilityAction(named: Text("Report issue")) { self.openFeedbackReport(for: entry) }
-                .accessibilityAction(named: Text(entry.isStarred ? "Unpin transcription" : "Pin transcription")) {
+                .accessibilityAction(named: Text(PichiLocalization.text(entry.isStarred ? "Unpin transcription" : "Pin transcription"))) {
                     self.togglePin(entry)
                 }
                 HStack(spacing: 8) {
@@ -347,8 +352,8 @@ struct TranscriptionHistoryView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Copy final text")
-                    .accessibilityLabel(self.copiedEntryID == entry.id ? "Copied" : "Copy final text")
+                    .help(PichiLocalization.text("Copy final text"))
+                    .accessibilityLabel(PichiLocalization.text(self.copiedEntryID == entry.id ? "Copied" : "Copy final text"))
                     Button {
                         self.openFeedbackReport(for: entry)
                     } label: {
@@ -357,8 +362,8 @@ struct TranscriptionHistoryView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Report an issue with this dictation")
-                    .accessibilityLabel("Report issue")
+                    .help(PichiLocalization.text("Report an issue with this dictation"))
+                    .accessibilityLabel(PichiLocalization.text("Report issue"))
                 }
                 .font(self.theme.typography.body)
                 .labelStyle(.iconOnly)
@@ -379,8 +384,8 @@ struct TranscriptionHistoryView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(entry.isStarred ? self.theme.palette.accent : self.theme.palette.secondaryText)
-                .help(entry.isStarred ? "Unpin transcription" : "Pin transcription")
-                .accessibilityLabel(entry.isStarred ? "Unpin transcription" : "Pin transcription")
+                .help(PichiLocalization.text(entry.isStarred ? "Unpin transcription" : "Pin transcription"))
+                .accessibilityLabel(PichiLocalization.text(entry.isStarred ? "Unpin transcription" : "Pin transcription"))
                 .accessibilityIdentifier("History.Pin.\(entry.id.uuidString)")
             }
         }
@@ -396,7 +401,7 @@ struct TranscriptionHistoryView: View {
         Button {
             self.togglePin(entry)
         } label: {
-            Label(entry.isStarred ? "Unpin" : "Pin", systemImage: entry.isStarred ? "pin.slash" : "pin")
+            Label(PichiLocalization.text(entry.isStarred ? "Unpin" : "Pin"), systemImage: entry.isStarred ? "pin.slash" : "pin")
         }
 
         Divider()
@@ -404,7 +409,7 @@ struct TranscriptionHistoryView: View {
         Button {
             self.copyFinalText(entry)
         } label: {
-            Label(entry.wasAIProcessed ? "Copy AI Text" : "Copy Text", systemImage: "doc.on.doc")
+            Label(PichiLocalization.text(entry.wasAIProcessed ? "Copy AI Text" : "Copy Text"), systemImage: "doc.on.doc")
         }
 
         if entry.wasAIProcessed {
@@ -493,11 +498,11 @@ struct TranscriptionHistoryView: View {
                 .foregroundStyle(.tertiary)
 
             VStack(spacing: 4) {
-                Text(self.emptyStateTitle)
+                Text(PichiLocalization.text(self.emptyStateTitle))
                     .font(.fluidSystem(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
 
-                Text(self.emptyStateMessage)
+                Text(PichiLocalization.text(self.emptyStateMessage))
                     .font(.fluidSystem(size: 12))
                     .foregroundStyle(.tertiary)
                     .multilineTextAlignment(.center)
@@ -518,7 +523,7 @@ struct TranscriptionHistoryView: View {
 
             HStack {
                 // Stats
-                Text(self.filteredEntries.count == 1 ? "1 entry" : "\(self.filteredEntries.count) entries")
+                Text(self.filteredEntries.count == 1 ? PichiLocalization.text("1 entry") : PichiLocalization.format("%lld entries", self.filteredEntries.count))
                     .font(.fluidSystem(size: 11, weight: .medium))
                     .foregroundStyle(.tertiary)
 
@@ -605,13 +610,13 @@ struct TranscriptionHistoryView: View {
                         self.metadataItem(
                             icon: "sparkles",
                             label: entry.aiProcessingError == nil ? "AI model" : "AI model (failed)",
-                            value: self.recordedModel(entry) ?? (entry.wasAIProcessed ? "Not recorded" : "No AI cleanup")
+                            value: self.recordedModel(entry) ?? PichiLocalization.text(entry.wasAIProcessed ? "Not recorded" : "No AI cleanup")
                         )
                     }
                 }
                 FluidManagementGroup(title: "Details") {
                     LazyVGrid(columns: self.detailColumns, alignment: .leading, spacing: 16) {
-                        self.metadataItem(icon: "app", label: "Application", value: entry.appName.isEmpty ? "Unknown" : entry.appName)
+                        self.metadataItem(icon: "app", label: "Application", value: entry.appName.isEmpty ? PichiLocalization.text("Unknown") : entry.appName)
                         self.metadataItem(icon: "waveform", label: "Recording", value: self.recordingDurationText(for: entry))
                         self.metadataItem(icon: "internaldrive", label: "Audio size", value: self.audioSizeText(for: entry))
                     }
@@ -631,7 +636,7 @@ struct TranscriptionHistoryView: View {
                 .background(self.theme.palette.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
             VStack(alignment: .leading, spacing: 5) {
                 Text("Dictation details").font(self.theme.typography.title)
-                Text(entry.fullDateString).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                Text(entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))).font(self.theme.typography.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -654,7 +659,7 @@ struct TranscriptionHistoryView: View {
                 .fluidGlassAction()
                 Button { self.copyFinalText(entry) } label: {
                     Label(
-                        self.copiedEntryID == entry.id ? "Copied" : "Copy text",
+                        PichiLocalization.text(self.copiedEntryID == entry.id ? "Copied" : "Copy text"),
                         systemImage: self.copiedEntryID == entry.id ? "checkmark" : "doc.on.doc"
                     )
                 }
@@ -664,16 +669,23 @@ struct TranscriptionHistoryView: View {
                     Button {
                         self.audioEntryID = self.audioEntryID == entry.id ? nil : entry.id
                     } label: {
-                        Label(self.audioEntryID == entry.id ? "Close audio" : "Audio", systemImage: "waveform")
+                        Label(PichiLocalization.text(self.audioEntryID == entry.id ? "Close audio" : "Audio"), systemImage: "waveform")
                     }
                     .fluidGlassAction()
                 }
                 Menu { self.entryActions(entry) } label: { Image(systemName: "ellipsis") }
                     .menuIndicator(.hidden)
                     .fluidGlassAction(circular: true)
-                    .accessibilityLabel("Dictation actions")
+                    .accessibilityLabel(PichiLocalization.text("Dictation actions"))
             }
         }
+    }
+
+    private func relativeDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.locale = self.interfaceLocale
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private func metadataItem(icon: String, label: String, value: String) -> some View {
@@ -681,7 +693,7 @@ struct TranscriptionHistoryView: View {
             Image(systemName: icon).font(.fluidSystem(size: 18)).foregroundStyle(self.theme.palette.accent)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 5) {
-                Text(label).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                Text(PichiLocalization.text(label)).font(self.theme.typography.caption).foregroundStyle(.secondary)
                 Text(value).font(self.theme.typography.bodyStrong).monospacedDigit()
             }
             Spacer(minLength: 0)
@@ -720,13 +732,13 @@ struct TranscriptionHistoryView: View {
     }
 
     private func recordingDurationText(for entry: TranscriptionHistoryEntry) -> String {
-        guard let audio = entry.audio else { return "Not saved" }
+        guard let audio = entry.audio else { return PichiLocalization.text("Not saved") }
         return String(format: "%.1fs", Double(audio.durationMilliseconds) / 1000.0)
     }
 
     private func audioSizeText(for entry: TranscriptionHistoryEntry) -> String {
-        guard let audio = entry.audio else { return "Not saved" }
-        guard self.hasAudio(entry) else { return "Unavailable" }
+        guard let audio = entry.audio else { return PichiLocalization.text("Not saved") }
+        guard self.hasAudio(entry) else { return PichiLocalization.text("Unavailable") }
         return ByteCountFormatter.string(fromByteCount: Int64(audio.byteCount), countStyle: .file)
     }
 
@@ -751,10 +763,10 @@ struct TranscriptionHistoryView: View {
             try DictationAudioHistoryStore.shared.exportPair(entry: entry, to: url)
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Pair Export Failed"
+            alert.messageText = PichiLocalization.text("Pair Export Failed")
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .critical
-            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: PichiLocalization.text("OK"))
             alert.runModal()
         }
     }
@@ -779,6 +791,7 @@ struct TranscriptionHistoryView: View {
 private struct TranscriptionFeedbackReportSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
 
     @State private var inputText: String
     @State private var outputText: String
@@ -838,7 +851,7 @@ private struct TranscriptionFeedbackReportSheet: View {
                                 .controlSize(.small)
                                 .fixedSize()
                         }
-                        Text(self.isSending ? "Sending..." : "Send Example")
+                        Text(PichiLocalization.text(self.isSending ? "Sending..." : "Send Example"))
                     }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -880,7 +893,7 @@ private struct TranscriptionFeedbackReportSheet: View {
 
     private func feedbackField(title: String, text: Binding<String>, height: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
+            Text(PichiLocalization.text(title))
                 .font(.fluidSystem(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)

@@ -6,8 +6,8 @@
   "minTermLength": 3,
   "terms": [
     {
-      "text": "FluidVoice",
-      "aliases": ["fluid voice", "fluid boys"],
+      "text": "${brand.appName}",
+      "aliases": [],
       "weight": 10.0
     }
   ]

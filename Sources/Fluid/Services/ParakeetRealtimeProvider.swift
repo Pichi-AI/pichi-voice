@@ -62,7 +62,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
         let engine = StreamingEouAsrManager(configuration: configuration, chunkSize: self.chunkSize)
         let progressRelay = ModelPreparationProgressRelay(progressHandler)
         do {
-            try await engine.loadModelsFromHuggingFace(progressHandler: { progress in
+            try await engine.loadModelsFromHuggingFace(to: Self.cacheRootDirectory(), progressHandler: { progress in
                 switch progress.phase {
                 case .listing:
                     progressRelay.report(.preparingDownload)
@@ -247,17 +247,7 @@ final class ParakeetRealtimeProvider: TranscriptionProvider {
     }
 
     private static func cacheRootDirectory() -> URL {
-        let baseDirectory =
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-                    "Library/Application Support",
-                    isDirectory: true
-                )
-
-        return baseDirectory
-            .appendingPathComponent("FluidAudio", isDirectory: true)
-            .appendingPathComponent("Models", isDirectory: true)
-            .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
+        AppBrand.modelsDirectory.appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
     }
 }
 #else

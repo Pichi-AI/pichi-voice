@@ -10,15 +10,15 @@ struct ReleaseHighlightsView: View {
         VStack(alignment: .leading, spacing: 28) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("FLUIDVOICE \(self.content.release)")
+                    Text(AppBrand.format("FLUIDVOICE %@", self.content.release))
                         .font(self.theme.typography.captionStrong)
                         .tracking(2)
                         .foregroundStyle(self.theme.palette.secondaryText)
-                    Text(self.content.title)
-                        .font(.system(size: 30, weight: .semibold))
+                    Text(PichiLocalization.text(self.content.title))
+                        .font(.fluidSystem(size: 30, weight: .semibold, role: .title))
                         .foregroundStyle(self.theme.palette.primaryText)
                         .accessibilityAddTraits(.isHeader)
-                    Text(self.content.subtitle)
+                    Text(PichiLocalization.text(self.content.subtitle))
                         .font(self.theme.typography.body)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -27,8 +27,8 @@ struct ReleaseHighlightsView: View {
                     Image(systemName: "xmark")
                 }
                 .fluidGlassAction(circular: true, quiet: true)
-                .accessibilityLabel("Close what’s new")
-                .help("Close (Esc)")
+                .accessibilityLabel(PichiLocalization.text("Close what’s new"))
+                .help(PichiLocalization.text("Close (Esc)"))
             }
             HStack(alignment: .top, spacing: 18) {
                 ForEach(self.content.features) { feature in
@@ -54,24 +54,24 @@ struct ReleaseHighlightsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .accessibilityHidden(true)
                 .padding(.bottom, 20)
-            Text(feature.eyebrow)
-                .font(.system(size: 9, weight: .semibold))
+            Text(PichiLocalization.text(feature.eyebrow))
+                .font(.fluidSystem(size: 9, weight: .semibold))
                 .tracking(1)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .padding(.bottom, 8)
-            Text(feature.title)
-                .font(.system(size: 17, weight: .semibold))
+            Text(PichiLocalization.text(feature.title))
+                .font(.fluidSystem(size: 17, weight: .semibold, role: .title))
                 .foregroundStyle(self.theme.palette.primaryText)
                 .accessibilityAddTraits(.isHeader)
                 .padding(.bottom, 10)
-            Text(feature.detail)
+            Text(PichiLocalization.text(feature.detail))
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(minHeight: 68, alignment: .topLeading)
             FluidGlassControlGroup {
-                Button(feature.action, systemImage: "arrow.up.right") { self.onClose(feature.destination) }
+                Button(PichiLocalization.text(feature.action), systemImage: "arrow.up.right") { self.onClose(feature.destination) }
                     .fluidGlassAction()
                     .disabled(!self.canExplore)
             }

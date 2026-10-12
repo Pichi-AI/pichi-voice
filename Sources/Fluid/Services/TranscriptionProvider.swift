@@ -109,6 +109,8 @@ final nonisolated class ModelPreparationProgressRelay: @unchecked Sendable {
 struct ASRTranscriptionResult {
     let text: String
     let confidence: Float
+    /// Optional calibrated endpoint evidence from providers that actually expose an EOU head.
+    let endOfUtteranceProbability: Float?
     /// FluidAudio's own Parakeet processing time. This excludes FluidVoice
     /// executor queueing, provider setup, and post-transcription work.
     let parakeetProcessingDurationMilliseconds: Int?
@@ -118,12 +120,14 @@ struct ASRTranscriptionResult {
     init(
         text: String,
         confidence: Float = 1.0,
+        endOfUtteranceProbability: Float? = nil,
         parakeetProcessingDurationMilliseconds: Int? = nil,
         pronunciationEnrollment: PronunciationEnrollmentCapture? = nil,
         dictionaryLearningAlignment: DictionaryLearningAlignment? = nil
     ) {
         self.text = text
         self.confidence = confidence
+        self.endOfUtteranceProbability = endOfUtteranceProbability
         self.parakeetProcessingDurationMilliseconds = parakeetProcessingDurationMilliseconds
         self.pronunciationEnrollment = pronunciationEnrollment
         self.dictionaryLearningAlignment = dictionaryLearningAlignment
@@ -187,6 +191,14 @@ protocol TranscriptionProvider {
     /// Check if models exist on disk (without loading them)
     func modelsExistOnDisk() -> Bool
 
+    /// Release owned runtime allocations after pending work has drained, without deleting weights.
+    /// The caller awaits this hook before discarding its provider references or loading a successor.
+    func releaseResidency() async
+
+    /// Install a supported local model folder. Implementations validate and atomically publish
+    /// artifacts; cancellation must join any file operation before returning.
+    func importModel(from directory: URL) async throws
+
     /// Clear cached models
     func clearCache() async throws
 
@@ -198,6 +210,13 @@ protocol TranscriptionProvider {
 extension TranscriptionProvider {
     func modelsExistOnDisk() -> Bool { return false }
     func clearCache() async throws {}
+    /// Legacy providers with no pooled runtime retain their existing reference-owned teardown.
+    func releaseResidency() async {}
+    func importModel(from directory: URL) async throws {
+        throw NSError(domain: "TranscriptionProvider", code: -2, userInfo: [
+            NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support importing a model folder."),
+        ])
+    }
     var shouldClearCacheAfterCancellation: Bool { true }
     var prefersNativeFileTranscription: Bool { false }
     var supportsWordTimings: Bool { false }

@@ -63,7 +63,7 @@ struct SearchableProviderPicker: View {
         if let provider = allProviders.first(where: { $0.id == selectedProviderID }) {
             return provider.name
         }
-        return self.selectedProviderID.isEmpty ? "Select Provider" : self.selectedProviderID
+        return self.selectedProviderID.isEmpty ? PichiLocalization.text("Select Provider") : self.selectedProviderID
     }
 
     var body: some View {

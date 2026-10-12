@@ -9,12 +9,15 @@ enum TranscriptionFeedbackReporter {
     }
 
     enum ReporterError: LocalizedError {
+        case notConfigured
         case invalidURL
         case invalidResponse
         case httpError(Int)
 
         var errorDescription: String? {
             switch self {
+            case .notConfigured:
+                return "Transcription feedback uploads are not configured for this distribution."
             case .invalidURL:
                 return "Invalid report endpoint."
             case .invalidResponse:
@@ -25,11 +28,11 @@ enum TranscriptionFeedbackReporter {
         }
     }
 
-    private static let endpoint = "https://altic.dev/api/fluid/examples"
+    private static let endpoint: URL? = nil
 
     static func submit(_ payload: Payload) async throws {
-        guard let url = URL(string: self.endpoint) else {
-            throw ReporterError.invalidURL
+        guard let url = self.endpoint else {
+            throw ReporterError.notConfigured
         }
 
         var request = URLRequest(url: url)

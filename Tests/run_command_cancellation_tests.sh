@@ -24,6 +24,7 @@ PYCODE
 # Compile the entire production agent, including streaming callbacks and recursive turns.
 # Only its model, terminal, UI, and UserDefaults dependencies are test doubles.
 xcrun swiftc -parse-as-library \
+    Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Services/CommandModeService.swift \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift \

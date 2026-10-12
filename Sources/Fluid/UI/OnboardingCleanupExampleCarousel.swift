@@ -72,7 +72,7 @@ struct OnboardingCleanupExampleCarousel: View {
                         ForEach(Self.examples) { example in
                             Button { self.browse(example.id) } label: {
                                 Circle()
-                                    .fill(self.selectedID == example.id ? FluidBrandColors.blue : self.theme.palette.secondaryText.opacity(0.4))
+                                    .fill(self.selectedID == example.id ? self.theme.palette.accent : self.theme.palette.secondaryText.opacity(0.4))
                                     .frame(width: self.selectedID == example.id ? 10 : 7, height: self.selectedID == example.id ? 10 : 7)
                                     .frame(width: 24, height: 24)
                                     .contentShape(Rectangle())
@@ -92,21 +92,21 @@ struct OnboardingCleanupExampleCarousel: View {
     private func card(_ example: Example, compact: Bool, contentWidth: CGFloat, visibleWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Group {
-                Text(example.title)
+                Text(PichiLocalization.text(example.title))
                     .font(.fluidSystem(size: 25, weight: .regular, design: .serif))
                     .tracking(-0.5)
-                    .foregroundStyle(Color(red: 0.96, green: 0.95, blue: 0.91))
+                    .foregroundStyle(self.theme.palette.primaryText)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity)
                     .frame(height: 56)
                     .accessibilityAddTraits(.isHeader)
-                self.mode(title: "Basic · Without Fluid Intelligence", text: example.spoken, enhanced: false)
+                self.mode(title: AppBrand.text("Basic · Without Fluid Intelligence"), text: example.spoken, enhanced: false)
                     .frame(minHeight: 76, alignment: .topLeading)
                 Rectangle()
-                    .fill(.white.opacity(0.12))
+                    .fill(self.theme.palette.separator)
                     .frame(height: 1)
-                self.mode(title: "Smart · With Fluid Intelligence", text: example.cleaned, enhanced: true)
+                self.mode(title: AppBrand.text("Smart · With Fluid Intelligence"), text: example.cleaned, enhanced: true)
             }
         }
         // Keep text at its final reading width while the glass surface slides and narrows.
@@ -134,10 +134,10 @@ struct OnboardingCleanupExampleCarousel: View {
             Text(title)
                 .font(.fluidSystem(size: 18, weight: .regular, design: .serif))
                 .tracking(-0.5)
-                .foregroundStyle(enhanced ? Color(red: 0.48, green: 0.72, blue: 1) : .white.opacity(0.62))
-            Text(text)
+                .foregroundStyle(enhanced ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(size: 13, weight: .regular))
-                .foregroundStyle(.white.opacity(0.9))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .lineSpacing(4)
                 .fixedSize(horizontal: false, vertical: true)
         }

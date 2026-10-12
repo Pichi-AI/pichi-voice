@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Shared product accents. Onboarding and feature surfaces use the same source of truth.
 enum FluidBrandColors {
-    static let blue = Color(red: 0.10, green: 0.46, blue: 1.0)
+    static var blue: Color { Color(hex: AppBrand.profile.accentLight) ?? .purple }
 }
 
 /// Central theme definition for the Fluid app. All colors, spacings and materials
@@ -23,6 +23,16 @@ struct AppTheme {
         let accent: Color
         let warning: Color
         let success: Color
+        var accentForegroundOverride: Color? = nil
+        var accentForeground: Color {
+            if let accentForegroundOverride { return accentForegroundOverride }
+            guard let rgb = NSColor(self.accent).usingColorSpace(.deviceRGB) else { return .white }
+            func channel(_ value: CGFloat) -> Double {
+                value <= 0.04045 ? Double(value / 12.92) : pow(Double((value + 0.055) / 1.055), 2.4)
+            }
+            let light = channel(rgb.redComponent) * 0.2126 + channel(rgb.greenComponent) * 0.7152 + channel(rgb.blueComponent) * 0.0722
+            return light > 0.179 ? .black : .white
+        }
     }
 
     struct Typography {
@@ -46,29 +56,38 @@ struct AppTheme {
         let sidebarItem: Font
         let sidebarSection: Font
         let chromeCaption: Font
+        var inheritedFont: Font? = nil
+        var brandStyle: BrandStyle? = nil
+        var nativeBodyFont: NSFont { .fluidSystemFont(ofSize: 14, style: self.brandStyle) }
 
-        static let standard = Typography(
-            displayTitle: .fluidSystem(size: 42, weight: .semibold),
-            statement: .fluidSystem(size: 17, weight: .regular),
-            title: .fluidSystem(size: 22, weight: .bold),
-            titleIcon: .fluidSystem(size: 22, weight: .regular),
-            sectionTitle: .fluidSystem(size: 15, weight: .semibold),
-            body: .fluidSystem(size: 14, weight: .regular),
-            bodyStrong: .fluidSystem(size: 14, weight: .medium),
-            bodySmall: .fluidSystem(size: 13, weight: .regular),
-            bodySmallStrong: .fluidSystem(size: 13, weight: .medium),
-            caption: .fluidSystem(size: 12, weight: .regular),
-            captionStrong: .fluidSystem(size: 12, weight: .medium),
-            captionSmall: .fluidSystem(size: 11, weight: .regular),
-            tiny: .fluidSystem(size: 11, weight: .regular),
-            tinyStrong: .fluidSystem(size: 11, weight: .bold),
-            badge: .fluidSystem(size: 11, weight: .semibold),
-            metricTiny: .fluidSystem(size: 11, weight: .bold, design: .rounded),
-            codeCaption: .fluidSystem(size: 12, weight: .medium, design: .monospaced),
-            sidebarItem: .fluidSystem(size: 14, weight: .regular),
-            sidebarSection: .fluidSystem(size: 12, weight: .medium),
-            chromeCaption: .fluidSystem(size: 12, weight: .regular)
-        )
+        static var standard: Typography { self.standard(style: AppBrand.package.style) }
+
+        static func standard(style: BrandStyle?) -> Typography {
+            Typography(
+                displayTitle: .fluidSystem(size: 42, weight: .semibold, role: .title, style: style),
+                statement: .fluidSystem(size: 17, weight: .regular, style: style),
+                title: .fluidSystem(size: 22, weight: .bold, role: .title, style: style),
+                titleIcon: .fluidSystem(size: 22, weight: .regular, style: style),
+                sectionTitle: .fluidSystem(size: 15, weight: .semibold, role: .title, style: style),
+                body: .fluidSystem(size: 14, weight: .regular, style: style),
+                bodyStrong: .fluidSystem(size: 14, weight: .medium, style: style),
+                bodySmall: .fluidSystem(size: 13, weight: .regular, style: style),
+                bodySmallStrong: .fluidSystem(size: 13, weight: .medium, style: style),
+                caption: .fluidSystem(size: 12, weight: .regular, style: style),
+                captionStrong: .fluidSystem(size: 12, weight: .medium, style: style),
+                captionSmall: .fluidSystem(size: 11, weight: .regular, style: style),
+                tiny: .fluidSystem(size: 11, weight: .regular, style: style),
+                tinyStrong: .fluidSystem(size: 11, weight: .bold, style: style),
+                badge: .fluidSystem(size: 11, weight: .semibold, style: style),
+                metricTiny: .fluidSystem(size: 11, weight: .bold, design: .rounded, style: style),
+                codeCaption: .fluidSystem(size: 12, weight: .medium, design: .monospaced, style: style),
+                sidebarItem: .fluidSystem(size: 14, weight: .regular, style: style),
+                sidebarSection: .fluidSystem(size: 12, weight: .medium, style: style),
+                chromeCaption: .fluidSystem(size: 12, weight: .regular, style: style),
+                inheritedFont: FluidTypography.overridesStandard(style: style) ? .fluidSystem(.body, style: style) : nil,
+                brandStyle: style
+            )
+        }
     }
 
     struct Metrics {
@@ -278,15 +297,47 @@ struct AppTheme {
     let metrics: Metrics
     let materials: Materials
 
-    static func adaptive(accent: Color, colorScheme: ColorScheme) -> AppTheme {
-        switch colorScheme {
-        case .light:
-            return .light(accent: accent)
-        case .dark:
-            return .dark(accent: accent)
-        @unknown default:
-            return .dark(accent: accent)
+    static func adaptive(accent: Color, colorScheme: ColorScheme, package: BrandPackage = AppBrand.package) -> AppTheme {
+        let base = colorScheme == .light ? Self.light(accent: accent) : Self.dark(accent: accent)
+        let palette = colorScheme == .light ? package.theme?.light : package.theme?.dark
+        return base.applying(palette: palette, style: package.style, brandAccent: colorScheme == .light ? package.profile.accentLight : package.profile.accentDark)
+    }
+
+    private func applying(palette branded: BrandPalette?, style: BrandStyle?, brandAccent: String) -> AppTheme {
+        func color(_ key: String, _ fallback: Color) -> Color {
+            branded?.colors[key].flatMap(Color.init(hex:)) ?? fallback
         }
+        let palette = Palette(
+            windowBackground: color("windowBackground", self.palette.windowBackground),
+            contentBackground: color("contentBackground", self.palette.contentBackground),
+            sidebarBackground: color("sidebarBackground", self.palette.sidebarBackground),
+            cardBackground: color("cardBackground", self.palette.cardBackground),
+            elevatedCardBackground: color("elevatedCardBackground", self.palette.elevatedCardBackground),
+            toolbarBackground: color("toolbarBackground", self.palette.toolbarBackground),
+            cardBorder: color("cardBorder", self.palette.cardBorder),
+            separator: color("separator", self.palette.separator),
+            primaryText: color("primaryText", self.palette.primaryText),
+            secondaryText: color("secondaryText", self.palette.secondaryText),
+            tertiaryText: color("tertiaryText", self.palette.tertiaryText),
+            accent: self.palette.accent,
+            warning: color("warning", self.palette.warning),
+            success: color("success", self.palette.success),
+            accentForegroundOverride: self.palette.accent == Color(hex: brandAccent)
+                ? branded?.colors["accentForeground"].flatMap(Color.init(hex:)) : nil
+        )
+        let scale = CGFloat(style?.spacingScale ?? 1)
+        let radius = CGFloat(style?.cornerRadiusScale ?? 1)
+        let metrics = Metrics(
+            spacing: Metrics.Spacing(xs: self.metrics.spacing.xs * scale, sm: self.metrics.spacing.sm * scale,
+                md: self.metrics.spacing.md * scale, lg: self.metrics.spacing.lg * scale,
+                xl: self.metrics.spacing.xl * scale, xxl: self.metrics.spacing.xxl * scale),
+            corners: Metrics.CornerRadius(sm: self.metrics.corners.sm * radius, md: self.metrics.corners.md * radius,
+                lg: self.metrics.corners.lg * radius, pill: self.metrics.corners.pill),
+            formRow: self.metrics.formRow, pickerControl: self.metrics.pickerControl,
+            cardSurface: self.metrics.cardSurface, onboardingSurface: self.metrics.onboardingSurface,
+            window: self.metrics.window, cardShadow: self.metrics.cardShadow, elevatedCardShadow: self.metrics.elevatedCardShadow
+        )
+        return AppTheme(palette: palette, typography: .standard(style: style), metrics: metrics, materials: self.materials)
     }
 
     /// Light theme using system colors so macOS accessibility contrast settings stay in control.
@@ -336,12 +387,12 @@ struct AppTheme {
     static func dark(accent: Color) -> AppTheme {
         AppTheme(
             palette: Palette(
-                windowBackground: Color(red: 0.07, green: 0.07, blue: 0.07),
-                contentBackground: Color(red: 0.09, green: 0.09, blue: 0.09),
-                sidebarBackground: Color(red: 0.06, green: 0.06, blue: 0.06),
-                cardBackground: Color(red: 0.08, green: 0.08, blue: 0.08),
-                elevatedCardBackground: Color(red: 0.11, green: 0.11, blue: 0.11),
-                toolbarBackground: Color(red: 0.06, green: 0.06, blue: 0.06),
+                windowBackground: Color(red: 0.055, green: 0.047, blue: 0.039),
+                contentBackground: Color(red: 0.102, green: 0.090, blue: 0.082),
+                sidebarBackground: Color(red: 0.055, green: 0.047, blue: 0.039),
+                cardBackground: Color(red: 0.118, green: 0.102, blue: 0.090),
+                elevatedCardBackground: Color(red: 0.180, green: 0.157, blue: 0.141),
+                toolbarBackground: Color(red: 0.055, green: 0.047, blue: 0.039),
 
                 cardBorder: Color.white.opacity(0.10),
                 separator: Color.white.opacity(0.16),

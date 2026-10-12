@@ -7,7 +7,7 @@ struct MeetingModelSettingsSection: View {
     @State private var showingDetails = false
 
     var body: some View {
-        FluidManagementGroup(title: "Speaker labels") {
+        FluidManagementGroup(title: PichiLocalization.text("Speaker labels")) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 HStack(spacing: self.theme.metrics.spacing.lg) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
@@ -26,11 +26,11 @@ struct MeetingModelSettingsSection: View {
                 DisclosureGroup(isExpanded: self.$showingDetails) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                         if case let .ready(installed) = self.store.state {
-                            Text("Nemotron 3 Diarization · \(ByteCountFormatter.string(fromByteCount: installed.totalByteCount, countStyle: .file))")
+                            Text("Nemotron 3 Diarization · \(installed.totalByteCount.formatted(.byteCount(style: .file).locale(PichiLocalization.locale)))")
                         }
                         Text(CPUArchitecture.isAppleSilicon
-                            ? "Downloads once (about 200 MB) and stays on this Mac. Recording works while it downloads; transcription waits for it."
-                            : "FluidMeet recording currently requires an Apple silicon Mac.")
+                            ? PichiLocalization.text("Downloads once (about 200 MB) and stays on this Mac. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities.")
+                            : PichiLocalization.text("Automatic speaker separation requires Apple Silicon. GigaAM can transcribe recordings on Intel with unknown speaker identities."))
                     }
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -63,7 +63,7 @@ struct MeetingModelSettingsSection: View {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                 ProgressView(value: fraction)
                     .frame(maxWidth: 220)
-                Text(fraction < 1 ? "Downloading · \(Int(fraction * 100))%" : "Installing…")
+                Text(fraction < 1 ? "Downloading · \(Int(fraction * 100))%" : PichiLocalization.text("Installing…"))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .monospacedDigit()

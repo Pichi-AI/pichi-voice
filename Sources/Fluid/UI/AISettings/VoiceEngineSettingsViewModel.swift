@@ -2,6 +2,21 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// Shared UI input collection. Artifact validation, residency and installation stay in ASRService.
+@MainActor
+enum SpeechModelImportFolderPicker {
+    static func chooseFolder(for model: SettingsStore.SpeechModel) -> URL? {
+        guard model.supportsFolderImport else { return nil }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = PichiLocalization.format(model.importFolderPrompt, model.displayName)
+        panel.prompt = PichiLocalization.text("Import")
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+}
+
 @MainActor
 final class VoiceEngineSettingsViewModel: ObservableObject {
     let settings: SettingsStore
@@ -19,6 +34,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
             || self.downloadingModel != nil
             || self.asr.hasActiveModelDownload
             || self.asr.hasActiveModelPreparation
+            || self.isImportingModel
             || self.asr.isCancellingModelPreparation
             || (!self.asr.isAsrReady && (self.asr.isDownloadingModel || self.asr.isLoadingModel))
     }
@@ -28,6 +44,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var englishOnlyFilter: Bool = false
     @Published var installedOnlyFilter: Bool = false
     @Published var showSpeechFilters: Bool = false
+    @Published private(set) var importingModel: SettingsStore.SpeechModel?
+    @Published private(set) var isCancellingModelImport = false
+    private var modelImportTask: Task<Void, Never>?
+    var isImportingModel: Bool { self.importingModel != nil }
 
     @Published var selectedSpeechProvider: SettingsStore.SpeechModel.Provider
     @Published var previewSpeechModel: SettingsStore.SpeechModel
@@ -89,6 +109,8 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         switch self.providerFilter {
         case .all:
             break
+        case .pichi:
+            models = models.filter { $0.provider == .pichi }
         case .nvidia:
             models = models.filter { $0.provider == .nvidia }
         case .apple:
@@ -147,6 +169,10 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     func downloadSpeechModel(_ model: SettingsStore.SpeechModel, updateWeights: Bool = false) {
         guard !self.areSpeechModelActionsBlocked else { return }
+        if model.supportsFolderImport {
+            self.importSpeechModel(model)
+            return
+        }
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -165,6 +191,40 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
                 self.asr.showError = true
             }
         }
+    }
+
+    func importSpeechModel(_ model: SettingsStore.SpeechModel) {
+        guard !self.areSpeechModelActionsBlocked, model.supportsFolderImport,
+              let directory = SpeechModelImportFolderPicker.chooseFolder(for: model),
+              !self.areSpeechModelActionsBlocked else { return }
+        self.importingModel = model
+        self.isCancellingModelImport = false
+        self.modelImportTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.importingModel = nil
+                self.isCancellingModelImport = false
+                self.modelImportTask = nil
+            }
+            do {
+                try Task.checkCancellation()
+                try await self.asr.importModel(model, from: directory)
+                try Task.checkCancellation()
+            } catch is CancellationError {
+                DebugLogger.shared.info("Model import cancelled: \(model.displayName)", source: "VoiceEngineVM")
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.asr.errorTitle = PichiLocalization.text("Model Import Failed")
+                self.asr.errorMessage = error.localizedDescription
+                self.asr.showError = true
+            }
+        }
+    }
+
+    func cancelModelImport() {
+        guard self.isImportingModel, !self.isCancellingModelImport else { return }
+        self.isCancellingModelImport = true
+        self.modelImportTask?.cancel()
     }
 
     func cancelSpeechModelDownload() {
@@ -201,6 +261,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     var modelDescriptionText: String {
         let model = self.settings.selectedSpeechModel
+        if model.supportsFolderImport { return model.cardDescription }
         switch model {
         case .appleSpeech:
             return "Apple Speech (Legacy) uses built-in macOS speech recognition. No model download required, works on Intel and Apple Silicon."

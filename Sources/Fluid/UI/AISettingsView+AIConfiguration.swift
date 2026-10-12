@@ -29,7 +29,7 @@ extension AIEnhancementSettingsView {
     // MARK: - Helper Functions
 
     func formLabel(_ title: String) -> some View {
-        Text(title)
+        Text(PichiLocalization.text(title))
             .fontWeight(.medium)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
@@ -269,7 +269,7 @@ extension AIEnhancementSettingsView {
                 .foregroundStyle(self.theme.palette.accent.opacity(0.95))
                 .frame(width: 14)
 
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(size: 12, weight: .medium))
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .lineLimit(1)
@@ -338,7 +338,7 @@ extension AIEnhancementSettingsView {
                 .font(.fluidSystem(size: 11))
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(size: 12))
                 .foregroundStyle(.secondary)
         }
@@ -533,7 +533,7 @@ extension AIEnhancementSettingsView {
                 .frame(width: AISettingsLayout.providerRowControlHeight, height: AISettingsLayout.providerRowControlHeight)
         }
         .buttonStyle(SquareIconButtonStyle())
-        .help(help)
+        .help(PichiLocalization.text(help))
     }
 
     /// Shared companion button with loading state — for refresh buttons.
@@ -561,7 +561,7 @@ extension AIEnhancementSettingsView {
         .buttonStyle(SquareIconButtonStyle())
         .disabled(disabled)
         .opacity(opacity)
-        .help(help)
+        .help(PichiLocalization.text(help))
     }
 
     private func providerCard(_ item: ProviderItem) -> some View {
@@ -576,7 +576,7 @@ extension AIEnhancementSettingsView {
                 Image(systemName: status.icon)
                     .font(.fluidSystem(size: 10))
             }
-            Text(status.text)
+            Text(PichiLocalization.text(status.text))
         }
         .font(.fluidSystem(.caption2))
         .foregroundStyle(status.color)
@@ -752,7 +752,7 @@ extension AIEnhancementSettingsView {
                             Text(
                                 isDownloading
                                     ? Self.downloadButtonText(progress: downloadProgress)
-                                    : "Download \(self.privateAIBackendShortName) & Verify"
+                                    : PichiLocalization.format("Download %@ & Verify", self.privateAIBackendShortName)
                             )
                             .font(.fluidSystem(size: 11, weight: .semibold))
                         }
@@ -779,7 +779,7 @@ extension AIEnhancementSettingsView {
                         Text(
                             isDownloading
                                 ? Self.downloadButtonText(progress: downloadProgress)
-                                : "Update & Verify"
+                                : PichiLocalization.text("Update & Verify")
                         )
                         .font(.fluidSystem(size: 11, weight: .semibold))
                     }
@@ -794,7 +794,7 @@ extension AIEnhancementSettingsView {
                                 .controlSize(.mini)
                                 .fixedSize()
                         }
-                        Text(isTesting ? "Loading..." : "Verify")
+                        Text(PichiLocalization.text(isTesting ? "Loading..." : "Verify"))
                             .font(.fluidSystem(size: 11, weight: .semibold))
                     }
                 }
@@ -831,7 +831,7 @@ extension AIEnhancementSettingsView {
             self.privateAIBackendPicker(isBusy: isBusy)
                 .frame(width: 190)
 
-            Text(self.settings.privateAIBackendPreference.detail)
+            Text(PichiLocalization.text(self.settings.privateAIBackendPreference.detail))
                 .font(.fluidSystem(.caption2))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -841,9 +841,9 @@ extension AIEnhancementSettingsView {
     }
 
     private func privateAIBackendPicker(isBusy: Bool) -> some View {
-        FluidDropdownPicker("Backend", selectedTitle: self.privateAIBackendBinding.wrappedValue.displayName, selection: self.privateAIBackendBinding) {
+        FluidDropdownPicker("Backend", selectedTitle: PichiLocalization.text(self.privateAIBackendBinding.wrappedValue.displayName), selection: self.privateAIBackendBinding) {
             ForEach(self.privateAISelectableBackendPreferences) { preference in
-                Text(preference.displayName).tag(preference)
+                Text(PichiLocalization.text(preference.displayName)).tag(preference)
             }
         }
         .fluidDropdownStyle()
@@ -904,7 +904,7 @@ extension AIEnhancementSettingsView {
                         .fixedSize()
                 }
 
-                Text(status.detail)
+                Text(PichiLocalization.text(status.detail))
                     .font(.fluidSystem(.caption))
                     .lineLimit(2)
             }
@@ -1069,7 +1069,7 @@ extension AIEnhancementSettingsView {
                 " (\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)))"
             } ?? ""
             return PrivateAIProviderModelStatus(
-                detail: "\(self.privateAIBackendShortName) model not downloaded\(size).",
+                detail: PichiLocalization.format("%@ model not downloaded%@.", self.privateAIBackendShortName, size),
                 color: self.theme.palette.accent
             )
         }
@@ -1152,7 +1152,7 @@ extension AIEnhancementSettingsView {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("API Key")
+                    Text(PichiLocalization.text(CloudTextProvider.descriptor(for: item.id)?.credentialTitle ?? "API Key"))
                         .font(.fluidSystem(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                     HStack(alignment: .center, spacing: 8) {
@@ -1171,7 +1171,7 @@ extension AIEnhancementSettingsView {
                            let url = URL(string: websiteInfo.url)
                         {
                             if managementLayout {
-                                Button(websiteInfo.label, systemImage: "key") { NSWorkspace.shared.open(url) }
+                                Button(PichiLocalization.text(websiteInfo.label), systemImage: "key") { NSWorkspace.shared.open(url) }
                                     .buttonStyle(.plain)
                                     .font(self.theme.typography.bodyStrong)
                                     .foregroundStyle(self.theme.palette.accent)
@@ -1181,7 +1181,7 @@ extension AIEnhancementSettingsView {
                                     HStack(spacing: 4) {
                                         Image(systemName: websiteInfo.label.contains("Guide") ? "book.fill" : "key.fill")
                                             .font(.fluidSystem(size: 10))
-                                        Text(websiteInfo.label)
+                                        Text(PichiLocalization.text(websiteInfo.label))
                                             .font(.fluidSystem(size: 11, weight: .medium))
                                     }
                                     .padding(.horizontal, 10)
@@ -1196,6 +1196,13 @@ extension AIEnhancementSettingsView {
                             }
                         }
                     }
+                }
+
+                if let provider = CloudTextProvider.descriptor(for: item.id) {
+                    ProviderConnectionFields(provider: provider, options: Binding(
+                        get: { self.viewModel.settings.providerConnectionOptions[item.id] ?? [:] },
+                        set: { self.viewModel.updateConnectionOptions($0, for: item.id) }
+                    ))
                 }
 
                 (managementLayout ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 8))) {
@@ -1232,6 +1239,12 @@ extension AIEnhancementSettingsView {
                     }
                 }
 
+                if let catalogProviderID = ModelRepository.shared.localTextModelProvider(for: baseURL) {
+                    LocalTextModelLibraryMenu(providerID: catalogProviderID,
+                                              installedModels: self.viewModel.discoveredModels(for: item.id),
+                                              selectedModel: self.modelBinding(for: item.id))
+                }
+
                 if managementLayout, self.viewModel.showingAddModel {
                     self.addModelSection
                 }
@@ -1242,7 +1255,7 @@ extension AIEnhancementSettingsView {
                             .font(self.theme.typography.captionStrong)
                             .foregroundStyle(self.theme.palette.secondaryText)
                         HStack(spacing: 8) {
-                            Text(self.viewModel.isReasoningEnabled(for: item.id) ? "Enabled" : "Not enabled")
+                            Text(PichiLocalization.text(self.viewModel.isReasoningEnabled(for: item.id) ? "Enabled" : "Not enabled"))
                                 .font(self.theme.typography.body)
                                 .foregroundStyle(self.theme.palette.secondaryText)
                             Spacer()
@@ -1309,7 +1322,7 @@ extension AIEnhancementSettingsView {
                                     Image(systemName: "checkmark.shield")
                                         .font(.fluidSystem(size: 12))
                                 }
-                                Text(self.viewModel.isTestingConnection ? "Verifying…" : "Verify model")
+                                Text(PichiLocalization.text(self.viewModel.isTestingConnection ? "Verifying…" : "Verify model"))
                                     .font(self.theme.typography.bodyStrong)
                             }
                         }
@@ -1322,7 +1335,7 @@ extension AIEnhancementSettingsView {
                     HStack(spacing: 6) {
                         Image(systemName: "info.circle")
                             .font(.fluidSystem(.caption))
-                        Text(hasModels ? "Select a model to enable verification" : "Refresh models to enable verification")
+                        Text(PichiLocalization.text(hasModels ? "Select a model to enable verification" : "Refresh models to enable verification"))
                             .font(.fluidSystem(.caption))
                     }
                     .foregroundStyle(.secondary)
@@ -1554,7 +1567,7 @@ extension AIEnhancementSettingsView {
                                 self.viewModel.startEditingProvider()
                             }
                         }) {
-                            Text("Edit")
+                            Text(PichiLocalization.text("action.edit", defaultValue: "Edit"))
                                 .font(.fluidSystem(size: 12, weight: .semibold))
                                 .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         }
@@ -1594,7 +1607,7 @@ extension AIEnhancementSettingsView {
                                 self.viewModel.setEditingAPIKey(true, for: item.id)
                             }
                         }) {
-                            Text("Edit")
+                            Text(PichiLocalization.text("action.edit", defaultValue: "Edit"))
                                 .font(.fluidSystem(size: 12, weight: .semibold))
                                 .frame(width: actionColumnWidth, height: AISettingsLayout.providerRowControlHeight)
                         }
@@ -1742,6 +1755,10 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerLogoName(for item: ProviderItem) -> String? {
+        if let provider = CloudTextProvider.descriptor(for: item.id) {
+            return provider.logoAssetName
+        }
+
         let id = item.id.lowercased()
         let name = item.name.lowercased()
 
@@ -1870,7 +1887,7 @@ extension AIEnhancementSettingsView {
                             self.privateAIBackendPicker(isBusy: isBusy).frame(width: 200)
                         }
                         Divider()
-                        FluidManagementRow(title: "Dictation window", detail: "\(self.privateAIContextCueText). Longer windows use more memory.") {
+                        FluidManagementRow(title: "Dictation window", detail: PichiLocalization.format("%@. Longer windows use more memory.", self.privateAIContextCueText)) {
                             self.privateAIContextControl(isBusy: isBusy)
                         }
                         Divider()
@@ -1882,7 +1899,7 @@ extension AIEnhancementSettingsView {
                         FluidManagementRow(title: "Free memory when idle", detail: "Experimental. Unloads the model after a quiet period and reloads it as you start speaking.") {
                             Picker("Free memory when idle", selection: self.privateAIIdleUnloadBinding) {
                                 ForEach(SettingsStore.PrivateAIIdleUnload.allCases) { option in
-                                    Text(option.title).tag(option)
+                                    Text(PichiLocalization.text(option.title)).tag(option)
                                 }
                             }
                             .labelsHidden().frame(width: 200)
@@ -1917,7 +1934,7 @@ extension AIEnhancementSettingsView {
                 Image(systemName: "pencil.circle.fill")
                     .font(.fluidSystem(size: 14))
                     .foregroundStyle(self.theme.palette.accent)
-                Text(onDone == nil ? "Edit Provider" : "Advanced settings")
+                Text(PichiLocalization.text(onDone == nil ? "Edit Provider" : "Advanced settings"))
                     .font(.fluidSystem(size: 14, weight: .semibold))
                 Spacer()
             }
@@ -1944,7 +1961,7 @@ extension AIEnhancementSettingsView {
                     self.privateAIBackendPicker(isBusy: isBusy)
                         .frame(width: 210)
 
-                    Text(self.settings.privateAIBackendPreference.detail)
+                    Text(PichiLocalization.text(self.settings.privateAIBackendPreference.detail))
                         .font(.fluidSystem(.caption2))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -2030,7 +2047,7 @@ extension AIEnhancementSettingsView {
                 .font(.fluidSystem(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
-            Text(title)
+            Text(PichiLocalization.text(title))
                 .font(.fluidSystem(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
         }
@@ -2094,8 +2111,7 @@ extension AIEnhancementSettingsView {
     private var privateAIContextCueText: String {
         let estimatedWords = SettingsStore.estimatedPrivateAIDictationWords(for: self.settings.privateAIContextTokenLimit)
         let estimatedMinutes = max(1, Int((Double(estimatedWords) / 150.0).rounded()))
-        let minuteText = estimatedMinutes == 1 ? "1 minute" : "\(estimatedMinutes) minutes"
-        return "Good for about \(estimatedWords.formatted()) words or \(minuteText) of dictation"
+        return PichiLocalization.format("Good for about %@ words or %lld minutes of dictation", estimatedWords.formatted(), estimatedMinutes)
     }
 
     var editProviderSection: some View {
@@ -2174,7 +2190,7 @@ extension AIEnhancementSettingsView {
                                 HStack(spacing: 4) {
                                     Image(systemName: websiteInfo.label.contains("Guide") ? "book.fill" : "key.fill")
                                         .font(.fluidSystem(size: 10))
-                                    Text(websiteInfo.label)
+                                    Text(PichiLocalization.text(websiteInfo.label))
                                         .font(.fluidSystem(size: 11, weight: .medium))
                                 }
                                 .padding(.horizontal, 10)
@@ -2383,7 +2399,7 @@ extension AIEnhancementSettingsView {
                 Toggle("", isOn: self.$viewModel.editingReasoningEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
-                Text(self.viewModel.editingReasoningEnabled ? "Enabled" : "Disabled")
+                Text(PichiLocalization.text(self.viewModel.editingReasoningEnabled ? "Enabled" : "Disabled"))
                     .font(.fluidSystem(.caption))
                     .foregroundStyle(self.viewModel.editingReasoningEnabled ? self.theme.palette.accent : .secondary)
             }
@@ -2536,7 +2552,7 @@ extension AIEnhancementSettingsView {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Button(action: { Task { await self.viewModel.testAPIConnection() } }) {
-                    Text(self.viewModel.isTestingConnection ? "Verifying…" : (self.viewModel.isModelVerified(for: self.viewModel.selectedProviderID) ? "Model verified" : "Verify model"))
+                    Text(PichiLocalization.text(self.viewModel.isTestingConnection ? "Verifying…" : (self.viewModel.isModelVerified(for: self.viewModel.selectedProviderID) ? "Model verified" : "Verify model")))
                         .font(.fluidSystem(.caption))
                         .fontWeight(.semibold)
                 }
@@ -2594,7 +2610,7 @@ extension AIEnhancementSettingsView {
                let url = URL(string: websiteInfo.url)
             {
                 Button(action: { NSWorkspace.shared.open(url) }) {
-                    Label(websiteInfo.label, systemImage: websiteInfo.label.contains("Download") ? "arrow.down.circle.fill" : (websiteInfo.label.contains("Guide") ? "book.fill" : "link"))
+                    Label(PichiLocalization.text(websiteInfo.label), systemImage: websiteInfo.label.contains("Download") ? "arrow.down.circle.fill" : (websiteInfo.label.contains("Guide") ? "book.fill" : "link"))
                         .labelStyle(.titleAndIcon).font(.fluidSystem(.caption))
                 }
                 .fluidButton(.compact, size: .compact)

@@ -20,8 +20,9 @@ final class ProviderModelVerificationStore {
             .map { ($0.key, $0.value) })
     }
 
-    static func identity(providerID: String, baseURL: String, apiKey: String, model: String) -> String {
-        let fields = [providerID, baseURL, apiKey, model].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    static func identity(providerID: String, baseURL: String, apiKey: String, model: String, connectionOptions: [String: String] = [:]) -> String {
+        var fields = [providerID, baseURL, apiKey, model].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if !connectionOptions.isEmpty { fields += connectionOptions.keys.sorted().flatMap { [$0, connectionOptions[$0] ?? ""] } }
         let data = (try? JSONEncoder().encode(fields)) ?? Data()
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }

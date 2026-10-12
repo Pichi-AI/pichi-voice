@@ -214,7 +214,7 @@ struct SettingsSearchAvailability {
 }
 
 enum SettingsSearchIndex {
-    private static let queryStopWords: Set<String> = ["and", "for", "from", "in", "of", "or", "the", "to", "with"]
+    private static let queryStopWords: Set<String> = ["and", "for", "from", "in", "of", "or", "the", "to", "with", "и", "для", "из", "в", "на", "или", "с"]
 
     private struct Entry {
         let target: SettingsSearchTarget
@@ -227,12 +227,12 @@ enum SettingsSearchIndex {
         let weight: Int
     }
 
-    private static let entries: [Entry] = [
+    private static var entries: [Entry] { [
         .init(target: .general, title: "General", terms: ["app settings preferences"]),
         .init(
             target: .launchAtStartup,
             title: "Launch at startup",
-            terms: ["Automatically start FluidVoice when you log in", "login startup boot open"]
+            terms: ["Automatically start FluidVoice when you log in", AppBrand.text("Automatically start FluidVoice when you log in"), "login startup boot open"]
         ),
         .init(
             target: .showWindowAtLogin,
@@ -267,7 +267,7 @@ enum SettingsSearchIndex {
             title: "Microphone Permission",
             terms: ["mic access authorization privacy grant denied system settings"]
         ),
-        .init(target: .shortcuts, title: "Shortcuts", terms: ["keyboard hotkeys Smart Fluid Intelligence"]),
+        .init(target: .shortcuts, title: "Shortcuts", terms: ["keyboard hotkeys Smart Fluid Intelligence", AppBrand.text("keyboard hotkeys Smart Fluid Intelligence")]),
         .init(target: .globalHotkey, title: "Global Hotkey", terms: ["keyboard shortcut activation accessibility"]),
         .init(
             target: .primaryDictationShortcuts,
@@ -448,9 +448,9 @@ enum SettingsSearchIndex {
         .init(
             target: .historyPerformance,
             title: "Show Performance in History",
-            terms: ["timing speed tokens per second ASR cleanup Fluid Intelligence"]
+            terms: ["timing speed tokens per second ASR cleanup Fluid Intelligence", AppBrand.text("timing speed tokens per second ASR cleanup Fluid Intelligence")]
         ),
-    ]
+    ] }
 
     static func results(for query: String) -> [SettingsSearchResult] {
         let normalizedQuery = self.normalize(query)
@@ -498,10 +498,16 @@ enum SettingsSearchIndex {
     }
 
     private static func score(_ entry: Entry, for query: String) -> Int? {
-        let fields = [
+        let sourceFields = [
             WeightedField(text: entry.title, weight: 100),
             WeightedField(text: entry.target.section.title, weight: 45),
         ] + entry.terms.map { WeightedField(text: $0, weight: 55) }
+        // Keep English aliases while matching the labels shown in the selected UI language.
+        let localizedFields = sourceFields.compactMap { field -> WeightedField? in
+            let localized = PichiLocalization.text(field.text)
+            return localized == field.text ? nil : WeightedField(text: localized, weight: field.weight)
+        }
+        let fields = sourceFields + localizedFields
 
         let allQueryTokens = self.tokens(in: query)
         let meaningfulQueryTokens = allQueryTokens.filter { !self.queryStopWords.contains($0) }
@@ -540,6 +546,10 @@ enum SettingsSearchIndex {
 
         for term in entry.terms {
             score += self.phraseBonus(query: query, candidate: self.normalize(term), exactBonus: 220)
+        }
+        for field in localizedFields {
+            let bonus = field.weight == 100 ? 1000 : (field.weight == 45 ? 400 : 220)
+            score += self.phraseBonus(query: query, candidate: self.normalize(field.text), exactBonus: bonus)
         }
 
         if hasCompactFuzzyMatch {
@@ -644,6 +654,7 @@ enum SettingsSearchIndex {
 /// is active.
 struct SidebarSearchField: View {
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @Binding var text: String
     let placeholder: String
     let isActive: Bool
@@ -657,8 +668,9 @@ struct SidebarSearchField: View {
                 .accessibilityHidden(true)
             SidebarSearchInput(
                 text: self.$text,
-                placeholder: self.placeholder,
+                placeholder: PichiLocalization.text(self.placeholder, locale: self.interfaceLocale),
                 isActive: self.isActive,
+                font: self.theme.typography.nativeBodyFont,
                 onCommand: self.onCommand,
                 isFocused: self.$isFocused
             )
@@ -673,7 +685,7 @@ struct SidebarSearchField: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .font(.system(size: 14))
+        .font(.fluidSystem(size: 14))
         .padding(.horizontal, self.theme.metrics.spacing.sm)
         .frame(height: 32)
         .background(
@@ -712,6 +724,7 @@ private struct SidebarSearchInput: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
     let isActive: Bool
+    let font: NSFont
     var onCommand: (Selector) -> Bool = { _ in false }
 
     @Binding var isFocused: Bool
@@ -735,7 +748,7 @@ private struct SidebarSearchInput: NSViewRepresentable {
         searchField.focusRingType = .none
         (searchField.cell as? NSSearchFieldCell)?.searchButtonCell = nil
         (searchField.cell as? NSSearchFieldCell)?.cancelButtonCell = nil
-        searchField.font = .systemFont(ofSize: 14)
+        searchField.font = self.font
         searchField.identifier = Self.identifier
         searchField.setAccessibilityLabel(self.placeholder)
         context.coordinator.observeFocusRequests(for: searchField)
@@ -744,6 +757,10 @@ private struct SidebarSearchInput: NSViewRepresentable {
 
     func updateNSView(_ searchField: NSSearchField, context: Context) {
         context.coordinator.parent = self
+        // The host resolved this known UI key using its selected locale. Keep it verbatim here.
+        searchField.placeholderString = self.placeholder
+        searchField.setAccessibilityLabel(self.placeholder)
+        if searchField.font != self.font { searchField.font = self.font }
         if searchField.stringValue != self.text {
             searchField.stringValue = self.text
         }

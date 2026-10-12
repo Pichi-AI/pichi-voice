@@ -33,8 +33,8 @@ final class KeychainService {
         case loaded([String: String])
     }
 
-    private let service = "com.fluidvoice.provider-api-keys"
-    private let account = "fluidApiKeys"
+    private let service = AppBrand.keychainService
+    private let account = AppBrand.keychainAccount
     private let cacheLock = NSLock()
     private let ioLock = NSRecursiveLock()
     private var keyCache = KeyCache.unloaded

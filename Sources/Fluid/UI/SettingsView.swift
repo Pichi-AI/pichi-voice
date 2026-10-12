@@ -60,8 +60,8 @@ struct SettingsView: View {
     @State private var cachedDefaultInputUID: String = ""
     @State private var cachedDefaultOutputName: String = ""
 
-    // Detailed analytics consent UI state (default ON; daily activity remains enabled)
-    @State private var shareDetailedAnalytics: Bool = SettingsStore.shared.shareDetailedAnalytics
+    // Detailed analytics defaults off; the basic daily activity policy is separate.
+    @State private var shareDetailedAnalytics: Bool = AnalyticsConfig.fromBundle().isConfigured && SettingsStore.shared.shareDetailedAnalytics
     @State private var showAnalyticsPrivacy: Bool = false
     @State private var pendingDetailedAnalyticsValue: Bool? = nil
     @State private var showDetailedAnalyticsConfirmation: Bool = false
@@ -233,8 +233,8 @@ struct SettingsView: View {
                             // Launch at startup
                             self.settingsToggleRow(
                                 title: "Launch at startup",
-                                description: "Automatically start FluidVoice when you log in",
-                                footnote: self.settings.launchAtStartupStatusMessage,
+                                description: AppBrand.text("Automatically start FluidVoice when you log in"),
+                                footnote: AppBrand.text(self.settings.launchAtStartupStatusMessage),
                                 errorMessage: self.settings.launchAtStartupErrorMessage,
                                 isOn: self.launchAtStartupBinding
                             )
@@ -244,7 +244,7 @@ struct SettingsView: View {
                             // Show window when launched at login
                             self.settingsToggleRow(
                                 title: "Show window when launched at login",
-                                description: "When off, FluidVoice starts silently in the menu bar at login. Opening the app yourself always shows the window.",
+                                description: AppBrand.text("When off, FluidVoice starts silently in the menu bar at login. Opening the app yourself always shows the window."),
                                 isOn: Binding(
                                     get: { SettingsStore.shared.showMainWindowAtLoginLaunch },
                                     set: { SettingsStore.shared.showMainWindowAtLoginLaunch = $0 }
@@ -256,7 +256,7 @@ struct SettingsView: View {
                             // Hide from Dock & App Switcher
                             self.settingsToggleRow(
                                 title: "Hide from Dock & App Switcher",
-                                description: "Keep FluidVoice in the menu bar only (hides Dock icon and Cmd+Tab entry)",
+                                description: AppBrand.text("Keep FluidVoice in the menu bar only (hides Dock icon and Cmd+Tab entry)"),
                                 footnote: "Note: May require app restart to take effect.",
                                 isOn: Binding(
                                     get: { SettingsStore.shared.hideFromDockAndAppSwitcher },
@@ -264,6 +264,34 @@ struct SettingsView: View {
                                 )
                             )
                             .settingsSearchTarget(.dockVisibility)
+                            Divider().opacity(0.2)
+
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Interface language")
+                                        .font(self.theme.typography.bodyStrong)
+                                    Text("Russian by default. Speech and summary languages are configured separately.")
+                                        .font(self.theme.typography.bodySmall)
+                                        .foregroundStyle(self.settingsSecondaryText)
+                                }
+                                Spacer()
+                                Picker("Interface language", selection: Binding(
+                                    get: { self.settings.interfaceLanguage },
+                                    set: { self.settings.interfaceLanguage = $0 }
+                                )) {
+                                    ForEach(PichiInterfaceLanguage.allCases) { language in
+                                        Text(verbatim: language.displayName).tag(language)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 130)
+                            }
+                            Text("Standard macOS menu titles update after restarting the app.")
+                                .font(self.theme.typography.caption)
+                                .foregroundStyle(self.settingsSecondaryText)
+                            Divider().opacity(0.2)
+
+                            BrandSettingsSection()
                             Divider().opacity(0.2)
 
                             // Accent Color
@@ -299,8 +327,8 @@ struct SettingsView: View {
                                                     .padding(4)
                                             }
                                             .buttonStyle(.plain)
-                                            .accessibilityLabel(option.rawValue)
-                                            .help(option.rawValue)
+                                            .accessibilityLabel(PichiLocalization.text(option.rawValue))
+                                            .help(PichiLocalization.text(option.rawValue))
                                         }
                                     }
                                     .padding(.horizontal, 6)
@@ -331,7 +359,7 @@ struct SettingsView: View {
 
                                 Spacer()
 
-                                FluidDropdownPicker("Transcription sound", selectedTitle: SettingsStore.shared.transcriptionStartSound.displayName, selection: Binding(
+                                FluidDropdownPicker("Transcription sound", selectedTitle: PichiLocalization.text(SettingsStore.shared.transcriptionStartSound.displayName), selection: Binding(
                                     get: { SettingsStore.shared.transcriptionStartSound },
                                     set: { newValue in
                                         SettingsStore.shared.transcriptionStartSound = newValue
@@ -339,7 +367,7 @@ struct SettingsView: View {
                                     }
                                 )) {
                                     ForEach(SettingsStore.TranscriptionStartSound.allCases) { option in
-                                        Text(option.displayName).tag(option)
+                                        Text(PichiLocalization.text(option.displayName)).tag(option)
                                     }
                                 }
                                 .fluidDropdownStyle()
@@ -462,8 +490,16 @@ struct SettingsView: View {
                                     .foregroundStyle(self.settingsSecondaryText)
                             }
                             .settingsSearchTarget(.automaticUpdates)
+                            .disabled(!AppBrand.updatesEnabled)
 
-                            if let version = self.updater.availableUpdateVersion {
+                            if !AppBrand.updatesEnabled {
+                                Text("Signed app updates are not configured for this distribution. Install a reviewed build manually.")
+                                    .font(self.theme.typography.bodySmall)
+                                    .foregroundStyle(self.settingsSecondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            if AppBrand.updatesEnabled, let version = self.updater.availableUpdateVersion {
                                 HStack(spacing: 10) {
                                     Label("Update available · \(version)", systemImage: "arrow.down.circle")
                                         .font(self.theme.typography.bodyStrong)
@@ -489,10 +525,10 @@ struct SettingsView: View {
                                 .buttonStyle(.borderedProminent)
                                 .tint(self.theme.palette.accent)
                                 .controlSize(.regular)
-                                .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
+                                .disabled(!AppBrand.updatesEnabled || self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
 
                                 Button("Release Notes") {
-                                    if let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") {
+                                    if let url = URL(string: "\(AppBrand.repositoryURL.absoluteString)/releases") {
                                         NSWorkspace.shared.open(url)
                                     }
                                 }
@@ -506,7 +542,7 @@ struct SettingsView: View {
                                     let targetVersion = self.rollbackVersion
                                     let confirm = NSAlert()
                                     confirm.messageText = "Rollback to \(infoText)?"
-                                    confirm.informativeText = "This will restore a previous app version and relaunch FluidVoice."
+                                    confirm.informativeText = AppBrand.text("This will restore a previous app version and relaunch FluidVoice.")
                                     confirm.alertStyle = .warning
                                     confirm.addButton(withTitle: "Rollback")
                                     confirm.addButton(withTitle: "Cancel")
@@ -526,7 +562,7 @@ struct SettingsView: View {
                                             await MainActor.run {
                                                 let success = NSAlert()
                                                 success.messageText = "Rollback Successful"
-                                                success.informativeText = "Rolled back to \(targetVersion). FluidVoice will relaunch shortly."
+                                                success.informativeText = AppBrand.text("Rolled back to \(targetVersion). FluidVoice will relaunch shortly.")
                                                 success.alertStyle = .informational
                                                 success.addButton(withTitle: "Report Bug")
                                                 success.addButton(withTitle: "OK")
@@ -811,16 +847,16 @@ struct SettingsView: View {
                                                 Text("Activation Mode")
                                                     .font(self.theme.typography.bodyStrong)
                                                     .foregroundStyle(self.settingsTitleText)
-                                                Text(self.hotkeyMode.description)
+                                                Text(PichiLocalization.text(self.hotkeyMode.description))
                                                     .font(self.theme.typography.bodySmall)
                                                     .foregroundStyle(self.settingsSecondaryText)
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                                            FluidDropdownPicker("Activation mode", selectedTitle: self.hotkeyMode.displayName, selection: self.$hotkeyMode) {
+                                            FluidDropdownPicker("Activation mode", selectedTitle: PichiLocalization.text(self.hotkeyMode.displayName), selection: self.$hotkeyMode) {
                                                 ForEach(HotkeyActivationMode.allCases) { mode in
-                                                    Text(mode.displayName).tag(mode)
+                                                    Text(PichiLocalization.text(mode.displayName)).tag(mode)
                                                 }
                                             }
                                             .fluidDropdownStyle()
@@ -849,19 +885,19 @@ struct SettingsView: View {
                                                 Text("Text Insertion Mode")
                                                     .font(self.theme.typography.bodyStrong)
                                                     .foregroundStyle(self.settingsTitleText)
-                                                Text(SettingsStore.shared.textInsertionMode.description)
+                                                Text(PichiLocalization.text(SettingsStore.shared.textInsertionMode.description))
                                                     .font(self.theme.typography.bodySmall)
                                                     .foregroundStyle(self.settingsSecondaryText)
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
                                             .frame(maxWidth: .infinity, alignment: .leading)
 
-                                            FluidDropdownPicker("Text insertion", selectedTitle: SettingsStore.shared.textInsertionMode.displayName, selection: Binding(
+                                            FluidDropdownPicker("Text insertion", selectedTitle: PichiLocalization.text(SettingsStore.shared.textInsertionMode.displayName), selection: Binding(
                                                 get: { SettingsStore.shared.textInsertionMode },
                                                 set: { SettingsStore.shared.textInsertionMode = $0 }
                                             )) {
                                                 ForEach(SettingsStore.TextInsertionMode.allCases) { mode in
-                                                    Text(mode.displayName).tag(mode)
+                                                    Text(PichiLocalization.text(mode.displayName)).tag(mode)
                                                 }
                                             }
                                             .fluidDropdownStyle()
@@ -938,7 +974,7 @@ struct SettingsView: View {
 
                                         self.optionToggleRow(
                                             title: "Pause Media During Transcription",
-                                            description: "Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it.",
+                                            description: AppBrand.text("Automatically pause currently playing audio/video when transcription starts. Resumes only if FluidVoice paused it."),
                                             isOn: Binding(
                                                 get: { SettingsStore.shared.pauseMediaDuringTranscription },
                                                 set: { SettingsStore.shared.pauseMediaDuringTranscription = $0 }
@@ -953,11 +989,12 @@ struct SettingsView: View {
 
                                         self.optionToggleRow(
                                             title: "Share Detailed Anonymous Analytics",
-                                            description: "Share anonymous daily feature, insertion performance, onboarding, and model metrics. " +
-                                                "When off, FluidVoice still records the anonymous daily activity signal and, in beta builds, daily ASR and Fluid Intelligence timing summaries. " +
-                                                "Never includes transcription text or prompts.",
+                                            description: AnalyticsConfig.fromBundle().isConfigured
+                                                ? "Share anonymous daily feature, insertion performance, onboarding, and model metrics. Never includes transcription text or prompts."
+                                                : "Telemetry is disabled in this distribution.",
                                             isOn: self.detailedAnalyticsToggleBinding
                                         )
+                                        .disabled(!AnalyticsConfig.fromBundle().isConfigured)
                                         .settingsSearchTarget(.analyticsPrivacy)
 
                                         HStack {
@@ -1137,7 +1174,7 @@ struct SettingsView: View {
 
                             self.optionToggleRow(
                                 title: "Microphone Changes",
-                                description: "Show an alert when FluidVoice changes or loses its microphone.",
+                                description: AppBrand.text("Show an alert when FluidVoice changes or loses its microphone."),
                                 isOn: Binding(
                                     get: { self.settings.showMicrophoneChangeAlerts },
                                     set: { enabled in
@@ -1154,7 +1191,7 @@ struct SettingsView: View {
 
                             self.optionToggleRow(
                                 title: "Paste Check",
-                                description: "Show a card when FluidVoice can't confirm that pasted text landed.",
+                                description: AppBrand.text("Show a card when FluidVoice can't confirm that pasted text landed."),
                                 isOn: Binding(
                                     get: { self.settings.showPasteCheckAlerts },
                                     set: { self.settings.showPasteCheckAlerts = $0 }
@@ -1303,9 +1340,9 @@ struct SettingsView: View {
                                 Spacer()
 
                                 if self.settings.overlayPosition == .bottom {
-                                    FluidDropdownPicker("Overlay size", selectedTitle: self.settings.overlaySize.displayName, selection: self.$settings.overlaySize) {
+                                    FluidDropdownPicker("Overlay size", selectedTitle: PichiLocalization.text(self.settings.overlaySize.displayName), selection: self.$settings.overlaySize) {
                                         ForEach(SettingsStore.OverlaySize.allCases, id: \.self) { size in
-                                            Text(size.displayName).tag(size)
+                                            Text(PichiLocalization.text(size.displayName)).tag(size)
                                         }
                                     }
                                     .fluidDropdownStyle()
@@ -1313,11 +1350,11 @@ struct SettingsView: View {
                                 } else {
                                     FluidDropdownPicker(
                                         "Notch presentation",
-                                        selectedTitle: self.settings.notchPresentationMode.displayName,
+                                        selectedTitle: PichiLocalization.text(self.settings.notchPresentationMode.displayName),
                                         selection: self.$settings.notchPresentationMode
                                     ) {
                                         ForEach(SettingsStore.NotchPresentationMode.allCases, id: \.self) { mode in
-                                            Text(mode.displayName).tag(mode)
+                                            Text(PichiLocalization.text(mode.displayName)).tag(mode)
                                         }
                                     }
                                     .fluidDropdownStyle()
@@ -1419,9 +1456,9 @@ struct SettingsView: View {
 
                                 Spacer()
 
-                                FluidDropdownPicker("Overlay position", selectedTitle: self.settings.overlayPosition.displayName, selection: self.$settings.overlayPosition) {
+                                FluidDropdownPicker("Overlay position", selectedTitle: PichiLocalization.text(self.settings.overlayPosition.displayName), selection: self.$settings.overlayPosition) {
                                     ForEach(SettingsStore.OverlayPosition.allCases, id: \.self) { position in
-                                        Text(position.displayName).tag(position)
+                                        Text(PichiLocalization.text(position.displayName)).tag(position)
                                     }
                                 }
                                 .fluidDropdownStyle()
@@ -1453,7 +1490,7 @@ struct SettingsView: View {
                             .settingsSearchTarget(.overlaySensitivity)
 
                             HStack(spacing: 10) {
-                                Text("More")
+                                Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
                                     .frame(width: 36, alignment: .trailing)
@@ -1508,7 +1545,7 @@ struct SettingsView: View {
                                     )
                                     .controlSize(.regular)
 
-                                    Text("More")
+                                    Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
                                         .frame(width: 36, alignment: .leading)
@@ -1575,7 +1612,7 @@ struct SettingsView: View {
                             Text("The debug log contains detailed information about app operations and can help with troubleshooting.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
-                            Text("Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default.")
+                            Text("Crash diagnostics are stored locally. Use Reveal Log File to find them.")
                                 .font(self.theme.typography.bodySmall)
                                 .foregroundStyle(self.settingsSecondaryText)
                         }
@@ -1615,7 +1652,7 @@ struct SettingsView: View {
 
                         self.settingsToggleRow(
                             title: "Show Performance in History",
-                            description: "Display transcription time, cleanup time, and Fluid Intelligence speed.",
+                            description: AppBrand.text("Display transcription time, cleanup time, and Fluid Intelligence speed."),
                             isOn: Binding(
                                 get: { SettingsStore.shared.showHistoryPerformanceMetrics },
                                 set: { SettingsStore.shared.showHistoryPerformanceMetrics = $0 }
@@ -1668,7 +1705,7 @@ struct SettingsView: View {
     }
 
     private func openIssueReportingPage() {
-        guard let url = URL(string: "https://github.com/altic-dev/Fluid-oss/issues/new/choose") else { return }
+        guard let url = URL(string: AppBrand.supportURL.absoluteString) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1691,7 +1728,7 @@ struct SettingsView: View {
 
             self.presentInfoAlert(
                 title: "Backup Exported",
-                message: "Saved your FluidVoice backup to:\n\(url.path)"
+                message: AppBrand.format("Saved your FluidVoice backup to:\n%@", url.path)
             )
         } catch {
             self.presentErrorAlert(
@@ -1719,20 +1756,16 @@ struct SettingsView: View {
             let document = try BackupService.shared.decode(data)
 
             let formatter = DateFormatter()
+            formatter.locale = PichiLocalization.locale
             formatter.dateStyle = .medium
             formatter.timeStyle = .short
 
             let confirm = NSAlert()
-            confirm.messageText = "Import this backup?"
-            confirm.informativeText = """
-            This replaces your current settings, prompt profiles, and stats history.
-
-            Exported: \(formatter.string(from: document.exportedAt))
-            API keys are not included and will not be changed.
-            """
+            confirm.messageText = PichiLocalization.text("Import this backup?")
+            confirm.informativeText = PichiLocalization.format("This replaces your current settings, prompt profiles, and stats history.\n\nExported: %@\nAPI keys are not included and will not be changed.", formatter.string(from: document.exportedAt))
             confirm.alertStyle = .warning
-            confirm.addButton(withTitle: "Import")
-            confirm.addButton(withTitle: "Cancel")
+            confirm.addButton(withTitle: PichiLocalization.text("Import"))
+            confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
 
             guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
@@ -1741,7 +1774,7 @@ struct SettingsView: View {
 
             self.presentInfoAlert(
                 title: "Backup Imported",
-                message: "Your settings, prompt profiles, and stats were restored successfully."
+                message: PichiLocalization.text("Your settings, prompt profiles, and stats were restored successfully.")
             )
         } catch {
             self.presentErrorAlert(
@@ -1752,7 +1785,7 @@ struct SettingsView: View {
     }
 
     private func syncLocalSettingsAfterBackupRestore() {
-        self.shareDetailedAnalytics = SettingsStore.shared.shareDetailedAnalytics
+        self.shareDetailedAnalytics = AnalyticsConfig.fromBundle().isConfigured && SettingsStore.shared.shareDetailedAnalytics
         self.pendingDetailedAnalyticsValue = nil
         self.showDetailedAnalyticsConfirmation = false
         self.refreshAudioHistoryUsage()
@@ -1768,7 +1801,7 @@ struct SettingsView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: ",", with: ".")
         guard let value = Double(normalized), value > 0 else {
-            self.presentErrorAlert(title: "Invalid Budget", message: "Enter a positive number of GB.")
+            self.presentErrorAlert(title: "Invalid Budget", message: PichiLocalization.text("Enter a positive number of GB."))
             self.refreshAudioHistoryUsage()
             return
         }
@@ -1777,13 +1810,11 @@ struct SettingsView: View {
         let newBudgetBytes = DictationAudioHistoryStore.bytes(forGigabytes: newBudget)
         if self.audioHistoryUsageBytes > newBudgetBytes {
             let confirm = NSAlert()
-            confirm.messageText = "Prune saved audio?"
-            confirm.informativeText = """
-            This budget is below current audio usage. FluidVoice will delete the oldest saved audio first and keep transcript history.
-            """
+            confirm.messageText = PichiLocalization.text("Prune saved audio?")
+            confirm.informativeText = PichiLocalization.format("This budget is below current audio usage. %@ will delete the oldest saved audio first and keep transcript history.", AppBrand.appName)
             confirm.alertStyle = .warning
-            confirm.addButton(withTitle: "Apply and Prune")
-            confirm.addButton(withTitle: "Cancel")
+            confirm.addButton(withTitle: PichiLocalization.text("Apply and Prune"))
+            confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
             guard confirm.runModal() == .alertFirstButtonReturn else {
                 self.refreshAudioHistoryUsage()
                 return
@@ -1794,22 +1825,22 @@ struct SettingsView: View {
         let pruned = TranscriptionHistoryStore.shared.pruneAudioToBudget()
         self.refreshAudioHistoryUsage()
         if pruned > 0 {
-            self.presentInfoAlert(title: "Audio Pruned", message: "Deleted oldest saved audio from \(pruned) history entries.")
+            self.presentInfoAlert(title: "Audio Pruned", message: PichiLocalization.format("Deleted oldest saved audio from %lld history entries.", Int64(pruned)))
         }
     }
 
     private func deleteSavedAudio() {
         let confirm = NSAlert()
-        confirm.messageText = "Delete saved audio?"
-        confirm.informativeText = "This removes saved dictation audio only. Transcript history stays intact."
+        confirm.messageText = PichiLocalization.text("Delete saved audio?")
+        confirm.informativeText = PichiLocalization.text("This removes saved dictation audio only. Transcript history stays intact.")
         confirm.alertStyle = .warning
-        confirm.addButton(withTitle: "Delete Audio")
-        confirm.addButton(withTitle: "Cancel")
+        confirm.addButton(withTitle: PichiLocalization.text("Delete Audio"))
+        confirm.addButton(withTitle: PichiLocalization.text("Cancel"))
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
         let removed = TranscriptionHistoryStore.shared.deleteAllSavedAudio()
         self.refreshAudioHistoryUsage()
-        self.presentInfoAlert(title: "Audio Deleted", message: "Removed audio from \(removed) history entries.")
+        self.presentInfoAlert(title: "Audio Deleted", message: PichiLocalization.format("Removed audio from %lld history entries.", Int64(removed)))
     }
 
     private func exportAudioZip() {
@@ -1830,7 +1861,7 @@ struct SettingsView: View {
                 entries: TranscriptionHistoryStore.shared.entries,
                 to: url
             )
-            self.presentInfoAlert(title: "Audio Export Saved", message: "Saved your dictation audio export to:\n\(url.path)")
+            self.presentInfoAlert(title: "Audio Export Saved", message: PichiLocalization.format("Saved your dictation audio export to:\n%@", url.path))
         } catch {
             self.presentErrorAlert(title: "Audio Export Failed", message: error.localizedDescription)
         }
@@ -1838,19 +1869,19 @@ struct SettingsView: View {
 
     private func presentInfoAlert(title: String, message: String) {
         let alert = NSAlert()
-        alert.messageText = title
+        alert.messageText = PichiLocalization.text(title)
         alert.informativeText = message
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: PichiLocalization.text("OK"))
         alert.runModal()
     }
 
     private func presentErrorAlert(title: String, message: String) {
         let alert = NSAlert()
-        alert.messageText = title
+        alert.messageText = PichiLocalization.text(title)
         alert.informativeText = message
         alert.alertStyle = .critical
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: PichiLocalization.text("OK"))
         alert.runModal()
     }
 
@@ -1858,8 +1889,8 @@ struct SettingsView: View {
         Task { @MainActor in
             do {
                 let options = try await SimpleUpdater.shared.fetchRecentReleaseBuildOptions(
-                    owner: "altic-dev",
-                    repo: "Fluid-oss",
+                    owner: AppBrand.repositoryOwner,
+                    repo: AppBrand.repositoryName,
                     limit: 3,
                     includePrerelease: SettingsStore.shared.betaReleasesEnabled
                 )
@@ -1877,15 +1908,15 @@ struct SettingsView: View {
         }
 
         let picker = NSAlert()
-        picker.messageText = "Download Previous Build"
-        picker.informativeText = "No local rollback backup was found. Choose a recent release build:"
+        picker.messageText = PichiLocalization.text("Download Previous Build")
+        picker.informativeText = PichiLocalization.text("No local rollback backup was found. Choose a recent release build:")
         picker.alertStyle = .informational
 
         for option in options {
             picker.addButton(withTitle: option.version)
         }
-        picker.addButton(withTitle: "All Releases")
-        picker.addButton(withTitle: "Cancel")
+        picker.addButton(withTitle: PichiLocalization.text("All Releases"))
+        picker.addButton(withTitle: PichiLocalization.text("Cancel"))
 
         let response = picker.runModal()
         let first = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
@@ -1901,7 +1932,7 @@ struct SettingsView: View {
     }
 
     private func openAllReleasesPage() {
-        guard let url = URL(string: "https://github.com/altic-dev/Fluid-oss/releases") else { return }
+        guard let url = URL(string: "\(AppBrand.repositoryURL.absoluteString)/releases") else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -1922,11 +1953,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(PichiLocalization.text(title))
                         .font(self.theme.typography.bodyStrong)
                         .foregroundStyle(self.settingsTitleText)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(description)
+                    Text(PichiLocalization.text(description))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.settingsSecondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1938,11 +1969,11 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .tint(self.theme.palette.accent)
                     .labelsHidden()
-                    .accessibilityLabel(title)
+                    .accessibilityLabel(PichiLocalization.text(title))
             }
 
             if let footnote = footnote {
-                Text(footnote)
+                Text(PichiLocalization.text(footnote))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2083,10 +2114,10 @@ struct SettingsView: View {
     ) -> some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodyStrong)
                     .foregroundStyle(self.settingsTitleText)
-                Text(description)
+                Text(PichiLocalization.text(description))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2110,7 +2141,7 @@ struct SettingsView: View {
                 Image(systemName: "info.circle.fill")
                     .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
                     .font(.fluidSystem(.caption))
-                Text(title)
+                Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodySmallStrong)
                     .foregroundStyle(self.settingsTitleText)
             }
@@ -2208,8 +2239,8 @@ private extension SettingsView {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon).foregroundStyle(color).frame(width: 20).padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(self.theme.typography.bodyStrong).foregroundStyle(self.settingsTitleText)
-                Text(description).font(self.theme.typography.bodySmall).foregroundStyle(self.settingsSecondaryText)
+                Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong).foregroundStyle(self.settingsTitleText)
+                Text(PichiLocalization.text(description)).font(self.theme.typography.bodySmall).foregroundStyle(self.settingsSecondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -2374,7 +2405,7 @@ private extension SettingsView {
                     title: "Smart dictation",
                     description: usesPrimary && configuration.shortcut == nil
                         ? "Uses your primary shortcut. An extra shortcut is optional."
-                        : "Optional shortcut to dictate with Fluid Intelligence."
+                        : AppBrand.text("Optional shortcut to dictate with Fluid Intelligence.")
                 ),
                 shortcut: configuration.shortcut,
                 isRecording: self.activeShortcutRecordingTarget == target,
@@ -2477,7 +2508,7 @@ private extension SettingsView {
             )
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            Text("FluidVoice tries microphones from top to bottom. Drag to reorder; unavailable devices keep their place.")
+            Text(AppBrand.text("FluidVoice tries microphones from top to bottom. Drag to reorder; unavailable devices keep their place."))
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.settingsSecondaryText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2609,7 +2640,7 @@ private extension SettingsView {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Priority \(rank), \(entry.name)")
-        .accessibilityValue(isActive ? "Active" : (isAvailable ? "Available" : "Unavailable"))
+        .accessibilityValue(isActive ? PichiLocalization.text("microphone.active", defaultValue: "Active") : PichiLocalization.text(isAvailable ? "Available" : "Unavailable"))
         .accessibilityAction(named: "Move up") {
             guard self.isMicrophonePriorityEditingDisabled == false, rank > 1 else { return }
             self.settings.moveMicrophonePriority(uid: entry.uid, by: -1)
@@ -2664,7 +2695,7 @@ private extension SettingsView {
             )
         } else {
             self.microphoneQualityGuidanceRow(
-                message: "This order applies only to FluidVoice and does not change your macOS input.",
+                message: AppBrand.text("This order applies only to FluidVoice and does not change your macOS input."),
                 systemImage: "info.circle",
                 color: self.settingsSecondaryText
             )
@@ -3052,7 +3083,7 @@ private struct DictionarySuggestionsSettingsRow: View {
                     Text("Learn from my corrections")
                         .font(self.theme.typography.bodyStrong)
                         .foregroundStyle(self.theme.palette.primaryText)
-                    Text("If you retype a word FluidVoice got wrong, it asks to add the right spelling to your dictionary.")
+                    Text(AppBrand.text("If you retype a word FluidVoice got wrong, it asks to add the right spelling to your dictionary."))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
@@ -3089,11 +3120,11 @@ private struct DictionarySuggestionsSettingsRow: View {
 
                     FluidDropdownPicker(
                         "Ask after",
-                        selectedTitle: self.settings.automaticDictionarySuggestionFrequency.displayName,
+                        selectedTitle: PichiLocalization.text(self.settings.automaticDictionarySuggestionFrequency.displayName),
                         selection: self.$settings.automaticDictionarySuggestionFrequency
                     ) {
                         ForEach(SettingsStore.AutomaticDictionarySuggestionFrequency.allCases) { frequency in
-                            Text(frequency.displayName).tag(frequency)
+                            Text(PichiLocalization.text(frequency.displayName)).tag(frequency)
                         }
                     }
                     .fluidDropdownStyle()
@@ -3113,18 +3144,10 @@ struct AnalyticsConfirmationView: View {
     @Environment(\.theme) private var theme
 
     private var contactInfoText: AttributedString {
-        var text = AttributedString(
-            "If you have any concerns we would love to hear about it, please email alticdev@gmail.com or file an issue in our GitHub."
-        )
-
-        if let emailRange = text.range(of: "alticdev@gmail.com") {
-            text[emailRange].link = URL(string: "mailto:alticdev@gmail.com")
-            text[emailRange].foregroundColor = self.theme.palette.accent
-        }
-
-        if let githubRange = text.range(of: "GitHub") {
-            text[githubRange].link = URL(string: "https://github.com/altic-dev/FluidVoice")
-            text[githubRange].foregroundColor = self.theme.palette.accent
+        var text = AttributedString(PichiLocalization.text("For privacy questions, contact our support team."))
+        if let range = text.range(of: PichiLocalization.text("support team")) {
+            text[range].link = AppBrand.supportURL
+            text[range].foregroundColor = self.theme.palette.accent
         }
 
         return text

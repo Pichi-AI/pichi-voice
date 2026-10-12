@@ -71,7 +71,7 @@ struct SearchableModelPicker: View {
             // Model button that opens popover
             Button(action: { self.isShowingPopover.toggle() }) {
                 HStack(spacing: 6) {
-                    Text(self.selectedModel.isEmpty ? "Select Model" : self.displayName(self.selectedModel))
+                    Text(self.selectedModel.isEmpty ? PichiLocalization.text("Select Model") : self.displayName(self.selectedModel))
                         .font(.fluidSystem(size: 12, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -183,7 +183,7 @@ struct SearchableModelPicker: View {
                     .buttonStyle(.borderless)
                     .disabled(self.isRefreshing || !self.refreshEnabled)
                     .opacity(self.refreshEnabled ? 1 : 0.45)
-                    .help("Refresh model list")
+                    .help(PichiLocalization.text("Refresh model list"))
                 } else {
                     Button(action: {
                         Task { await onRefresh() }
@@ -203,7 +203,7 @@ struct SearchableModelPicker: View {
                     .fluidCompactButton(isReady: false)
                     .disabled(self.isRefreshing || !self.refreshEnabled)
                     .opacity(self.refreshEnabled ? 1 : 0.45)
-                    .help("Refresh model list")
+                    .help(PichiLocalization.text("Refresh model list"))
                 }
             }
         }

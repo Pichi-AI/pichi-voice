@@ -4282,6 +4282,107 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.acquireCount, 1)
     }
 
+    func testModelChangedDuringPermissionPromptIsValidatedBeforeCaptureAllocation() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .parakeetTDT
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let gate = PermissionPreflightGate()
+        let preflightReached = self.expectation(description: "permission prompt suspended")
+        capture.onPreflight = {
+            preflightReached.fulfill()
+            await gate.wait()
+        }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        self.addTeardownBlock { @MainActor in
+            await gate.open()
+            await coordinator.shutdownForTermination()
+        }
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "en"
+        let start = Task { try await coordinator.startRecording(configuration: configuration) }
+        await self.fulfillment(of: [preflightReached], timeout: 2)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        settings.selectedSpeechModel = .gigaam
+        await gate.open()
+        do {
+            _ = try await start.value
+            XCTFail("The model selected under the lease must reject incompatible meeting language")
+        } catch {
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode("en"))
+        }
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1, "Invalid frozen configuration must roll back the acquired lease")
+        XCTAssertEqual(capture.startCount, 0, "Capture and captions cannot start with the stale preflight model")
+        XCTAssertEqual(coordinator.liveTranscript, .empty)
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertTrue(coordinator.isQuiescent)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty, "No invalid session may be persisted before final configuration validation")
+    }
+
+    func testFrozenHostCapabilitiesRejectModelChangedDuringIntelPermissionPrompt() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .gigaam
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let gate = PermissionPreflightGate()
+        let preflightReached = self.expectation(description: "Intel permission prompt suspended")
+        capture.onPreflight = {
+            preflightReached.fulfill()
+            await gate.wait()
+        }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var frozenConfigurations: [MeetingFinalProcessingConfiguration] = []
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            validateFrozenRecordingConfiguration: { configuration in
+                frozenConfigurations.append(configuration)
+                try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration, isAppleSilicon: false)
+            }
+        )
+        self.addTeardownBlock { @MainActor in
+            await gate.open()
+            await coordinator.shutdownForTermination()
+        }
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "ru"
+        let start = Task { try await coordinator.startRecording(configuration: configuration) }
+        await self.fulfillment(of: [preflightReached], timeout: 2)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        settings.selectedSpeechModel = .parakeetTDT
+        await gate.open()
+        do {
+            _ = try await start.value
+            XCTFail("The actual post-admission model must satisfy the frozen host capabilities")
+        } catch {
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedArchitecture)
+        }
+        XCTAssertEqual(frozenConfigurations.count, 1)
+        XCTAssertEqual(frozenConfigurations.first?.asrModel, "parakeet-tdt")
+        XCTAssertEqual(frozenConfigurations.first?.languageCode, "ru")
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(coordinator.liveTranscript, .empty)
+        XCTAssertTrue(coordinator.isQuiescent)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
     func testDeniedPermissionNeverAcquiresMeetingLease() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -4854,6 +4955,21 @@ private final class ThrowingDirectoryStore: MeetingSessionStoring, @unchecked Se
 
     func delete(id: MeetingSessionID) async throws { try await self.wrapped.delete(id: id) }
     func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.wrapped.deleteAudioFiles(for: id) }
+}
+
+private actor PermissionPreflightGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if self.isOpen { return }
+        await withCheckedContinuation { self.waiters.append($0) }
+    }
+    func open() {
+        self.isOpen = true
+        let pending = self.waiters
+        self.waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
 }
 
 private actor EventRecorder {

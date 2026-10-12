@@ -11,6 +11,7 @@ import SwiftUI
 // MARK: - Setup Step View
 
 struct SetupStepView: View {
+    @Environment(\.locale) private var locale
     @Environment(\.theme) private var theme
     let step: Int
     let title: String
@@ -58,11 +59,11 @@ struct SetupStepView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.title)
+                    Text(PichiLocalization.text(self.title, locale: self.locale))
                         .font(.fluidSystem(.body).weight(.medium))
                         .foregroundStyle(.primary)
 
-                    Text(self.description)
+                    Text(PichiLocalization.text(self.description, locale: self.locale))
                         .font(.fluidSystem(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
@@ -80,7 +81,7 @@ struct SetupStepView: View {
                         .background(Color.fluidGreen, in: Capsule())
                 } else if self.showActionButton {
                     HStack(spacing: 3) {
-                        Text(self.actionButtonTitle)
+                        Text(PichiLocalization.text(self.actionButtonTitle, locale: self.locale))
                             .font(.fluidSystem(.caption).weight(.medium))
                         Image(systemName: "arrow.right")
                             .font(.fluidSystem(.caption2).weight(.bold))
@@ -125,6 +126,7 @@ struct SetupStepView: View {
 // MARK: - Instruction Step
 
 struct InstructionStep: View {
+    @Environment(\.locale) private var locale
     @Environment(\.theme) private var theme
     let number: Int
     let title: String
@@ -143,10 +145,10 @@ struct InstructionStep: View {
             }
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(self.title)
+                Text(PichiLocalization.text(self.title, locale: self.locale))
                     .font(.fluidSystem(.subheadline).weight(.medium))
 
-                Text(self.description)
+                Text(PichiLocalization.text(self.description, locale: self.locale))
                     .font(.fluidSystem(.caption))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

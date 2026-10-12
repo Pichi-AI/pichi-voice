@@ -18,9 +18,9 @@ enum MeetingSettingsSection: String, CaseIterable, Identifiable {
 
     var guidance: String {
         switch self {
-        case .recording: "Choose your audio sources and transcript language."
-        case .automation: "Choose when to see a recording prompt and how long to keep audio."
-        case .integrations: "Connect your meeting notes to the AI assistants you already use."
+        case .recording: PichiLocalization.text("Choose your audio sources and transcript language.")
+        case .automation: PichiLocalization.text("Choose when to see a recording prompt and how long to keep audio.")
+        case .integrations: PichiLocalization.text("Connect your meeting notes to the AI assistants you already use.")
         }
     }
 }
@@ -44,6 +44,7 @@ struct MeetingRecordingSettingsSheet: View {
     let onSave: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var locale
 
     @State private var selectedSection: MeetingSettingsSection
 
@@ -91,14 +92,14 @@ struct MeetingRecordingSettingsSheet: View {
     private var saveHelp: String? {
         guard !self.canSave else { return nil }
         if !self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) {
-            return "Choose an available microphone to save this setup."
+            return PichiLocalization.text("Choose an available microphone to save this setup.")
         }
         if self.draft.mode == .onlineCall, !self.draft.usesAutomaticApplication,
            !self.applications.contains(where: { $0.id == self.draft.selectedApplicationID })
         {
-            return "Choose an available meeting application to save this setup."
+            return PichiLocalization.text("Choose an available meeting application to save this setup.")
         }
-        return self.readiness.blockingMessage
+        return self.readiness.blockingMessage.map(PichiLocalization.text)
     }
 
     var body: some View {
@@ -136,7 +137,7 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-            Text("FluidMeet settings")
+            Text(AppBrand.text("FluidMeet settings"))
                 .font(self.theme.typography.sectionTitle)
                 .foregroundStyle(self.theme.palette.primaryText)
             Text("Audio and transcripts stay on this Mac.")
@@ -158,7 +159,7 @@ struct MeetingRecordingSettingsSheet: View {
                         Image(systemName: section.symbol)
                             .frame(width: self.theme.metrics.spacing.lg)
                             .foregroundStyle(self.theme.palette.secondaryText)
-                        Text(section.rawValue)
+                        Text(PichiLocalization.text(section.rawValue))
                             .font(self.selectedSection == section ? self.theme.typography.bodySmallStrong : self.theme.typography.bodySmall)
                             .foregroundStyle(self.theme.palette.primaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -188,7 +189,7 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var sectionHeading: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-            Text(self.selectedSection.rawValue)
+            Text(PichiLocalization.text(self.selectedSection.rawValue))
                 .font(self.theme.typography.sectionTitle)
                 .foregroundStyle(self.theme.palette.primaryText)
             Text(self.selectedSection.guidance)
@@ -200,11 +201,11 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var recordingSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            FluidManagementGroup(title: "Audio sources") {
+            FluidManagementGroup(title: PichiLocalization.text("Audio sources")) {
                 VStack(spacing: 0) {
                     MeetingAdaptiveSetupRow(
-                        title: "Meeting type",
-                        detail: self.draft.mode == .onlineCall ? "Meeting app and microphone." : "Microphone only."
+                        title: PichiLocalization.text("Meeting type"),
+                        detail: self.draft.mode == .onlineCall ? PichiLocalization.text("Meeting app and microphone.") : PichiLocalization.text("Microphone only.")
                     ) {
                         Menu {
                             Picker("Meeting type", selection: self.$draft.mode) {
@@ -213,7 +214,7 @@ struct MeetingRecordingSettingsSheet: View {
                             }
                             .pickerStyle(.inline)
                         } label: {
-                            Text(self.draft.mode == .onlineCall ? "Online call" : "In-room")
+                            Text(self.draft.mode == .onlineCall ? PichiLocalization.text("Online call") : PichiLocalization.text("In-room"))
                         }
                         .fluidDropdownStyle(fillsWidth: true)
                         .accessibilityLabel("Default meeting type")
@@ -222,11 +223,11 @@ struct MeetingRecordingSettingsSheet: View {
                     if self.draft.mode == .onlineCall {
                         Divider()
                         MeetingAdaptiveSetupRow(
-                            title: "Meeting audio",
-                            detail: "Automatic follows the detected call."
+                            title: PichiLocalization.text("Meeting audio"),
+                            detail: PichiLocalization.text("Automatic follows the detected call.")
                         ) {
                             Menu {
-                                self.applicationMenuEntry(title: "Automatic", id: nil)
+                                self.applicationMenuEntry(title: PichiLocalization.text("Automatic"), id: nil)
                                 ForEach(self.meetingApplications) { option in
                                     self.applicationMenuEntry(title: self.applicationDisplayName(option), id: option.id)
                                 }
@@ -248,8 +249,8 @@ struct MeetingRecordingSettingsSheet: View {
 
                     Divider()
                     MeetingAdaptiveSetupRow(
-                        title: "Microphone",
-                        detail: "Capture your side of the conversation."
+                        title: PichiLocalization.text("Microphone"),
+                        detail: PichiLocalization.text("Capture your side of the conversation.")
                     ) {
                         Menu {
                             Picker("Microphone", selection: self.$draft.selectedMicrophoneID) {
@@ -260,7 +261,7 @@ struct MeetingRecordingSettingsSheet: View {
                             }
                             .pickerStyle(.inline)
                         } label: {
-                            Text(self.microphones.first(where: { $0.id == self.draft.selectedMicrophoneID })?.identity.displayName ?? "Choose microphone…")
+                            Text(self.microphones.first(where: { $0.id == self.draft.selectedMicrophoneID })?.identity.displayName ?? PichiLocalization.text("Choose microphone…"))
                         }
                         .fluidDropdownStyle(fillsWidth: true)
                         .accessibilityLabel("Default meeting microphone")
@@ -268,7 +269,7 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                Button(self.readiness.isCheckingSources ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise", action: self.onRefreshSources)
+                Button(self.readiness.isCheckingSources ? PichiLocalization.text("Refreshing…") : PichiLocalization.text("Refresh"), systemImage: "arrow.clockwise", action: self.onRefreshSources)
                     .buttonStyle(.plain)
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.theme.palette.accent)
@@ -277,20 +278,20 @@ struct MeetingRecordingSettingsSheet: View {
                     .accessibilityLabel("Refresh audio sources")
             }
 
-            FluidManagementGroup(title: "Transcript language") {
+            FluidManagementGroup(title: PichiLocalization.text("Transcript language")) {
                 MeetingAdaptiveSetupRow(
-                    title: "Language",
-                    detail: "Final transcripts support 25 languages. Live captions are English-only."
+                    title: PichiLocalization.text("Language"),
+                    detail: PichiLocalization.text("Live captions use English streaming or buffered transcription for supported languages. Russian captions support GigaAM and Parakeet v3.")
                 ) {
                     Menu {
                         Picker("Meeting language", selection: self.$draft.languageCode) {
                             ForEach(VoiceEngineLanguageCatalog.allLanguages(availableModels: [.parakeetTDT])) { language in
-                                Text(language.displayName).tag(language.id)
+                                Text(language.localizedDisplayName(locale: self.locale)).tag(language.id)
                             }
                         }
                         .pickerStyle(.inline)
                     } label: {
-                        Text(VoiceEngineLanguageCatalog.language(id: self.draft.languageCode, availableModels: [.parakeetTDT])?.displayName ?? "Choose language…")
+                        Text(VoiceEngineLanguageCatalog.language(id: self.draft.languageCode, availableModels: [.parakeetTDT])?.localizedDisplayName(locale: self.locale) ?? PichiLocalization.text("Choose language…"))
                     }
                     .fluidDropdownStyle(fillsWidth: true)
                     .accessibilityLabel("Meeting transcript language")
@@ -300,7 +301,7 @@ struct MeetingRecordingSettingsSheet: View {
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {
-                FluidManagementGroup(title: "Permissions need attention") {
+                FluidManagementGroup(title: PichiLocalization.text("Permissions need attention")) {
                     Text("Allow the requested access in macOS Settings, then refresh your sources.")
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -346,9 +347,9 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private var selectedApplicationName: String {
-        guard !self.draft.usesAutomaticApplication else { return "Automatic" }
+        guard !self.draft.usesAutomaticApplication else { return PichiLocalization.text("Automatic") }
         guard let selected = self.applications.first(where: { $0.id == self.draft.selectedApplicationID }) else {
-            return "Source unavailable"
+            return PichiLocalization.text("Source unavailable")
         }
         return self.applicationDisplayName(selected)
     }
@@ -358,27 +359,27 @@ struct MeetingRecordingSettingsSheet: View {
         if !name.isEmpty { return name }
         let bundleIdentifier = option.identity.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         if !bundleIdentifier.isEmpty { return bundleIdentifier }
-        if let processID = option.identity.processID { return "Audio source (\(processID))" }
-        return "Audio source"
+        if let processID = option.identity.processID { return PichiLocalization.format("Audio source (%d)", processID) }
+        return PichiLocalization.text("Audio source")
     }
 
     private var automationSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            FluidManagementGroup(title: "Your preferences") {
+            FluidManagementGroup(title: PichiLocalization.text("Your preferences")) {
                 VStack(spacing: 0) {
                     MeetingAdaptiveSetupRow(
-                        title: "Keep recordings",
-                        detail: "Includes past meetings. Transcripts are always kept."
+                        title: PichiLocalization.text("Keep recordings"),
+                        detail: PichiLocalization.text("Includes past meetings. Transcripts are always kept.")
                     ) {
                         Menu {
                             Picker("Keep audio", selection: self.$retentionPolicy) {
                                 ForEach(MeetingAudioRetentionPolicy.allCases, id: \.self) { policy in
-                                    Text(policy.displayName).tag(policy)
+                                    Text(PichiLocalization.text(policy.displayName)).tag(policy)
                                 }
                             }
                             .pickerStyle(.inline)
                         } label: {
-                            Text(self.retentionPolicy.displayName)
+                            Text(PichiLocalization.text(self.retentionPolicy.displayName))
                         }
                         .fluidDropdownStyle(fillsWidth: true)
                         .accessibilityLabel("Audio retention")
@@ -386,8 +387,8 @@ struct MeetingRecordingSettingsSheet: View {
 
                     Divider()
                     MeetingAdaptiveSetupRow(
-                        title: "Detect meetings automatically",
-                        detail: "Offer to record Zoom, Teams, and Webex meetings. Recording always starts with you.",
+                        title: PichiLocalization.text("Detect meetings automatically"),
+                        detail: PichiLocalization.text("Offer to record Zoom, Teams, and Webex meetings. Recording always starts with you."),
                         trailingSwitch: true
                     ) {
                         Toggle("Detect meetings automatically", isOn: self.$draft.autoDetectEnabled)
@@ -400,8 +401,8 @@ struct MeetingRecordingSettingsSheet: View {
                     if self.draft.autoDetectEnabled {
                         Divider()
                         MeetingAdaptiveSetupRow(
-                            title: "Include browser meetings",
-                            detail: "Check the frontmost tab for supported meeting sites. Tab addresses are never stored or sent.",
+                            title: PichiLocalization.text("Include browser meetings"),
+                            detail: PichiLocalization.text("Check the frontmost tab for supported meeting sites. Tab addresses are never stored or sent."),
                             trailingSwitch: true
                         ) {
                             Toggle("Include browser meetings", isOn: self.$draft.browserDetectionEnabled)
@@ -418,8 +419,8 @@ struct MeetingRecordingSettingsSheet: View {
                self.appServices.meetingAutoDetectHealth == .zoomWindowTitleUnreadable
             {
                 MeetingAdaptiveSetupRow(
-                    title: "Zoom window access needs repair",
-                    detail: "Screen Recording or Accessibility access is preventing FluidVoice from reading Zoom meeting windows. Recording has not started."
+                    title: PichiLocalization.text("Zoom window access needs repair"),
+                    detail: AppBrand.text("Screen Recording or Accessibility access is preventing FluidVoice from reading Zoom meeting windows. Recording has not started.")
                 ) {
                     Button("Open Screen Recording Settings") {
                         self.onOpenScreenRecordingSettings()
@@ -429,7 +430,7 @@ struct MeetingRecordingSettingsSheet: View {
             }
 
             if self.dismissalAdvisor.shouldSuggest {
-                FluidManagementGroup(title: "Fewer interruptions") {
+                FluidManagementGroup(title: PichiLocalization.text("Fewer interruptions")) {
                     Text("You’ve dismissed several meeting prompts recently. You can turn off detection and still record manually.")
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -450,7 +451,7 @@ struct MeetingRecordingSettingsSheet: View {
                 }
             }
 
-            Text("Expired audio is removed while FluidVoice is running.")
+            Text(AppBrand.text("Expired audio is removed while FluidVoice is running."))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
         }
@@ -458,11 +459,11 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var integrationSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            FluidManagementGroup(title: "Claude & ChatGPT MCP links") {
+            FluidManagementGroup(title: PichiLocalization.text("Claude & ChatGPT MCP links")) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    self.integrationRow(name: "Claude", provider: "by Anthropic", assetName: "Provider_Anthropic")
+                    self.integrationRow(name: "Claude", provider: PichiLocalization.text("by Anthropic"), assetName: "Provider_Anthropic")
                     Divider()
-                    self.integrationRow(name: "ChatGPT", provider: "by OpenAI", assetName: "Provider_OpenAI")
+                    self.integrationRow(name: "ChatGPT", provider: PichiLocalization.text("by OpenAI"), assetName: "Provider_OpenAI")
                 }
             }
 
@@ -514,12 +515,12 @@ struct MeetingRecordingSettingsSheet: View {
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Spacer(minLength: self.theme.metrics.spacing.md)
                     Button(action: self.onCancel) {
-                        Text(self.isFirstSetup ? "Not now" : "Cancel").frame(minWidth: 72)
+                        Text(self.isFirstSetup ? PichiLocalization.text("Not now") : PichiLocalization.text("Cancel")).frame(minWidth: 72)
                     }
                     .meetingGlassAction()
                     .keyboardShortcut(.cancelAction)
                     Button(action: self.onSave) {
-                        Text(self.isFirstSetup ? "Save setup" : "Save").frame(minWidth: 72)
+                        Text(self.isFirstSetup ? PichiLocalization.text("Save setup") : PichiLocalization.text("Save")).frame(minWidth: 72)
                     }
                     .meetingGlassAction(prominent: true)
                     .disabled(!self.canSave)

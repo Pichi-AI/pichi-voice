@@ -33,12 +33,12 @@ struct MeetingSegmentAudioPlayer: View {
                         }
                         .fluidGlassAction(circular: true)
                         .disabled(self.isLoading)
-                        .accessibilityLabel(self.progress.isPlaying ? "Pause audio chunk" : "Play audio chunk")
+                        .accessibilityLabel(self.progress.isPlaying ? PichiLocalization.text("Pause audio chunk") : PichiLocalization.text("Play audio chunk"))
                         self.action("Forward 5 seconds", symbol: "goforward.5") { self.playback.skip(by: 5) }
                     }
                 }
                 Spacer(minLength: self.theme.metrics.spacing.sm)
-                Text(self.isLoading ? "Loading…" : "\(Self.time(self.isScrubbing ? self.scrubPosition : self.progress.elapsed)) / \(Self.time(self.progress.duration))")
+                Text(self.isLoading ? PichiLocalization.text("Loading…") : "\(Self.time(self.isScrubbing ? self.scrubPosition : self.progress.elapsed)) / \(Self.time(self.progress.duration))")
                     .font(self.theme.typography.codeCaption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .monospacedDigit()

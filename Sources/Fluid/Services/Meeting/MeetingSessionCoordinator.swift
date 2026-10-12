@@ -193,6 +193,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
     private let validateRecordingModels: @MainActor () async throws -> Void
+    private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
     private let processingLogger: @MainActor (String) -> Void
     private static let correctionUndoStackCap = 50
 
@@ -203,6 +204,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
+        validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
         processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
     ) {
         self.store = store
@@ -212,6 +214,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.audioArbiter = audioArbiter
         self.preferredMicrophoneUID = preferredMicrophoneUID
         self.validateRecordingModels = validateRecordingModels
+        self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.processingLogger = processingLogger
     }
 
@@ -329,7 +332,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         return MeetingCaptureConfiguration(
             mode: mode,
             title: title,
-            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode ?? "en",
+            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode
+                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: SettingsStore.shared.selectedSpeechModel.rawValue) ?? "ru",
             application: application,
             microphone: microphone,
             timestampDefaultTitle: true
@@ -373,6 +377,13 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws -> MeetingSession {
         try Task.checkCancellation()
         try configuration.validate()
+        let selectedModelID = SettingsStore.shared.selectedSpeechModel.rawValue
+        if PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
+            _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
+                asrModel: selectedModelID,
+                languageCode: configuration.languageCode
+            ))
+        }
         guard self.startReservation == reservation,
               self.activeSession?.id == passiveOffer?.id,
               !self.hasBlockingActivityTaskExceptStart,
@@ -402,6 +413,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
 
         let lease = try await self.audioArbiter.acquireMeetingCapture()
+        let recordingModelID: String
+        let recordingBackendID: MeetingBackendID
+        let recordingASRConfiguration: MeetingFinalProcessingConfiguration
         do {
             try Task.checkCancellation()
             guard self.startReservation == reservation,
@@ -411,6 +425,19 @@ final class MeetingSessionCoordinator: ObservableObject {
             else {
                 throw CancellationError()
             }
+            // Permission prompts deliberately run without an ASR lease. Resolve and validate
+            // the actual recording snapshot only once admission closes model/artifact changes.
+            recordingModelID = SettingsStore.shared.selectedSpeechModel.rawValue
+            recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(
+                languageCode: configuration.languageCode,
+                selectedModelID: recordingModelID
+            )
+            recordingASRConfiguration = PichiMeetingProviderFactory.configuration(
+                backendID: recordingBackendID,
+                languageCode: configuration.languageCode
+            )
+            _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
+            try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
         } catch {
             await self.audioArbiter.release(lease)
             throw error
@@ -428,6 +455,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         let timebase = Self.makeTimebase()
         var session = MeetingSession(configuration: configuration, timebase: timebase)
+        session.recordingBackendID = recordingBackendID.rawValue
+        session.recordingASRArtifactFingerprint = recordingASRConfiguration.asrArtifactFingerprint
         session.retention.retainAudioUntil = SettingsStore.shared.meetingAudioRetentionPolicy
             .retainUntil(startedAt: session.startedAt)
         self.activeSession = session
@@ -454,7 +483,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
-        liveTranscriptionCoordinator.start(mode: configuration.mode, languageCode: configuration.languageCode)
+        liveTranscriptionCoordinator.start(
+            mode: configuration.mode,
+            languageCode: configuration.languageCode,
+            modelID: recordingModelID,
+            artifactFingerprint: session.recordingASRArtifactFingerprint
+        )
 
         do {
             try await self.store.create(session)
@@ -2128,8 +2162,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 kind: .captureStoppedUnexpectedly,
                 trackID: nil,
                 detail: previousState == .processing
-                    ? "FluidVoice restarted before transcription completed."
-                    : "FluidVoice restarted before capture finalized."
+                    ? AppBrand.text("FluidVoice restarted before transcription completed.")
+                    : AppBrand.text("FluidVoice restarted before capture finalized.")
             ))
         }
         if Self.shouldQueuePendingAttempt(for: session) {
@@ -2189,7 +2223,7 @@ enum MeetingCoordinatorError: LocalizedError {
         case .noCorrectionToUndo:
             return "There is nothing to undo."
         case .maintenanceInProgress:
-            return "FluidVoice is tidying up meeting storage. Try again in a moment."
+            return AppBrand.text("FluidVoice is tidying up meeting storage. Try again in a moment.")
         }
     }
 }

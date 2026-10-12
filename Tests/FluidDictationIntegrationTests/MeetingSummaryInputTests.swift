@@ -132,6 +132,50 @@ final class MeetingSummaryActivityTests: XCTestCase {
         }
     }
 
+    func testSummaryClosesAdmissionAndJoinsOptionalWorkBeforeAcquiringAudio() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        let draining = expectation(description: "Optional work cancellation is joining")
+        var resume: CheckedContinuation<Void, Never>?
+        _ = try XCTUnwrap(gate.beginOptionalProcessing(cancelAndJoin: {
+            draining.fulfill()
+            await withCheckedContinuation { resume = $0 }
+        }))
+        let pending = Task { try await gate.withSummary(activity: activity) { XCTFail("Cancelled summary must not start") } }
+        await fulfillment(of: [draining], timeout: 5)
+        XCTAssertTrue(gate.isProcessing)
+        XCTAssertNil(activity.active, "No audio or model handoff is allowed before optional work drains")
+        XCTAssertEqual(activity.handoffs, 0)
+        XCTAssertNil(gate.beginProcessing(), "New ordinary work cannot enter while cancellation is joining")
+        XCTAssertNil(gate.beginOptionalProcessing(cancelAndJoin: {}))
+        pending.cancel()
+        resume?.resume()
+        do { try await pending.value; XCTFail("Cancelled summary cannot succeed") } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertFalse(gate.isProcessing)
+        XCTAssertNil(activity.active)
+        XCTAssertNotNil(gate.beginProcessing(), "Joined cancellation eventually restores ordinary admission")
+    }
+
+    func testOptionalPreemptionCannotCancelOrUnlockOrdinaryProcessing() async throws {
+        let gate = MeetingSummaryActivityCoordinator()
+        let activity = Activity()
+        let ordinary = try XCTUnwrap(gate.beginProcessing())
+        var optionalWasCancelled = false
+        _ = try XCTUnwrap(gate.beginOptionalProcessing(cancelAndJoin: { optionalWasCancelled = true }))
+        do {
+            try await gate.withSummary(activity: activity) { XCTFail("Ordinary processing still owns admission") }
+            XCTFail("An ordinary processing token must still block summary")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        XCTAssertTrue(optionalWasCancelled)
+        XCTAssertTrue(gate.isProcessing)
+        XCTAssertEqual(activity.handoffs, 0)
+        XCTAssertNil(activity.active)
+        gate.endProcessing(ordinary)
+        XCTAssertFalse(gate.isProcessing)
+        try await gate.withSummary(activity: activity) {}
+        XCTAssertEqual(activity.handbacks, 1)
+    }
+
     func testProcessingBlocksSummaryWithoutTouchingAudioAndStaleReleaseCannotUnlock() async throws {
         let gate = MeetingSummaryActivityCoordinator()
         let activity = Activity()

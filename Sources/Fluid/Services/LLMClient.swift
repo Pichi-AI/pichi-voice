@@ -56,6 +56,51 @@ nonisolated enum LLMError: Error, LocalizedError, @unchecked Sendable {
 
 // MARK: - LLMClient
 
+/// Foundation invalidation returns before cancelled tasks and delegate callbacks
+/// drain. Each owned session therefore needs its own completion, rather than the
+/// redirect singleton shared by unrelated transports.
+final nonisolated class LLMClientSessionLifetime: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var invalidationRequested = false
+    private var invalidated = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var hasInvalidated: Bool { self.lock.withLock { self.invalidated } }
+
+    func invalidateAndWait(for session: URLSession) async {
+        // Cleanup deliberately survives caller cancellation and is always joined.
+        await withCheckedContinuation { continuation in
+            let shouldInvalidate: Bool? = self.lock.withLock {
+                if self.invalidated { return nil }
+                self.waiters.append(continuation)
+                if self.invalidationRequested { return false }
+                self.invalidationRequested = true
+                return true
+            }
+            if let shouldInvalidate {
+                if shouldInvalidate { session.invalidateAndCancel() }
+            } else { continuation.resume() }
+        }
+    }
+
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        let pending = self.lock.withLock {
+            self.invalidated = true
+            let pending = self.waiters
+            self.waiters.removeAll()
+            return pending
+        }
+        for continuation in pending { continuation.resume() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        CloudTextProviderTransport.redirectPolicy.urlSession(session, task: task,
+            willPerformHTTPRedirection: response, newRequest: request, completionHandler: completionHandler)
+    }
+}
+
 /// Unified LLM communication layer for all modes (Transcription, Command, Rewrite).
 /// Handles HTTP requests, SSE streaming, thinking token extraction, and tool call parsing.
 /// Stateless, thread-safe transport. Keeping streaming decode off MainActor prevents
@@ -68,17 +113,31 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
     /// URLSession configured with appropriate timeouts
     private let session: URLSession
+    private let localSession: URLSession
+    private let cloudSession: URLSession
+    private let cloudAuthorization: CloudTextProviderAuthorization
 
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = Self.defaultTimeoutSeconds
         config.timeoutIntervalForResource = Self.defaultTimeoutSeconds * 2 // Allow extra time for resource loading
         self.session = URLSession(configuration: config)
+        let localConfig = URLSessionConfiguration.ephemeral
+        localConfig.httpShouldSetCookies = false
+        localConfig.httpCookieStorage = nil
+        localConfig.timeoutIntervalForRequest = OllamaChatAdapter.maximumTimeoutSeconds
+        localConfig.timeoutIntervalForResource = OllamaChatAdapter.maximumTimeoutSeconds * 2
+        self.localSession = URLSession(configuration: localConfig, delegate: CloudTextProviderTransport.redirectPolicy, delegateQueue: nil)
+        self.cloudSession = CloudTextProviderTransport.session
+        self.cloudAuthorization = .shared
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
     init(session: URLSession) {
         self.session = session
+        self.localSession = session
+        self.cloudSession = session
+        self.cloudAuthorization = CloudTextProviderAuthorization(session: session)
     }
 
     // MARK: - Response Types
@@ -130,8 +189,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
         /// Optional token limit (max_tokens or max_completion_tokens depending on model)
         var maxTokens: Int?
 
-        /// Extra parameters to add to the request body (e.g., reasoning_effort, enable_thinking)
-        /// These are model-specific and come from user settings
+        /// Immutable, nonsecret connection metadata captured by the calling mode.
+        var providerOptions: [String: String] = [:]
+
+        /// Extra request-body parameters from the existing model/user settings.
         var extraParameters: [String: Any]
 
         /// Optional dictation pipeline correlation for bounded latency diagnostics.
@@ -183,41 +244,86 @@ final nonisolated class LLMClient: @unchecked Sendable {
     /// Handles thinking token extraction, tool call parsing, and retries.
     @concurrent func call(_ config: Config) async throws -> Response {
         self.benchmark(config, "call_enter")
-        var request = try buildRequest(config)
+        try Task.checkCancellation()
+        var request: URLRequest
+        if OllamaChatAdapter.supports(config.baseURL) {
+            request = try await self.preparedLocalRequest(config)
+        } else { request = try buildRequest(config) }
+        if let provider = CloudTextProvider.descriptor(forEndpoint: config.baseURL) {
+            let headers = try await self.cloudAuthorization.headers(for: provider, credential: config.apiKey, options: config.providerOptions)
+            for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        }
+        try Task.checkCancellation()
         self.benchmark(config, "request_built bodyBytes=\(request.httpBody?.count ?? 0)")
 
         // Apply timeout to the request itself
-        let timeout = config.timeoutSeconds ?? Self.defaultTimeoutSeconds
+        let timeout = OllamaChatAdapter.supports(config.baseURL)
+            ? try OllamaChatAdapter.timeout(config) : config.timeoutSeconds ?? Self.defaultTimeoutSeconds
         request.timeoutInterval = timeout
 
-        // Execute the request. We rely on URLRequest/URLSession timeouts (30s default) rather
-        // than racing a separate "timeout task". A task-group timeout wrapper can accidentally
-        // keep the caller suspended until the full timeout elapses, which is the exact stall
-        // we want to eliminate for overlay responsiveness.
+        // A request timeout alone measures inactivity, so a stream of tokens can
+        // outlive it. Native local calls also own a resource-bounded session.
+        // Copy the existing configuration to preserve isolated fixture transports
+        // and headers; invalidate only after inference has returned or cancelled.
+        let boundedLocalSession = OllamaChatAdapter.supports(config.baseURL)
+            ? try self.makeBoundedLocalSession(config) : nil
+        let transport = boundedLocalSession?.session ?? self.transportSession(for: request)
         do {
-            let response = try await self.executeWithRetry(request: request, config: config)
+            let response = try await self.executeWithRetry(request: request, config: config, session: transport)
+            if let boundedLocalSession {
+                await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
+                try Task.checkCancellation()
+            }
             self.benchmark(config, "call_return")
             return response
         } catch {
+            if let boundedLocalSession {
+                await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
+            }
             self.benchmark(config, "call_fail")
             throw error
         }
     }
 
+    private func preparedLocalRequest(_ config: Config) async throws -> URLRequest {
+        let owned = try self.makeBoundedLocalSession(config, timeoutCap: 5)
+        do {
+            let request = try await OllamaChatAdapter.preparedRequest(config, load: { try await owned.session.data(for: $0) })
+            await owned.lifetime.invalidateAndWait(for: owned.session)
+            try Task.checkCancellation()
+            return request
+        } catch {
+            await owned.lifetime.invalidateAndWait(for: owned.session)
+            throw error
+        }
+    }
+
     /// Execute request with retry logic (extracted for timeout wrapper)
-    private func executeWithRetry(request: URLRequest, config: Config) async throws -> Response {
+    private func executeWithRetry(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         var lastError: Error?
+        var request = request
         for attempt in 1...config.maxRetries {
             do {
                 self.benchmark(config, "attempt_start attempt=\(attempt)")
                 if config.streaming {
                     if self.isResponsesRequest(request) {
-                        return try await self.processResponsesStreaming(request: request, config: config)
+                        return try await self.processResponsesStreaming(request: request, config: config, session: session)
                     }
-                    return try await self.processStreaming(request: request, config: config)
+                    return try await self.processStreaming(request: request, config: config, session: session)
                 } else {
-                    return try await self.processNonStreaming(request: request, config: config)
+                    return try await self.processNonStreaming(request: request, config: config, session: session)
                 }
+            } catch LLMError.httpError(401, _) where CloudTextProvider.descriptor(forEndpoint: config.baseURL) != nil {
+                guard let provider = CloudTextProvider.descriptor(forEndpoint: config.baseURL), case .oauth = provider.authorization else {
+                    throw CloudTextProviderError.http(401)
+                }
+                let headers = try await self.cloudAuthorization.headers(for: provider, credential: config.apiKey, options: config.providerOptions,
+                                                                       rejecting: request.value(forHTTPHeaderField: "Authorization"))
+                for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+                try Task.checkCancellation()
+                // One authentication retry is independent of transient transport retries.
+                if config.streaming { return try await self.processStreaming(request: request, config: config, session: session) }
+                return try await self.processNonStreaming(request: request, config: config, session: session)
             } catch let error as URLError where self.isRetryableError(error) {
                 lastError = LLMError.networkError(error)
                 DebugLogger.shared.warning("LLMClient: Retry \(attempt)/\(config.maxRetries) due to \(error.code.rawValue)", source: "LLMClient")
@@ -242,6 +348,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
     // MARK: - Request Building
 
     func buildRequest(_ config: Config) throws -> URLRequest {
+        if OllamaChatAdapter.supports(config.baseURL) { return try OllamaChatAdapter.request(config) }
         // Build endpoint URL
         let baseURL = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !baseURL.isEmpty else {
@@ -269,7 +376,18 @@ final nonisolated class LLMClient: @unchecked Sendable {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
 
         // Send Authorization whenever a key exists; some localhost endpoints still require auth.
-        if !config.apiKey.isEmpty {
+        if let provider = CloudTextProvider.descriptor(forEndpoint: baseURL) {
+            try CloudTextProvider.validateCredential(config.apiKey)
+            let options = try provider.normalizedOptions(config.providerOptions)
+            try provider.validateModel(config.model, options: options)
+            if !provider.supportsTools, !config.tools.isEmpty {
+                throw LLMError.invalidRequest(PichiLocalization.text("This provider supports text enhancement and summaries. Use a provider with tool support for command mode."))
+            }
+            if let header = provider.projectHeader { request.setValue(options["project"], forHTTPHeaderField: header) }
+            if case let .apiKey(scheme) = provider.authorization, !config.apiKey.isEmpty {
+                request.setValue("\(scheme) \(config.apiKey)", forHTTPHeaderField: "Authorization")
+            }
+        } else if !config.apiKey.isEmpty {
             request.addValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         }
 
@@ -358,6 +476,11 @@ final nonisolated class LLMClient: @unchecked Sendable {
         // Layer 2: User-provided extra parameters (e.g., reasoning_effort from settings)
         for (key, value) in config.extraParameters {
             body[key] = value
+        }
+
+        if let provider = CloudTextProvider.descriptor(forEndpoint: config.baseURL),
+           let format = body["response_format"] as? [String: Any] {
+            body["response_format"] = provider.responseFormat(format)
         }
 
         // Final Layer: Common parameters with model-specific keys
@@ -494,16 +617,46 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return input
     }
 
+    private func transportSession(for request: URLRequest) -> URLSession {
+        if let url = request.url, url.path == "/api/chat", var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.path = "/v1"
+            if let baseURL = components.url?.absoluteString, OllamaChatAdapter.supports(baseURL) { return self.localSession }
+        }
+        return CloudTextProvider.descriptor(forEndpoint: request.url?.absoluteString ?? "") == nil ? self.session : self.cloudSession
+    }
+
+    /// Native calls have a finite total response lifetime, including streams that
+    /// keep emitting. Session ownership remains with the calling operation.
+    func makeBoundedLocalSession(_ config: Config, timeoutCap: TimeInterval? = nil) throws -> (session: URLSession, lifetime: LLMClientSessionLifetime) {
+        guard OllamaChatAdapter.supports(config.baseURL) else { throw LLMError.invalidURL }
+        guard let configuration = self.localSession.configuration.copy() as? URLSessionConfiguration else { throw LLMError.invalidResponse }
+        let requested = try OllamaChatAdapter.timeout(config)
+        let cap = timeoutCap ?? requested
+        guard cap.isFinite, cap > 0 else { throw LLMError.invalidRequest(PichiLocalization.text("Invalid local model timeout.")) }
+        let timeout = min(requested, cap)
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
+        let lifetime = LLMClientSessionLifetime()
+        let session = URLSession(configuration: configuration, delegate: lifetime, delegateQueue: nil)
+        return (session, lifetime)
+    }
+
+    private func safeHTTPErrorBody(_ data: Data, request: URLRequest) -> String {
+        if CloudTextProvider.descriptor(forEndpoint: request.url?.absoluteString ?? "") != nil { return PichiLocalization.text("Cloud provider request failed.") }
+        return String(data: data, encoding: .utf8) ?? "Unknown error"
+    }
+
     // MARK: - Non-Streaming Response
 
-    private func processNonStreaming(request: URLRequest, config: Config) async throws -> Response {
+    private func processNonStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await session.data(for: request)
+        try Task.checkCancellation()
         self.benchmark(config, "response_data bytes=\(data.count)")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let errText = String(data: data, encoding: .utf8) ?? "Unknown error"
+            let errText = self.safeHTTPErrorBody(data, request: request)
             DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode): \(errText.prefix(200))", source: "LLMClient")
             throw LLMError.httpError(http.statusCode, errText)
         }
@@ -515,7 +668,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
         }
 
         let parsed: Response
-        if self.isResponsesRequest(request) {
+        if OllamaChatAdapter.supports(config.baseURL) {
+            self.benchmark(config, "native_timing \(OllamaChatAdapter.timingDiagnostics(json))")
+            parsed = self.parseMessageResponse(try OllamaChatAdapter.message(json, completed: true))
+        } else if self.isResponsesRequest(request) {
             parsed = try self.parseResponsesResponse(json)
         } else {
             guard let choices = json["choices"] as? [[String: Any]],
@@ -528,10 +684,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return parsed
     }
 
-    private func processResponsesStreaming(request: URLRequest, config: Config) async throws -> Response {
+    private func processResponsesStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         self.benchmark(config, "response_headers")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
@@ -539,7 +695,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             for try await byte in bytes {
                 errorData.append(byte)
             }
-            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            let errText = self.safeHTTPErrorBody(errorData, request: request)
             throw LLMError.httpError(http.statusCode, errText)
         }
 
@@ -639,10 +795,11 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return parsed
     }
 
-    private func processStreaming(request: URLRequest, config: Config) async throws -> Response {
+    private func processStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Starting streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (bytes, response) = try await self.session.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
         self.benchmark(config, "response_headers")
 
         // Check for HTTP errors
@@ -651,7 +808,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             for try await byte in bytes {
                 errorData.append(byte)
             }
-            let errText = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            let errText = self.safeHTTPErrorBody(errorData, request: request)
             throw LLMError.httpError(http.statusCode, errText)
         }
 
@@ -670,31 +827,49 @@ final nonisolated class LLMClient: @unchecked Sendable {
         var toolCallId: String?
         var toolCallName: String?
         var toolCallArguments = ""
+        let nativeOllama = OllamaChatAdapter.supports(config.baseURL)
+        var nativeCompleted = false
+        var nativeToolCalls: [ToolCall] = []
 
         // Process SSE lines
         for try await rawLine in bytes.lines {
+            try Task.checkCancellation()
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.hasPrefix("data:") else { continue }
-
-            var jsonString = String(line.dropFirst(5))
-            if jsonString.hasPrefix(" ") {
-                jsonString = String(jsonString.dropFirst(1))
-            }
+            if line.isEmpty { continue }
+            if !nativeOllama, !line.hasPrefix("data:") { continue }
+            var jsonString = nativeOllama ? line : String(line.dropFirst(5))
+            if jsonString.hasPrefix(" ") { jsonString = String(jsonString.dropFirst(1)) }
 
             if jsonString.trimmingCharacters(in: .whitespaces) == "[DONE]" {
                 continue
             }
 
             guard let jsonData = jsonString.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
-                  let delta = choices.first?["delta"] as? [String: Any]
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
             else {
+                if nativeOllama { throw LLMError.invalidResponse }
                 continue
+            }
+            let delta: [String: Any]
+            if nativeOllama {
+                guard !nativeCompleted else { throw LLMError.invalidResponse }
+                nativeCompleted = json["done"] as? Bool == true
+                if nativeCompleted {
+                    self.benchmark(config, "native_timing \(OllamaChatAdapter.timingDiagnostics(json))")
+                }
+                delta = try OllamaChatAdapter.message(json, completed: nativeCompleted)
+                let calls = self.parseMessageResponse(delta).toolCalls
+                for call in calls { config.onToolCallStart?(call.name) }
+                nativeToolCalls += calls
+            } else {
+                guard let choices = json["choices"] as? [[String: Any]],
+                      let value = choices.first?["delta"] as? [String: Any] else { continue }
+                delta = value
             }
 
             // Preserve bounded raw diagnostics without re-serializing every token.
-            if thinkingBuffer.count + contentBuffer.count < 8 || delta["tool_calls"] != nil {
+            if CloudTextProvider.descriptor(forEndpoint: config.baseURL) == nil,
+               thinkingBuffer.count + contentBuffer.count < 8 || delta["tool_calls"] != nil {
                 let rawDelta = jsonString
                 DebugLogger.shared.logLazy(level: .debug, source: "LLMClient") {
                     "LLMClient: Full Delta: \(rawDelta)"
@@ -783,7 +958,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
 
             // Handle tool calls (streamed in parts)
-            if let toolCalls = delta["tool_calls"] as? [[String: Any]],
+            if !nativeOllama, let toolCalls = delta["tool_calls"] as? [[String: Any]],
                let tc = toolCalls.first
             {
                 if let id = tc["id"] as? String {
@@ -800,6 +975,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 }
             }
         }
+        try Task.checkCancellation()
+        if nativeOllama, !nativeCompleted { throw LLMError.invalidResponse }
 
         // Finalize - flush any remaining content in tagDetectionBuffer
         if !tagDetectionBuffer.isEmpty {
@@ -821,7 +998,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         DebugLogger.shared.debug("LLMClient: Streaming complete. Thinking: \(thinkingText.count) chars, Content: \(contentText.count) chars", source: "LLMClient")
 
         // Build tool calls array
-        var parsedToolCalls: [ToolCall] = []
+        var parsedToolCalls: [ToolCall] = nativeToolCalls
         if let name = toolCallName,
            let argsData = toolCallArguments.data(using: .utf8),
            let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any]

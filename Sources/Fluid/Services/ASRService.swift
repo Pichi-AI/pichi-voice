@@ -11,11 +11,17 @@ import AudioToolbox
 import CoreAudio
 
 /// Serializes transcription operations and lets teardown cancel the real queued work.
-private actor TranscriptionExecutor {
+actor TranscriptionExecutor {
     private var lastTask: Task<Void, Never>?
+    private var lastTaskID: UUID?
     private var operationCancellations: [UUID: () -> Void] = [:]
 
+    #if DEBUG
+    var pendingOperationCountForTesting: Int { self.operationCancellations.count }
+    #endif
+
     func run<T>(benchmarkSessionID: Int? = nil, _ operation: @escaping () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
         logTranscriptionExecutorPhase("entered", sessionID: benchmarkSessionID)
         let previous = self.lastTask
         let operationID = UUID()
@@ -24,21 +30,38 @@ private actor TranscriptionExecutor {
             _ = await previous?.result
             logTranscriptionExecutorPhase("previous_finished", sessionID: benchmarkSessionID)
             try Task.checkCancellation()
-            return try await operation()
+            let result = try await operation()
+            try Task.checkCancellation()
+            return result
         }
         self.operationCancellations[operationID] = { task.cancel() }
         self.lastTask = Task { _ = try? await task.value }
+        self.lastTaskID = operationID
         defer { self.operationCancellations.removeValue(forKey: operationID) }
-        return try await task.value
+        return try await withTaskCancellationHandler {
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     func cancelAndAwaitPending() async {
-        for cancel in self.operationCancellations.values {
+        let pending = self.lastTask
+        let pendingID = self.lastTaskID
+        let cancellations = self.operationCancellations
+        for cancel in cancellations.values {
             cancel()
         }
-        _ = await self.lastTask?.result
-        self.lastTask = nil
-        self.operationCancellations.removeAll()
+        _ = await pending?.result
+        if self.lastTaskID == pendingID {
+            self.lastTask = nil
+            self.lastTaskID = nil
+        }
+        // A newer queued operation may have arrived while the old work drained.
+        // Retire only the captured ownership set, preserving its cancellation handle.
+        for id in cancellations.keys { self.operationCancellations.removeValue(forKey: id) }
     }
 }
 
@@ -630,6 +653,10 @@ final class ASRService: ObservableObject {
     private var meetingAudioHandbackLease: ASRActivityLease?
     private var meetingAudioHandbackTask: Task<Void, Never>?
     private var meetingAudioHandbackTaskID: UUID?
+    private var meetingCaptureModelLease: ASRActivityLease?
+    private var meetingCaptureResidentModel: MeetingResidentModel?
+    private var meetingCaptureModelSuspension: Task<Void, Error>?
+    private var meetingCaptureModelFinish: Task<Void, Never>?
     // Keep the existing descriptive state or persisted evidence field name.
     // swiftlint:disable:next identifier_name
     private var meetingHandoffShouldRestorePreparedCapture = false
@@ -653,6 +680,7 @@ final class ASRService: ObservableObject {
     #if DEBUG
     /// Test seam replacing the lazily wired production owner so scope tests use fake providers.
     var meetingASRPreparationOwnerForTesting: MeetingASRPreparationOwner?
+    var meetingCaptureResidencyParticipantForTesting: MeetingModelParticipant?
     #endif
     var isRunningOrStarting: Bool {
         self.isRunning || self.isStarting
@@ -744,6 +772,8 @@ final class ASRService: ObservableObject {
         await self.directAudioLifecycleController.invalidate(reason: "meeting_audio_handoff")
         self.activeAudioCaptureBackend = .none
         await self.retireAudioEngineAndWait(reason: "meeting_audio_handoff")
+        // Captions are created only after the arbiter returns this fully drained handoff.
+        try await self.suspendDictationModelsForMeetingCapture(lease)
 
         guard self.activeActivityLease == lease,
               self.meetingAudioHandoffGeneration == generation,
@@ -816,6 +846,7 @@ final class ASRService: ObservableObject {
             self.deferredMeetingRouteRecoveryReason = nil
             self.deferredMeetingRouteRecoveryRequiresPrewarm = false
             self.deferredMeetingRouteRecoveryReconcilesInput = false
+            await self.finishDictationModelsAfterMeetingCapture(lease)
             self.releaseExclusiveActivity(lease)
             return
         }
@@ -850,6 +881,7 @@ final class ASRService: ObservableObject {
         self.deferredMeetingRouteRecoveryReason = nil
         self.deferredMeetingRouteRecoveryRequiresPrewarm = false
         self.deferredMeetingRouteRecoveryReconcilesInput = false
+        await self.finishDictationModelsAfterMeetingCapture(lease)
         self.releaseExclusiveActivity(lease)
 
         if shouldPrewarm || deferredReason != nil {
@@ -1031,6 +1063,7 @@ final class ASRService: ObservableObject {
     private var parakeetRealtimeProvider: ParakeetRealtimeProvider?
     private var externalCoreMLProvider: ExternalCoreMLTranscriptionProvider?
     private var nemotronProviders: [NemotronProvider.Mode: NemotronProvider] = [:]
+    private var gigaamProvider: PichiGigaAMProvider?
     private var whisperProvider: WhisperProvider?
     private var appleSpeechProvider: AppleSpeechProvider?
     /// Stored as Any? because @available cannot be applied to stored properties
@@ -1134,11 +1167,15 @@ final class ASRService: ObservableObject {
         await self.meetingTranscriptionExecutor.cancelAndAwaitPending()
         self.flushDeferredMeetingLeaseReleaseIfReady()
         await self.transcriptionExecutor.cancelAndAwaitPending()
+        if let lease = self.meetingCaptureModelLease {
+            await self.finishDictationModelsAfterMeetingCapture(lease)
+        }
 
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
         self.nemotronProviders.removeAll()
+        self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
@@ -1157,6 +1194,8 @@ final class ASRService: ObservableObject {
         #endif
 
         switch model {
+        case .gigaam:
+            return self.getGigaAMProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return self.getAppleSpeechAnalyzerProvider()
@@ -1179,6 +1218,13 @@ final class ASRService: ObservableObject {
         default:
             return self.getWhisperProvider()
         }
+    }
+
+    private func getGigaAMProvider() -> PichiGigaAMProvider {
+        if let existing = self.gigaamProvider { return existing }
+        let provider = PichiGigaAMProvider()
+        self.gigaamProvider = provider
+        return provider
     }
 
     private func getFluidAudioProvider() -> FluidAudioProvider {
@@ -1290,6 +1336,8 @@ final class ASRService: ObservableObject {
         if let injected = self.modelProvidersForTesting[model] { return injected }
         #endif
         switch model {
+        case .gigaam:
+            return PichiGigaAMProvider()
         case .appleSpeechAnalyzer:
             if #available(macOS 26.0, *) {
                 return AppleSpeechAnalyzerProvider()
@@ -1348,6 +1396,7 @@ final class ASRService: ObservableObject {
         guard self.activeExclusiveActivity != .settingsRestore else {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
+        guard !self.isOrdinaryASRBlockedByMeetingCapture else { throw MeetingModelResidencyError.busy }
         let admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
         defer { self.meetingModelResidency.endOperation(admission) }
         if self.isMeetingASRPreparationClaimed {
@@ -1449,6 +1498,81 @@ final class ASRService: ObservableObject {
         }
     }
 
+    /// Installs folder-based engines through the existing model operation, activity and resource
+    /// mechanisms. The provider owns artifact validation; this service owns admission and teardown.
+    func importModel(_ model: SettingsStore.SpeechModel, from directory: URL) async throws {
+        try Task.checkCancellation()
+        guard model.supportsFolderImport else {
+            throw NSError(domain: "TranscriptionProvider", code: -2, userInfo: [
+                NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support importing a model folder."),
+            ])
+        }
+        guard !self.isTerminating, !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
+              !self.recordingBufferHandoffGate.isActive, !self.recordingBufferHandoffGate.isRecovering,
+              !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive, !self.isDictionaryTrainingCaptureActive,
+              self.providerResetDrain == nil, self.deletingModelID == nil,
+              !self.hasActiveModelDownload, !self.hasActiveModelPreparation,
+              !self.isCancellingModelPreparation, !self.isCancellingModelDownload,
+              !self.meetingModelResidency.isExclusive
+        else { throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? .modelMaintenance) }
+        let lease = try self.acquireExclusiveActivity(.modelMaintenance)
+        let admission: UUID
+        do {
+            admission = try self.meetingModelResidency.beginOperation(owner: "speech", modelID: model.id)
+        } catch {
+            self.releaseExclusiveActivity(lease)
+            throw error
+        }
+        let operationID = UUID()
+        let provider = self.getProvider(for: model)
+        self.modelDownloadOperationID = operationID
+        self.downloadingModelId = model.id
+        self.modelPreparationPhase = .preparingDownload
+        self.isCancellingModelDownload = false
+        let task = Task { @MainActor in
+            let outcome: Result<Void, Error>
+            do {
+                try await provider.importModel(from: directory)
+                outcome = .success(())
+            } catch {
+                outcome = .failure(error)
+            }
+            // The existing owned operation includes native cleanup, so shutdown/cancel joins it.
+            await Task { @MainActor in await provider.releaseResidency() }.value
+            try outcome.get()
+        }
+        self.modelDownloadTask = task
+        let outcome: Result<Void, Error>
+        do {
+            try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
+            // A successful provider return means its atomic publication completed. Do not report
+            // cancellation after that commit while leaving a selected runtime on old artifacts.
+            outcome = .success(())
+        } catch {
+            outcome = .failure(error)
+        }
+        // The joined operation has finished every import and release hook before admission opens.
+        if self.modelDownloadOperationID == operationID {
+            self.modelDownloadTask = nil
+            self.modelDownloadOperationID = nil
+            self.downloadingModelId = nil
+            self.downloadProgress = nil
+            self.modelPreparationPhase = nil
+            self.isCancellingModelDownload = false
+        }
+        if case .success = outcome, !self.isTerminating, SettingsStore.shared.selectedSpeechModel == model {
+            self.providerResetPending = true
+        }
+        self.meetingModelResidency.endOperation(admission)
+        // Releasing the import lease precedes reset admission, so modelMaintenance is not nested.
+        self.releaseExclusiveActivity(lease)
+        while let drain = self.providerResetDrain { await drain.task.value }
+        SpeechModelInstallationSnapshot.shared.refresh()
+        try outcome.get()
+    }
+
     /// Call this when the transcription provider setting changes to reset state
     func resetTranscriptionProvider() {
         self.meetingModelResidency.vetoRestoration(owner: "speech")
@@ -1492,12 +1616,18 @@ final class ASRService: ObservableObject {
         }
         let resetDrainID = UUID()
         let executor = self.transcriptionExecutor
+        let retiringProviders = self.cachedTranscriptionProviders
         let resetDrainTask = Task { @MainActor [weak self] in
             await executor.cancelAndAwaitPending()
-            // A completed handle must not leave future imports permanently busy.
-            if self?.providerResetDrain?.id == resetDrainID {
-                self?.providerResetDrain = nil
+            _ = await retiringTask?.result
+            for provider in retiringProviders { await provider.releaseResidency() }
+            guard let self else { return }
+            if SettingsStore.shared.selectedSpeechModel == newModel {
+                await self.checkIfModelsExistAsync()
+                self.refreshWordBoostStatus()
             }
+            if self.providerResetDrain?.id == resetDrainID { self.providerResetDrain = nil }
+            self.releaseExclusiveActivity(resetLease)
         }
         self.providerResetDrain = (resetDrainID, resetDrainTask)
         // ensureAsrReady joins this executor drain. The retiring preparation task
@@ -1511,24 +1641,13 @@ final class ASRService: ObservableObject {
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
+        self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
 
-        // CRITICAL FIX: Check if the NEW model's files exist on disk
-        // This prevents UI from showing "Download" when model is already downloaded
-        // Use Task for async check to support providers like AppleSpeechAnalyzerProvider
-        Task { [weak self] in
-            guard let self = self else { return }
-            defer { self.releaseExclusiveActivity(resetLease) }
-            _ = await retiringTask?.result
-            guard SettingsStore.shared.selectedSpeechModel == newModel else { return }
-            await self.checkIfModelsExistAsync()
-            await MainActor.run {
-                self.refreshWordBoostStatus()
-            }
-            DebugLogger.shared.info("ASRService: Provider reset complete, will initialize '\(newModel.displayName)' on next use", source: "ASRService")
-        }
+        // The reset drain checks the new artifacts and releases its lease only after all owned
+        // preparation and resource-release hooks complete. ensureAsrReady and imports join it.
     }
 
     // CRITICAL FIX (launch-time crash mitigation):
@@ -2028,6 +2147,12 @@ final class ASRService: ObservableObject {
     private var inputFormat: AVAudioFormat?
     private var micPermissionGranted = false
     private var isRequestingMicrophoneAccess = false
+    #if DEBUG
+    // Permission routing fixtures must never prompt or change the host's system settings.
+    var microphoneAuthorizationStatusForTesting: (() -> AVAuthorizationStatus)?
+    var microphoneAccessRequesterForTesting: ((@escaping @Sendable (Bool) -> Void) -> Void)?
+    var microphoneSettingsOpenerForTesting: (() -> Void)?
+    #endif
 
     // Internal access for MeetingTranscriptionService to share models
     // Note: Only available when using FluidAudioProvider (Apple Silicon)
@@ -2498,6 +2623,16 @@ final class ASRService: ObservableObject {
         self.modelExistenceCheckID = checkID
         let exists: Bool
 
+        #if DEBUG
+        if let injected = self.modelProvidersForTesting[model] {
+            let exists = injected.modelsExistOnDisk()
+            if self.modelExistenceCheckID == checkID, SettingsStore.shared.selectedSpeechModel == model {
+                self.modelsExistOnDisk = exists
+            }
+            return
+        }
+        #endif
+
         // For Apple Speech Analyzer, use the async refresh method
         if model == .appleSpeechAnalyzer {
             if #available(macOS 26.0, *) {
@@ -2534,7 +2669,32 @@ final class ASRService: ObservableObject {
                 return
             }
 
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+            // A cached onboarding status can lag a grant changed in System Settings or
+            // after an update. Route from the current OS status, not the displayed label.
+            #if DEBUG
+            let status = self.microphoneAuthorizationStatusForTesting?() ?? AVCaptureDevice.authorizationStatus(for: .audio)
+            #else
+            let status = AVCaptureDevice.authorizationStatus(for: .audio)
+            #endif
+            self.micStatus = status
+            self.micPermissionGranted = status == .authorized
+            switch status {
+            case .authorized:
+                self.isRequestingMicrophoneAccess = false
+                return
+            case .notDetermined:
+                break
+            case .denied, .restricted:
+                self.isRequestingMicrophoneAccess = false
+                self.openSystemSettingsForMic()
+                return
+            @unknown default:
+                self.isRequestingMicrophoneAccess = false
+                self.openSystemSettingsForMic()
+                return
+            }
+
+            self.requestMicrophoneAccess { [weak self] granted in
                 guard let self else { return }
                 Task { @MainActor in
                     self.isRequestingMicrophoneAccess = false
@@ -2546,6 +2706,16 @@ final class ASRService: ObservableObject {
                 }
             }
         }
+    }
+
+    private func requestMicrophoneAccess(_ completion: @escaping @Sendable (Bool) -> Void) {
+        #if DEBUG
+        if let requester = self.microphoneAccessRequesterForTesting {
+            requester(completion)
+            return
+        }
+        #endif
+        AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
     }
 
     func startMicrophonePreview() async {
@@ -2722,6 +2892,12 @@ final class ASRService: ObservableObject {
     }
 
     func openSystemSettingsForMic() {
+        #if DEBUG
+        if let opener = self.microphoneSettingsOpenerForTesting {
+            opener()
+            return
+        }
+        #endif
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
             NSWorkspace.shared.open(url)
         }
@@ -3994,7 +4170,9 @@ final class ASRService: ObservableObject {
                 var processedSampleCount = 0
 
                 while true {
+                    try Task.checkCancellation()
                     var samples = try await reader.nextSamples()
+                    try Task.checkCancellation()
                     let sampleCount = samples.count
                     guard sampleCount > 0 else { break }
                     if sampleCount < 16_000 {
@@ -4002,6 +4180,7 @@ final class ASRService: ObservableObject {
                     }
 
                     let result = try await provider.transcribeFinal(samples)
+                    try Task.checkCancellation()
                     if !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         textParts.append(result.text)
                     }
@@ -4054,7 +4233,99 @@ final class ASRService: ObservableObject {
 
     // MARK: - Exclusive model residency
 
+    #if DEBUG
+    var meetingModelParticipantsForTesting: [MeetingModelParticipant]?
+    #endif
+    private var isOrdinaryASRBlockedByMeetingCapture: Bool {
+        self.meetingCaptureModelLease != nil && MeetingModelContext.grant?.owner != "speech"
+    }
+
+    /// Owns only immutable identity while recording. No dictation model weights cross this barrier.
+    func suspendDictationModelsForMeetingCapture(_ lease: ASRActivityLease) async throws {
+        guard self.activeActivityLease == lease, lease.activity == .meeting, !self.isTerminating else {
+            throw CancellationError()
+        }
+        if self.meetingCaptureModelLease == lease, let task = self.meetingCaptureModelSuspension {
+            try await withTaskCancellationHandler {
+                try await task.value
+                try Task.checkCancellation()
+            } onCancel: { task.cancel() }
+            return
+        }
+        guard self.meetingCaptureModelLease == nil else {
+            if self.meetingCaptureModelLease == lease { return }
+            throw MeetingModelResidencyError.busy
+        }
+        self.meetingCaptureModelLease = lease
+        let participant = self.meetingResidencyParticipant()
+        let task = Task { @MainActor in
+            self.meetingCaptureResidentModel = try await participant.snapshot()
+            try Task.checkCancellation()
+            try await participant.suspend()
+            try Task.checkCancellation()
+        }
+        self.meetingCaptureModelSuspension = task
+        try await withTaskCancellationHandler {
+            try await task.value
+            try Task.checkCancellation()
+        } onCancel: { task.cancel() }
+    }
+
+    /// Capture stop/failure calls this only after both live engines and their shared model unload.
+    /// Final processing normally consumes the snapshot via its existing residency scope first.
+    func finishDictationModelsAfterMeetingCapture(_ lease: ASRActivityLease) async {
+        if self.meetingCaptureModelLease == lease, let task = self.meetingCaptureModelFinish {
+            await task.value
+            return
+        }
+        guard self.meetingCaptureModelLease == lease else { return }
+        let task = Task { @MainActor in
+            self.meetingCaptureModelSuspension?.cancel()
+            _ = await self.meetingCaptureModelSuspension?.result
+            guard self.meetingCaptureModelLease == lease else { return }
+            if self.meetingCaptureResidentModel != nil, !self.isTerminating, !self.providerResetPending {
+                do {
+                    try await self.meetingModelResidency.withExclusive(
+                        attemptID: UUID(), participants: [self.meetingResidencyParticipant()]
+                    ) {}
+                } catch {
+                    DebugLogger.shared.warning("Dictation model remains unloaded after recording: \(error.localizedDescription)", source: "MeetingModelResidency")
+                }
+            }
+            self.meetingCaptureResidentModel = nil
+            self.meetingCaptureModelLease = nil
+            self.meetingCaptureModelSuspension = nil
+        }
+        self.meetingCaptureModelFinish = task
+        await task.value
+        self.meetingCaptureModelFinish = nil
+    }
+
     func meetingResidencyParticipant() -> MeetingModelParticipant {
+        let participant: MeetingModelParticipant
+        #if DEBUG
+        participant = self.meetingCaptureResidencyParticipantForTesting ?? self.makeMeetingResidencyParticipant()
+        #else
+        participant = self.makeMeetingResidencyParticipant()
+        #endif
+        return MeetingModelParticipant(
+            owner: participant.owner,
+            snapshot: { [weak self] in
+                guard let self else { throw CancellationError() }
+                if let suspended = self.meetingCaptureResidentModel { return suspended }
+                return try await participant.snapshot()
+            },
+            suspend: participant.suspend,
+            restore: { [weak self] model in
+                guard let self else { return }
+                if self.meetingCaptureResidentModel == model { self.meetingCaptureResidentModel = nil }
+                try await participant.restore(model)
+            },
+            finish: participant.finish
+        )
+    }
+
+    private func makeMeetingResidencyParticipant() -> MeetingModelParticipant {
         MeetingModelParticipant(
             owner: "speech",
             snapshot: { [weak self] in
@@ -4085,17 +4356,25 @@ final class ASRService: ObservableObject {
     }
 
     func withMeetingModelResidency<T>(attemptID: UUID, acceptsCompletedCancellation: (T) -> Bool = { _ in false }, work: () async throws -> T) async throws -> T {
-        try await self.meetingModelResidency.withExclusive(
+        let defaultParticipants = [
+            self.meetingResidencyParticipant(),
+            PrivateAIIntegrationService.meetingResidencyParticipant(),
+            DictionaryTrainingEndpointMonitor.shared.meetingResidencyParticipant(),
+        ]
+        #if DEBUG
+        let participants = self.meetingModelParticipantsForTesting ?? defaultParticipants
+        #else
+        let participants = defaultParticipants
+        #endif
+        return try await self.meetingModelResidency.withExclusive(
             attemptID: attemptID,
-            participants: [
-                self.meetingResidencyParticipant(),
-                PrivateAIIntegrationService.meetingResidencyParticipant(),
-                DictionaryTrainingEndpointMonitor.shared.meetingResidencyParticipant(),
-            ],
+            participants: participants,
             acceptsCompletedCancellation: acceptsCompletedCancellation,
             work: work
         )
     }
+
+    func markMeetingSummaryPhase() throws { try self.meetingModelResidency.markSummary() }
 
     // MARK: - Scoped Meeting ASR Preparation
 
@@ -4128,8 +4407,8 @@ final class ASRService: ObservableObject {
                 try await self.retireDictationASRResourcesForMeeting(lease: lease)
             },
             makeProvider: { configuration in
-                // Language selects the pinned Parakeet v2/v3 model; never reads selectedSpeechModel.
-                try FluidAudioProvider(meetingConfiguration: configuration)
+                // The frozen meeting configuration selects the provider and exact model artifacts.
+                try PichiMeetingProviderFactory.make(configuration)
             },
             prepareProvider: { provider, _, progress in
                 try await provider.prepare(progressHandler: progress)
@@ -4140,6 +4419,18 @@ final class ASRService: ObservableObject {
         )
         self.meetingASRPreparationOwner = owner
         return owner
+    }
+
+    /// Existing engine caches expose one resource contract to orchestration. Empty legacy hooks
+    /// are followed by dropping their references; pooled providers must join native cleanup.
+    private var cachedTranscriptionProviders: [any TranscriptionProvider] {
+        let optionalProviders: [(any TranscriptionProvider)?] = [
+            self.fluidAudioProvider, self.parakeetRealtimeProvider, self.externalCoreMLProvider,
+            self.gigaamProvider, self.whisperProvider, self.appleSpeechProvider,
+            self._appleSpeechAnalyzerProvider as? any TranscriptionProvider,
+        ]
+        return optionalProviders.compactMap { $0 }
+            + self.nemotronProviders.values.map { $0 as any TranscriptionProvider }
     }
 
     /// Drops cached dictation providers and drains the legacy executor for a claimed meeting
@@ -4160,10 +4451,13 @@ final class ASRService: ObservableObject {
         await self.transcriptionExecutor.cancelAndAwaitPending()
 
         guard self.activeActivityLease == lease else { throw CancellationError() }
+        for provider in self.cachedTranscriptionProviders { await provider.releaseResidency() }
+        guard self.activeActivityLease == lease else { throw CancellationError() }
         self.fluidAudioProvider = nil
         self.parakeetRealtimeProvider = nil
         self.externalCoreMLProvider = nil
         self.nemotronProviders.removeAll()
+        self.gigaamProvider = nil
         self.whisperProvider = nil
         self.appleSpeechProvider = nil
         self._appleSpeechAnalyzerProvider = nil
@@ -6367,6 +6661,7 @@ final class ASRService: ObservableObject {
         guard self.activeExclusiveActivity != .settingsRestore else {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
+        guard !self.isOrdinaryASRBlockedByMeetingCapture else { throw MeetingModelResidencyError.busy }
         let admission = try self.meetingModelResidency.beginOperation(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )
@@ -6893,7 +7188,7 @@ final class ASRService: ObservableObject {
         }
         guard !model.usesAppleLogo, model != .qwen3Asr else {
             throw NSError(domain: "ASRService", code: -2003, userInfo: [
-                NSLocalizedDescriptionKey: "This model cannot be deleted from FluidVoice.",
+                NSLocalizedDescriptionKey: AppBrand.text("This model cannot be deleted from FluidVoice."),
             ])
         }
         let activityLease = try self.acquireExclusiveActivity(.modelMaintenance)
@@ -7722,7 +8017,7 @@ private extension ASRService {
 
     static var streamingRecoveryMessage: String {
         "Speech recognition took too long to finish. This recording could not be transcribed. " +
-            "Wait for the model to recover, or restart FluidVoice before recording again."
+            AppBrand.text("Wait for the model to recover, or restart FluidVoice before recording again.")
     }
 
     func presentStreamingRecoveryError() {

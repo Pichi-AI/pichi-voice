@@ -231,8 +231,8 @@ struct PremiumButtonStyle: ButtonStyle {
 
             return LinearGradient(
                 colors: [
-                    self.theme.palette.accent.opacity(0.95),
-                    self.theme.palette.accent.opacity(0.75),
+                    self.theme.palette.accent,
+                    self.theme.palette.accent,
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -244,7 +244,7 @@ struct PremiumButtonStyle: ButtonStyle {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity)
                 .frame(height: self.height)
-                .foregroundStyle(self.isRecording ? Color.white : self.theme.palette.primaryText)
+                .foregroundStyle(self.isRecording ? Color.white : self.theme.palette.accentForeground)
                 .background(
                     self.shape
                         .fill(self.baseGradient)
@@ -328,14 +328,14 @@ struct AccentButtonStyle: ButtonStyle {
                 .padding(.horizontal, self.compact ? 12 : self.theme.metrics.spacing.lg)
                 .padding(.vertical, self.compact ? 8 : self.theme.metrics.spacing.md)
                 .frame(minHeight: self.compact ? 32 : 36)
-                .foregroundStyle(Color.white)
+                .foregroundStyle(self.tone == nil ? self.theme.palette.accentForeground : Color.white)
                 .background(
                     self.shape
                         .fill(
                             LinearGradient(
                                 colors: [
                                     tone,
-                                    tone.opacity(0.85),
+                                    tone,
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
@@ -382,7 +382,7 @@ struct InlineButtonStyle: ButtonStyle {
                 .fontWeight(.medium)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .padding(.vertical, self.theme.metrics.spacing.xs)
-                .foregroundStyle(Color.white)
+                .foregroundStyle(self.theme.palette.accentForeground)
                 .background(
                     self.shape
                         .fill(self.theme.palette.accent.opacity(self.isHovered ? 0.9 : 0.8))

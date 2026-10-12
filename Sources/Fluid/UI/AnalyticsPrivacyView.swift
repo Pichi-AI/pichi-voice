@@ -10,7 +10,7 @@ struct AnalyticsPrivacyView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Anonymous Analytics")
                         .font(.fluidSystem(size: 18, weight: .semibold))
-                    Text("Daily activity and optional detailed analytics")
+                    Text(PichiLocalization.text(AnalyticsConfig.fromBundle().isConfigured ? "Daily activity and optional detailed analytics" : "Telemetry is disabled in this distribution"))
                         .font(.fluidSystem(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -29,15 +29,21 @@ struct AnalyticsPrivacyView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
+                    if !AnalyticsConfig.fromBundle().isConfigured {
+                        self.sectionTitle("No analytics are sent")
+                        self.bullet("This app does not send daily activity, detailed metrics or beta timing summaries to an analytics service.")
+                        self.bullet("Speech recognition runs on this Mac. AI enhancement may use a provider you configure.")
+                    } else {
+                    self.bullet(PichiLocalization.format("Analytics destination: %@", AnalyticsConfig.fromBundle().postHogHost))
                     self.sectionTitle("Always collected")
                     self.bullet("A random installation ID, app version, the operating-system label macOS, and basic hardware info.")
                     self.bullet("One active-use signal per local day after you interact with the app, buffered on this Mac and sent weekly.")
-                    self.bullet("Beta builds also send one daily aggregate of ASR and Fluid Intelligence timing distributions, including macOS version. No individual timing samples are sent.")
+                    self.bullet(AppBrand.text("Beta builds also send one daily aggregate of ASR and Fluid Intelligence timing distributions, including macOS version. No individual timing samples are sent."))
 
                     self.sectionTitle("When detailed analytics is enabled")
                     self.bullet("Daily totals for Dictation, Command Mode, Edit Mode, and meeting transcription.")
                     self.bullet("Onboarding steps viewed and completed, including skips.")
-                    self.bullet("Transcription and AI provider/model identifiers, counted as daily totals.")
+                    self.bullet("Approved public transcription and AI provider/model identifiers, counted as daily totals. Custom names are replaced with generic categories.")
                     self.bullet("Model download source, outcome, and download duration.")
                     self.bullet("Daily aggregated insertion timing statistics—including toggle-stop-to-paste-dispatch—split by delivery path and outcome.")
 
@@ -47,15 +53,17 @@ struct AnalyticsPrivacyView: View {
                     self.bullet("Terminal commands or outputs from Command Mode.")
                     self.bullet("Window titles, app names, file names/paths, clipboard contents, or anything you type.")
                     self.bullet("Hardware serial numbers, other unique device identifiers, target-app identity, or individual transcription and insertion timings/events.")
+                    self.bullet("No session replay, automatic UI capture, person profiles or geographic enrichment are enabled.")
 
                     self.sectionTitle("How it’s used")
                     self.bullet("Daily activity measures active installations and retention without requiring accounts.")
                     self.bullet("Optional detailed analytics helps us understand feature adoption, insertion performance, onboarding completion, and model usage.")
-                    self.bullet("Beta timing summaries help us compare ASR and Fluid Intelligence speed across Mac hardware and macOS versions.")
+                    self.bullet(AppBrand.text("Beta timing summaries help us compare ASR and Fluid Intelligence speed across Mac hardware and macOS versions."))
 
                     self.sectionTitle("Control")
                     self.bullet("You can disable detailed analytics anytime in Settings → Share Detailed Anonymous Analytics.")
                     self.bullet("Disabling detailed analytics securely removes its queued and aggregated data from this Mac. Daily activity and beta timing summaries remain enabled.")
+                    }
                 }
                 .padding(.vertical, 6)
             }
@@ -81,25 +89,17 @@ struct AnalyticsPrivacyView: View {
     }
 
     private var contactInfoText: AttributedString {
-        var text = AttributedString(
-            "If you have any concerns we would love to hear about it, please email alticdev@gmail.com or file an issue in our GitHub."
-        )
-
-        if let emailRange = text.range(of: "alticdev@gmail.com") {
-            text[emailRange].link = URL(string: "mailto:alticdev@gmail.com")
-            text[emailRange].foregroundColor = self.theme.palette.accent
-        }
-
-        if let githubRange = text.range(of: "GitHub") {
-            text[githubRange].link = URL(string: "https://github.com/altic-dev/FluidVoice")
-            text[githubRange].foregroundColor = self.theme.palette.accent
+        var text = AttributedString(PichiLocalization.text("For privacy questions, contact our support team."))
+        if let range = text.range(of: PichiLocalization.text("support team")) {
+            text[range].link = AppBrand.supportURL
+            text[range].foregroundColor = self.theme.palette.accent
         }
 
         return text
     }
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text)
+        Text(PichiLocalization.text(text))
             .font(.fluidSystem(size: 12, weight: .semibold))
             .foregroundStyle(self.theme.palette.accent)
             .padding(.top, 4)
@@ -109,7 +109,7 @@ struct AnalyticsPrivacyView: View {
         HStack(alignment: .top, spacing: 8) {
             Text("•")
                 .foregroundStyle(.secondary)
-            Text(text)
+            Text(PichiLocalization.text(text))
                 .font(.fluidSystem(size: 13))
                 .foregroundStyle(.primary)
             Spacer(minLength: 0)

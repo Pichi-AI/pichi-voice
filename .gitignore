@@ -250,11 +250,17 @@ builds/
 /docs/development/*
 !/docs/development/codex.md
 !/docs/development/upstream.md
+!/docs/development/branding.md
+!/docs/development/localization.md
+!/docs/development/analytics.md
+!/docs/development/local-russian-text-models.md
+!/docs/development/meeting-summary-strategy.md
 !/scripts/
 /scripts/*
 !/scripts/dev/
 /scripts/dev/*
 !/scripts/dev/*.sh
+!/scripts/dev/check-localization.py
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/

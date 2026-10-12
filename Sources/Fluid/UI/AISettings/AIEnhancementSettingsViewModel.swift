@@ -36,6 +36,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var refreshingProviderID: String? = nil
     @Published var fetchModelsError: String? = nil
 
+    private struct ModelDiscoverySnapshot {
+        let fingerprint: String
+        let models: [String]
+    }
+    // Editable and persisted model lists are not proof of server availability.
+    @Published private var modelDiscoveryByProvider: [String: ModelDiscoverySnapshot] = [:]
+
     // Reasoning Configuration
     @Published var showingReasoningConfig: Bool = false
     @Published var editingReasoningParamName: String = "reasoning_effort"
@@ -203,7 +210,11 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             // Use ModelRepository to correctly identify ALL built-in providers
             let newKey: String = ModelRepository.shared.isBuiltIn(lower) ? lower :
                 (key.hasPrefix("custom:") ? key : "custom:\(key)")
-            if let list = normalized[newKey], list.contains(model) { normalizedSel[newKey] = model }
+            let endpoint = self.savedProviders.first(where: { self.providerKey(for: $0.id) == newKey })?.baseURL
+                ?? ModelRepository.shared.defaultBaseURL(for: newKey)
+            if self.isLocalEndpoint(endpoint) || normalized[newKey]?.contains(model) == true {
+                normalizedSel[newKey] = model
+            }
         }
         self.selectedModelByProvider = normalizedSel
         self.settings.selectedModelByProvider = normalizedSel
@@ -274,12 +285,13 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func providerDisplayName(for providerID: String) -> String {
+        if let provider = CloudTextProvider.descriptor(for: providerID) { return provider.name }
         if PrivateFeatures.privateAIProvider, providerID == PrivateAIProviderFeature.shared.providerID {
             return ModelRepository.shared.displayName(for: providerID)
         }
 
         switch providerID {
-        case "": return "No Provider"
+        case "": return PichiLocalization.text("No Provider")
         case "openai": return "OpenAI"
         case "groq": return "Groq"
         default:
@@ -685,8 +697,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func probeKeychainAccess() -> KeychainAccessCheckResult {
-        let service = "com.fluidvoice.provider-api-keys"
-        let account = "fluidApiKeys"
+        let service = AppBrand.keychainService
+        let account = AppBrand.keychainAccount
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -727,16 +739,16 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func keychainPermissionExplanation(for status: OSStatus) -> String {
-        var message = "FluidVoice stores provider API keys securely in your macOS Keychain but does not currently have permission to access it."
+        var message = AppBrand.text("FluidVoice stores provider API keys securely in your macOS Keychain but does not currently have permission to access it.")
         if let detail = SecCopyErrorMessageString(status, nil) as String? {
             message += "\n\nmacOS reported: \(detail) (\(status))"
         }
-        message += "\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access."
+        message += AppBrand.text("\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access.")
         return message
     }
 
     private func keychainPersistenceExplanation(for error: Error) -> String {
-        var message = "FluidVoice could not save the API key to your macOS Keychain, so this provider was not verified."
+        var message = AppBrand.text("FluidVoice could not save the API key to your macOS Keychain, so this provider was not verified.")
         if let keychainError = error as? KeychainServiceError {
             switch keychainError {
             case .invalidData:
@@ -751,7 +763,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         } else {
             message += "\n\n\(error.localizedDescription)"
         }
-        message += "\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access."
+        message += AppBrand.text("\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access.")
         return message
     }
 
@@ -775,15 +787,15 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func presentKeychainAccessAlert(message: String) {
         let msg = message.isEmpty
-            ? "FluidVoice stores provider API keys securely in your macOS Keychain. Please grant access by choosing \"Always Allow\" when prompted."
+            ? AppBrand.text("FluidVoice stores provider API keys securely in your macOS Keychain. Please grant access by choosing \"Always Allow\" when prompted.")
             : message
 
         let alert = NSAlert()
-        alert.messageText = "Keychain Access Required"
+        alert.messageText = PichiLocalization.text("Keychain Access Required")
         alert.informativeText = msg
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Open Keychain Access")
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: PichiLocalization.text("Open Keychain Access"))
+        alert.addButton(withTitle: PichiLocalization.text("OK"))
 
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
@@ -845,12 +857,42 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         )
 
         let verificationIdentity = ProviderModelVerificationStore.identity(
-            providerID: providerID, baseURL: baseURL, apiKey: apiKey, model: trimmedModel
+            providerID: providerID, baseURL: baseURL, apiKey: apiKey, model: trimmedModel,
+            connectionOptions: self.settings.providerConnectionOptions[providerID] ?? [:]
         )
         self.isTestingConnection = true
         self.updateConnectionStatus(.testing, for: providerID)
         // Every validation/network exit must stop the spinner.
         defer { self.isTestingConnection = false }
+
+        // Registered protocol policies use the same transport as enhancement and
+        // summaries. Verification sends only this public synthetic prompt.
+        if CloudTextProvider.descriptor(forEndpoint: baseURL) != nil || OllamaChatAdapter.supports(baseURL) {
+            var config = LLMClient.Config(messages: [["role": "user", "content": "test"]], model: trimmedModel,
+                                          baseURL: baseURL, apiKey: apiKey, streaming: false, maxTokens: 50)
+            config.providerOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
+            config.timeoutSeconds = 15
+            config.maxRetries = 1
+            if OllamaChatAdapter.supports(baseURL) {
+                // This verifies connectivity using public synthetic data, not
+                // enhancement quality. Thinking can exhaust a tiny probe budget.
+                config.extraParameters["think"] = false
+            }
+            do {
+                _ = try await LLMClient.shared.call(config)
+                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                self.modelVerifications.recordSuccess(verificationIdentity)
+                self.updateConnectionStatus(.success, for: providerID)
+                self.setEditingAPIKey(false, for: providerID)
+                self.storeVerificationFingerprint(for: providerID, baseURL: baseURL, apiKey: apiKey)
+            } catch {
+                guard verificationIdentity == self.modelVerificationIdentity(for: providerID) else { return }
+                self.modelVerifications.remove(verificationIdentity)
+                self.updateConnectionStatus(.failed, for: providerID)
+                self.setConnectionError(error.localizedDescription, for: providerID)
+            }
+            return
+        }
 
         // Build the endpoint URL
         let endpoint = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1026,7 +1068,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             providerID: providerID,
             baseURL: self.providerBaseURL(for: providerID),
             apiKey: self.providerAPIKey(for: providerID),
-            model: self.selectedModel(for: providerID)
+            model: self.selectedModel(for: providerID),
+            connectionOptions: self.settings.providerConnectionOptions[providerID] ?? [:]
         )
     }
 
@@ -1172,6 +1215,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             self.providerAPIKeys = previousKeys
             return false
         }
+        self.settings.providerConnectionOptions.removeValue(forKey: deletedProviderID)
         self.clearProviderAssignments(for: deletedProviderID)
         let remainingAddedIDs = (UserDefaults.standard.stringArray(forKey: Self.addedProviderIDsKey) ?? []).filter { $0 != deletedProviderID }
         UserDefaults.standard.set(remainingAddedIDs, forKey: Self.addedProviderIDsKey)
@@ -1249,7 +1293,8 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func fetchModelsForCurrentProvider() async {
         guard !self.isFetchingModels, !self.isTestingConnection else { return }
-        self.refreshingProviderID = self.selectedProviderID
+        let providerID = self.selectedProviderID
+        self.refreshingProviderID = providerID
         self.isFetchingModels = true
         self.fetchModelsError = nil
         defer {
@@ -1258,23 +1303,28 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         let baseURL = self.openAIBaseURL
-        let key = self.providerKey(for: self.selectedProviderID)
-        let shouldPersistKey = self.hasProviderAPIKeyDraft(for: self.selectedProviderID)
-        if shouldPersistKey, !self.saveProviderAPIKeys(invalidating: self.selectedProviderID) {
+        let key = self.providerKey(for: providerID)
+        let shouldPersistKey = self.hasProviderAPIKeyDraft(for: providerID)
+        if shouldPersistKey, !self.saveProviderAPIKeys(invalidating: providerID) {
             self.fetchModelsError = "Could not save API key to Keychain. Grant access and try again."
             return
         }
-        let apiKey = self.providerAPIKey(for: self.selectedProviderID)
+        let apiKey = self.providerAPIKey(for: providerID)
+        let connectionOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
 
         do {
             let models = try await ModelRepository.shared.fetchModels(
-                for: self.selectedProviderID,
+                for: providerID,
                 baseURL: baseURL,
-                apiKey: apiKey
+                apiKey: apiKey, connectionOptions: connectionOptions
             )
 
             // Update state on main thread
             await MainActor.run {
+                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
+                self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
                 if models.isEmpty {
                     // Keep existing models if fetch returned empty
                     self.fetchModelsError = "No models returned from API"
@@ -1284,7 +1334,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                     self.settings.availableModelsByProvider = self.availableModelsByProvider
                     self.fetchedModelsProviders.insert(key)
 
-                    if let providerIndex = self.savedProviders.firstIndex(where: { $0.id == self.selectedProviderID }) {
+                    if let providerIndex = self.savedProviders.firstIndex(where: { $0.id == providerID }) {
                         let updatedProvider = SettingsStore.SavedProvider(
                             id: self.savedProviders[providerIndex].id,
                             name: self.savedProviders[providerIndex].name,
@@ -1295,16 +1345,22 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
                         self.saveSavedProviders()
                     }
 
-                    // Select first model if current selection not in list
-                    if !models.contains(self.selectedModel) {
-                        self.selectedModel = models.first ?? ""
-                        self.selectedModelByProvider[key] = self.selectedModel
+                    let selection = ModelRepository.selectionAfterRefresh(
+                        preferred: self.selectedModel, models: models, isLocal: self.isLocalEndpoint(baseURL)
+                    )
+                    if selection != self.selectedModel {
+                        self.selectedModel = selection
+                        self.selectedModelByProvider[key] = selection
                         self.settings.selectedModelByProvider = self.selectedModelByProvider
                     }
                 }
             }
         } catch {
             await MainActor.run {
+                guard self.selectedProviderID == providerID, self.openAIBaseURL == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
+                self.modelDiscoveryByProvider.removeValue(forKey: key)
                 self.fetchModelsError = error.localizedDescription
             }
         }
@@ -1322,6 +1378,21 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             return ModelRepository.shared.defaultModels(for: providerID)
         }
         return []
+    }
+
+    /// Only a successful discovery for this exact endpoint/API context can
+    /// enable a library entry. Manually added IDs stay in the normal picker.
+    func discoveredModels(for providerID: String) -> [String] {
+        let key = self.providerKey(for: providerID)
+        guard let snapshot = self.modelDiscoveryByProvider[key],
+              snapshot.fingerprint == self.fingerprint(baseURL: self.providerBaseURL(for: providerID),
+                                                       apiKey: self.providerAPIKey(for: providerID)) else { return [] }
+        return snapshot.models
+    }
+
+    private func recordModelDiscovery(_ models: [String], for providerID: String, baseURL: String, apiKey: String) {
+        guard let fingerprint = self.fingerprint(baseURL: baseURL, apiKey: apiKey) else { return }
+        self.modelDiscoveryByProvider[self.providerKey(for: providerID)] = .init(fingerprint: fingerprint, models: models)
     }
 
     func selectedModel(for providerID: String) -> String {
@@ -1355,6 +1426,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func fetchModels(for providerID: String) async {
+        guard !self.isFetchingModels, !self.isTestingConnection else { return }
         let baseURL = self.providerBaseURL(for: providerID)
         let key = self.providerKey(for: providerID)
         let shouldPersistKey = self.hasProviderAPIKeyDraft(for: providerID)
@@ -1373,15 +1445,20 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         }
 
         let apiKey = self.providerAPIKey(for: providerID)
+        let connectionOptions = self.settings.providerConnectionOptions[providerID] ?? [:]
 
         do {
             let models = try await ModelRepository.shared.fetchModels(
                 for: providerID,
                 baseURL: baseURL,
-                apiKey: apiKey
+                apiKey: apiKey, connectionOptions: connectionOptions
             )
 
             await MainActor.run {
+                guard self.providerBaseURL(for: providerID) == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
+                self.recordModelDiscovery(models, for: providerID, baseURL: baseURL, apiKey: apiKey)
                 guard !models.isEmpty else {
                     self.fetchModelsError = "No models returned from API"
                     return
@@ -1393,14 +1470,17 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
                 if providerID == self.selectedProviderID {
                     self.availableModels = models
-                    if !models.contains(self.selectedModel) {
-                        self.selectedModel = models.first ?? ""
-                    }
+                    self.selectedModel = ModelRepository.selectionAfterRefresh(
+                        preferred: self.selectedModel, models: models, isLocal: self.isLocalEndpoint(baseURL)
+                    )
                 }
 
                 let selectedForProvider = self.selectedModelByProvider[key] ?? ""
-                if !models.contains(selectedForProvider), let first = models.first {
-                    self.selectedModelByProvider[key] = first
+                let selection = ModelRepository.selectionAfterRefresh(
+                    preferred: selectedForProvider, models: models, isLocal: self.isLocalEndpoint(baseURL)
+                )
+                if selection != selectedForProvider {
+                    self.selectedModelByProvider[key] = selection
                     self.settings.selectedModelByProvider = self.selectedModelByProvider
                 }
 
@@ -1417,9 +1497,20 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             }
         } catch {
             await MainActor.run {
+                guard self.providerBaseURL(for: providerID) == baseURL,
+                      self.providerAPIKey(for: providerID) == apiKey,
+                      (self.settings.providerConnectionOptions[providerID] ?? [:]) == connectionOptions else { return }
+                self.modelDiscoveryByProvider.removeValue(forKey: key)
                 self.fetchModelsError = error.localizedDescription
             }
         }
+    }
+
+    func updateConnectionOptions(_ options: [String: String], for providerID: String) {
+        self.settings.providerConnectionOptions[providerID] = options
+        self.invalidateVerification(for: providerID)
+        self.modelDiscoveryByProvider.removeValue(forKey: self.providerKey(for: providerID))
+        self.refreshProviderItems()
     }
 
     private func providerBaseURL(for providerID: String) -> String {
@@ -1447,13 +1538,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func fingerprint(baseURL: String, apiKey: String) -> String? {
-        let trimmedBase = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Only require baseURL - API key can be empty for local providers (Ollama, LM Studio, etc.)
-        guard !trimmedBase.isEmpty else { return nil }
-        let input = "\(trimmedBase)|\(trimmedKey)"
-        let digest = SHA256.hash(data: Data(input.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        let providerID = CloudTextProvider.descriptor(forEndpoint: baseURL)?.id ?? ""
+        return CloudTextProvider.connectionFingerprint(baseURL: baseURL, apiKey: apiKey,
+                                                       options: self.settings.providerConnectionOptions[providerID] ?? [:])
     }
 
     private func privateAIFingerprint(for modelID: String) -> String {
@@ -1861,7 +1948,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     func addAppPromptBinding(for mode: SettingsStore.PromptMode, appBundleID: String, appName: String) {
         let normalizedBundleID = self.normalizedBundleID(appBundleID)
         guard !normalizedBundleID.isEmpty else {
-            self.appPromptBindingErrorMessage = "The selected app is missing a valid bundle identifier."
+            self.appPromptBindingErrorMessage = PichiLocalization.text("The selected app is missing a valid bundle identifier.")
             return
         }
 
@@ -1887,7 +1974,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func addCurrentAppPromptBinding(for mode: SettingsStore.PromptMode) {
         guard let target = self.resolveBindingTargetApp() else {
-            self.appPromptBindingErrorMessage = "Could not detect a target app. Focus another app window (outside FluidVoice) and try again."
+            self.appPromptBindingErrorMessage = AppBrand.text("Could not detect a target app. Focus another app window (outside FluidVoice) and try again.")
             DebugLogger.shared.info(
                 "App prompt binding skipped: unable to resolve non-Fluid target app",
                 source: "AISettingsView"
@@ -1899,9 +1986,9 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
 
     func addAppPromptBindingFromFilePicker(for mode: SettingsStore.PromptMode) {
         let panel = NSOpenPanel()
-        panel.title = "Choose Application"
-        panel.message = "Pick an app to add an app-specific prompt override."
-        panel.prompt = "Add App"
+        panel.title = PichiLocalization.text("Choose Application")
+        panel.message = PichiLocalization.text("Pick an app to add an app-specific prompt override.")
+        panel.prompt = PichiLocalization.text("Add App")
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -1912,7 +1999,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         guard panel.runModal() == .OK, let appURL = panel.url else { return }
 
         guard let target = self.bindingTarget(fromApplicationURL: appURL) else {
-            self.appPromptBindingErrorMessage = "Could not read that app. Please choose a valid .app bundle."
+            self.appPromptBindingErrorMessage = PichiLocalization.text("Could not read that app. Please choose a valid .app bundle.")
             return
         }
 

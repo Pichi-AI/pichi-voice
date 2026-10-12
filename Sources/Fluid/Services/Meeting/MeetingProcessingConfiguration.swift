@@ -28,6 +28,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     static let defaultPipelineVersion = 13
 
     let asrModel: String
+    let asrArtifactFingerprint: String?
+    let asrArtifactDirectory: URL?
     let languageCode: String
     let vocabularyBoostingEnabled: Bool
     let pronunciationMatchingEnabled: Bool
@@ -38,6 +40,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
 
     init(
         asrModel: String? = nil,
+        asrArtifactFingerprint: String? = nil,
+        asrArtifactDirectory: URL? = nil,
         languageCode: String = Self.defaultLanguageCode,
         vocabularyBoostingEnabled: Bool = false,
         pronunciationMatchingEnabled: Bool = false,
@@ -47,6 +51,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
         pipelineVersion: Int = Self.defaultPipelineVersion
     ) {
         self.asrModel = asrModel ?? (languageCode == Self.defaultLanguageCode ? Self.defaultASRModel : "parakeet-tdt")
+        self.asrArtifactFingerprint = asrArtifactFingerprint
+        self.asrArtifactDirectory = asrArtifactDirectory
         self.languageCode = languageCode
         self.vocabularyBoostingEnabled = vocabularyBoostingEnabled
         self.pronunciationMatchingEnabled = pronunciationMatchingEnabled
@@ -59,7 +65,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
     /// Identity of this inert configuration snapshot only. It does not by itself prove the runtime
     /// enforced these options; resumability may rely on it only once processing fully applies them.
     var identityFingerprint: String {
-        MeetingConfigFingerprintEncoding.encode([
+        var pairs: [(key: String, value: String)] = [
             ("asr", self.asrModel),
             ("lang", self.languageCode),
             ("vocabBoost", String(self.vocabularyBoostingEnabled)),
@@ -68,7 +74,9 @@ nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
             ("unifiedFinal", String(self.experimentalUnifiedFinalEnabled)),
             ("diarizer", self.diarizationFingerprint),
             ("pipeline", String(self.pipelineVersion)),
-        ])
+        ]
+        if let asrArtifactFingerprint { pairs.append(("asrArtifact", asrArtifactFingerprint)) }
+        return MeetingConfigFingerprintEncoding.encode(pairs)
     }
 }
 

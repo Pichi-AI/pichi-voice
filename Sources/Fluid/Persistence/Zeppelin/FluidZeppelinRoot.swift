@@ -21,7 +21,7 @@ actor FluidZeppelinRoot {
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("FluidVoice/zeppelin", isDirectory: true)
+            .appendingPathComponent("\(AppBrand.storageNamespace)/zeppelin", isDirectory: true)
     }
 
     /// Opens a namespace, or returns the handle already open for it.

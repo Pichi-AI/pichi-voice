@@ -13,15 +13,8 @@ extension EnvironmentValues {
 
 extension View {
     /// Applies an app theme to the view hierarchy.
-    @ViewBuilder
     func appTheme(_ theme: AppTheme) -> some View {
-        Group {
-            if FluidTypography.overridesStandard {
-                self.font(.fluidSystem(.body))
-            } else {
-                self
-            }
-        }
+        self.font(theme.typography.inheritedFont)
         .environment(\.theme, theme)
         .buttonStyle(FluidOutlinedButtonStyle())
     }
@@ -42,10 +35,17 @@ struct AdaptiveAppTheme<Content: View>: View {
     var body: some View {
         let preferredScheme = self.settings.themePreference.preferredColorScheme
         let activeScheme = preferredScheme ?? self.colorScheme
+        let activeAccent = self.settings.accentColorOption == .brand
+            ? (Color(hex: activeScheme == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? self.accent)
+            : self.accent
 
         self.content
-            .appTheme(AppTheme.adaptive(accent: self.accent, colorScheme: activeScheme))
+            .appTheme(AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme))
+            .environment(\.locale, PichiLocalization.locale)
+            .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
+            .tint(activeAccent)
             .preferredColorScheme(preferredScheme)
+            .toolbarColorScheme(activeScheme, for: .windowToolbar)
     }
 }
 

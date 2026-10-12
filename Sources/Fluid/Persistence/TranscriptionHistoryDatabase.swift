@@ -134,8 +134,8 @@ final class TranscriptionHistoryWriter: @unchecked Sendable {
 
     init(defaults: UserDefaults = .standard, url: URL? = nil) {
         self.defaults = defaults
-        self.url = url ?? URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Application Support/FluidVoice/TranscriptionHistory.sqlite3")
+        self.url = url ?? AppBrand.applicationSupportDirectory
+            .appendingPathComponent("TranscriptionHistory.sqlite3")
     }
 
     func load() async throws -> [TranscriptionHistoryEntry] {

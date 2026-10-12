@@ -1240,6 +1240,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     }
 
     private struct Accumulator {
+        // Freeze presentation policy for new names; checkpoint/user names remain data.
+        let speakerLabelLanguage = PichiLocalization.language
         var speakers: [MeetingSessionSpeaker] = []
         var segments: [MeetingTranscriptSegment] = []
         var speakerIDByKey: [String: SessionSpeakerID] = [:]
@@ -1329,12 +1331,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
+    private let usesRecordingBackendPin: Bool
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
     /// filesystem observer; tests inject fixture observations instead of writing audio.
     private let chunkObserver: (any MeetingChunkAudioObserving)?
     /// Canonical path only: an explicitly injected per-unit echo provider. Without an injection,
-    /// only the Parakeet+Nemotron backend gets its Stage E text/time provider; every other
-    /// canonical backend remains fail-closed until it wires its own evidence source.
+    /// the selected backend may provide its evidence source through the contract; other
+    /// canonical backends remain fail-closed.
     private let echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)?
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
@@ -1361,6 +1364,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
+        self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
@@ -1388,9 +1392,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             self.backendIDProvider = { _ in registryDefault }
         } else {
             self.backendIDProvider = { languageCode in
-                let saved = SettingsStore.shared.meetingTranscriptionBackendID
-                // Preserve English rollback settings; non-English recordings need the current backend.
-                return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+                PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode)
             }
         }
     }
@@ -1400,7 +1402,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(session.languageCode) else {
+        if let languages = self.backendRegistry.supportedLanguageCodes, !languages.contains(session.languageCode) {
             throw MeetingProcessingError.unsupportedLanguage
         }
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
@@ -1410,7 +1412,18 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // The selection is read exactly once, here, and every later decision in this attempt uses
         // the local copy. Re-reading the preference after an await could split one attempt across
         // two backends — planning under one, failing the legacy callback against another.
-        let backendID = self.backendIDProvider(session.languageCode)
+        let backendID: MeetingBackendID
+        let usesRecordingPin = self.usesRecordingBackendPin && session.processingAttempts.count <= 1
+            && session.processingAttempts.allSatisfy({ $0.completedAt == nil })
+        if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
+            backendID = MeetingBackendID(rawValue: recordingBackendID)
+        } else {
+            backendID = self.backendIDProvider(session.languageCode)
+        }
+        if let descriptor = self.backendRegistry.descriptor(for: backendID),
+           !descriptor.supportedLanguageCodes.contains(session.languageCode) {
+            throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
+        }
         DebugLogger.shared.info(
             "Meeting final processing selected backend=\(backendID.rawValue)",
             source: "MeetingProcessingPipeline"
@@ -1426,7 +1439,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
             sessionDirectory: sessionDirectory,
-            configuration: MeetingFinalProcessingConfiguration(languageCode: session.languageCode)
+            configuration: PichiMeetingProviderFactory.configuration(
+                backendID: backendID,
+                languageCode: session.languageCode,
+                artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil
+            )
         )
         let backend = try self.backendRegistry.makeBackend(
             id: backendID,
@@ -1457,6 +1474,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 }
             )
         )
+        guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
+            throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
+        }
         if backendID == .parakeetNemotron {
             try await self.prepareDiarizationModel()
         }
@@ -1539,6 +1559,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
         let request = plan.request
+        let speakerNameFormat = PichiLocalization.text("Speaker %lld")
         let observer = self.chunkObserver ?? MeetingChunkAudioObserver(
             sessionDirectory: request.sessionDirectory
         )
@@ -1568,9 +1589,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         }
 
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
-            ?? (plan.backendID == .parakeetNemotron
-                ? MeetingTextOverlapEchoVerdictProvider()
-                : MeetingFailClosedEchoVerdictProvider())
+            ?? backend.echoVerdictProvider
+            ?? MeetingFailClosedEchoVerdictProvider()
         let echoVerdicts = try await echoProvider.echoVerdicts(
             for: bundle.evidence,
             manifest: manifest,
@@ -1587,7 +1607,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             echoVerdicts: echoVerdicts
         )
         let assemblyTask = Task.detached(priority: .userInitiated) {
-            try MeetingTranscriptAssembler().assemble(assemblyInput)
+            try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(assemblyInput)
         }
         let assembly = try await withTaskCancellationHandler {
             try await assemblyTask.value
@@ -1649,6 +1669,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         attempt.asrProvider = plan.backendID.rawValue
         attempt.asrModel = request.configuration.asrModel
         attempt.languageCode = request.configuration.languageCode
+        attempt.asrArtifactFingerprint = request.configuration.asrArtifactFingerprint
         attempt.diarizationModel = request.configuration.diarizationFingerprint
         attempt.backendID = plan.backendID.rawValue
         attempt.backendVersion = plan.backendVersion
@@ -2083,7 +2104,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 accumulator.addResolvedSpeaker(
                     id: speakerID,
                     key: "remote-cluster:\(speakerID.uuidString)",
-                    displayName: "Speaker \(accumulator.nextRemoteSpeaker)",
+                    displayName: PichiLocalization.format("Speaker %lld", language: accumulator.speakerLabelLanguage, bundle: .main, arguments: [Int64(accumulator.nextRemoteSpeaker)]),
                     clusterID: firstLabel,
                     trackKind: .applicationAudio,
                     isLocalUser: false
@@ -2724,7 +2745,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             for turn in stagedTurns {
                 let isNewSpeaker = !accumulator.speakers.contains { $0.id == turn.clusterID }
                 if isNewSpeaker {
-                    let displayName = "Room Speaker \(accumulator.nextMicrophoneSpeaker)"
+                    let displayName = PichiLocalization.format("Room Speaker %lld", language: accumulator.speakerLabelLanguage, bundle: .main, arguments: [Int64(accumulator.nextMicrophoneSpeaker)])
                     accumulator.nextMicrophoneSpeaker += 1
                     accumulator.addResolvedSpeaker(
                         id: turn.clusterID,
@@ -2738,7 +2759,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     accumulator.addResolvedSpeaker(
                         id: turn.clusterID,
                         key: "room-cluster:\(turn.clusterID.uuidString)",
-                        displayName: "Room Speaker",
+                        displayName: PichiLocalization.text("Room Speaker", language: accumulator.speakerLabelLanguage, bundle: .main),
                         clusterID: turn.clusterLabel,
                         trackKind: .microphone,
                         isLocalUser: false
@@ -2794,7 +2815,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     accumulator.addResolvedSpeaker(
                         id: turn.clusterID,
                         key: "microphone-speaker:\(turn.clusterID.uuidString)",
-                        displayName: "Microphone Speaker \(ordinal)",
+                        displayName: PichiLocalization.format("Microphone Speaker %lld", language: accumulator.speakerLabelLanguage, bundle: .main, arguments: [Int64(ordinal)]),
                         clusterID: turn.clusterLabel,
                         trackKind: .microphone,
                         isLocalUser: false

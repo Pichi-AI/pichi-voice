@@ -10,6 +10,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "Vendor/WebRTCAudioProcessing"),
+        .package(path: "Vendor/PichiGigaAM"),
         .package(url: "https://github.com/mxcl/AppUpdater.git", from: "1.0.0"),
         .package(url: "https://github.com/altic-dev/FluidAudio.git", revision: "eb1e6628998e47022799d305b52c2680d3576801"),
         .package(url: "https://github.com/mxcl/PromiseKit", from: "6.0.0"),
@@ -34,11 +35,14 @@ let package = Package(
                 "PromiseKit",
                 "DynamicNotchKit",
                 .product(name: "FluidAEC3Bridge", package: "WebRTCAudioProcessing"),
+                .product(name: "PichiGigaAM", package: "PichiGigaAM"),
                 .product(name: "TranscribeCpp", package: "transcribe-cpp-swift"),
                 .product(name: "ZeppelinEmbed", package: "zeppelin-embed"),
             ],
             resources: [
                 .copy("Resources/speech-model-check.pcm"),
+                .copy("Resources/Notices"),
+                .copy("Models/local-text-models.json"),
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),

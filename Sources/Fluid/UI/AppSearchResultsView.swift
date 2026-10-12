@@ -60,7 +60,7 @@ struct AppSearchResultsView: View {
                                 self.toggle(group)
                                 if wasExpanded { proxy.scrollTo(group.kind, anchor: .top) }
                             } label: {
-                                Text(self.expanded.contains(group.kind) ? "Show less" : "Show more (\(group.hits.count - Self.rowsPerGroup))")
+                                Text(self.expanded.contains(group.kind) ? PichiLocalization.text("Show less") : PichiLocalization.format("Show more (%lld)", group.hits.count - Self.rowsPerGroup))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                     .padding(.vertical, self.theme.metrics.spacing.xs / 2)
@@ -69,7 +69,7 @@ struct AppSearchResultsView: View {
                             .font(self.theme.typography.sidebarItem)
                             .foregroundStyle(self.theme.palette.accent)
                             .sidebarOptionHover(isSelected: false, reduceMotion: self.reduceMotion)
-                            .accessibilityLabel("\(self.expanded.contains(group.kind) ? "Show fewer" : "Show all") \(group.kind.title) results")
+                            .accessibilityLabel(PichiLocalization.format(self.expanded.contains(group.kind) ? "Show fewer %@ results" : "Show all %@ results", PichiLocalization.text(group.kind.title)))
                         }
                     } header: {
                         self.groupHeader(group)
@@ -90,7 +90,7 @@ struct AppSearchResultsView: View {
         if group.hits.count > Self.rowsPerGroup {
             Button { self.toggle(group) } label: {
                 HStack(spacing: self.theme.metrics.spacing.xs) {
-                    Text(group.kind.title)
+                    Text(PichiLocalization.text(group.kind.title))
                     Image(systemName: self.expanded.contains(group.kind) ? "chevron.down" : "chevron.right")
                         .imageScale(.small)
                     Spacer(minLength: 0)
@@ -102,11 +102,11 @@ struct AppSearchResultsView: View {
             }
             .buttonStyle(.plain)
             .sidebarOptionHover(isSelected: false, reduceMotion: self.reduceMotion)
-            .accessibilityLabel("\(group.kind.title) results")
-            .accessibilityValue(self.expanded.contains(group.kind) ? "Expanded, \(group.hits.count) results" : "Showing \(Self.rowsPerGroup) of \(group.hits.count) results")
-            .accessibilityHint(self.expanded.contains(group.kind) ? "Show fewer results" : "Show all results")
+            .accessibilityLabel(PichiLocalization.format("%@ results", PichiLocalization.text(group.kind.title)))
+            .accessibilityValue(self.expanded.contains(group.kind) ? PichiLocalization.format("Expanded, %lld results", group.hits.count) : PichiLocalization.format("Showing %lld of %lld results", Self.rowsPerGroup, group.hits.count))
+            .accessibilityHint(PichiLocalization.text(self.expanded.contains(group.kind) ? "Show fewer results" : "Show all results"))
         } else {
-            Text(group.kind.title)
+            Text(PichiLocalization.text(group.kind.title))
                 .font(self.theme.typography.sidebarSection)
                 .foregroundStyle(.secondary)
         }
@@ -134,7 +134,7 @@ struct AppSearchResultsView: View {
                     .foregroundStyle(isSelected ? Color.white : Color.primary)
                     .lineLimit(1)
                 Text(hit.snippet)
-                    .font(.caption)
+                    .font(.fluidSystem(.caption))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color.secondary)
                     .lineLimit(2)
             }

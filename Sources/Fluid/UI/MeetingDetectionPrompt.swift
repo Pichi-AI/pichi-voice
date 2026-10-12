@@ -205,7 +205,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.cancelSuppressionRetry()
         self.request = request
         let resolved = NSWorkspace.shared.urlForApplication(withBundleIdentifier: request.bundleIdentifier)
-        self.appIcon = NSImage(named: "AppIcon") ?? NSApp.applicationIconImage
+        self.appIcon = PichiBrandMark.appIcon
         let appName = resolved.flatMap {
             FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "")
         } ?? "Meeting"
@@ -448,9 +448,9 @@ final class MeetingDetectionPromptController: ObservableObject {
 
     static func startErrorMessage(from error: Error, appDisplayName: String) -> String {
         if case MeetingCaptureError.applicationUnavailable = error {
-            return "\(appDisplayName) is no longer available to record."
+            return PichiLocalization.format("%@ is no longer available to record.", appDisplayName)
         }
-        return (error as? LocalizedError)?.errorDescription ?? "Can't start recording right now."
+        return (error as? LocalizedError)?.errorDescription.map(PichiLocalization.text) ?? PichiLocalization.text("Can't start recording right now.")
     }
 
     static func suppressionReason(
@@ -579,7 +579,7 @@ private struct MeetingDetectionPromptContent: View {
                     self.controller.startTapped()
                 } label: {
                     Label(
-                        self.controller.request?.cta == .setup ? "Set up" : "Record",
+                        self.controller.request?.cta == .setup ? PichiLocalization.text("Set up") : PichiLocalization.text("Record"),
                         systemImage: self.controller.request?.cta == .setup ? "gearshape" : "record.circle"
                     )
                 }

@@ -288,9 +288,322 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(backend.descriptor.supportedLanguageCodes, VoiceEngineLanguageCatalog.parakeetV3LanguageIDs)
         XCTAssertEqual(backend.descriptor.execution, .local)
         XCTAssertEqual(backend.descriptor.analysisSampleRate, 16_000)
+        XCTAssertTrue(backend.echoVerdictProvider is MeetingTextOverlapEchoVerdictProvider)
+        let legacy = try registry.makeBackend(id: .legacyCompatibility, context: context)
+        XCTAssertNil(legacy.echoVerdictProvider)
 
         let selectedDefault = try registry.makeBackend(id: registry.defaultBackendID, context: context)
         XCTAssertEqual(selectedDefault.descriptor.id, .parakeetNemotron)
+    }
+
+    private func thirdProviderDescriptor() -> MeetingBackendDescriptor {
+        MeetingBackendDescriptor(
+            id: MeetingBackendID(rawValue: "fixture.third-provider"),
+            version: "test",
+            execution: .local,
+            supportedLanguageCodes: ["en"],
+            supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
+            supportedFinalPrecisions: [.word, .utterance],
+            resultContract: .canonicalEvidence,
+            knownLimits: [],
+            analysisSampleRate: 16_000
+        )
+    }
+
+    func testThirdProviderBackendUsesInheritedRuntimeCapabilityAndFrozenHostRequest() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let descriptor = self.thirdProviderDescriptor()
+        let providerModelID = MeetingFinalProcessingConfiguration().asrModel
+        let runtime = FakeRuntime()
+        runtime.asrSession.responses = ["first", "second", "remote"].map {
+            .init(text: $0, words: [.init(text: $0, start: 0.2, end: 0.6)])
+        }
+        final class Spy { var requests: [MeetingBackendRequest] = [] }
+        let spy = Spy()
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: descriptor.id)
+        registry.register(descriptor.id) { context in
+            MeetingProviderBackedBackend(
+                descriptor: descriptor,
+                providerModelID: providerModelID,
+                runtimeFactory: context.parakeetNemotronRuntimeFactory,
+                modelLocator: StubModelLocator(),
+                materializer: FakeMaterializer()
+            )
+        }
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: {
+                XCTFail("The injected shared runtime must own this backend's ASR")
+                return ASRService()
+            },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            chunkObserver: FixtureObserver(results: fixture.observations),
+            meetingRuntimeFactory: { request in
+                spy.requests.append(request)
+                return runtime
+            }
+        )
+
+        let result = try await pipeline.process(
+            session: fixture.session, sessionDirectory: directory, progress: { _ in }
+        )
+
+        XCTAssertEqual(spy.requests.count, 1, "A new registered backend must reuse the one host runtime factory")
+        let request = try XCTUnwrap(spy.requests.first)
+        XCTAssertEqual(request.attemptID, fixture.session.processingAttempts.last?.id)
+        XCTAssertEqual(request.session.id, fixture.session.id)
+        XCTAssertEqual(request.sessionDirectory, directory)
+        XCTAssertEqual(request.configuration, MeetingFinalProcessingConfiguration(languageCode: "en"))
+        XCTAssertEqual(runtime.asrConfigurations, [request.configuration])
+        XCTAssertEqual(runtime.asrAttemptIDs, [request.attemptID])
+        XCTAssertEqual(result.attempt.backendID, descriptor.id.rawValue)
+        XCTAssertEqual(result.attempt.asrModel, providerModelID)
+        XCTAssertEqual(Set(result.segments.map(\.text)), ["first", "second", "remote"])
+        XCTAssertTrue(result.isComplete)
+        XCTAssertNotNil(result.resultSidecarReference)
+    }
+
+    func testGenericProviderRejectsUnsupportedLanguageBeforeRuntimeOrMaterialization() throws {
+        let fixture = self.makeTwoEpochFixture()
+        var session = fixture.session
+        session.languageCode = "ru"
+        let descriptor = self.thirdProviderDescriptor()
+        let runtime = FakeRuntime()
+        let materializer = FakeMaterializer()
+        var runtimeCreations = 0
+        let backend = MeetingProviderBackedBackend(
+            descriptor: descriptor,
+            providerModelID: MeetingFinalProcessingConfiguration().asrModel,
+            runtimeFactory: { _ in runtimeCreations += 1; return runtime },
+            modelLocator: StubModelLocator(),
+            materializer: materializer
+        )
+        XCTAssertTrue(backend.echoVerdictProvider is MeetingTextOverlapEchoVerdictProvider)
+
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(
+            session: session,
+            directory: self.makeTempSessionDirectory(),
+            configuration: MeetingFinalProcessingConfiguration(asrModel: MeetingFinalProcessingConfiguration.defaultASRModel, languageCode: "ru")
+        ))) { error in
+            XCTAssertEqual(error as? MeetingBackendError, .unsupportedLanguage(backend: descriptor.id, languageCode: "ru"))
+        }
+
+        XCTAssertEqual(runtimeCreations, 0)
+        XCTAssertTrue(runtime.asrConfigurations.isEmpty)
+        XCTAssertEqual(runtime.diarizationScopeCount, 0)
+        XCTAssertTrue(materializer.materializedEpochs.isEmpty)
+    }
+
+    func testDownstreamRegistrationExposesLanguagePolicyWithoutReplacingInheritedProviders() throws {
+        let registered = "gigaam-v3-eou"
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: registered))
+        XCTAssertEqual(descriptor.id, .gigaam)
+        XCTAssertEqual(descriptor.supportedLanguageCodes, ["ru"])
+        XCTAssertEqual(PichiMeetingProviderFactory.registeredLanguageCodes(for: registered), ["ru"])
+        XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: registered), "ru")
+        // Existing upstream models retain their own provider options and native language
+        // rules rather than being copied into the downstream extension registration.
+        for (modelID, language) in [("parakeet-tdt-v2", "en"), ("parakeet-tdt", "de")] {
+            XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: modelID))
+            XCTAssertNil(PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID))
+            XCTAssertNil(PichiMeetingProviderFactory.defaultLanguageCode(for: modelID))
+            let options = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
+                asrModel: modelID, languageCode: language
+            ))
+            XCTAssertEqual(options.model.id, modelID)
+        }
+        let unregistered = "fixture.unregistered-provider"
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: unregistered))
+        XCTAssertNil(PichiMeetingProviderFactory.registeredLanguageCodes(for: unregistered))
+        XCTAssertNil(PichiMeetingProviderFactory.defaultLanguageCode(for: unregistered))
+    }
+
+    #if DEBUG
+    @MainActor private final class NativeScopeProvider: TranscriptionProvider {
+        let name = "Generic native scope fixture"
+        let isAvailable = true
+        let supportsWordTimings = true
+        var isReady = false
+        var prepareCalls = 0
+        var timedSampleCounts: [Int] = []
+        func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
+            self.prepareCalls += 1
+            self.isReady = true
+        }
+        func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
+            XCTFail("The native meeting session must preserve the provider's timing capability")
+            return ASRTranscriptionResult(text: "", confidence: 0)
+        }
+        func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+            self.timedSampleCounts.append(samples.count)
+            return (
+                ASRTranscriptionResult(text: "Scoped provider", confidence: 1),
+                [.init(text: "Scoped", start: 0.1, end: 0.4), .init(text: "provider", start: 0.4, end: 0.8)]
+            )
+        }
+    }
+
+    /// Deliberately has no architecture guard: generic ASR must also work in the Intel host,
+    /// while the injected owner/provider keep this test outside CoreML and real model caches.
+    func testNativeRuntimeUsesGenericASRScopeWithFrozenArtifactConfigurationOnEveryArchitecture() async throws {
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        let provider = NativeScopeProvider()
+        var factoryConfigurations: [MeetingFinalProcessingConfiguration] = []
+        var prepareConfigurations: [MeetingFinalProcessingConfiguration] = []
+        var drainCalls = 0
+        let owner = MeetingASRPreparationOwner(
+            isActiveLease: { $0 == lease },
+            isUserDownloadInProgress: { false },
+            retireDictationResources: { _ in },
+            makeProvider: { configuration in
+                factoryConfigurations.append(configuration)
+                return provider
+            },
+            prepareProvider: { prepared, configuration, progress in
+                XCTAssertTrue(prepared as AnyObject === provider)
+                prepareConfigurations.append(configuration)
+                try await prepared.prepare(progressHandler: progress)
+            },
+            drainExecutor: { _ in drainCalls += 1 }
+        )
+        service.meetingASRPreparationOwnerForTesting = owner
+        let configuration = MeetingFinalProcessingConfiguration(
+            asrModel: "gigaam-v3-eou",
+            asrArtifactFingerprint: "synthetic-frozen-artifact-sha256",
+            asrArtifactDirectory: URL(fileURLWithPath: "/fixture/never-read-model-artifacts"),
+            languageCode: "ru",
+            diarizationFingerprint: "fixture-disabled-diarization"
+        )
+        let attemptID = UUID()
+        let runtime = MeetingParakeetNemotronRuntime(
+            asrServiceProvider: { service }, modelLocator: StubModelLocator()
+        )
+
+        _ = try await runtime.withPreparedASR(attemptID: attemptID, configuration: configuration) { session in
+            let output = try await session.transcribeWithTimings([Float](repeating: 0, count: 16_000))
+            XCTAssertEqual(output.result.text, "Scoped provider")
+            XCTAssertEqual(output.words.map(\.text), ["Scoped", "provider"])
+            XCTAssertEqual(output.words.first?.start, 0.1)
+            return MeetingParakeetPhaseResult()
+        }
+
+        XCTAssertEqual(factoryConfigurations, [configuration])
+        XCTAssertEqual(prepareConfigurations, [configuration])
+        XCTAssertEqual(provider.prepareCalls, 1)
+        XCTAssertEqual(provider.timedSampleCounts, [16_000])
+        XCTAssertEqual(drainCalls, 1)
+        XCTAssertFalse(owner.isClaimed)
+        XCTAssertFalse(owner.isDraining)
+        XCTAssertNil(owner.currentClaimToken)
+    }
+    #endif
+
+    func testGigaAMTranscriptOnlyUsesRealWordTimesAndCoverageWithoutInventedSpeakers() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        var session = fixture.session
+        session.languageCode = "ru"
+        let runtime = FakeRuntime()
+        let backend = MeetingProviderBackedBackend(
+            descriptor: try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou")),
+            providerModelID: "gigaam-v3-eou",
+            runtimeFactory: { _ in runtime },
+            modelLocator: StubModelLocator(),
+            materializer: FakeMaterializer()
+        )
+        let configuration = MeetingFinalProcessingConfiguration(
+            asrModel: "gigaam-v3-eou", languageCode: "ru",
+            diarizationFingerprint: PichiMeetingProviderFactory.transcriptOnlyDiarizationFingerprint
+        )
+        let plan = try backend.plan(self.makeRequest(
+            session: session, directory: self.makeTempSessionDirectory(), configuration: configuration
+        ))
+        let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+        runtime.asrSession.responses = ["Привет", "Договорились", "Пятница"].map {
+            .init(text: $0, words: [.init(text: $0, start: 0.2, end: 0.6)])
+        }
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(bundle.evidence.backendID, .gigaam)
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["Привет", "Договорились", "Пятница"])
+        XCTAssertTrue(bundle.evidence.units.allSatisfy { $0.precision == .word && $0.speaker == .unassigned })
+        XCTAssertEqual(bundle.evidence.units.first?.analysisStart, 0.2)
+        XCTAssertEqual(bundle.evidence.units.first?.analysisEnd, 0.6)
+        XCTAssertTrue(bundle.evidence.speakerActivity.isEmpty)
+        XCTAssertEqual(runtime.diarizationScopeCount, 0)
+        XCTAssertEqual(runtime.asrConfigurations, [configuration])
+        XCTAssertEqual(bundle.coverageReceipts.count, 3)
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+    }
+
+    func testGigaAMMissingSpeakerModelDoesNotPreventTranscriptionAndUntimedTextStaysUtterance() async throws {
+        let fixture = self.makeTwoEpochFixture(mode: .inRoom)
+        var session = fixture.session
+        session.languageCode = "ru"
+        let locator = StubModelLocator()
+        locator.error = MeetingNemotronModelReadinessError.modelNotInstalled(path: "/fixture/missing")
+        let runtime = FakeRuntime()
+        let backend = MeetingProviderBackedBackend(
+            descriptor: try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou")),
+            providerModelID: "gigaam-v3-eou",runtimeFactory: { _ in runtime }, modelLocator: locator, materializer: FakeMaterializer())
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru")
+        let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory(), configuration: configuration))
+        let manifest = try self.makeManifest(plan: plan, observations: fixture.observations)
+        runtime.asrSession.responses = [.init(text: "Обсудим проект", words: []), .init(text: "Следующий шаг", words: []), .init(text: "Итоги", words: [])]
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertFalse(bundle.evidence.units.isEmpty)
+        XCTAssertTrue(bundle.evidence.units.allSatisfy { $0.precision == .utterance && $0.speaker == .unassigned })
+        XCTAssertEqual(runtime.diarizationScopeCount, 0)
+        XCTAssertEqual(runtime.asrConfigurations, [configuration])
+    }
+
+    func testGigaAMRefusesAnotherASRModelOrLanguageInsteadOfRelabelingIt() throws {
+        let fixture = self.makeTwoEpochFixture()
+        let backend = MeetingProviderBackedBackend(
+            descriptor: try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou")),
+            providerModelID: "gigaam-v3-eou",runtimeFactory: { _ in FakeRuntime() })
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: fixture.session, directory: self.makeTempSessionDirectory()))) { error in
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel("parakeet-tdt-v2"))
+        }
+        let englishConfiguration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "en")
+        XCTAssertThrowsError(try backend.plan(self.makeRequest(session: fixture.session, directory: self.makeTempSessionDirectory(), configuration: englishConfiguration))) { error in
+            XCTAssertEqual(error as? MeetingBackendError, .unsupportedLanguage(backend: .gigaam, languageCode: "en"))
+        }
+    }
+
+    func testGigaAMPipelinePinsRussianModelAndPersistsBackendProvenance() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        var session = fixture.session
+        session.languageCode = "ru"
+        let runtime = FakeRuntime()
+        runtime.asrSession.responses = ["Запишем", "Решение", "Задачу"].map {
+            .init(text: $0, words: [.init(text: $0, start: 0.2, end: 0.6)])
+        }
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .gigaam)
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou"))
+        registry.register(.gigaam) { context in
+            MeetingProviderBackedBackend(descriptor: descriptor, providerModelID: "gigaam-v3-eou", runtimeFactory: context.parakeetNemotronRuntimeFactory, modelLocator: StubModelLocator(), materializer: FakeMaterializer())
+        }
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Fake runtime must not prepare a real ASR service"); return ASRService() },
+            managesModelResidency: false,
+            serializationGate: MeetingProcessingSerializationGate(),
+            backendRegistry: registry,
+            chunkObserver: FixtureObserver(results: fixture.observations),
+            meetingRuntimeFactory: { _ in runtime }
+        )
+        let result = try await pipeline.process(session: session, sessionDirectory: self.makeTempSessionDirectory(), progress: { _ in })
+        XCTAssertEqual(result.attempt.backendID, MeetingBackendID.gigaam.rawValue)
+        XCTAssertEqual(result.attempt.asrModel, "gigaam-v3-eou")
+        XCTAssertEqual(result.attempt.languageCode, "ru")
+        XCTAssertEqual(runtime.asrConfigurations.first?.asrModel, "gigaam-v3-eou")
+        XCTAssertEqual(runtime.asrConfigurations.first?.languageCode, "ru")
+        XCTAssertNotNil(result.resultSidecarReference)
+        XCTAssertTrue(result.isComplete)
     }
 
     // MARK: - Canonical turn merge (chronological fold)

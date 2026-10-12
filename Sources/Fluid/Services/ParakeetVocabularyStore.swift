@@ -85,7 +85,7 @@ final class ParakeetVocabularyStore {
     }
 
     private let fileName = "parakeet_custom_vocabulary.json"
-    private let appSupportFolder = "FluidVoice"
+    private let appSupportFolder = AppBrand.storageNamespace
 
     private init() {}
 
@@ -111,7 +111,7 @@ final class ParakeetVocabularyStore {
         if let bundled = Bundle.main.url(forResource: "parakeet_custom_vocabulary.default", withExtension: "json"),
            let bundledText = try? String(contentsOf: bundled, encoding: .utf8)
         {
-            try bundledText.write(to: url, atomically: true, encoding: .utf8)
+            try Self.brandedFactoryDefaultJSON(bundledText).write(to: url, atomically: true, encoding: .utf8)
         } else {
             try Self.defaultTemplateJSON().write(to: url, atomically: true, encoding: .utf8)
         }
@@ -151,7 +151,7 @@ final class ParakeetVocabularyStore {
     /// Search reads a bounded snapshot without creating files or blocking the UI.
     @concurrent nonisolated static func readSearchTerms() async throws -> [VocabularyConfig.Term] {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
-        let url = base.appendingPathComponent("FluidVoice/parakeet_custom_vocabulary.json")
+        let url = base.appendingPathComponent("\(AppBrand.storageNamespace)/parakeet_custom_vocabulary.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
@@ -304,24 +304,32 @@ final class ParakeetVocabularyStore {
         return normalized
     }
 
-    static func defaultTemplateJSON() -> String {
-        """
-        {
-          "alpha": 2.8,
-          "minCtcScore": -2.2,
-          "minSimilarity": 0.72,
-          "minCombinedConfidence": 0.64,
-          "minTermLength": 3,
-          "terms": [
-            {
-              "text": "FluidVoice",
-              "aliases": ["fluid voice", "fluid boys"],
-              "weight": 10.0
-            }
-          ]
+    /// Resolve product placeholders only in the packaged factory dictionary.
+    /// Existing files and user-provided terms never pass through this method.
+    static func brandedFactoryDefaultJSON(_ source: String, appName: String = AppBrand.appName) throws -> String {
+        let original = try JSONDecoder().decode(VocabularyConfig.self, from: Data(source.utf8))
+        let terms = original.terms.map { term in
+            term.text == "${brand.appName}" || term.text == "FluidVoice"
+                ? VocabularyConfig.Term(text: appName, weight: term.weight) : term
         }
-        """
+        let config = VocabularyConfig(alpha: original.alpha, minCtcScore: original.minCtcScore,
+            minSimilarity: original.minSimilarity, minCombinedConfidence: original.minCombinedConfidence,
+            minTermLength: original.minTermLength, terms: terms)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return String(decoding: try encoder.encode(config), as: UTF8.self)
     }
+
+    static func defaultTemplateJSON() -> String {
+        let config = VocabularyConfig(alpha: Defaults.alpha, minCtcScore: Defaults.minCtcScore,
+            minSimilarity: Defaults.minSimilarity, minCombinedConfidence: Defaults.minCombinedConfidence,
+            minTermLength: Defaults.minTermLength,
+            terms: [VocabularyConfig.Term(text: AppBrand.appName, weight: 10)])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{\"terms\":[]}"
+    }
+
 }
 
 extension Notification.Name {

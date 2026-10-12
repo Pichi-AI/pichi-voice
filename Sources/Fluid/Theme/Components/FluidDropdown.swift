@@ -140,7 +140,7 @@ struct FluidDropdownPicker<Selection: Hashable, Options: View>: View {
         } label: {
             Text(self.selectedTitle)
         }
-        .accessibilityLabel(self.title.isEmpty ? self.selectedTitle : self.title)
+        .accessibilityLabel(self.title.isEmpty ? self.selectedTitle : PichiLocalization.text(self.title))
         .accessibilityValue(self.selectedTitle)
     }
 }

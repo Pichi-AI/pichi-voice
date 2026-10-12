@@ -16,6 +16,7 @@ struct FileTranscriptionView: View {
     @Binding private var revealTarget: AppSearchHit.Target?
     @State private var selectedFileURL: URL?
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
 
     init(asrService: ASRService, transcriptionService: FileTranscriptionService, revealTarget: Binding<AppSearchHit.Target?> = .constant(nil)) {
         self._revealTarget = revealTarget
@@ -145,7 +146,7 @@ struct FileTranscriptionView: View {
         }
         .onReceive(self.fileHistoryStore.$entries) { entries in
             self.rowMetadata = Dictionary(entries.map { entry in
-                (entry.id, RowMetadata(preview: entry.previewText, relativeDate: entry.relativeTimeString, fullDate: entry.fullDateString))
+                (entry.id, self.metadata(for: entry))
             }, uniquingKeysWith: { _, latest in latest })
             self.updateSearchResults(entries: entries)
         }
@@ -160,18 +161,21 @@ struct FileTranscriptionView: View {
         .onChange(of: self.searchQuery) { _, _ in
             self.updateSearchResults(entries: self.fileHistoryStore.entries)
         }
+        .onChange(of: self.interfaceLocale) { _, _ in
+            self.rowMetadata = Dictionary(self.fileHistoryStore.entries.map { ($0.id, self.metadata(for: $0)) }, uniquingKeysWith: { _, latest in latest })
+        }
         .onChange(of: self.transcriptionService.isTranscribing) { _, isTranscribing in
             guard isTranscribing else { return }
-            AccessibilityNotification.Announcement("File transcription started").post()
+            AccessibilityNotification.Announcement(PichiLocalization.text("File transcription started")).post()
         }
         .onChange(of: self.transcriptionService.result?.id) { _, resultID in
             guard resultID != nil else { return }
             self.searchQuery = ""
-            AccessibilityNotification.Announcement("File transcription complete").post()
+            AccessibilityNotification.Announcement(PichiLocalization.text("File transcription complete")).post()
         }
         .onChange(of: self.transcriptionService.error) { _, error in
             guard let error, !error.isEmpty else { return }
-            AccessibilityNotification.Announcement("File transcription failed. \(error)").post()
+            AccessibilityNotification.Announcement(PichiLocalization.format("File transcription failed. %@", error)).post()
         }
         .alert("Delete transcript?", isPresented: Binding(
             get: { self.pendingDeleteEntry != nil },
@@ -202,7 +206,7 @@ struct FileTranscriptionView: View {
 
     private func activityConflictCard(activity: ASRExclusiveActivity) -> some View {
         Label(
-            "File transcription is paused while \(activity.displayName) is active.",
+            PichiLocalization.format("File transcription is paused while %@ is active.", PichiLocalization.text(activity.displayName)),
             systemImage: activity == .meeting ? "person.2.wave.2.fill" : "waveform.badge.mic"
         )
         .font(self.theme.typography.bodySmall)
@@ -218,7 +222,7 @@ struct FileTranscriptionView: View {
                 )
         )
         .accessibilityLabel(
-            "File transcription unavailable. Wait for the active \(activity.displayName) to finish."
+            PichiLocalization.format("File transcription unavailable. Wait for the active %@ to finish.", PichiLocalization.text(activity.displayName))
         )
     }
 
@@ -239,7 +243,7 @@ struct FileTranscriptionView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
 
-                        Text(self.selectedFileIsVideo ? "Video file" : "Audio file")
+                        Text(PichiLocalization.text(self.selectedFileIsVideo ? "Video file" : "Audio file"))
                             .font(self.theme.typography.caption)
                             .foregroundColor(.secondary)
                     }
@@ -252,11 +256,11 @@ struct FileTranscriptionView: View {
                                 self.selectedFileURL = nil
                                 self.transcriptionService.reset()
                             }) {
-                                Label("Remove", systemImage: "xmark")
+                                Label("Remove file", systemImage: "xmark")
                             }
                             .fluidGlassAction()
                             .disabled(self.transcriptionService.isTranscribing)
-                            .help(self.transcriptionService.isTranscribing ? "Wait for transcription to finish" : "Remove file")
+                            .help(PichiLocalization.text(self.transcriptionService.isTranscribing ? "Wait for transcription to finish" : "Remove file"))
                             Button(action: {
                                 Task {
                                     await self.transcribeFile()
@@ -264,7 +268,7 @@ struct FileTranscriptionView: View {
                             }) {
                                 HStack {
                                     Image(systemName: "waveform")
-                                    Text(self.transcriptionService.isTranscribing ? "Transcribing…" : "Transcribe file")
+                                    Text(PichiLocalization.text(self.transcriptionService.isTranscribing ? "Transcribing…" : "Transcribe file"))
                                 }
                             }
                             .fluidGlassAction(prominent: true)
@@ -272,11 +276,11 @@ struct FileTranscriptionView: View {
                                 self.transcriptionService.isTranscribing ||
                                     self.conflictingActivity != nil
                             )
-                            .help(
+                            .help(PichiLocalization.text(
                                 self.conflictingActivity != nil
                                     ? "Wait for the active transcription to finish"
                                     : "Transcribe the selected file"
-                            )
+                            ))
                         }
                     }
                 }
@@ -298,16 +302,16 @@ struct FileTranscriptionView: View {
                                 Text("Label speakers")
                                     .font(self.theme.typography.bodySmall)
 
-                                Text(self.selectedFileIsVideo
+                                Text(PichiLocalization.text(self.selectedFileIsVideo
                                     ? "Available for audio files only"
-                                    : "Identify who said what (downloads speaker models on first use)")
+                                    : "Identify who said what (downloads speaker models on first use)"))
                                     .font(self.theme.typography.caption)
                                     .foregroundColor(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .toggleStyle(.switch)
-                        .accessibilityLabel("Label speakers")
+                        .accessibilityLabel(PichiLocalization.text("Label speakers"))
                         .disabled(self.selectedFileIsVideo || self.transcriptionService.isTranscribing)
 
                         if self.settings.fileTranscriptionSpeakerLabelsEnabled, !self.selectedFileIsVideo {
@@ -319,7 +323,7 @@ struct FileTranscriptionView: View {
 
                                 FluidDropdownPicker(
                                     "Number of speakers",
-                                    selectedTitle: self.settings.fileTranscriptionExpectedSpeakerCount == 0 ? "Auto" : String(self.settings.fileTranscriptionExpectedSpeakerCount),
+                                    selectedTitle: self.settings.fileTranscriptionExpectedSpeakerCount == 0 ? PichiLocalization.text("Auto") : String(self.settings.fileTranscriptionExpectedSpeakerCount),
                                     selection: self.$settings.fileTranscriptionExpectedSpeakerCount
                                 ) {
                                     Text("Auto").tag(0)
@@ -351,7 +355,7 @@ struct FileTranscriptionView: View {
                         .font(self.theme.typography.titleIcon)
                         .foregroundStyle(self.theme.palette.accent)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text(self.isDropTargeted ? "Drop to select file" : "Transcribe a file")
+                        Text(PichiLocalization.text(self.isDropTargeted ? "Drop to select file" : "Transcribe a file"))
                             .font(self.theme.typography.sectionTitle)
                         Text("Drop audio or video here, or choose a file.")
                             .font(self.theme.typography.bodySmall)
@@ -366,7 +370,7 @@ struct FileTranscriptionView: View {
                 .frame(maxWidth: .infinity)
                 .padding(self.theme.metrics.spacing.lg)
                 .contentShape(Rectangle())
-                .help(FileTranscriptionService.supportedFormatsDescription)
+                .help(PichiLocalization.text(FileTranscriptionService.supportedFormatsDescription))
                 .background(
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
                         .fill(self.theme.palette.cardBackground)
@@ -415,7 +419,7 @@ struct FileTranscriptionView: View {
                     .controlSize(.small)
                     .fixedSize()
 
-                Text(self.transcriptionService.currentStatus)
+                Text(self.transcriptionService.status.text(language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian))
                     .font(self.theme.typography.bodySmall)
                     .foregroundColor(.secondary)
             }
@@ -480,10 +484,10 @@ struct FileTranscriptionView: View {
                 .onEnded { _ in self.splitterDragStart = nil }
         )
         .simultaneousGesture(TapGesture(count: 2).onEnded { self.transcriptListWidth = 320 })
-        .help("Drag to resize panes. Double-click to reset.")
+        .help(PichiLocalization.text("Drag to resize panes. Double-click to reset."))
         .accessibilityElement()
-        .accessibilityLabel("Resize transcript panes")
-        .accessibilityValue("File list width \(Int(width)) points")
+        .accessibilityLabel(PichiLocalization.text("Resize transcript panes"))
+        .accessibilityValue(PichiLocalization.format("File list width %lld points", Int(width)))
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: self.transcriptListWidth = min(width + 40, maximum)
@@ -516,13 +520,13 @@ struct FileTranscriptionView: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
                 TextField("Search transcripts…", text: self.$searchQuery)
                     .textFieldStyle(.plain)
-                    .accessibilityLabel("Search filenames and transcript text")
+                    .accessibilityLabel(PichiLocalization.text("Search filenames and transcript text"))
                 if !self.searchQuery.isEmpty {
                     Button { self.searchQuery = "" } label: {
                         Image(systemName: "xmark.circle.fill")
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Clear search")
+                    .accessibilityLabel(PichiLocalization.text("Clear search"))
                 }
             }
             .font(self.theme.typography.bodySmall)
@@ -534,9 +538,9 @@ struct FileTranscriptionView: View {
 
             if self.filteredEntries.isEmpty {
                 VStack(spacing: self.theme.metrics.spacing.sm) {
-                    Text(self.searchQuery.isEmpty ? "No transcripts yet" : "No matching transcripts")
+                    Text(PichiLocalization.text(self.searchQuery.isEmpty ? "No transcripts yet" : "No matching transcripts"))
                         .font(self.theme.typography.bodySmallStrong)
-                    Text(self.searchQuery.isEmpty ? "Transcribe a file to start your library." : "Try a filename or words from the transcript.")
+                    Text(PichiLocalization.text(self.searchQuery.isEmpty ? "Transcribe a file to start your library." : "Try a filename or words from the transcript."))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -616,8 +620,8 @@ struct FileTranscriptionView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Copy transcript")
-            .accessibilityLabel("Copy \(entry.displayTitle)")
+            .help(PichiLocalization.text("Copy transcript"))
+            .accessibilityLabel(PichiLocalization.format("Copy %@", entry.displayTitle))
             .padding(.trailing, self.theme.metrics.spacing.sm)
         }
         .background(
@@ -636,7 +640,7 @@ struct FileTranscriptionView: View {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(self.theme.typography.titleIcon)
                 .foregroundStyle(self.theme.palette.secondaryText)
-            Text(self.searchQuery.isEmpty ? "Your transcript appears here" : "No matching transcript")
+            Text(PichiLocalization.text(self.searchQuery.isEmpty ? "Your transcript appears here" : "No matching transcript"))
                 .font(self.theme.typography.sectionTitle)
             Text("Select a file on the left to read, copy, or export its transcript.")
                 .font(self.theme.typography.bodySmall)
@@ -676,7 +680,7 @@ struct FileTranscriptionView: View {
                         .fluidGlassAction(prominent: true)
                         Menu {
                             ForEach(ExportFormat.allCases, id: \.self) { format in
-                                Button(format.rawValue) {
+                                Button(PichiLocalization.text(format.rawValue)) {
                                     self.exportFormat = format
                                     self.exportResult = entry.toTranscriptionResult()
                                     self.showingExportDialog = true
@@ -691,8 +695,8 @@ struct FileTranscriptionView: View {
                                 .foregroundStyle(.red)
                         }
                         .fluidGlassAction()
-                        .help("Delete transcript")
-                        .accessibilityLabel("Delete transcript")
+                        .help(PichiLocalization.text("Delete transcript"))
+                        .accessibilityLabel(PichiLocalization.text("Delete transcript"))
                         Spacer(minLength: 0)
                     }
                 }
@@ -739,6 +743,17 @@ struct FileTranscriptionView: View {
             }
         }
         .background(self.theme.palette.windowBackground)
+    }
+
+    private func metadata(for entry: FileTranscriptionEntry) -> RowMetadata {
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .abbreviated
+        relative.locale = self.interfaceLocale
+        return RowMetadata(
+            preview: entry.previewText,
+            relativeDate: relative.localizedString(for: entry.timestamp, relativeTo: Date()),
+            fullDate: entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))
+        )
     }
 
     // MARK: - Error Card

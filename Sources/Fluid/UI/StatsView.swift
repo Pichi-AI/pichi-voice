@@ -58,7 +58,7 @@ struct StatsView: View {
         .fluidPageActions {
             Button("Share my stats", systemImage: "square.and.arrow.up") { self.showShareSheet = true }
                 .disabled(self.statsStore.snapshot == nil)
-                .help("Make an image of your stats to post or send")
+                .help(PichiLocalization.text("Make an image of your stats to post or send"))
         }
         .sheet(isPresented: self.$showShareSheet) {
             StatsShareSheet(content: self.shareContent) { self.showShareSheet = false }
@@ -196,7 +196,7 @@ struct StatsView: View {
                         .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
                         .foregroundStyle(self.stats.currentStreak > 0 ? self.theme.palette.warning : .primary)
 
-                    Text(self.stats.currentStreak == 1 ? "day" : "days")
+                    Text(PichiLocalization.text(self.stats.currentStreak == 1 ? "day" : "days"))
                         .font(.fluidSystem(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
@@ -217,7 +217,7 @@ struct StatsView: View {
                     .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
 
-                Text(self.stats.fluidFixedWords == 0 ? "Words fixed by Smart mode show up here" : "words fixed for you by Smart mode")
+                Text(PichiLocalization.text(self.stats.fluidFixedWords == 0 ? "Words fixed by Smart mode show up here" : "words fixed for you by Smart mode"))
                     .font(.fluidSystem(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -303,7 +303,7 @@ private struct StatCard<Content: View>: View {
     var body: some View {
         ThemedCard(style: .standard, padding: 16, hoverEffect: false) {
             VStack(alignment: .leading, spacing: 10) {
-                Label(self.title, systemImage: self.icon)
+                Label(AppBrand.text(self.title), systemImage: self.icon)
                     .font(.fluidSystem(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
 

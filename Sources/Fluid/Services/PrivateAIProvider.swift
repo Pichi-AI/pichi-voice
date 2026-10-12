@@ -493,11 +493,11 @@ private struct UnavailablePrivateAIIntegrationProvider: PrivateAIIntegrationProv
     var modelDirectoryURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?
-            .appendingPathComponent("FluidVoice", isDirectory: true)
+            .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
             .appendingPathComponent(PrivateAIProviderFeature.shared.modelDirectoryName, isDirectory: true)
             .appendingPathComponent("Models", isDirectory: true)
             ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("FluidVoice", isDirectory: true)
+            .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
             .appendingPathComponent(PrivateAIProviderFeature.shared.modelDirectoryName, isDirectory: true)
             .appendingPathComponent("Models", isDirectory: true)
     }

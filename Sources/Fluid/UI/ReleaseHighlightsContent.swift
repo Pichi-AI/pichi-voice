@@ -24,15 +24,15 @@ struct ReleaseHighlightsContent {
         Self(
             release: "1.6.10",
             title: "Say hello to what’s new.",
-            subtitle: "Three new ways to make FluidVoice yours.",
+            subtitle: AppBrand.text("Three new ways to make FluidVoice yours."),
             features: [
                 Feature(
                     id: "fluidmeet",
                     preview: .meeting,
-                    eyebrow: "MEETINGS, MEET FLUID",
-                    title: "Introducing FluidMeet",
+                    eyebrow: "YOUR MEETINGS, ORGANIZED",
+                    title: AppBrand.text("Introducing FluidMeet"),
                     detail: "Stay in the conversation. Local recording, live captions, and AI summaries.",
-                    action: "Open FluidMeet",
+                    action: AppBrand.text("Open FluidMeet"),
                     destination: .meetings
                 ),
                 Feature(

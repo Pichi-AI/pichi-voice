@@ -1,0 +1,154 @@
+import Foundation
+
+public struct GigaAMWordTiming: Sendable, Equatable {
+    public let text: String
+    public let start: TimeInterval
+    public let end: TimeInterval
+    public let confidence: Float
+
+    public init(text: String, start: TimeInterval, end: TimeInterval, confidence: Float) {
+        self.text = text
+        self.start = start
+        self.end = end
+        self.confidence = confidence
+    }
+}
+
+public struct GigaAMTranscript: Sendable {
+    public let text: String
+    public let confidence: Float
+    /// Approximate CTC emission spans at 40 ms resolution, not forced alignment.
+    public let words: [GigaAMWordTiming]
+    public let endOfUtteranceProbability: Float?
+    public let processingDuration: TimeInterval
+
+    public init(text: String, confidence: Float, words: [GigaAMWordTiming], endOfUtteranceProbability: Float?, processingDuration: TimeInterval) {
+        self.text = text
+        self.confidence = confidence
+        self.words = words
+        self.endOfUtteranceProbability = endOfUtteranceProbability
+        self.processingDuration = processingDuration
+    }
+}
+
+struct GigaAMVocabulary: Sendable {
+    let tokens: [String]
+    let blankID: Int
+    let unknownID: Int?
+    let subword: Bool
+
+    static let russianCharacters = GigaAMVocabulary(
+        tokens: [" "] + (0..<32).map { String(UnicodeScalar(0x0430 + $0)!) } + ["<blk>"],
+        blankID: 33,
+        unknownID: nil,
+        subword: false
+    )
+
+    init(tokens: [String], blankID: Int, unknownID: Int?, subword: Bool) {
+        self.tokens = tokens
+        self.blankID = blankID
+        self.unknownID = unknownID
+        self.subword = subword
+    }
+
+    init(contents: String) throws {
+        var entries: [Int: String] = [:]
+        for line in contents.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let separator = line.lastIndex(of: " "),
+                  let id = Int(line[line.index(after: separator)...]),
+                  id >= 0, id < 65_536, entries[id] == nil else {
+                throw GigaAMError.invalidVocabulary
+            }
+            entries[id] = String(line[..<separator])
+        }
+        guard !entries.isEmpty,
+              let maximum = entries.keys.max(), entries.count == maximum + 1 else {
+            throw GigaAMError.invalidVocabulary
+        }
+        let tokens = (0...maximum).map { entries[$0]! }
+        guard let blank = tokens.firstIndex(of: "<blk>") else { throw GigaAMError.invalidVocabulary }
+        self.init(tokens: tokens, blankID: blank, unknownID: tokens.firstIndex(of: "<unk>"), subword: tokens.contains { $0.contains("▁") })
+    }
+}
+
+struct GigaAMCTC {
+    static let frameDuration: TimeInterval = 0.04
+
+    static func decode(logProbabilities: [Float], frameCount: Int, vocabulary: GigaAMVocabulary, audioDuration: TimeInterval) throws -> [GigaAMWordTiming] {
+        let width = vocabulary.tokens.count
+        guard frameCount >= 0, logProbabilities.count == frameCount * width else { throw GigaAMError.invalidOutput }
+        struct Token {
+            let piece: String
+            let startFrame: Int
+            var endFrame: Int
+            var probability: Float
+        }
+        var tokens: [Token] = []
+        var previous = -1
+        for frame in 0..<frameCount {
+            let offset = frame * width
+            var best = 0
+            for index in 1..<width where logProbabilities[offset + index] > logProbabilities[offset + best] {
+                best = index
+            }
+            let probability = min(1, max(0, exp(logProbabilities[offset + best])))
+            if best != vocabulary.blankID && best != vocabulary.unknownID {
+                if best != previous {
+                    tokens.append(Token(piece: vocabulary.tokens[best], startFrame: frame, endFrame: frame, probability: probability))
+                } else if !tokens.isEmpty {
+                    tokens[tokens.count - 1].endFrame = frame
+                    tokens[tokens.count - 1].probability = max(tokens[tokens.count - 1].probability, probability)
+                }
+            }
+            previous = best
+        }
+        var words: [GigaAMWordTiming] = []
+        var currentText = ""
+        var start = 0.0
+        var end = 0.0
+        var probabilities: [Float] = []
+        func flush() {
+            guard !currentText.isEmpty else { return }
+            words.append(GigaAMWordTiming(text: currentText, start: min(start, audioDuration), end: min(max(start + Self.frameDuration, end), audioDuration), confidence: probabilities.reduce(0, +) / Float(max(1, probabilities.count))))
+            currentText = ""
+            probabilities = []
+        }
+        for token in tokens {
+            let wordBoundary = vocabulary.subword ? token.piece.hasPrefix("▁") : token.piece == " "
+            if wordBoundary { flush() }
+            let piece = vocabulary.subword ? token.piece.replacingOccurrences(of: "▁", with: " ") : token.piece
+            let body = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { continue }
+            if currentText.isEmpty { start = Double(token.startFrame) * Self.frameDuration }
+            currentText += body
+            end = Double(token.endFrame + 1) * Self.frameDuration
+            probabilities.append(token.probability)
+        }
+        flush()
+        return words
+    }
+}
+
+public enum GigaAMError: LocalizedError {
+    case frontendInitialization
+    case invalidVocabulary
+    case invalidOutput
+    case invalidAudio
+    case missingModels(URL)
+    case checksumMismatch(String)
+    case notPrepared
+    case incompatibleModel
+
+    public var errorDescription: String? {
+        switch self {
+        case .frontendInitialization: return "GigaAM audio frontend could not initialize."
+        case .invalidVocabulary: return "GigaAM vocabulary is invalid or incomplete."
+        case .invalidOutput: return "GigaAM returned an incompatible tensor."
+        case .invalidAudio: return "GigaAM expects finite 16 kHz mono PCM samples."
+        case .missingModels(let directory): return "Import the Pichi GigaAM model folder in Settings. Expected model files in \(directory.path)."
+        case .checksumMismatch(let file): return "GigaAM checksum verification failed for \(file)."
+        case .notPrepared: return "GigaAM is not loaded."
+        case .incompatibleModel: return "This ONNX export is not a supported GigaAM v3 CTC model."
+        }
+    }
+}

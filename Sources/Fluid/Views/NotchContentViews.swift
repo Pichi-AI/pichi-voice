@@ -85,7 +85,7 @@ struct SpokenSendIndicatorView: View {
         Image(systemName: name)
             .font(.fluidSystem(size: max(6, self.size * 0.46), weight: .semibold))
             .foregroundStyle(color)
-            .accessibilityLabel(accessibilityLabel)
+            .accessibilityLabel(PichiLocalization.text(accessibilityLabel))
     }
 }
 
@@ -544,9 +544,9 @@ struct NotchExpandedView: View {
 
     private var processingLabel: String {
         switch self.contentState.mode {
-        case .dictation: return "Transcribing"
-        case .edit, .rewrite, .write: return "Thinking"
-        case .command: return "Working"
+        case .dictation: return PichiLocalization.text("Transcribing")
+        case .edit, .rewrite, .write: return PichiLocalization.text("Thinking")
+        case .command: return PichiLocalization.text("Working")
         }
     }
 
@@ -566,7 +566,7 @@ struct NotchExpandedView: View {
     private var processingStatusText: String {
         let t = self.contentState.transcriptionText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard Self.transientOverlayStatusTexts.contains(t) else { return self.processingLabel }
-        return t
+        return PichiLocalization.text(t)
     }
 
     private var hasTranscription: Bool {
@@ -636,7 +636,7 @@ struct NotchExpandedView: View {
     }
 
     private var selectedPromptLabel: String {
-        guard let activePromptMode else { return "N/A" }
+        guard let activePromptMode else { return PichiLocalization.text("N/A") }
         if activePromptMode.normalized == .dictate {
             if let label = self.contentState.stopSnapshotLabel { return label }
             return self.settings.dictationOverlayLabel(
@@ -649,9 +649,9 @@ struct NotchExpandedView: View {
             appBundleID: self.promptResolutionBundleID
         ) {
             let name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? "Untitled" : name
+            return name.isEmpty ? PichiLocalization.text("Untitled") : name
         }
-        return "Default"
+        return PichiLocalization.text("Default")
     }
 
     private var compactPromptLabel: String {
@@ -827,7 +827,7 @@ struct NotchExpandedView: View {
 
                     if promptMode.normalized == .dictate {
                         self.promptMenuRow(
-                            "Basic",
+                            PichiLocalization.text("Basic"),
                             rowID: "off",
                             isSelected: {
                                 let selection = self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID)
@@ -877,7 +877,7 @@ struct NotchExpandedView: View {
                                 ? (self.settings.resolvedDictationPromptSelection(for: activeDictationSlot, appBundleID: self.promptResolutionBundleID) == .profile(profile.id))
                                 : (self.settings.selectedPromptID(for: promptMode) == profile.id)
                             self.promptMenuRow(
-                                profile.name.isEmpty ? "Untitled" : profile.name,
+                                profile.name.isEmpty ? PichiLocalization.text("Untitled") : profile.name,
                                 rowID: profile.id,
                                 isSelected: isSelected
                             ) {
@@ -1004,6 +1004,7 @@ struct NotchExpandedView: View {
         .animation(.spring(response: 0.25, dampingFraction: 0.8), value: self.hasTranscription)
         .animation(.easeInOut(duration: 0.2), value: self.contentState.mode)
         .animation(.easeInOut(duration: 0.25), value: self.contentState.isProcessing)
+        .environment(\.locale, PichiLocalization.locale)
     }
 
     private var notchBodyContent: some View {
@@ -1037,7 +1038,7 @@ struct NotchExpandedView: View {
 
             if self.contentState.isTextDeliveryFailureVisible && !self.contentState.isProcessing {
                 HStack(spacing: 6) {
-                    Text(self.contentState.textDeliveryFailureMessage)
+                    Text(PichiLocalization.text(self.contentState.textDeliveryFailureMessage))
                         .font(.fluidSystem(size: 10, weight: .semibold))
                         .foregroundStyle(Color.orange.opacity(0.9))
                         .lineLimit(1)
@@ -1053,7 +1054,7 @@ struct NotchExpandedView: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
-                    .help("Copy transcript")
+                    .help(PichiLocalization.text("Copy transcript"))
 
                     Button {
                         let transcript = self.contentState.textDeliveryFailureTranscript
@@ -1065,7 +1066,7 @@ struct NotchExpandedView: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
-                    .help("Paste last transcript")
+                    .help(PichiLocalization.text("Paste last transcript"))
 
                     Button {
                         self.contentState.clearTextDeliveryFailure()
@@ -1076,14 +1077,14 @@ struct NotchExpandedView: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
-                    .help("Dismiss")
+                    .help(PichiLocalization.text("Dismiss"))
                 }
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: self.previewMaxWidth, alignment: .leading)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             } else if self.contentState.isAIProcessingFailureVisible && !self.contentState.isProcessing {
                 HStack(spacing: 6) {
-                    Text(self.contentState.aiProcessingFailureMessage)
+                    Text(PichiLocalization.text(self.contentState.aiProcessingFailureMessage))
                         .font(.fluidSystem(size: 10, weight: .semibold))
                         .foregroundStyle(
                             self.contentState.canRetryAIProcessingFailure
@@ -1105,7 +1106,7 @@ struct NotchExpandedView: View {
                                 .frame(width: 16, height: 16)
                         }
                         .buttonStyle(.plain)
-                        .help("Try again")
+                        .help(PichiLocalization.text("Try again"))
                     }
 
                     Button {
@@ -1117,7 +1118,7 @@ struct NotchExpandedView: View {
                             .frame(width: 16, height: 16)
                     }
                     .buttonStyle(.plain)
-                    .help("Dismiss")
+                    .help(PichiLocalization.text("Dismiss"))
                 }
                 .foregroundStyle(.white.opacity(0.9))
                 .frame(width: self.previewMaxWidth, alignment: .leading)
@@ -1478,6 +1479,7 @@ struct NotchCommandOutputExpandedView: View {
             self.inputArea
         }
         .frame(width: 380, height: self.dynamicHeight)
+        .environment(\.locale, PichiLocalization.locale)
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: self.contentState.commandConversationHistory.count)
@@ -1513,7 +1515,7 @@ struct NotchCommandOutputExpandedView: View {
                         .font(.fluidSystem(size: 11, weight: .medium))
                         .foregroundStyle(self.commandRed)
                 } else if self.contentState.isCommandProcessing {
-                    ShimmerText(text: "Working...", color: self.commandRed)
+                    ShimmerText(text: PichiLocalization.text("Working..."), color: self.commandRed)
                 } else {
                     Text("Command")
                         .font(.fluidSystem(size: 11, weight: .medium))
@@ -1540,7 +1542,7 @@ struct NotchCommandOutputExpandedView: View {
                 .contentShape(Circle())
                 .onHover { self.isHoveringNewChat = $0 }
                 .disabled(self.contentState.isCommandProcessing)
-                .help("New chat")
+                .help(PichiLocalization.text("New chat"))
 
                 // Recent Chats Menu
                 Menu {
@@ -1587,7 +1589,7 @@ struct NotchCommandOutputExpandedView: View {
                 .buttonStyle(.plain)
                 .frame(width: 22, height: 22)
                 .onHover { self.isHoveringRecent = $0 }
-                .help("Recent chats")
+                .help(PichiLocalization.text("Recent chats"))
 
                 // Delete Chat Button - deletes the current chat entirely
                 Button(action: self.onClearChat) {
@@ -1604,7 +1606,7 @@ struct NotchCommandOutputExpandedView: View {
                 .contentShape(Circle())
                 .onHover { self.isHoveringClear = $0 }
                 .disabled(self.contentState.isCommandProcessing)
-                .help("Delete chat")
+                .help(PichiLocalization.text("Delete chat"))
 
                 // Vertical divider
                 Rectangle()
@@ -1626,7 +1628,7 @@ struct NotchCommandOutputExpandedView: View {
                 .buttonStyle(.plain)
                 .contentShape(Circle())
                 .onHover { self.isHoveringDismiss = $0 }
-                .help("Close (Escape)")
+                .help(PichiLocalization.text("Close (Escape)"))
             }
         }
         .padding(.horizontal, 12)

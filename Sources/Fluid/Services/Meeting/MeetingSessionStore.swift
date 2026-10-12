@@ -52,7 +52,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             ).first ?? fileManager.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
             self.rootDirectory = applicationSupport
-                .appendingPathComponent("FluidVoice", isDirectory: true)
+                .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
                 .appendingPathComponent("Meetings", isDirectory: true)
         }
 

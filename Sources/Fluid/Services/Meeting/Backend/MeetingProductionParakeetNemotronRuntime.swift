@@ -11,7 +11,7 @@ import FluidAudio
 // - Nemotron diarization: one shared weight load per attempt, one *fresh* `SortformerDiarizer`
 //   state per track (`initialize(models:)` re-creates streaming state), released before the ASR
 //   phase begins — the loaded-set sequence is none -> Nemotron -> drained -> Parakeet -> drained.
-// - Parakeet ASR: one `ASRService.withPreparedMeetingASR` scope per attempt, with the heavy body
+// - Prepared-provider ASR: one `ASRService.withPreparedMeetingASR` scope per attempt, with the heavy body
 //   bounced off the main actor so materialization and inference never block the UI.
 // - Optional local WeSpeaker encoding between those phases, using bounded voice excerpts.
 //
@@ -92,7 +92,9 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
     }
 }
 
-/// The prepared Parakeet session. Both references are only ever exercised through ASRService's
+#endif
+
+/// The prepared provider session. The inherited interface name is retained; both references use ASRService's
 /// own main-actor scope and meeting executor, never from the caller's context directly.
 private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession, @unchecked Sendable {
     let asrService: ASRService
@@ -120,12 +122,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     /// Runs between Nemotron and ASR, so the additional encoder never overlaps their residency.
     /// Only short, admitted single-speaker excerpts reach this local model; no audio is uploaded.
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+        #if arch(arm64)
         guard !samples.isEmpty else { return [] }
         try Task.checkCancellation()
         let models = try await DownloadUtils.loadModels(
             .diarizer,
             modelNames: [ModelNames.Diarizer.embeddingFile],
-            directory: DiarizerModels.defaultModelsDirectory().deletingLastPathComponent(),
+            directory: AppBrand.modelsDirectory,
             computeUnits: .cpuAndNeuralEngine
         )
         try Task.checkCancellation()
@@ -158,12 +161,16 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             }
         }
         return profiles
+        #else
+        return []
+        #endif
     }
 
     func withNemotronDiarization(
         artifact: MeetingNemotronModelArtifact,
         _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult
     ) async throws -> MeetingNemotronPhaseResult {
+        #if arch(arm64)
         // Recheck at open time: the artifact located at plan/readiness time is validated again
         // before CoreML touches it (plan §5).
         let artifact = try self.modelLocator.recheck(artifact)
@@ -193,6 +200,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             factory.cleanup()
             throw error
         }
+        #else
+        throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
+        #endif
     }
 
     func withPreparedASR(
@@ -218,31 +228,3 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         }
     }
 }
-
-#else
-
-/// Non-Apple-Silicon stub: the FluidAudio runtime stack is arm64-only in this app, so the
-/// capability refuses rather than partially working.
-final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronRunning {
-    init(
-        asrServiceProvider _: @escaping @MainActor () -> ASRService,
-        modelLocator _: any MeetingNemotronModelLocating
-    ) {}
-
-    func withNemotronDiarization(
-        artifact _: MeetingNemotronModelArtifact,
-        _: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult
-    ) async throws -> MeetingNemotronPhaseResult {
-        throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
-    }
-
-    func withPreparedASR(
-        attemptID _: UUID,
-        configuration _: MeetingFinalProcessingConfiguration,
-        body _: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
-    ) async throws -> MeetingParakeetPhaseResult {
-        throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
-    }
-}
-
-#endif

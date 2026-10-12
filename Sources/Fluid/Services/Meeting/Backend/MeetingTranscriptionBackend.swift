@@ -247,6 +247,9 @@ struct MeetingBackendHostContext {
 @MainActor
 protocol MeetingTranscriptionBackend: AnyObject {
     var descriptor: MeetingBackendDescriptor { get }
+    /// A canonical backend explicitly opts into an echo-evidence source; unknown backends remain
+    /// fail-closed. This avoids inferring signal capabilities from a model identifier.
+    var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { get }
 
     /// Validates compatibility and freezes an immutable plan. Runs before any model load.
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan
@@ -259,6 +262,10 @@ protocol MeetingTranscriptionBackend: AnyObject {
         manifest: MeetingAnalysisManifest?,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingBackendOutcome
+}
+
+extension MeetingTranscriptionBackend {
+    var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { nil }
 }
 
 nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {

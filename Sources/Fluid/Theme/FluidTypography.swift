@@ -6,6 +6,7 @@ import SwiftUI
 /// PostScript font name. `.newYork` uses Apple’s native serif at every size and weight.
 /// Invalid names fall back to the original system design.
 enum FluidTypography {
+    enum Role { case body, title }
     enum Family {
         case system
         case newYork
@@ -38,19 +39,34 @@ enum FluidTypography {
     }
 
     static var overridesStandard: Bool {
-        if case .system = self.standard { return false }
+        self.overridesStandard(style: AppBrand.package.style)
+    }
+
+    static func overridesStandard(style: BrandStyle?) -> Bool {
+        if case .system = self.standard { return self.systemDesign(for: .default, style: style) != .default }
         return true
     }
 
-    static func systemDesign(for design: Font.Design) -> Font.Design {
+    /// Package lookup uses the existing decoded package cache, never file or glyph lookup.
+    /// Rounded metrics, monospaced code and native system symbols retain their own roles.
+    static func systemDesign(for design: Font.Design, role: Role = .body, style: BrandStyle? = AppBrand.package.style) -> Font.Design {
         let family: Family = switch design {
         case .serif: self.serif
         case .rounded: self.rounded
         case .monospaced: self.monospace
         default: self.standard
         }
-        if case .newYork = family { return .serif }
-        return design
+        let originalDesign: Font.Design = if case .newYork = family { .serif } else { design }
+        if design == .monospaced || design == .rounded { return originalDesign }
+        let configured = role == .title || design == .serif ? style?.titleFontDesign : style?.bodyFontDesign
+        if let configured {
+            return switch configured {
+            case .sans: .default
+            case .serif: .serif
+            case .rounded: .rounded
+            }
+        }
+        return originalDesign
     }
 
     static func pointSize(for style: Font.TextStyle) -> CGFloat {
@@ -72,42 +88,48 @@ enum FluidTypography {
 
 extension Font {
     /// Family indirection only: default size, weight, and design remain native.
-    static func fluidSystem(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+    static func fluidSystem(size: CGFloat, weight: Font.Weight = .regular, design: Font.Design = .default,
+                            role: FluidTypography.Role = .body, style: BrandStyle? = AppBrand.package.style) -> Font {
         guard let name = FluidTypography.name(for: design) else {
-            return .system(size: size, weight: weight, design: FluidTypography.systemDesign(for: design))
+            return .system(size: size, weight: weight, design: FluidTypography.systemDesign(for: design, role: role, style: style))
         }
         return .custom(name, fixedSize: size).weight(weight)
     }
 
-    static func fluidSystem(_ style: Font.TextStyle, design: Font.Design = .default) -> Font {
+    static func fluidSystem(_ textStyle: Font.TextStyle, design: Font.Design = .default, style: BrandStyle? = AppBrand.package.style) -> Font {
+        let role: FluidTypography.Role = [.largeTitle, .title, .title2, .title3].contains(textStyle) ? .title : .body
         guard let name = FluidTypography.name(for: design) else {
-            return .system(style, design: FluidTypography.systemDesign(for: design))
+            return .system(textStyle, design: FluidTypography.systemDesign(for: design, role: role, style: style))
         }
-        let font = Font.custom(name, size: FluidTypography.pointSize(for: style), relativeTo: style)
-        return style == .headline ? font.weight(.semibold) : font
+        let font = Font.custom(name, size: FluidTypography.pointSize(for: textStyle), relativeTo: textStyle)
+        return textStyle == .headline ? font.weight(.semibold) : font
     }
 }
 
 extension NSFont {
-    static func fluidSystemFont(ofSize size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
-        self.fluidFont(ofSize: size, weight: weight, design: .default)
+    static func fluidSystemFont(ofSize size: CGFloat, weight: NSFont.Weight = .regular,
+                                style: BrandStyle? = AppBrand.package.style) -> NSFont {
+        self.fluidFont(ofSize: size, weight: weight, design: .default, style: style)
     }
 
     static func fluidMonospacedSystemFont(ofSize size: CGFloat, weight: NSFont.Weight) -> NSFont {
         self.fluidFont(ofSize: size, weight: weight, design: .monospaced)
     }
 
-    private static func fluidFont(ofSize size: CGFloat, weight: NSFont.Weight, design: Font.Design) -> NSFont {
+    static func fluidFont(ofSize size: CGFloat, weight: NSFont.Weight, design: Font.Design,
+                          role: FluidTypography.Role = .body, style: BrandStyle? = AppBrand.package.style) -> NSFont {
         if let name = FluidTypography.name(for: design), let font = NSFont(name: name, size: size) {
             let descriptor = font.fontDescriptor.addingAttributes([.traits: [NSFontDescriptor.TraitKey.weight: weight.rawValue]])
             return NSFont(descriptor: descriptor, size: size) ?? font
         }
-        if FluidTypography.systemDesign(for: design) == .serif,
-           let descriptor = NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(.serif),
+        let resolved = FluidTypography.systemDesign(for: design, role: role, style: style)
+        if resolved == .monospaced { return .monospacedSystemFont(ofSize: size, weight: weight) }
+        let nativeDesign: NSFontDescriptor.SystemDesign = resolved == .serif ? .serif : resolved == .rounded ? .rounded : .default
+        if let descriptor = NSFont.systemFont(ofSize: size, weight: weight).fontDescriptor.withDesign(nativeDesign),
            let font = NSFont(descriptor: descriptor, size: size)
         {
             return font
         }
-        return design == .monospaced ? .monospacedSystemFont(ofSize: size, weight: weight) : .systemFont(ofSize: size, weight: weight)
+        return .systemFont(ofSize: size, weight: weight)
     }
 }

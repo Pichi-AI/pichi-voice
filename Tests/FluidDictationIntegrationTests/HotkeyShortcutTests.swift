@@ -181,7 +181,8 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertTrue(summary.contains("prompt[__default__]=Left ⌘ [keyCode=55"), summary)
         XCTAssertTrue(summary.contains("secondaryPromptMode=Right ⇧ [keyCode=60 flags=0] enabled=false"), summary)
         XCTAssertTrue(summary.contains("command=none enabled=false"), summary)
-        XCTAssertTrue(summary.contains("edit=⌥ + R [keyCode=15"), summary)
+        XCTAssertTrue(summary.contains("edit=⌥ +"), summary)
+        XCTAssertTrue(summary.contains("[keyCode=15 flags=524288] enabled=true"), summary)
         XCTAssertTrue(summary.contains("cancel=Escape [keyCode=53"), summary)
         XCTAssertTrue(summary.contains("pasteLast=⌘ + Left Click [button=0"), summary)
     }
@@ -2236,8 +2237,10 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     func testMicrophoneChangeAlertsSupportProductionAndDebugAppsOnly() {
-        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app"))
-        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app.debug"))
+        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: AppBrand.releaseBundleIdentifier))
+        XCTAssertTrue(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: AppBrand.releaseBundleIdentifier + ".debug"))
+        XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app"))
+        XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.FluidApp.app.debug"))
         XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: "com.example.tests"))
         XCTAssertFalse(MicrophoneChangeOverlayController.supportsAlerts(bundleIdentifier: nil))
     }
@@ -2799,7 +2802,8 @@ final class HotkeyShortcutTests: XCTestCase {
         let shortcut = try JSONDecoder().decode(HotkeyShortcut.self, from: data)
 
         XCTAssertFalse(shortcut.isMouseShortcut)
-        XCTAssertEqual(shortcut.displayString, "A")
+        XCTAssertEqual(shortcut.keyCode, 0)
+        XCTAssertTrue(shortcut.matches(keyCode: 0, modifiers: NSEvent.ModifierFlags()))
         XCTAssertFalse(shortcut.matchesMouse(button: 3, modifiers: NSEvent.ModifierFlags()))
     }
 

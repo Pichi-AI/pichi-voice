@@ -22,12 +22,12 @@ struct StatsShareContent {
     var headline: String {
         if self.pagesEquivalent >= 300 {
             let novels = Double(self.pagesEquivalent) / 300
-            return String(format: "That's about %.1f novels, spoken instead of typed.", novels)
+            return PichiLocalization.format("That's about %.1f novels, spoken instead of typed.", novels)
         }
         if self.pagesEquivalent >= 2 {
-            return "That's about \(self.pagesEquivalent) book pages, spoken instead of typed."
+            return PichiLocalization.format("That's about %lld book pages, spoken instead of typed.", self.pagesEquivalent)
         }
-        return "Spoken instead of typed."
+        return PichiLocalization.text("Spoken instead of typed.")
     }
 }
 
@@ -93,6 +93,7 @@ enum StatsShareStat: String, CaseIterable, Identifiable {
 
 /// Fixed-size artwork rendered to an image; sized for a 1200×675 social preview at 2×.
 struct StatsShareCard: View {
+    @Environment(\.locale) private var interfaceLocale
     static let size = CGSize(width: 600, height: 337.5)
 
     let content: StatsShareContent
@@ -103,32 +104,32 @@ struct StatsShareCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(nsImage: NSImage(named: "AppIcon") ?? NSApp.applicationIconImage)
+                Image(nsImage: PichiBrandMark.appIcon)
                     .resizable()
                     .frame(width: 22, height: 22)
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                Text("FluidVoice")
-                    .font(.system(size: 14, weight: .semibold))
+                Text(AppBrand.text("FluidVoice"))
+                    .font(.fluidSystem(size: 14, weight: .semibold))
                 Spacer()
-                Text(Date.now.formatted(.dateTime.month(.wide).year()))
-                    .font(.system(size: 12, weight: .medium))
+                Text(Date.now.formatted(.dateTime.month(.wide).year().locale(self.interfaceLocale)))
+                    .font(.fluidSystem(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.5))
             }
 
             Spacer(minLength: 0)
 
             Text(self.content.totalWords.formatted())
-                .font(.system(size: 76, weight: .bold, design: .rounded))
+                .font(.fluidSystem(size: 76, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(
                     LinearGradient(colors: [.white, self.accent.opacity(0.85)], startPoint: .topLeading, endPoint: .bottomTrailing)
                 )
             Text("words dictated")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.fluidSystem(size: 17, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
                 .padding(.top, -6)
             Text(self.content.headline)
-                .font(.system(size: 13, weight: .medium))
+                .font(.fluidSystem(size: 13, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
                 .padding(.top, 6)
 
@@ -170,7 +171,7 @@ struct StatsShareCard: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(stat.value(in: self.content))
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.fluidSystem(size: 22, weight: .bold, design: .rounded))
                     .monospacedDigit()
                 if stat == .streak, let flame = self.streakFlame {
                     Image(systemName: "flame.fill")
@@ -178,8 +179,8 @@ struct StatsShareCard: View {
                         .foregroundStyle(flame.color)
                 }
             }
-            Text(stat.label)
-                .font(.system(size: 11, weight: .medium))
+            Text(PichiLocalization.text(stat.label))
+                .font(.fluidSystem(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
         }
         .fixedSize()
@@ -231,7 +232,7 @@ struct StatsShareSheet: View {
     }
 
     private var image: NSImage? {
-        let renderer = ImageRenderer(content: self.card)
+        let renderer = ImageRenderer(content: self.card.environment(\.locale, PichiLocalization.locale))
         renderer.scale = 2
         return renderer.nsImage
     }
@@ -240,7 +241,7 @@ struct StatsShareSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Flex your FluidVoice stats").font(self.theme.typography.sectionTitle)
+                    Text(AppBrand.text("Flex your FluidVoice stats")).font(self.theme.typography.sectionTitle)
                     Text("Post it, send it to a friend, start a streak war.")
                         .font(self.theme.typography.caption).foregroundStyle(.secondary)
                 }
@@ -272,13 +273,13 @@ struct StatsShareSheet: View {
                 if let image {
                     ShareLink(
                         item: Image(nsImage: image),
-                        preview: SharePreview("My FluidVoice stats", image: Image(nsImage: image))
+                        preview: SharePreview(AppBrand.text("My FluidVoice stats"), image: Image(nsImage: image))
                     ) {
                         Label("Share…", systemImage: "square.and.arrow.up")
                     }
                     .fluidGlassAction(prominent: true)
                 }
-                Button(self.copied ? "Copied" : "Copy image", systemImage: self.copied ? "checkmark" : "doc.on.doc", action: self.copy)
+                Button(PichiLocalization.text(self.copied ? "Copied" : "Copy image"), systemImage: self.copied ? "checkmark" : "doc.on.doc", action: self.copy)
                     .fluidGlassAction()
                 Button("Save…", systemImage: "arrow.down.to.line", action: self.save)
                     .fluidGlassAction()
@@ -296,7 +297,7 @@ struct StatsShareSheet: View {
             HStack(spacing: 5) {
                 Image(systemName: isOn ? "checkmark" : "plus")
                     .font(.fluidSystem(size: 9, weight: .bold))
-                Text(title).font(self.theme.typography.captionStrong)
+                Text(PichiLocalization.text(title)).font(self.theme.typography.captionStrong)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -339,7 +340,7 @@ struct StatsShareSheet: View {
         else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "FluidVoice stats.png"
+        panel.nameFieldStringValue = AppBrand.text("FluidVoice stats.png")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? png.write(to: url)
     }

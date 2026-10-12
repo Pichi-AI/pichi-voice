@@ -1,0 +1,5 @@
+// Override these build settings for a separately installed white-label distribution.
+// Visual runtime profiles do not change bundle identity or enable an updater.
+PICHI_PRODUCT_NAME = Pichi Voice
+PICHI_BUNDLE_IDENTIFIER = ai.pichi.voice
+PICHI_APP_ICON = PichiAppIcon
