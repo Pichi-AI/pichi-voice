@@ -11933,19 +11933,19 @@
         }
       }
     },
-    "Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default.": {
+    "Crash diagnostics are stored locally. Use Reveal Log File to find them.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Crash diagnostics are written to Library/Logs/Fluid/Fluid.log by default."
+            "value": "Crash diagnostics are stored locally. Use Reveal Log File to find them."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "По умолчанию сведения о сбоях записываются в Library/Logs/Fluid/Fluid.log."
+            "value": "Диагностика сбоев хранится локально. Чтобы найти её, нажмите «Показать файл журнала»."
           }
         }
       }

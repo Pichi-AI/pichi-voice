@@ -154,6 +154,7 @@ struct BrandProfileTests {
         precondition(AppBrand.releaseBundleIdentifier(from: "com.partner.debug.voice") == "com.partner.debug.voice")
         precondition(AppBrand.keychainService.hasPrefix(AppBrand.bundleIdentifier))
         precondition(AppBrand.modelsDirectory.path.contains(AppBrand.bundleIdentifier))
+        try self.verifyDiagnosticLogIsolation()
         precondition(!AppBrand.updatesEnabled && AppBrand.feedbackEndpoint == nil)
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://github.com/a/b", updatesEnabled: true).validate() }
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://attacker.invalid/a/b").validate() }
@@ -161,6 +162,60 @@ struct BrandProfileTests {
         try signedPolicy.validate()
         precondition(!signedPolicy.updatesAllowedForCurrentSignature, "Unsigned local tools must not enable the updater")
         print("Portable brand package: validation, atomic activation, cache, legacy migration and identity isolation passed")
+    }
+
+    static func verifyDiagnosticLogIsolation() throws {
+        let library = FileManager.default.temporaryDirectory.appendingPathComponent("log-identity-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: library) }
+        let identifiers = ["com.FluidApp.app", "ai.pichi.voice", "ai.pichi.voice.debug", "com.partner.voice"]
+        let directories = identifiers.map { AppBrand.logsDirectory(in: library, storageNamespace: $0) }
+        precondition(Set(directories).count == identifiers.count, "Installed identities must not share diagnostics")
+        for (identifier, directory) in zip(identifiers, directories) {
+            precondition(directory == library.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent(identifier, isDirectory: true))
+        }
+        // Appearance imports cannot supply a log namespace or redirect another installation.
+        let packageData = try Data(contentsOf: URL(fileURLWithPath: "Configuration/BrandExamples/sber-demo.json"))
+        let object = try JSONSerialization.jsonObject(with: packageData) as! [String: Any]
+        for forbidden in ["storageNamespace", "logDirectory", "logsDirectory"] {
+            var injected = object
+            injected[forbidden] = "com.FluidApp.app"
+            self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: injected)) }
+        }
+        precondition(AppBrand.logsDirectory(in: library, storageNamespace: AppBrand.storageNamespace)
+            == library.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent(AppBrand.bundleIdentifier, isDirectory: true))
+        // The real logger smoke test is compiled only with the existing isolated baseline mode.
+        #if FLUID_ASR_BASELINE
+        let logger = FileLogger.shared
+        let log = logger.currentLogFileURL()
+        let logDirectory = log.deletingLastPathComponent()
+        let baselineRoot = logDirectory.deletingLastPathComponent().deletingLastPathComponent()
+        precondition(baselineRoot.deletingLastPathComponent().standardizedFileURL == URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true).standardizedFileURL)
+        precondition(baselineRoot.lastPathComponent.hasPrefix("FluidASRBaseline-"))
+        precondition(logDirectory.lastPathComponent == AppBrand.storageNamespace)
+        precondition(log.lastPathComponent == "diagnostics.log")
+        defer { try? FileManager.default.removeItem(at: baselineRoot) }
+        let oldDirectory = baselineRoot.appendingPathComponent("Logs/Fluid", isDirectory: true)
+        try FileManager.default.createDirectory(at: oldDirectory, withIntermediateDirectories: true)
+        let oldLog = oldDirectory.appendingPathComponent("Fluid.log")
+        let sentinel = Data("Another installation's synthetic log\n".utf8)
+        try sentinel.write(to: oldLog)
+        let line = String(repeating: "x", count: 32_768)
+        for _ in 0..<80 { logger.appendSync(line: line) }
+        logger.append(line: "asynchronous write")
+        logger.appendSync(line: "joined queue barrier")
+        FileLogger.writeCrashLineDirect("synthetic direct crash diagnostic")
+        let current = try String(contentsOf: log, encoding: .utf8)
+        precondition(current.contains("asynchronous write") && current.contains("joined queue barrier"))
+        precondition(current.contains("synthetic direct crash diagnostic"), "Crash descriptor must follow the rotated current file")
+        let files = try FileManager.default.contentsOfDirectory(at: logDirectory, includingPropertiesForKeys: [.fileSizeKey])
+        precondition(Set(files.map(\.lastPathComponent)) == ["diagnostics.log", "diagnostics.log.1"])
+        for file in files {
+            let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize!
+            precondition(size <= 1_048_576 + line.utf8.count + 1, "The existing rotation bound includes at most one final line")
+        }
+        try self.require(try Data(contentsOf: oldLog) == sentinel)
+        print("Diagnostic log identity, isolated baseline, rotation, joined queue and direct crash writes passed")
+        #endif
     }
 
     static func png(width: Int, height: Int) throws -> Data {

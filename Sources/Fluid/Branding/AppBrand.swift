@@ -71,6 +71,11 @@ nonisolated enum AppBrand {
         identifier.hasSuffix(".debug") ? String(identifier.dropLast(".debug".count)) : identifier
     }
     static var storageNamespace: String { self.bundleIdentifier }
+    static func logsDirectory(in libraryDirectory: URL, storageNamespace: String) -> URL {
+        // The namespace is trusted bundle identity, never an imported appearance name.
+        libraryDirectory.appendingPathComponent("Logs", isDirectory: true)
+            .appendingPathComponent(storageNamespace, isDirectory: true)
+    }
     static var applicationSupportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)

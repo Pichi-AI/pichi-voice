@@ -10,8 +10,6 @@ final nonisolated class FileLogger: @unchecked Sendable {
     private let logDirectory: URL
     private let logFileURL: URL
     private let backupLogURL: URL
-    private let legacyLogFileURL: URL
-    private let legacyBackupLogURL: URL
     private let maxLogFileSize: UInt64 = 1 * 1024 * 1024 // 1 MB limit per log file
     private let maxLogFileAge: TimeInterval = 72 * 60 * 60 // Rotate every 72 hours
     private static var crashFileDescriptor: Int32 = -1
@@ -31,15 +29,12 @@ final nonisolated class FileLogger: @unchecked Sendable {
         #else
         let baseDirectory = self.fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: NSTemporaryDirectory())
         #endif
-        self.logDirectory = baseDirectory.appendingPathComponent("Logs/Fluid", isDirectory: true)
-        self.logFileURL = self.logDirectory.appendingPathComponent("Fluid.log", isDirectory: false)
-        self.backupLogURL = self.logDirectory.appendingPathComponent("Fluid.log.1", isDirectory: false)
-        self.legacyLogFileURL = self.logDirectory.appendingPathComponent("fluid.log", isDirectory: false)
-        self.legacyBackupLogURL = self.logDirectory.appendingPathComponent("fluid.log.1", isDirectory: false)
+        self.logDirectory = AppBrand.logsDirectory(in: baseDirectory, storageNamespace: AppBrand.storageNamespace)
+        self.logFileURL = self.logDirectory.appendingPathComponent("diagnostics.log", isDirectory: false)
+        self.backupLogURL = self.logDirectory.appendingPathComponent("diagnostics.log.1", isDirectory: false)
 
         self.queue.sync {
             self.createLogDirectoryIfNeeded()
-            self.migrateLegacyLogFilesIfNeeded()
             self.rotateIfNeeded(force: false)
             self.prepareCrashLogging()
             self.appendRunMetadata()
@@ -72,20 +67,6 @@ final nonisolated class FileLogger: @unchecked Sendable {
             try self.fileManager.createDirectory(at: self.logDirectory, withIntermediateDirectories: true)
         } catch {
             // If the directory cannot be created, fall back to /tmp
-        }
-    }
-
-    private func migrateLegacyLogFilesIfNeeded() {
-        if !self.fileManager.fileExists(atPath: self.logFileURL.path),
-           self.fileManager.fileExists(atPath: self.legacyLogFileURL.path)
-        {
-            try? self.fileManager.moveItem(at: self.legacyLogFileURL, to: self.logFileURL)
-        }
-
-        if !self.fileManager.fileExists(atPath: self.backupLogURL.path),
-           self.fileManager.fileExists(atPath: self.legacyBackupLogURL.path)
-        {
-            try? self.fileManager.moveItem(at: self.legacyBackupLogURL, to: self.backupLogURL)
         }
     }
 

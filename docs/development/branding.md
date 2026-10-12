@@ -57,7 +57,7 @@ The helper does not install, launch, sign, publish or overwrite an existing dist
 
 Pichi ships with app updates disabled. Enabling updates in a trusted distribution requires a single validated GitHub repository, an expected signing team and a valid current code signature matching that team. Unsigned developer builds remain disabled. The existing updater still verifies downloaded app signatures. Runtime packages cannot enable updates, redirect telemetry, change consent or submit private data to a different endpoint. Analytics is independently configured through trusted bundle/build settings; see its development documentation when enabled.
 
-The bundle ID controls UserDefaults, Application Support and provider Keychain namespaces. Existing FluidVoice data and credentials are not copied. Dependency-owned public model caches and genuine third-party model attribution remain explicit. Preserve original source copyright notices, GPL-3.0 and model licenses in every distribution.
+The bundle ID controls UserDefaults, Application Support, provider Keychain and diagnostic-log namespaces. Local diagnostics use `~/Library/Logs/<bundle identifier>/diagnostics.log`, with the existing 1 MB rotation and one backup. Debug and separately installed distributions have separate logs. Existing FluidVoice logs, data and credentials are not copied or migrated. Baseline ASR runs keep their unique temporary root. Dependency-owned public model caches and genuine third-party model attribution remain explicit. Preserve original source copyright notices, GPL-3.0 and model licenses in every distribution.
 
 ## Verification
 
