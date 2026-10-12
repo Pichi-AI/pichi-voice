@@ -1755,6 +1755,10 @@ extension AIEnhancementSettingsView {
     }
 
     private func providerLogoName(for item: ProviderItem) -> String? {
+        if let provider = CloudTextProvider.descriptor(for: item.id) {
+            return provider.logoAssetName
+        }
+
         let id = item.id.lowercased()
         let name = item.name.lowercased()
 

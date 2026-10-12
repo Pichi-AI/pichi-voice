@@ -1,8 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// Transport metadata extends the existing provider repository. It is independent
-/// of model IDs, prompts, branding and per-mode orchestration.
+/// Provider metadata extends the existing provider repository. Service identity
+/// is independent of model IDs, prompts, app branding and per-mode orchestration.
 nonisolated struct CloudTextProvider: Sendable {
     struct Field: Identifiable, Sendable {
         let id: String
@@ -19,6 +19,7 @@ nonisolated struct CloudTextProvider: Sendable {
     }
     let id: String
     let name: String
+    let logoAssetName: String
     let baseURL: String
     let hosts: Set<String>
     let website: String
@@ -30,14 +31,14 @@ nonisolated struct CloudTextProvider: Sendable {
     let structuredResponse: StructuredResponse
 
     static let registered: [Self] = [
-        .init(id: "gigachat", name: "GigaChat", baseURL: "https://api.giga.chat/v1",
+        .init(id: "gigachat", name: "GigaChat", logoAssetName: "Provider_GigaChat", baseURL: "https://api.giga.chat/v1",
               hosts: ["api.giga.chat", "gigachat.devices.sberbank.ru"],
               website: "https://developers.sber.ru/docs/ru/gigachat/api/reference/rest/gigachat-api",
               credentialTitle: "Authorization key", fields: [
                   .init(id: "scope", title: "API scope", choices: ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"], defaultValue: "GIGACHAT_API_PERS"),
               ], authorization: .oauth(tokenURL: URL(string: "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")!),
               projectHeader: nil, supportsTools: false, structuredResponse: .inlineSchema),
-        .init(id: "yandex", name: "Yandex AI Studio", baseURL: "https://ai.api.cloud.yandex.net/v1",
+        .init(id: "yandex", name: "Yandex AI Studio", logoAssetName: "Provider_Yandex", baseURL: "https://ai.api.cloud.yandex.net/v1",
               hosts: ["ai.api.cloud.yandex.net"], website: "https://aistudio.yandex.ru/ru/docs/ai-studio/quickstart/",
               credentialTitle: "API key", fields: [.init(id: "project", title: "Folder ID", choices: [], defaultValue: "")],
               authorization: .apiKey(scheme: "Api-Key"), projectHeader: "OpenAI-Project", supportsTools: true,
