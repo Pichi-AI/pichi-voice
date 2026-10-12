@@ -31,6 +31,7 @@ final class OllamaChatTransportTests: XCTestCase {
             var config = self.config(baseURL: baseURL)
             config.extraParameters = ["reasoning_effort": "high"]
             config.timeoutSeconds = 120
+            config.maxRetries = 3
             DictationPostProcessingService.configureInteractiveLocalRequest(&config)
             XCTAssertEqual(config.extraParameters["reasoning_effort"] as? String, "high")
             XCTAssertNil(config.extraParameters["think"])
@@ -49,6 +50,23 @@ final class OllamaChatTransportTests: XCTestCase {
             XCTAssertThrowsError(try context.client.buildRequest(config)) { self.assertInvalidRequest($0) }
         }
         XCTAssertTrue(context.fixture.requests.isEmpty)
+    }
+
+    func testInteractiveNativeSessionBoundsTotalResponseLifetimeAndPreservesFixtureIsolation() throws {
+        let context = OllamaTransportContext()
+        defer { context.cleanup() }
+        var config = self.config()
+        DictationPostProcessingService.configureInteractiveLocalRequest(&config)
+        let originalResourceTimeout = context.session.configuration.timeoutIntervalForResource
+        let session = try context.client.makeBoundedLocalSession(config)
+        defer { session.invalidateAndCancel() }
+        XCTAssertEqual(session.configuration.timeoutIntervalForRequest, 30)
+        XCTAssertEqual(session.configuration.timeoutIntervalForResource, 30)
+        XCTAssertEqual(session.configuration.httpAdditionalHeaders?["X-Ollama-Transport-Test"] as? String, context.token)
+        XCTAssertEqual(session.configuration.protocolClasses?.count, 1)
+        XCTAssertTrue(session.configuration.protocolClasses?.first == OllamaTransportURLProtocol.self)
+        XCTAssertEqual(context.session.configuration.timeoutIntervalForResource, originalResourceTimeout,
+                       "A call must not mutate its shared or caller-supplied session configuration")
     }
 
     func testSelectedNativePreloadUsesEmptyContentAndTheDictationContext() async throws {
@@ -110,6 +128,26 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(context.fixture.requests.count, 1)
         XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
         try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) {}
+    }
+
+    func testExplicitSummaryCancelsAndJoinsOptionalNativePreloadBeforeModelAdmission() async throws {
+        let context = OllamaTransportContext(body: "", held: true)
+        defer { context.cleanup() }
+        let route = DictationProviderRoute(providerID: "synthetic", providerKey: "synthetic", baseURL: "http://localhost:11434/v1", model: "synthetic-selected", apiKey: "")
+        let pending = Task { try await DictationPostProcessingService.shared.prewarmLocalModel(route, client: context.client) }
+        for _ in 0..<100 where context.fixture.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(context.fixture.requests.count, 1)
+        let activity = OllamaWarmupActivity()
+        let result = try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: activity) {
+            XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1,
+                                        "Explicit summary must join optional transport cancellation before taking model ownership")
+            XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
+            return try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) { 42 }
+        }
+        XCTAssertEqual(result, 42)
+        do { try await pending.value; XCTFail("Optional preload should have yielded to the explicit summary") } catch {}
+        XCTAssertNil(activity.active)
+        XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
     }
 
     func testNativeTimingDiagnosticsContainOnlyFiniteNumericMetrics() {
@@ -814,6 +852,22 @@ private nonisolated final class OllamaTransportURLProtocol: URLProtocol, @unchec
     }
 
     override func stopLoading() { self.activeLock.withLock { self.fixture }?.stopped(path: self.request.url?.path ?? "") }
+}
+
+@MainActor
+private final class OllamaWarmupActivity: ASRActivityLeasing {
+    var active: ASRActivityLease?
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard self.active == nil else { throw MeetingModelResidencyError.busy }
+        let lease = ASRActivityLease(id: UUID(), activity: activity)
+        self.active = lease
+        return lease
+    }
+    func releaseExclusiveActivity(_ lease: ASRActivityLease) {
+        if self.active == lease { self.active = nil }
+    }
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {}
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async { self.releaseExclusiveActivity(lease) }
 }
 
 private nonisolated final class OllamaCallbackProbe: @unchecked Sendable {

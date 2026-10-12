@@ -53,6 +53,7 @@ nonisolated enum MeetingSummaryInput {
 final class MeetingSummaryActivityCoordinator: ObservableObject {
     static let shared = MeetingSummaryActivityCoordinator()
     private var processing: Set<UUID> = []
+    private var optionalProcessing: [UUID: @MainActor () async -> Void] = [:]
     @Published private(set) var isProcessing = false
     private var summary: UUID?
     @Published private(set) var selectionLock: UUID?
@@ -79,8 +80,17 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
     }
 
     func endProcessing(_ token: UUID) {
+        self.optionalProcessing.removeValue(forKey: token)
         self.processing.remove(token)
         self.isProcessing = !self.processing.isEmpty
+    }
+
+    /// Optional preparation must yield to an explicit summary. Its owner supplies
+    /// a joined cancellation, so admission never opens while work still drains.
+    func beginOptionalProcessing(cancelAndJoin: @escaping @MainActor () async -> Void) -> UUID? {
+        guard let token = self.beginProcessing() else { return nil }
+        self.optionalProcessing[token] = cancelAndJoin
+        return token
     }
 
     static func presentBusyError() {
@@ -92,10 +102,19 @@ final class MeetingSummaryActivityCoordinator: ObservableObject {
 
     func withSummary<T>(activity: any ASRActivityLeasing, work: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
-        guard self.summary == nil, self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
+        guard self.summary == nil else { throw MeetingModelResidencyError.busy }
         let token = UUID()
         self.summary = token
         defer { if self.summary == token { self.summary = nil } }
+        // Close admission before awaiting cancellation. Ordinary processing is
+        // never preempted, and a second summary cannot enter during this drain.
+        let optional = self.optionalProcessing
+        for (activity, cancelAndJoin) in optional {
+            await cancelAndJoin()
+            self.endProcessing(activity)
+        }
+        try Task.checkCancellation()
+        guard self.processing.isEmpty else { throw MeetingModelResidencyError.busy }
         let lease = try activity.acquireExclusiveActivity(.meeting)
         do {
             try await activity.prepareMeetingAudioHandoff(lease)

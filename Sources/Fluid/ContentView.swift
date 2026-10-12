@@ -62,7 +62,10 @@ nonisolated enum DictationAIFailurePresentationPolicy {
 }
 
 nonisolated enum DictationStreamingFallbackPolicy {
-    static func shouldRetryWithoutStreaming(after error: Error) -> Bool {
+    static func shouldRetryWithoutStreaming(after error: Error, baseURL: String? = nil) -> Bool {
+        // Native chat explicitly supports streaming. Re-running local inference
+        // after a failure would double the interactive response budget.
+        if let baseURL, OllamaChatAdapter.supports(baseURL) { return false }
         if error is CancellationError || error is URLError {
             return false
         }
@@ -2938,7 +2941,7 @@ struct ContentView: View {
             do {
                 response = try await LLMClient.shared.call(config)
             } catch {
-                guard DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error) else {
+                guard DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error, baseURL: config.baseURL) else {
                     self.appBench("ai_streaming_fallback_skipped reason=transport_or_cancel")
                     throw error
                 }

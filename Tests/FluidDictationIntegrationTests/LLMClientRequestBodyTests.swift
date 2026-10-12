@@ -8,6 +8,14 @@ import XCTest
 
 @MainActor
 final class LLMClientRequestBodyTests: XCTestCase {
+    func testNativeDictationCannotRestartInferenceAfterStreamingFailure() {
+        for error in [LLMError.invalidResponse, .httpError(500, "synthetic error")] {
+            XCTAssertFalse(DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error, baseURL: "http://127.0.0.1:11434/v1"))
+            XCTAssertTrue(DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error, baseURL: "http://127.0.0.1:1234/v1"),
+                          "Existing compatible endpoints retain their protocol fallback")
+        }
+    }
+
     func testDictationStreamingFallbackSkipsTransportFailuresAndCancellation() {
         XCTAssertFalse(
             DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(

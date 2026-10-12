@@ -235,18 +235,30 @@ final class DictationPostProcessingService {
     func prewarmLocalModel(_ route: DictationProviderRoute, client: LLMClient = .shared) async throws {
         guard OllamaChatAdapter.supports(route.baseURL), !route.model.isEmpty else { throw LLMError.invalidURL }
         try Task.checkCancellation()
-        guard let activity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
+        var config = LLMClient.Config(messages: [], model: route.model, baseURL: route.baseURL,
+                                      apiKey: route.apiKey, streaming: false,
+                                      benchmarkID: "warm-\(UUID().uuidString)")
+        config.providerOptions = route.connectionOptions
+        Self.configureInteractiveLocalRequest(&config)
+        let request = config
+        let pending = Task { @MainActor in
+            try await MeetingModelResidencyCoordinator.shared.withBackgroundOperation(owner: "local-text", modelID: route.model) {
+                _ = try await client.call(request)
+            }
+        }
+        guard let activity = MeetingSummaryActivityCoordinator.shared.beginOptionalProcessing(cancelAndJoin: {
+            pending.cancel()
+            _ = await pending.result
+        }) else {
+            pending.cancel()
+            _ = await pending.result
             throw MeetingModelResidencyError.busy
         }
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(activity) }
-        try await MeetingModelResidencyCoordinator.shared.withBackgroundOperation(owner: "local-text", modelID: route.model) {
-            var config = LLMClient.Config(messages: [], model: route.model, baseURL: route.baseURL,
-                                          apiKey: route.apiKey, streaming: false,
-                                          benchmarkID: "warm-\(UUID().uuidString)")
-            config.providerOptions = route.connectionOptions
-            Self.configureInteractiveLocalRequest(&config)
-            _ = try await client.call(config)
-        }
+        try await withTaskCancellationHandler {
+            try await pending.value
+            try Task.checkCancellation()
+        } onCancel: { pending.cancel() }
     }
 
     struct Result {
