@@ -2,17 +2,19 @@ import CryptoKit
 import Foundation
 
 nonisolated enum S1MiniError: LocalizedError {
-    case unknownModel, missingModel, integrity, verification, unsupportedTask, unsafeDirectory
+    case unknownModel, missingModel, integrity, verification, unsupportedTask, unsafeDirectory, incompleteOutput
 
     var errorDescription: String? {
-        switch self {
+        let key: String = switch self {
         case .unknownModel: "The selected S1-mini model is not available."
-        case .missingModel: "Download S1-mini before using AI enhancement."
+        case .missingModel: "Model file is not installed."
         case .integrity: "The S1-mini file failed its integrity check. Download it again."
         case .verification: "S1-mini could not verify its native runtime."
         case .unsupportedTask: "S1-mini is available for dictation cleanup only."
         case .unsafeDirectory: "The S1-mini model folder is not safe to modify."
+        case .incompleteOutput: "S1-mini did not finish cleaning this dictation within its output limit."
         }
+        return PichiLocalization.text(key)
     }
 }
 
@@ -51,6 +53,8 @@ nonisolated struct S1MiniModelStore: Sendable {
     func isInstalled() -> Bool {
         guard Self.hasExpectedFileSize(self.modelURL, bytes: self.model.artifact.byteCount),
               Self.isRegularFile(self.receiptURL),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: self.receiptURL.path),
+              let receiptSize = attributes[.size] as? NSNumber, receiptSize.intValue <= 4096,
               let bytes = try? Data(contentsOf: self.receiptURL), bytes.count <= 4096,
               let receipt = try? JSONDecoder().decode(Receipt.self, from: bytes),
               let expected = self.expectedReceipt

@@ -49,7 +49,7 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
         let value = UserDefaults.standard.string(forKey: S1MiniProviderFeature.shared.selectedModelDefaultsKey) ?? ""
         return S1MiniProviderFeature.shared.canonicalModelID(for: value) ?? S1MiniProviderFeature.shared.defaultModelID
     }
-    nonisolated var selectedModel: PrivateAIRegisteredModel { S1MiniProviderFeature.modelDescriptor }
+    nonisolated var selectedModel: PrivateAIRegisteredModel { self.store.model }
     nonisolated var configuredLocalModelPath: String? {
         let path = UserDefaults.standard.string(forKey: S1MiniProviderFeature.shared.localModelPathDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -164,8 +164,9 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
             // Empty cleanup is valid for filler-only input, but this meaningful fixture must yield text.
             guard !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw S1MiniError.verification }
         } catch {
-            await self.retireAfterFailure(error)
-            throw error
+            let failure = Self.userFacingError(error)
+            await self.retireAfterFailure(failure)
+            throw failure
         }
     }
 
@@ -218,8 +219,9 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
             let milliseconds = Int(elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000)
             return .init(outputText: output, backendKind: "llama.cpp", latencyMilliseconds: milliseconds)
         } catch {
-            await self.retireAfterFailure(error)
-            throw error
+            let failure = Self.userFacingError(error)
+            await self.retireAfterFailure(failure)
+            throw failure
         }
     }
 
@@ -259,8 +261,9 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
             self.state = .ready
             self.failureMessage = nil
         } catch {
-            await self.retireAfterFailure(error)
-            throw error
+            let failure = Self.userFacingError(error)
+            await self.retireAfterFailure(failure)
+            throw failure
         }
     }
 
@@ -276,6 +279,17 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
         if !(error is CancellationError) {
             self.state = .failed
             self.failureMessage = error.localizedDescription
+        }
+    }
+
+    private nonisolated static func userFacingError(_ error: Error) -> Error {
+        guard let native = error as? NativeTextInferenceError else { return error }
+        switch native {
+        case .promptTooLarge, .contextLimitExceeded: return AIProcessingError.dictationExceedsAIContextWindow
+        case .outputLimitExceeded: return S1MiniError.incompleteOutput
+        case .invalidModelURL: return S1MiniError.integrity
+        case .modelNotLoaded: return S1MiniError.missingModel
+        default: return S1MiniError.verification
         }
     }
 
