@@ -338,7 +338,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         unknown["index"] = 7
         for updates in [[unknown], [update, update]] {
             let raw = String(decoding: try JSONSerialization.data(withJSONObject: ["updates": updates]), as: UTF8.self)
-            let transport = RepairTransport(responses: [try self.json(fixture.document), raw])
+            let transport = RepairTransport(responses: [try self.json(fixture.document), raw, raw])
             do {
                 _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                     .generate(session: fixture.session, configuration: self.configuration())
@@ -348,7 +348,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 XCTAssertEqual(updates.count, 2, "Duplicate updates exceed the actual candidate count")
             }
             let requests = await transport.requests
-            XCTAssertEqual(requests.count, 2, "A ledger violation must not be repaired or published")
+            XCTAssertEqual(requests.count, 3, "Two invalid ledger responses must reject after exactly one bounded regeneration")
             let nativeRequest = try PichiMeetingSummaryTransport.ollamaRequest(requests[1])
             let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(nativeRequest.httpBody)) as? [String: Any])
             let schema = try XCTUnwrap(body["format"] as? [String: Any])
@@ -918,7 +918,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             XCTFail("An invalid second update must reject the complete response instead of publishing the valid first update")
         } catch PichiMeetingSummaryError.invalidEvidence {}
         let requests = await invalid.requests
-        XCTAssertEqual(requests.count, 2, "Ledger evidence rejection fails closed without schema regeneration or publishing a prefix")
+        XCTAssertEqual(requests.count, 3, "The sole ledger regeneration must still reject invalid later evidence without publishing a prefix")
     }
 
     func testAcceptanceRequiresExactTaskFieldsBeforeSupersedingAnEarlierRow() async throws {
@@ -972,7 +972,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let update = String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [[
                 "index": 0, "evidence": [["segmentID": fixture.correction.segmentID.uuidString, "quote": fixture.correction.quote]],
             ]]]), as: UTF8.self)
-            let transport = RepairTransport(responses: [response, update])
+            let transport = RepairTransport(responses: count == 15 ? [response, update] : [response, update, update])
             let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
             let fingerprint = PichiMeetingSummaryInput.fingerprint(fixture.session)
             do {
@@ -988,7 +988,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 XCTAssertEqual(count, 16)
             }
             let requests = await transport.requests
-            XCTAssertEqual(requests.count, 2, "The final gate rejects deterministically without another model request")
+            XCTAssertEqual(requests.count, count == 15 ? 2 : 3, "Oversized merged evidence gets one bounded regeneration, never clipping or an unbounded retry")
             XCTAssertNil(requests[0].extraParameters["response_format"], "Exercise the compatible API's 16-citation contract")
             XCTAssertEqual(fixture.document.decisions[0].evidence.count, count)
             XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(fixture.session), fingerprint)
@@ -1001,7 +1001,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let update = String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [[
             "index": 0, "evidence": [["segmentID": fixture.correction.segmentID.uuidString, "quote": fixture.correction.quote]],
         ]]]), as: UTF8.self)
-        let transport = RepairTransport(responses: [try self.json(fixture.document), update])
+        let transport = RepairTransport(responses: [try self.json(fixture.document), update, update])
         let owner = MeetingModelResidencyCoordinator()
         let resources = SummaryResidentResources(owner: owner)
         let asr = ASRService(meetingModelResidency: owner)
@@ -1488,6 +1488,177 @@ final class PichiMeetingSummaryTests: XCTestCase {
             throw error
         }
         try await store.delete(id: session.id)
+    }
+
+    func testLedgerRegeneratesTemporalRejectionWithSameSourcesStateAndConfiguration() async throws {
+        let fixture = self.ledgerRepairFixture()
+        let valid = "{\"updates\":[{\"index\":0,\"evidence\":[{\"sourceIndex\":2}]},{\"index\":1,\"evidence\":[{\"sourceIndex\":3}]}]}"
+        // A valid prefix followed by an equal-time witness must not enter the
+        // second input or resolve the first question before full validation.
+        let invalid = "{\"updates\":[{\"index\":0,\"evidence\":[{\"sourceIndex\":2}]},{\"index\":1,\"evidence\":[{\"sourceIndex\":1}]}]}"
+        let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: [invalid, valid])
+        var configuration = self.configuration()
+        configuration.execution = .extended
+        configuration.execution.reasoningParameter = "think"
+        configuration.execution.reasoningValue = "false"
+        configuration.inferenceModelID = "owned-synthetic-alias"
+        configuration.modelArtifactID = "synthetic-digest"
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(fixture.session)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: fixture.session, configuration: configuration)
+        XCTAssertEqual(result.openQuestions.count, 2)
+        XCTAssertTrue(result.openQuestions.allSatisfy { $0.resolved == true })
+        XCTAssertEqual(Set(result.openQuestions[0].evidence.map(\.segmentID)), Set([fixture.session.transcriptSegments[0].id, fixture.session.transcriptSegments[2].id]))
+        XCTAssertEqual(Set(result.openQuestions[1].evidence.map(\.segmentID)), Set([fixture.session.transcriptSegments[1].id, fixture.session.transcriptSegments[3].id]))
+        let requests = await transport.ledgerRequests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String,
+                       "Rejected response cannot mutate the snapshot, source catalog or candidate index batch")
+        for config in requests {
+            XCTAssertEqual(config.model, "owned-synthetic-alias")
+            XCTAssertEqual(config.baseURL, configuration.baseURL)
+            XCTAssertEqual(config.extraParameters["summary_artifact_id"] as? String, "synthetic-digest")
+            XCTAssertEqual(config.extraParameters["think"] as? Bool, false)
+            XCTAssertEqual(config.maxTokens, 8192)
+            XCTAssertEqual(config.timeoutSeconds, 900)
+            XCTAssertEqual((config.extraParameters["options"] as? [String: Int])?["num_ctx"], 16384)
+        }
+        let input = try XCTUnwrap(requests[1].messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        _ = try ModelSource.catalog(from: fields)
+        let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+        XCTAssertTrue(candidates.allSatisfy { ($0["item"] as? [String: Any])?["resolved"] == nil })
+        let feedback = try XCTUnwrap(requests[1].messages.first?["content"] as? String)
+        XCTAssertTrue(feedback.contains("strictly GREATER"))
+        XCTAssertTrue(feedback.contains("equal-time and earlier witnesses are invalid"))
+        XCTAssertTrue(feedback.contains("COMPLETE updates array"))
+        XCTAssertFalse(feedback.contains(fixture.session.transcriptSegments[0].text), "No private speech or expected answer in validation feedback")
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(fixture.session), fingerprint)
+    }
+
+    func testLedgerRegeneratesStructureAndUnknownSourceOnceAndAcceptsExplicitEmptyUpdates() async throws {
+        let fixture = self.ledgerRepairFixture()
+        for invalid in ["{}", "{\"updates\":[{\"index\":0,\"evidence\":[{\"sourceIndex\":999}]}]}"] {
+            let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: [invalid, "{\"updates\":[]}"])
+            let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: fixture.session, configuration: self.configuration())
+            XCTAssertEqual(result.openQuestions, fixture.document.openQuestions, "The model may explicitly leave uncertain questions open, without deleting original items")
+            let count = await transport.ledgerRequests.count
+            XCTAssertEqual(count, 2)
+        }
+    }
+
+    func testTwoInvalidLedgerResponsesRejectWithoutPublishingValidPrefix() async throws {
+        let fixture = self.ledgerRepairFixture()
+        let invalid = "{\"updates\":[{\"index\":0,\"evidence\":[{\"sourceIndex\":2}]},{\"index\":1,\"evidence\":[{\"sourceIndex\":1}]}]}"
+        let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: [invalid, invalid])
+        do {
+            _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: fixture.session, configuration: self.configuration())
+            XCTFail("A valid first update must never survive an invalid second update in either response")
+        } catch PichiMeetingSummaryError.invalidEvidence {}
+        let requests = await transport.ledgerRequests
+        XCTAssertEqual(requests.count, 2, "No third ledger completion or fallback to extraction")
+        XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String)
+    }
+
+    func testLedgerTransportFailureAndOutputExhaustionNeverStartValidationRegeneration() async throws {
+        let fixture = self.ledgerRepairFixture()
+        for exhaustion in [false, true] {
+            let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: [],
+                                                   failure: exhaustion ? .outputLimit : .transport)
+            do {
+                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: fixture.session, configuration: self.configuration())
+                XCTFail("Transport failure cannot become an empty successful ledger")
+            } catch PichiMeetingSummaryError.outputLimit { XCTAssertTrue(exhaustion) }
+            catch let error as URLError { XCTAssertFalse(exhaustion); XCTAssertEqual(error.code, .cannotConnectToHost) }
+            let count = await transport.ledgerRequests.count
+            XCTAssertEqual(count, 1)
+        }
+    }
+
+    func testCancelledFirstLedgerResponseJoinsBeforeReleaseAndStartsNoRegeneration() async throws {
+        let fixture = self.ledgerRepairFixture()
+        let entered = expectation(description: "First ledger inference entered")
+        let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: ["{}"], entered: entered)
+        let generator = PichiMeetingSummaryGenerator(complete: { try await transport.complete($0) }, prepare: { configuration in
+            .init(configuration: configuration, release: { await transport.release() })
+        })
+        let task = Task { try await generator.generate(session: fixture.session, configuration: self.configuration()) }
+        await fulfillment(of: [entered], timeout: 5)
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled ledger cannot publish prior map results") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let count = await transport.ledgerRequests.count
+        XCTAssertEqual(count, 1)
+        let events = await transport.events
+        XCTAssertEqual(events, ["ledger-entered", "ledger-joined", "release"])
+    }
+
+    func testOutputLimitHasDistinctActionableDiagnosisFromInvalidStructuredOutput() {
+        XCTAssertNotEqual(PichiMeetingSummaryError.outputLimit.localizedDescription, PichiMeetingSummaryError.invalidOutput.localizedDescription)
+        XCTAssertEqual(PichiMeetingSummaryError.outputLimit.localizedDescription,
+            PichiLocalization.text("The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe."))
+    }
+
+    private func ledgerRepairFixture() -> (session: MeetingSession, document: PichiMeetingSummaryDocument) {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        let texts = ["Когда будет готов документ?", "Когда будет готов макет?", "Документ будет готов в понедельник.", "Макет будет готов во вторник."]
+        session.transcriptSegments = texts.enumerated().map { index, text in
+            var turn = template
+            turn.id = UUID()
+            turn.start = .init(value: Int64(index * 60_000), timescale: 1000)
+            turn.text = text
+            return turn
+        }
+        let evidence = session.transcriptSegments.map { PichiMeetingSummaryEvidence(segmentID: $0.id, quote: $0.text) }
+        let summary = PichiMeetingSummaryItem(text: "Обсудили готовность документа и макета.", evidence: [evidence[0], evidence[1]])
+        let questions = Array(session.transcriptSegments.prefix(2)).enumerated().map { index, turn in
+            PichiMeetingSummaryItem(text: turn.text, evidence: [evidence[index]])
+        }
+        // Include an equal-time source catalog witness, matching the real failure
+        // class without embedding the private hour recording or its expected answer.
+        let answers = session.transcriptSegments.enumerated().map { index, turn in
+            PichiMeetingSummaryItem(text: turn.text, evidence: [evidence[index]])
+        }
+        return (session, .init(summary: [summary], decisions: [], actions: [], openQuestions: questions, answers: answers))
+    }
+
+    private actor LedgerRepairTransport {
+        enum Failure: Sendable { case transport, outputLimit }
+        let document: String
+        let responses: [String]
+        let failure: Failure?
+        let entered: XCTestExpectation?
+        var ledgerRequests: [LLMClient.Config] = []
+        var events: [String] = []
+        init(document: String, responses: [String], failure: Failure? = nil, entered: XCTestExpectation? = nil) {
+            self.document = document
+            self.responses = responses
+            self.failure = failure
+            self.entered = entered
+        }
+        func complete(_ config: LLMClient.Config) async throws -> String {
+            if let review = try PichiMeetingSummaryTests.identityReview(config) { return review }
+            guard (config.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") else { return self.document }
+            self.ledgerRequests.append(config)
+            if let entered {
+                self.events.append("ledger-entered")
+                entered.fulfill()
+                defer { self.events.append("ledger-joined") }
+                try await Task.sleep(for: .seconds(30))
+            }
+            switch self.failure {
+            case .transport: throw URLError(.cannotConnectToHost)
+            case .outputLimit: throw PichiMeetingSummaryError.outputLimit
+            case nil: break
+            }
+            guard self.responses.indices.contains(self.ledgerRequests.count - 1) else { throw URLError(.badServerResponse) }
+            return self.responses[self.ledgerRequests.count - 1]
+        }
+        func release() { self.events.append("release") }
     }
 
     func testSupportReviewRepairsWrongExcerptQuestionTasksAndMissingDistinctRequests() async throws {

@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель исчерпала лимит вывода до завершения структурированного резюме. Попробуйте отключить режим размышления или выбрать расширенный лимит обработки. Транскрипт и предыдущее резюме сохранены."
+          }
+        }
+      }
+    },
     "Update Ollama to version 0.16 or later for bounded local processing.": {
       "extractionState": "manual",
       "localizations": {

@@ -330,7 +330,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     var baseCacheIdentity: String {
         // Hash a canonical payload rather than delimiter-joining user-controlled values.
         // Credentials and the temporary inference alias never become persisted metadata.
-        let payload: [String: Any] = ["version": 15, "provider": self.providerID, "model": self.modelID,
+        let payload: [String: Any] = ["version": 16, "provider": self.providerID, "model": self.modelID,
                                       "endpoint": self.baseURL, "language": self.language,
                                       "execution": self.execution.identity, "connection": self.connectionOptions]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
@@ -367,7 +367,8 @@ nonisolated enum PichiMeetingSummaryError: LocalizedError {
         case .insecureEndpoint: PichiLocalization.text("Remote summaries require an HTTPS endpoint.")
         case .unsupportedProvider: PichiLocalization.text("Choose an OpenAI-compatible provider in AI Enhancement settings, such as Ollama, LM Studio or OpenRouter.")
         case .emptyTranscript: PichiLocalization.text("This meeting has no completed transcript to summarize.")
-        case .invalidOutput, .outputLimit: PichiLocalization.text("The model did not return a valid structured summary. Try a different model. The transcript is safe.")
+        case .invalidOutput: PichiLocalization.text("The model did not return a valid structured summary. Try a different model. The transcript is safe.")
+        case .outputLimit: PichiLocalization.text("The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.")
         case .invalidEvidence: PichiLocalization.text("The model returned an unsupported source, owner or date. The result was rejected. The transcript is safe.")
         case .timeLimit: PichiLocalization.text("The summary time limit was reached. The transcript and previous summary are safe.")
         case .tooManyChunks: PichiLocalization.text("This transcript is too large to summarize in one operation.")
@@ -835,58 +836,105 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                 guard let original = try JSONSerialization.jsonObject(with: Data(self.encoded(LedgerRequest(candidates: candidates, changes: events)).utf8)) as? [String: Any]
                 else { throw PichiMeetingSummaryError.invalidOutput }
                 let input = try self.preparedInput(original, sources: catalog)
-                let raw = try await self.completion(self.config(prompt: prompt, input: input, configuration: configuration,
-                                                              sources: catalog, candidateIndexes: candidates.map(\.index), actionStates: actionStates), remainingRequests: &remainingRequests)
-                try Task.checkCancellation()
-                guard let data = try self.resolvedResponse(raw, sources: catalog).data(using: .utf8), data.count <= 100_000,
-                      let updates = try? JSONDecoder().decode(LedgerUpdates.self, from: data), updates.updates.count <= candidates.count
-                else { throw PichiMeetingSummaryError.invalidOutput }
-                // Every update in one response sees the same state. Applying a
-                // later completion first must not change an earlier acceptance.
+                // Validation/regeneration sees the exact same state and request
+                // catalog. No prefix from a rejected response enters later batches.
                 let stateBeforeUpdates = result
-                var plannedUpdates = stateBeforeUpdates
-                var updated = Set<Int>()
-                for update in updates.updates {
+                var raw = try await self.completion(self.config(prompt: prompt, input: input, configuration: configuration,
+                                                              sources: catalog, candidateIndexes: candidates.map(\.index), actionStates: actionStates), remainingRequests: &remainingRequests)
+                for attempt in 0..<2 {
                     try Task.checkCancellation()
-                    guard let candidate = candidates.first(where: { $0.index == update.index }),
-                          updated.insert(update.index).inserted, (1...8).contains(update.evidence.count),
-                          actionStates ? update.hasStatus : !update.hasStatus
-                    else { throw PichiMeetingSummaryError.invalidEvidence }
-                    for evidence in update.evidence {
-                        guard let evidenceTime = times[evidence.segmentID], evidenceTime > candidate.lastSourceSeconds,
-                              let event = events.first(where: { event in
-                            event.sourceSeconds > candidate.lastSourceSeconds && event.item.evidence.contains(evidence)
-                        }), event.sourceSeconds > candidate.lastSourceSeconds
-                        else { throw PichiMeetingSummaryError.invalidEvidence }
+                    do {
+                        let plannedUpdates = try self.validatedLedger(raw, catalog: catalog, candidates: candidates, events: events,
+                            times: times, stateBeforeUpdates: stateBeforeUpdates, actionVersions: actionVersions,
+                            resolvingQuestions: resolvingQuestions, actionStates: actionStates)
+                        try Task.checkCancellation()
+                        result = plannedUpdates
+                        break
+                    } catch {
+                        guard attempt == 0, let instruction = self.ledgerRepairInstruction(error) else { throw error }
+                        try Task.checkCancellation()
+                        raw = try await self.completion(self.config(prompt: prompt + "\nThe previous ledger response was rejected. " + instruction,
+                            input: input, configuration: configuration, sources: catalog,
+                            candidateIndexes: candidates.map(\.index), actionStates: actionStates), remainingRequests: &remainingRequests)
                     }
-                    var item = stateBeforeUpdates[update.index]
-                    if resolvingQuestions { item.resolved = true }
-                    else if actionStates, let status = update.status,
-                            status != .completed, status != .cancelled {
-                        // Acceptance changes the same pending task's state. Keep
-                        // it current unless extraction already supplied that exact
-                        // later version. Preserve both occurrences and their sources;
-                        // a similar task or an independent repeated request is distinct.
-                        let identity = [item.title, item.text, item.owner, item.deadline, item.urgency?.rawValue]
-                        let hasLaterVersion = (actionVersions[identity] ?? []).contains { index in
-                            let later = stateBeforeUpdates[index]
-                            return index != update.index && later.superseded != true && later.status == status
-                                && update.evidence.allSatisfy(later.evidence.contains)
-                        }
-                        item.superseded = hasLaterVersion ? true : nil
-                    } else { item.superseded = true }
-                    if actionStates, let status = update.status { item.status = status }
-                    var seen = Set<PichiMeetingSummaryEvidence>()
-                    item.evidence = (item.evidence + update.evidence).filter { seen.insert($0).inserted }
-                    plannedUpdates[update.index] = item
                 }
-                // A later malformed update cannot commit a valid prefix.
-                try Task.checkCancellation()
-                result = plannedUpdates
             }
         }
         return result
     }
+
+    /// Retry only local structural/evidence/temporal rejection, never transport,
+    /// cancellation, output exhaustion or a fresh attempt with reset budgets.
+    private func ledgerRepairInstruction(_ error: any Error) -> String? {
+        let detail: String
+        switch error {
+        case let issue as PichiMeetingSummaryValidationIssue:
+            detail = issue.repairInstruction
+        case PichiMeetingSummaryError.invalidEvidence:
+            detail = "Use each supplied candidate index at most once and only supplied sourceIndex values. EVERY selected excerpt's seconds and its change event's sourceSeconds must be strictly GREATER than that candidate's lastSourceSeconds; equal-time and earlier witnesses are invalid. Include status only for task updates, including JSON null when no definite changed state is established."
+        case PichiMeetingSummaryError.invalidOutput:
+            detail = "Return only the required updates JSON object with valid candidate indexes, evidence and task status fields. Respect all item and citation limits, including at most 16 combined original and later citations per candidate; never clip existing evidence."
+        default: return nil
+        }
+        return detail + " Regenerate the COMPLETE updates array from the same immutable input. Never include a valid prefix of a rejected response. If no definite supported later update fits, return an empty updates array and leave the original candidates unchanged."
+    }
+
+    /// Build a complete plan without mutating the batch snapshot. Both the first
+    /// response and the sole regeneration pass the same canonical checks.
+    private func validatedLedger(_ raw: String, catalog: [PichiMeetingSummarySource], candidates: [LedgerCandidate],
+                                 events: [LedgerChange], times: [UUID: TimeInterval],
+                                 stateBeforeUpdates: [PichiMeetingSummaryItem], actionVersions: [[String?]: [Int]],
+                                 resolvingQuestions: Bool, actionStates: Bool) throws -> [PichiMeetingSummaryItem] {
+        try Task.checkCancellation()
+        guard let data = try self.resolvedResponse(raw, sources: catalog).data(using: .utf8), data.count <= 100_000,
+              let updates = try? JSONDecoder().decode(LedgerUpdates.self, from: data), updates.updates.count <= candidates.count
+        else { throw PichiMeetingSummaryError.invalidOutput }
+        // Every update in one response sees the same state. Applying a
+        // later completion first must not change an earlier acceptance.
+        var plannedUpdates = stateBeforeUpdates
+        var updated = Set<Int>()
+        for update in updates.updates {
+            try Task.checkCancellation()
+            guard let candidate = candidates.first(where: { $0.index == update.index }),
+                  updated.insert(update.index).inserted, (1...8).contains(update.evidence.count),
+                  actionStates ? update.hasStatus : !update.hasStatus
+            else { throw PichiMeetingSummaryError.invalidEvidence }
+            for evidence in update.evidence {
+                guard let evidenceTime = times[evidence.segmentID], evidenceTime > candidate.lastSourceSeconds,
+                      let event = events.first(where: { event in
+                    event.sourceSeconds > candidate.lastSourceSeconds && event.item.evidence.contains(evidence)
+                }), event.sourceSeconds > candidate.lastSourceSeconds
+                else { throw PichiMeetingSummaryError.invalidEvidence }
+            }
+            var item = stateBeforeUpdates[update.index]
+            if resolvingQuestions { item.resolved = true }
+            else if actionStates, let status = update.status,
+                    status != .completed, status != .cancelled {
+                // Acceptance changes the same pending task's state. Keep
+                // it current unless extraction already supplied that exact
+                // later version. Preserve both occurrences and their sources;
+                // a similar task or an independent repeated request is distinct.
+                let identity = [item.title, item.text, item.owner, item.deadline, item.urgency?.rawValue]
+                let hasLaterVersion = (actionVersions[identity] ?? []).contains { index in
+                    let later = stateBeforeUpdates[index]
+                    return index != update.index && later.superseded != true && later.status == status
+                        && update.evidence.allSatisfy(later.evidence.contains)
+                }
+                item.superseded = hasLaterVersion ? true : nil
+            } else { item.superseded = true }
+            if actionStates, let status = update.status { item.status = status }
+            var seen = Set<PichiMeetingSummaryEvidence>()
+            item.evidence = (item.evidence + update.evidence).filter { seen.insert($0).inserted }
+            // Reconciliation may add sources, but never clip them to fit the
+            // canonical per-item limit or commit an oversized valid prefix.
+            guard item.evidence.count <= 16 else { throw PichiMeetingSummaryError.invalidOutput }
+            plannedUpdates[update.index] = item
+        }
+        // A later malformed update cannot commit a valid prefix.
+        try Task.checkCancellation()
+        return plannedUpdates
+    }
+
 }
 
 // Provider preparation owns only its temporary resource. The existing generator
