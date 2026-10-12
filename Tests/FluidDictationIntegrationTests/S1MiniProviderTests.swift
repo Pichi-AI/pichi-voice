@@ -190,6 +190,39 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         XCTAssertNil(loaded)
     }
 
+    func testRemovalRetainsRuntimeLeaseUntilFilesAreDeleted() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = TestEngine()
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        _ = try await provider.enhanceDictation("hello", runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 32)
+        await engine.blockNextUnload()
+        let removal = Task {
+            try await provider.withUnloadedRuntime(reason: "remove") {
+                try FileManager.default.removeItem(at: store.modelURL)
+                try FileManager.default.removeItem(at: store.receiptURL)
+            }
+        }
+        await engine.waitUntilUnloading()
+        let started = DownloadProbe()
+        let queuedEnhancement = Task {
+            await started.started()
+            return try await provider.enhanceDictation("hello", runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 32)
+        }
+        await started.waitUntilStarted()
+        await engine.finishBlockedUnload()
+        try await removal.value
+        do { _ = try await queuedEnhancement.value; XCTFail("The queued enhancement must not reload removed weights") }
+        catch S1MiniError.missingModel {}
+        let loads = await engine.loads
+        let loaded = await provider.loadedModelState()
+        XCTAssertEqual(loads, 1)
+        XCTAssertNil(loaded)
+        XCTAssertFalse(store.isInstalled())
+    }
+
     func testRealS1MiniEnglishAndRussianCleanup() async throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty else {
             throw XCTSkip("Set PICHI_S1_MINI_MODEL_PATH to the pinned official GGUF for native inference.")
@@ -278,6 +311,10 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         private(set) var generationEnded = false
         private var generating = false
         private var waiter: CheckedContinuation<Void, Never>?
+        private var blocksUnload = false
+        private var unloading = false
+        private var unloadWaiter: CheckedContinuation<Void, Never>?
+        private var unloadCompletion: CheckedContinuation<Void, Never>?
         let output: String
         let blocksGeneration: Bool
         init(output: String = "Hello world.", blocksGeneration: Bool = false) {
@@ -296,8 +333,20 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         }
         func unload() async {
             self.unloadedWhileGenerating = self.unloadedWhileGenerating || self.generating
+            if self.blocksUnload {
+                self.unloading = true
+                self.unloadWaiter?.resume(); self.unloadWaiter = nil
+                await withCheckedContinuation { self.unloadCompletion = $0 }
+                self.blocksUnload = false
+                self.unloading = false
+            }
             self.isLoaded = false
         }
+        func blockNextUnload() { self.blocksUnload = true }
+        func waitUntilUnloading() async {
+            if !self.unloading { await withCheckedContinuation { self.unloadWaiter = $0 } }
+        }
+        func finishBlockedUnload() { self.unloadCompletion?.resume(); self.unloadCompletion = nil }
         func waitUntilGenerating() async {
             if !self.generating { await withCheckedContinuation { self.waiter = $0 } }
         }

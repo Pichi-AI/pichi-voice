@@ -180,6 +180,13 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
         await Task { try? await self.serialized { await self.retire() } }.value
     }
 
+    func withUnloadedRuntime(reason _: String, operation: @Sendable () throws -> Void) async throws {
+        try await self.serialized {
+            await self.retire()
+            try operation()
+        }
+    }
+
     func shutdownForTermination() async { await self.unloadCachedRuntime(reason: "termination") }
 
     nonisolated func enhanceDictation(
@@ -253,6 +260,7 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
         self.state = .loading
         do {
             let url = URL(fileURLWithPath: selection.path)
+            guard FileManager.default.fileExists(atPath: url.path) else { throw S1MiniError.missingModel }
             try self.store.validate(url)
             try await self.engine.load(modelURL: url, contextTokenLimit: selection.contextTokenLimit)
             try Task.checkCancellation()

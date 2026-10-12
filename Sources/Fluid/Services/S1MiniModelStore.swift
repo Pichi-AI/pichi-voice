@@ -55,7 +55,7 @@ nonisolated struct S1MiniModelStore: Sendable {
               Self.isRegularFile(self.receiptURL),
               let attributes = try? FileManager.default.attributesOfItem(atPath: self.receiptURL.path),
               let receiptSize = attributes[.size] as? NSNumber, receiptSize.intValue <= 4096,
-              let bytes = try? Data(contentsOf: self.receiptURL), bytes.count <= 4096,
+              let bytes = try? self.readReceipt(), bytes.count <= 4096,
               let receipt = try? JSONDecoder().decode(Receipt.self, from: bytes),
               let expected = self.expectedReceipt
         else { return false }
@@ -68,6 +68,13 @@ nonisolated struct S1MiniModelStore: Sendable {
               self.receiptURL.resolvingSymlinksInPath().standardizedFileURL == self.receiptURL
         else { return [] }
         return [self.modelURL, self.receiptURL].filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    private func readReceipt() throws -> Data {
+        let file = try FileHandle(forReadingFrom: self.receiptURL)
+        defer { try? file.close() }
+        // Bound allocation even if another process replaces/grows the file after the size probe.
+        return try file.read(upToCount: 4097) ?? Data()
     }
 
     func prepare(progressHandler: PrivateAIModelDownloadProgressHandler?) async throws -> URL {
