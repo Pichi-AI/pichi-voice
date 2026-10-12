@@ -13,6 +13,7 @@ final nonisolated class PichiMeetingSummaryRedirectPolicy: NSObject, URLSessionT
 nonisolated enum PichiMeetingSummaryTransport {
     static let ollamaContextTokens = 8192
     static let ollamaOutputTokens = 3000
+    static let maximumLedgerSchemaEnumValues = 1000
     static let redirectPolicy = PichiMeetingSummaryRedirectPolicy()
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -233,7 +234,8 @@ nonisolated enum PichiMeetingSummaryTransport {
         return context
     }
 
-    static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil, actionStates: Bool = false) -> [String: Any] {
+    static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil, candidateSourceIndexes: [Int: [Int]]? = nil,
+                       actionStates: Bool = false) -> [String: Any] {
         var evidence: [String: Any] = [
             "type": "object", "additionalProperties": false, "required": ["segmentID", "quote"],
             "properties": ["segmentID": ["type": "string"], "quote": ["type": "string", "minLength": 1, "maxLength": 500]],
@@ -261,8 +263,30 @@ nonisolated enum PichiMeetingSummaryTransport {
                 updateProperties["status"] = ["anyOf": [["type": "null"], ["type": "string", "enum": PichiMeetingSummaryActionStatus.allCases.map(\.rawValue)]]]
                 required.append("status")
             }
-            updates["items"] = ["type": "object", "additionalProperties": false,
-                                "required": required, "properties": updateProperties]
+            let update: [String: Any] = ["type": "object", "additionalProperties": false,
+                                         "required": required, "properties": updateProperties]
+            updates["items"] = update
+            if let candidateSourceIndexes {
+                let sourceSet = Set(sourceIndexes ?? [])
+                let candidates = Array(Set(candidateIndexes ?? candidateSourceIndexes.keys.map { $0 })).sorted()
+                let branches: [[String: Any]] = candidates.compactMap { candidate in
+                    let legal = Array(Set(candidateSourceIndexes[candidate] ?? []).intersection(sourceSet)).sorted()
+                    guard !legal.isEmpty else { return nil }
+                    var properties = updateProperties
+                    properties["index"] = ["type": "integer", "enum": [candidate]]
+                    var scopedEvidence = evidence
+                    scopedEvidence["properties"] = ["sourceIndex": ["type": "integer", "enum": legal]]
+                    scopedEvidence["required"] = ["sourceIndex"]
+                    var scopedCitations = citations
+                    scopedCitations["items"] = scopedEvidence
+                    properties["evidence"] = scopedCitations
+                    return ["type": "object", "additionalProperties": false, "required": required, "properties": properties]
+                }
+                updates["maxItems"] = branches.count
+                // Empty anyOf/enum is not portable. Runtime skips batches without
+                // legal candidates; the standalone empty schema allows no updates.
+                if !branches.isEmpty { updates["items"] = ["anyOf": branches] }
+            }
             return definitions.merging(["type": "object", "additionalProperties": false, "required": ["updates"],
                                         "properties": ["updates": updates]]) { _, new in new }
         }

@@ -330,7 +330,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     var baseCacheIdentity: String {
         // Hash a canonical payload rather than delimiter-joining user-controlled values.
         // Credentials and the temporary inference alias never become persisted metadata.
-        let payload: [String: Any] = ["version": 16, "provider": self.providerID, "model": self.modelID,
+        let payload: [String: Any] = ["version": 17, "provider": self.providerID, "model": self.modelID,
                                       "endpoint": self.baseURL, "language": self.language,
                                       "execution": self.execution.identity, "connection": self.connectionOptions]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
@@ -653,7 +653,8 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
     }
 
     private func config(prompt: String, input: String, configuration: PichiMeetingSummaryConfiguration,
-                        sources: [PichiMeetingSummarySource]? = nil, candidateIndexes: [Int]? = nil, actionStates: Bool = false) throws -> LLMClient.Config {
+                        sources: [PichiMeetingSummarySource]? = nil, candidateIndexes: [Int]? = nil,
+                        candidateSourceIndexes: [Int: [Int]]? = nil, actionStates: Bool = false) throws -> LLMClient.Config {
         var config = LLMClient.Config(messages: [["role": "system", "content": prompt], ["role": "user", "content": input]],
                                       model: configuration.inferenceModelID ?? configuration.modelID, baseURL: configuration.baseURL,
                                       apiKey: configuration.apiKey, streaming: false, maxTokens: configuration.execution.outputTokens)
@@ -673,7 +674,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             || CloudTextProvider.descriptor(forEndpoint: config.baseURL) != nil {
             guard sources.count <= 128 else { throw PichiMeetingSummaryError.tooManyChunks }
             let schema = PichiMeetingSummaryTransport.schema(ledger: prompt.contains("Reconcile meeting"), sourceIndexes: sources.map(\.sourceIndex),
-                                                            candidateIndexes: candidateIndexes, actionStates: actionStates)
+                                                            candidateIndexes: candidateIndexes, candidateSourceIndexes: candidateSourceIndexes, actionStates: actionStates)
             guard try JSONSerialization.data(withJSONObject: schema).count <= 64_000 else { throw PichiMeetingSummaryError.tooManyChunks }
             config.extraParameters["response_format"] = ["type": "json_schema", "json_schema": [
                 "name": "meeting_summary", "strict": true,
@@ -749,6 +750,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         let index: Int
         let lastSourceSeconds: TimeInterval
         let item: PichiMeetingSummaryItem
+        let allowedSourceIndexes: [Int]
     }
     private struct LedgerChange: Codable {
         let sourceSeconds: TimeInterval
@@ -815,32 +817,50 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         Include an update only when a later change explicitly cancels, postpones or replaces that candidate. A discussion or unrelated change does not supersede it. A change earlier than lastSourceSeconds cannot supersede the candidate.
         Never invent or rewrite a candidate, owner or date. Do not omit a candidate just because it is not mentioned again. Each update must cite an exact supplied later change quote. Empty updates is valid. If uncertain, leave the candidate unchanged.
         """
+        let scopedPrompt = prompt + "\nFor each candidate, select evidence ONLY from its allowedSourceIndexes. These are request-local legal later witnesses for that candidate, not answers or semantic matches. Still verify that the selected later speech directly establishes the claimed update. Never borrow another candidate's allowed list."
         for events in eventBatches {
-            let candidates = result.enumerated().filter { resolvingQuestions ? $0.element.resolved != true : $0.element.superseded != true }.map {
-                LedgerCandidate(index: $0.offset, lastSourceSeconds: $0.element.evidence.compactMap { times[$0.segmentID] }.max() ?? 0, item: $0.element)
+            let catalog = try self.sources(events.flatMap { $0.item.evidence }, turns: turns)
+            let candidates = result.enumerated().filter { resolvingQuestions ? $0.element.resolved != true : $0.element.superseded != true }.compactMap { entry -> LedgerCandidate? in
+                let lastSourceSeconds = entry.element.evidence.compactMap { times[$0.segmentID] }.max() ?? 0
+                let allowed = catalog.filter { source in
+                    source.seconds > lastSourceSeconds && events.contains { event in
+                        event.sourceSeconds > lastSourceSeconds && event.item.evidence.contains(source.evidence)
+                    }
+                }.map(\.sourceIndex)
+                // No possible legal witness in this event batch means no update
+                // request. The original ledger item remains intact for later batches.
+                guard !allowed.isEmpty else { return nil }
+                return LedgerCandidate(index: entry.offset, lastSourceSeconds: lastSourceSeconds, item: entry.element,
+                                       allowedSourceIndexes: allowed)
             }
             var candidateBatches: [[LedgerCandidate]] = []
             var candidateBatch: [LedgerCandidate] = []
             var candidateSize = 0
+            // Shared structured-output subset: bounded nested anyOf branches use
+            // at most 1000 enum values in total, including global evidence choices.
+            var schemaEnumValues = catalog.count
             for candidate in candidates {
                 let cost = try self.encoded(candidate).count
-                if !candidateBatch.isEmpty, candidateSize + cost > 6000 {
-                    candidateBatches.append(candidateBatch); candidateBatch = []; candidateSize = 0
+                let enumCost = candidate.allowedSourceIndexes.count + 1 + (actionStates ? PichiMeetingSummaryActionStatus.allCases.count : 0)
+                if !candidateBatch.isEmpty, candidateSize + cost > 6000
+                    || schemaEnumValues + enumCost > PichiMeetingSummaryTransport.maximumLedgerSchemaEnumValues {
+                    candidateBatches.append(candidateBatch); candidateBatch = []; candidateSize = 0; schemaEnumValues = catalog.count
                 }
-                candidateBatch.append(candidate); candidateSize += cost
+                candidateBatch.append(candidate); candidateSize += cost; schemaEnumValues += enumCost
             }
             if !candidateBatch.isEmpty { candidateBatches.append(candidateBatch) }
             for candidates in candidateBatches {
                 try Task.checkCancellation()
-                let catalog = try self.sources(events.flatMap { $0.item.evidence }, turns: turns)
+                let scopes = Dictionary(uniqueKeysWithValues: candidates.map { ($0.index, $0.allowedSourceIndexes) })
                 guard let original = try JSONSerialization.jsonObject(with: Data(self.encoded(LedgerRequest(candidates: candidates, changes: events)).utf8)) as? [String: Any]
                 else { throw PichiMeetingSummaryError.invalidOutput }
                 let input = try self.preparedInput(original, sources: catalog)
                 // Validation/regeneration sees the exact same state and request
                 // catalog. No prefix from a rejected response enters later batches.
                 let stateBeforeUpdates = result
-                var raw = try await self.completion(self.config(prompt: prompt, input: input, configuration: configuration,
-                                                              sources: catalog, candidateIndexes: candidates.map(\.index), actionStates: actionStates), remainingRequests: &remainingRequests)
+                var raw = try await self.completion(self.config(prompt: scopedPrompt, input: input, configuration: configuration,
+                                                              sources: catalog, candidateIndexes: candidates.map(\.index),
+                                                              candidateSourceIndexes: scopes, actionStates: actionStates), remainingRequests: &remainingRequests)
                 for attempt in 0..<2 {
                     try Task.checkCancellation()
                     do {
@@ -853,9 +873,10 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                     } catch {
                         guard attempt == 0, let instruction = self.ledgerRepairInstruction(error) else { throw error }
                         try Task.checkCancellation()
-                        raw = try await self.completion(self.config(prompt: prompt + "\nThe previous ledger response was rejected. " + instruction,
+                        raw = try await self.completion(self.config(prompt: scopedPrompt + "\nThe previous ledger response was rejected. " + instruction,
                             input: input, configuration: configuration, sources: catalog,
-                            candidateIndexes: candidates.map(\.index), actionStates: actionStates), remainingRequests: &remainingRequests)
+                            candidateIndexes: candidates.map(\.index), candidateSourceIndexes: scopes,
+                            actionStates: actionStates), remainingRequests: &remainingRequests)
                     }
                 }
             }
@@ -899,8 +920,9 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                   updated.insert(update.index).inserted, (1...8).contains(update.evidence.count),
                   actionStates ? update.hasStatus : !update.hasStatus
             else { throw PichiMeetingSummaryError.invalidEvidence }
+            let legalEvidence = Set(catalog.filter { candidate.allowedSourceIndexes.contains($0.sourceIndex) }.map(\.evidence))
             for evidence in update.evidence {
-                guard let evidenceTime = times[evidence.segmentID], evidenceTime > candidate.lastSourceSeconds,
+                guard legalEvidence.contains(evidence), let evidenceTime = times[evidence.segmentID], evidenceTime > candidate.lastSourceSeconds,
                       let event = events.first(where: { event in
                     event.sourceSeconds > candidate.lastSourceSeconds && event.item.evidence.contains(evidence)
                 }), event.sourceSeconds > candidate.lastSourceSeconds

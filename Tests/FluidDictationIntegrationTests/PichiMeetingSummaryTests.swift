@@ -356,7 +356,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let array = try XCTUnwrap(fields["updates"] as? [String: Any])
             XCTAssertEqual(array["maxItems"] as? Int, 1)
             let item = try XCTUnwrap(array["items"] as? [String: Any])
-            let itemFields = try XCTUnwrap(item["properties"] as? [String: Any])
+            let branch = try XCTUnwrap((item["anyOf"] as? [[String: Any]])?.first)
+            let itemFields = try XCTUnwrap(branch["properties"] as? [String: Any])
             XCTAssertEqual((itemFields["index"] as? [String: Any])?["enum"] as? [Int], [0])
         }
     }
@@ -943,24 +944,38 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 session.transcriptSegments[1].start = .init(value: 0, timescale: 1000)
             }
             let transport = CompletionStateTransport(omitStatus: !earlier)
-            do {
-                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            if earlier {
+                let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                     .generate(session: session, configuration: self.configuration())
-                XCTFail("Missing action update metadata or a prior completion must not create an accepted current state")
-            } catch PichiMeetingSummaryError.invalidEvidence {}
+                let pending = try XCTUnwrap(result.actions.first { $0.status == .agreed })
+                XCTAssertNil(pending.superseded, "Earlier completion must not change a later pending task")
+                XCTAssertEqual(pending.evidence.map(\.segmentID), [session.transcriptSegments[0].id])
+                let requests = await transport.requests
+                XCTAssertFalse(requests.contains { ($0.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") },
+                               "No candidate can legally receive an equal-time or earlier completion")
+            } else {
+                do {
+                    _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                        .generate(session: session, configuration: self.configuration())
+                    XCTFail("Missing action update metadata must remain rejected for a candidate with legal later witnesses")
+                } catch PichiMeetingSummaryError.invalidEvidence {}
+            }
         }
     }
 
-    func testEarlierChangeCannotCancelLaterDecision() async {
+    func testEarlierChangeCannotCancelLaterDecision() async throws {
         let transport = FixtureTransport(cancellationMode: true, wrongChronology: true)
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
         var session = self.cancellationSession()
         session.transcriptSegments[0].start = .init(value: 120_000, timescale: 1000)
         session.transcriptSegments[1].start = .init(value: 0, timescale: 1000)
-        do {
-            _ = try await generator.generate(session: session, configuration: self.configuration())
-            XCTFail("The transport attempted to supersede a later decision using an earlier source")
-        } catch { XCTAssertEqual(error.localizedDescription, PichiMeetingSummaryError.invalidEvidence.localizedDescription) }
+        let result = try await generator.generate(session: session, configuration: self.configuration())
+        let decision = try XCTUnwrap(result.decisions.first { $0.text == "Выпустить в пятницу." })
+        XCTAssertNil(decision.superseded, "Earlier cancellation must not supersede the later decision")
+        XCTAssertEqual(decision.evidence.map(\.segmentID), [session.transcriptSegments[0].id])
+        let requests = await transport.requests
+        XCTAssertFalse(requests.contains { ($0.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") },
+                       "Zero legal future witnesses omit only the request, never the original ledger item")
     }
 
     func testMergedCorrectionRespectsCanonicalEvidenceLimitWithoutClipping() async throws {
@@ -1118,16 +1133,18 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
     }
 
-    func testEarlierAnswerCannotResolveLaterQuestion() async {
+    func testEarlierAnswerCannotResolveLaterQuestion() async throws {
         let transport = FixtureTransport(wrongChronology: true, answerMode: true)
         let generator = PichiMeetingSummaryGenerator { try await transport.complete($0) }
         var session = self.questionSession()
         session.transcriptSegments[0].start = .init(value: 120_000, timescale: 1000)
         session.transcriptSegments[1].start = .init(value: 0, timescale: 1000)
-        do {
-            _ = try await generator.generate(session: session, configuration: self.configuration())
-            XCTFail("An earlier answer cannot resolve a question asked later")
-        } catch { XCTAssertEqual(error.localizedDescription, PichiMeetingSummaryError.invalidEvidence.localizedDescription) }
+        let result = try await generator.generate(session: session, configuration: self.configuration())
+        let question = try XCTUnwrap(result.openQuestions.first)
+        XCTAssertNil(question.resolved, "An earlier answer cannot resolve a question asked later")
+        XCTAssertEqual(question.evidence.map(\.segmentID), [session.transcriptSegments[0].id])
+        let requests = await transport.requests
+        XCTAssertFalse(requests.contains { ($0.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") })
     }
 
     func testRepeatedQuestionOccurrencesAreNotMergedAcrossEarlierAnswer() {
@@ -1488,6 +1505,146 @@ final class PichiMeetingSummaryTests: XCTestCase {
             throw error
         }
         try await store.delete(id: session.id)
+    }
+
+    func testLedgerScopedSchemaBindsCandidateIndexAndLegalWitnessesWithTaskState() throws {
+        for actionStates in [false, true] {
+            let schema = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [0, 1, 2, 3],
+                candidateIndexes: [4, 11, 27], candidateSourceIndexes: [4: [0, 1], 11: [2, 999], 27: []], actionStates: actionStates)
+            XCTAssertEqual(schema["type"] as? String, "object")
+            XCTAssertNil(schema["anyOf"], "Keep the structured-output root as an object")
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let updates = try XCTUnwrap(properties["updates"] as? [String: Any])
+            XCTAssertEqual(updates["maxItems"] as? Int, 2)
+            let item = try XCTUnwrap(updates["items"] as? [String: Any])
+            let branches = try XCTUnwrap(item["anyOf"] as? [[String: Any]])
+            XCTAssertEqual(branches.count, 2)
+            for (offset, expected) in [(4, [0, 1]), (11, [2])] {
+                let branch = try XCTUnwrap(branches.first {
+                    (($0["properties"] as? [String: Any])?["index"] as? [String: Any])?["enum"] as? [Int] == [offset]
+                })
+                let fields = try XCTUnwrap(branch["properties"] as? [String: Any])
+                XCTAssertEqual(branch["additionalProperties"] as? Bool, false)
+                XCTAssertEqual(Set(branch["required"] as? [String] ?? []), Set(actionStates ? ["index", "evidence", "status"] : ["index", "evidence"]))
+                let citations = try XCTUnwrap(fields["evidence"] as? [String: Any])
+                XCTAssertEqual(citations["minItems"] as? Int, 1)
+                XCTAssertEqual(citations["maxItems"] as? Int, 8)
+                let evidence = try XCTUnwrap(citations["items"] as? [String: Any])
+                let evidenceFields = try XCTUnwrap(evidence["properties"] as? [String: Any])
+                XCTAssertEqual((evidenceFields["sourceIndex"] as? [String: Any])?["enum"] as? [Int], expected)
+                XCTAssertEqual(Set(evidenceFields.keys), ["sourceIndex"])
+                if actionStates {
+                    let status = try XCTUnwrap(fields["status"] as? [String: Any])
+                    let choices = try XCTUnwrap(status["anyOf"] as? [[String: Any]])
+                    XCTAssertEqual(choices[0]["type"] as? String, "null")
+                    XCTAssertEqual(choices[1]["enum"] as? [String], PichiMeetingSummaryActionStatus.allCases.map(\.rawValue))
+                } else { XCTAssertNil(fields["status"]) }
+            }
+            let empty = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [0], candidateIndexes: [4], candidateSourceIndexes: [4: []])
+            let emptyProperties = try XCTUnwrap(empty["properties"] as? [String: Any])
+            XCTAssertEqual((emptyProperties["updates"] as? [String: Any])?["maxItems"] as? Int, 0)
+        }
+    }
+
+    func testLedgerScopeMetadataUsesStrictLaterSourcesForEachCandidateAndRetainsZeroEligibleItem() async throws {
+        var fixture = self.ledgerRepairFixture()
+        let last = fixture.session.transcriptSegments[3]
+        fixture.document.openQuestions.append(.init(text: "Нужно ли уточнить срок?", evidence: [.init(segmentID: last.id, quote: last.text)]))
+        let valid = "{\"updates\":[{\"index\":0,\"evidence\":[{\"sourceIndex\":2}]},{\"index\":1,\"evidence\":[{\"sourceIndex\":3}]}]}"
+        let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: [valid])
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: fixture.session, configuration: self.configuration())
+        XCTAssertEqual(result.openQuestions.count, 3)
+        XCTAssertEqual(result.openQuestions[2], fixture.document.openQuestions[2], "An ineligible candidate is preserved, not dropped or resolved")
+        let requests = await transport.ledgerRequests
+        XCTAssertEqual(requests.count, 1)
+        let input = try XCTUnwrap(requests[0].messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        _ = try ModelSource.catalog(from: fields)
+        let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+        XCTAssertEqual(candidates.compactMap { $0["index"] as? Int }, [0, 1])
+        XCTAssertEqual(candidates[0]["allowedSourceIndexes"] as? [Int], [1, 2, 3])
+        XCTAssertEqual(candidates[1]["allowedSourceIndexes"] as? [Int], [2, 3], "An equal-time witness legal for another candidate remains forbidden here")
+        let format = try XCTUnwrap(requests[0].extraParameters["response_format"] as? [String: Any])
+        let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
+        let schemaProperties = try XCTUnwrap(schema["properties"] as? [String: Any])
+        let updates = try XCTUnwrap(schemaProperties["updates"] as? [String: Any])
+        let branches = try XCTUnwrap((updates["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])
+        XCTAssertEqual(branches.count, 2)
+        XCTAssertTrue((requests[0].messages.first?["content"] as? String ?? "").contains("ONLY from its allowedSourceIndexes"))
+    }
+
+    func testNoEligibleFutureWitnessMakesNoLedgerRequestAndPreservesOriginalQuestions() async throws {
+        var fixture = self.ledgerRepairFixture()
+        fixture.document.answers = Array(fixture.document.answers!.prefix(1)) // Equal for first question, earlier for second.
+        let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: [])
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: fixture.session, configuration: self.configuration())
+        XCTAssertEqual(result.openQuestions, fixture.document.openQuestions)
+        let count = await transport.ledgerRequests.count
+        XCTAssertEqual(count, 0, "Deterministic absence of legal witnesses skips the request, without manufacturing an empty model response")
+    }
+
+    func testLiteralLaterTranscriptQuoteWithoutMatchingLedgerEventStillFailsClosed() async throws {
+        var fixture = self.ledgerRepairFixture()
+        var unrelated = fixture.session.transcriptSegments[3]
+        unrelated.id = UUID()
+        unrelated.start = .init(value: 240_000, timescale: 1000)
+        unrelated.text = "Обсудили другую тему."
+        fixture.session.transcriptSegments.append(unrelated)
+        let invalid = try Self.wireJSON(["updates": [["index": 0,
+            "evidence": [["segmentID": unrelated.id.uuidString, "quote": unrelated.text]]]]])
+        let transport = LedgerRepairTransport(document: try self.json(fixture.document), responses: [invalid, invalid])
+        do {
+            _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: fixture.session, configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+            XCTFail("A later literal quote without a matching change/answer event cannot resolve a candidate")
+        } catch PichiMeetingSummaryError.invalidEvidence {}
+        let count = await transport.ledgerRequests.count
+        XCTAssertEqual(count, 2, "An API ignoring schema still receives at most one regeneration before whole-attempt rejection")
+    }
+
+    func testScopedLedgerBatchesStayWithinTotalSchemaEnumBudgetWithoutLosingCandidates() async throws {
+        var session = self.session()
+        session.transcriptSegments[0].text = "Вопрос."
+        var later = session.transcriptSegments[0]
+        later.id = UUID()
+        later.start = .init(value: 60_000, timescale: 1000)
+        let quotes = (0..<64).map { "П\($0)." }
+        later.text = quotes.joined(separator: " ")
+        session.transcriptSegments.append(later)
+        let original = PichiMeetingSummaryEvidence(segmentID: self.id, quote: "Вопрос.")
+        let questions = (0..<30).map { PichiMeetingSummaryItem(text: "Вопрос \($0)?", evidence: [original]) }
+        let answers = stride(from: 0, to: 64, by: 8).map { start in
+            PichiMeetingSummaryItem(text: "Уточнили ответ \(start).", evidence: quotes[start..<(start + 8)].map { .init(segmentID: later.id, quote: $0) })
+        }
+        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили вопросы.", evidence: [original])],
+            decisions: [], actions: [], openQuestions: questions, answers: answers)
+        let transport = LedgerRepairTransport(document: try self.json(document), responses: Array(repeating: "{\"updates\":[]}", count: 30))
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.openQuestions, questions)
+        let requests = await transport.ledgerRequests
+        XCTAssertGreaterThan(requests.count, 1)
+        var indexes: [Int] = []
+        for config in requests {
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(config.messages.last?["content"] as? String).utf8)) as? [String: Any])
+            let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+            indexes += candidates.compactMap { $0["index"] as? Int }
+            let format = try XCTUnwrap(config.extraParameters["response_format"] as? [String: Any])
+            let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
+            XCTAssertLessThanOrEqual(Self.schemaEnumCount(schema), PichiMeetingSummaryTransport.maximumLedgerSchemaEnumValues)
+        }
+        XCTAssertEqual(indexes.sorted(), Array(0..<30), "Every eligible candidate survives the bounded schema batches exactly once")
+    }
+
+    private nonisolated static func schemaEnumCount(_ value: Any) -> Int {
+        if let fields = value as? [String: Any] {
+            return ((fields["enum"] as? [Any])?.count ?? 0)
+                + fields.filter { $0.key != "enum" }.reduce(0) { $0 + Self.schemaEnumCount($1.value) }
+        }
+        if let values = value as? [Any] { return values.reduce(0) { $0 + Self.schemaEnumCount($1) } }
+        return 0
     }
 
     func testLedgerRegeneratesTemporalRejectionWithSameSourcesStateAndConfiguration() async throws {
