@@ -1409,8 +1409,10 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 .generate(session: session, configuration: self.configuration())
             XCTFail("Repairs must also consume the 256-call operation budget")
         } catch { guard case PichiMeetingSummaryError.tooManyChunks = error else { return XCTFail("Expected operation budget rejection") } }
-        let count = await transport.requests.count
-        XCTAssertEqual(count, 256)
+        let count = await transport.recordedRequests.count
+        let extractionCount = await transport.requests.count
+        XCTAssertEqual(count, 256, "Map, structural repair and support review share the same global admission budget")
+        XCTAssertLessThan(extractionCount, count, "Support reviews must consume budget rather than bypass admission")
     }
 
     @MainActor
@@ -1488,6 +1490,184 @@ final class PichiMeetingSummaryTests: XCTestCase {
         try await store.delete(id: session.id)
     }
 
+    func testSupportReviewRepairsWrongExcerptQuestionTasksAndMissingDistinctRequests() async throws {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = [
+            "Можем ли мы уже объявить релиз? Остались ли нерешённые вопросы?",
+            "Пожалуйста, найди сохранённую спецификацию. Проверь, проходит ли сборка сейчас.",
+            "Мы так и не получили согласование. Я считаю, что обещанные условия не выполнили.",
+        ].enumerated().map { index, text in
+            var turn = template
+            turn.id = UUID()
+            turn.start = .init(value: Int64(index * 1000), timescale: 1000)
+            turn.text = text
+            return turn
+        }
+        func item(_ text: String, index: Int, task: Bool = false) -> [String: Any] {
+            var result: [String: Any] = ["text": text, "evidence": [["sourceIndex": index]]]
+            if task {
+                result.merge(["title": text, "status": "requested", "urgency": "unspecified",
+                              "owner": NSNull(), "deadline": NSNull()]) { _, new in new }
+            }
+            return result
+        }
+        let candidate: [String: Any] = [
+            "summary": [item("Попросили проверить сборку.", index: 2)], // Literal but unrelated complaint.
+            "actions": [item("Объявить релиз", index: 0, task: true), item("Получить согласование", index: 2, task: true)],
+            "decisions": [], "openQuestions": [], "changes": [], "answers": [],
+        ]
+        let corrected: [String: Any] = [
+            "summary": [item("Обсудили готовность релиза и попросили найти спецификацию и проверить сборку.", index: 0)],
+            "actions": [item("Найти сохранённую спецификацию", index: 1, task: true), item("Проверить текущую сборку", index: 1, task: true)],
+            "decisions": [], "openQuestions": [item("Готов ли релиз к объявлению?", index: 0)], "changes": [], "answers": [],
+        ]
+        // Correct the recap's support too: both source excerpts must be selected.
+        var supported = corrected
+        supported["summary"] = [["text": "Обсудили готовность релиза и попросили найти спецификацию и проверить сборку.",
+                                 "evidence": [["sourceIndex": 0], ["sourceIndex": 1]]]]
+        let transport = SupportReviewTransport(responses: [try Self.wireJSON(candidate), try Self.wireJSON(supported)])
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.actions.map(\.text), ["Найти сохранённую спецификацию", "Проверить текущую сборку"])
+        XCTAssertEqual(result.openQuestions.first?.text, "Готов ли релиз к объявлению?")
+        XCTAssertEqual(result.actions[0].evidence.first?.segmentID, session.transcriptSegments[1].id)
+        XCTAssertEqual(Set(result.summary[0].evidence.map(\.segmentID)), Set(session.transcriptSegments.prefix(2).map(\.id)))
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2, "One extraction plus one bounded complete-document review")
+        let input = try XCTUnwrap(requests[1].messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        let sources = try ModelSource.catalog(from: fields)
+        XCTAssertEqual(sources.map(\.text), session.transcriptSegments.map(\.text), "Omission repair must see every original excerpt, including the end")
+        XCTAssertNotNil(fields["candidate"], "Reviewer must see the fallible candidate rather than perform an unrelated extraction")
+        let prompt = try XCTUnwrap(requests[1].messages.first?["content"] as? String)
+        XCTAssertTrue(prompt.contains("Work source-first"))
+        XCTAssertTrue(prompt.contains("polite requests phrased as questions"))
+        XCTAssertTrue(prompt.contains("EXACT selected excerpt"))
+        XCTAssertFalse(prompt.contains(session.transcriptSegments[0].text), "No fixture gold or private source in system instructions")
+        XCTAssertEqual(requests[0].model, requests[1].model)
+        XCTAssertEqual(requests[0].baseURL, requests[1].baseURL)
+        XCTAssertEqual(requests[0].maxTokens, requests[1].maxTokens)
+        XCTAssertEqual(requests[0].timeoutSeconds, requests[1].timeoutSeconds)
+        XCTAssertEqual(requests[0].providerOptions, requests[1].providerOptions)
+        XCTAssertEqual(PichiMeetingSummaryInput.turns(for: session).count, 3)
+    }
+
+    func testSupportReviewInvalidOutputOrEvidenceRejectsWholeAttemptWithoutFallbackOrRetry() async throws {
+        for reviewed in ["{}", try self.referenceResponse(999), try self.json(self.document(owner: "Неизвестный"))] {
+            let transport = SupportReviewTransport(responses: [try self.referenceResponse(0), reviewed])
+            do {
+                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: self.session(), configuration: self.configuration())
+                XCTFail("A valid extraction cannot mask an invalid support review")
+            } catch PichiMeetingSummaryError.invalidOutput {
+            } catch is PichiMeetingSummaryValidationIssue {
+            }
+            let requests = await transport.requests
+            XCTAssertEqual(requests.count, 2, "No regeneration of a rejected review and no extraction-only fallback")
+        }
+    }
+
+    func testSupportReviewOutputLimitDoesNotSplitOrPublishExtractionOnlyResult() async throws {
+        let transport = SupportReviewTransport(responses: [try self.referenceResponse(0)], exhaustReview: true)
+        do {
+            _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: self.session(), configuration: self.configuration())
+            XCTFail("Truncated review must fail closed")
+        } catch PichiMeetingSummaryError.outputLimit {}
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2)
+    }
+
+    func testSupportReviewCancellationJoinsCompletionThenReleasesSnapshot() async throws {
+        let entered = expectation(description: "Support review entered")
+        let transport = SupportReviewTransport(responses: [try self.referenceResponse(0)], reviewEntered: entered)
+        let generator = PichiMeetingSummaryGenerator(complete: { try await transport.complete($0) }, prepare: { configuration in
+            .init(configuration: configuration, release: { await transport.release() })
+        })
+        let task = Task { try await generator.generate(session: self.session(), configuration: self.configuration()) }
+        await fulfillment(of: [entered], timeout: 5)
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled review cannot publish candidate") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let events = await transport.events
+        XCTAssertEqual(events, ["review-entered", "review-joined", "release"], "Model restoration follows joined inference cancellation")
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2)
+    }
+
+    func testSupportReviewUsesArtifactReasoningAndOriginalStructuredSchema() async throws {
+        var configuration = self.configuration()
+        configuration.modelArtifactID = "synthetic-artifact"
+        configuration.inferenceModelID = "owned-fixture-alias"
+        configuration.execution = .extended
+        configuration.execution.reasoningParameter = "think"
+        configuration.execution.reasoningValue = "true"
+        let transport = SupportReviewTransport(responses: [try self.referenceResponse(0), try self.referenceResponse(0)])
+        _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: self.session(), configuration: configuration)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2)
+        for config in requests {
+            XCTAssertEqual(config.model, "owned-fixture-alias")
+            XCTAssertEqual(config.extraParameters["summary_artifact_id"] as? String, "synthetic-artifact")
+            XCTAssertEqual(config.extraParameters["think"] as? Bool, true)
+            XCTAssertEqual(config.timeoutSeconds, 900)
+            XCTAssertEqual(config.maxTokens, 8192)
+            XCTAssertEqual((config.extraParameters["options"] as? [String: Int])?["num_ctx"], 16384)
+            let format = try XCTUnwrap(config.extraParameters["response_format"] as? [String: Any])
+            let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            XCTAssertNotNil(properties["actions"])
+            XCTAssertNil(properties["updates"], "Revision returns the existing complete document, not a new ledger/patch schema")
+        }
+    }
+
+    private nonisolated static func wireJSON(_ fields: [String: Any]) throws -> String {
+        String(decoding: try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    private actor SupportReviewTransport {
+        var requests: [LLMClient.Config] = []
+        var events: [String] = []
+        let responses: [String]
+        let exhaustReview: Bool
+        let reviewEntered: XCTestExpectation?
+        init(responses: [String], exhaustReview: Bool = false, reviewEntered: XCTestExpectation? = nil) {
+            self.responses = responses
+            self.exhaustReview = exhaustReview
+            self.reviewEntered = reviewEntered
+        }
+        func complete(_ config: LLMClient.Config) async throws -> String {
+            self.requests.append(config)
+            if self.requests.count == 2 {
+                if self.exhaustReview { throw PichiMeetingSummaryError.outputLimit }
+                if let entered = self.reviewEntered {
+                    self.events.append("review-entered")
+                    entered.fulfill()
+                    defer { self.events.append("review-joined") }
+                    try await Task.sleep(for: .seconds(30))
+                }
+            }
+            guard self.responses.indices.contains(self.requests.count - 1) else { throw URLError(.badServerResponse) }
+            return self.responses[self.requests.count - 1]
+        }
+        func release() { self.events.append("release") }
+    }
+
+    /// Existing extraction/ledger fixtures are not semantic model judges. Their
+    /// explicit identity reviewer returns the projected candidate and records the
+    /// extra call, while preserving each original stage's assertions/script index.
+    /// Review-specific contrast/failure tests below use fully scripted reviewers.
+    private nonisolated static func identityReview(_ config: LLMClient.Config) throws -> String? {
+        guard (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions") else { return nil }
+        let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        _ = try ModelSource.catalog(from: fields)
+        let candidate = try XCTUnwrap(fields["candidate"] as? [String: Any])
+        return String(decoding: try JSONSerialization.data(withJSONObject: candidate), as: UTF8.self)
+    }
+
     /// The model sees this projection only. Persistence IDs belong to the runtime,
     /// and private fixture catalogs must never be serialized into a request.
     private nonisolated struct ModelSource: Decodable, Sendable {
@@ -1519,7 +1699,11 @@ final class PichiMeetingSummaryTests: XCTestCase {
     }
 
     private actor OutputBudgetTransport {
-        var requests: [LLMClient.Config] = []
+        var recordedRequests: [LLMClient.Config] = []
+        var requests: [LLMClient.Config] { recordedRequests.filter { !Self.isReview($0) } }
+        private static func isReview(_ config: LLMClient.Config) -> Bool {
+            (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions")
+        }
         var successfulExtractionSources: [PichiMeetingSummarySource] = []
         var truncations = 0
         let maximumSourceCharacters: Int
@@ -1538,7 +1722,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
 
         func complete(_ config: LLMClient.Config) throws -> String {
-            self.requests.append(config)
+            self.recordedRequests.append(config)
+            if let reviewed = try PichiMeetingSummaryTests.identityReview(config) { return reviewed }
             if self.invalidFirst, self.requests.count == 1 || (self.alternateInvalid && self.requests.count % 2 == 1) { return "{}" }
             let input = try XCTUnwrap(config.messages.last?["content"] as? String)
             let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
@@ -1572,7 +1757,11 @@ final class PichiMeetingSummaryTests: XCTestCase {
     }
 
     private actor RepairTransport {
-        var requests: [LLMClient.Config] = []
+        var recordedRequests: [LLMClient.Config] = []
+        var requests: [LLMClient.Config] { recordedRequests.filter { !Self.isReview($0) } }
+        private static func isReview(_ config: LLMClient.Config) -> Bool {
+            (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions")
+        }
         let responses: [String]
         let failTransport: Bool
 
@@ -1582,7 +1771,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
 
         func complete(_ config: LLMClient.Config) throws -> String {
-            self.requests.append(config)
+            self.recordedRequests.append(config)
+            if let reviewed = try PichiMeetingSummaryTests.identityReview(config) { return reviewed }
             if self.failTransport { throw URLError(.cannotConnectToHost) }
             let index = self.requests.count - 1
             guard self.responses.indices.contains(index) else { throw URLError(.badServerResponse) }
@@ -2131,7 +2321,11 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let includeAcceptedAction: Bool
         let acceptedFields: [String: String]
         var reconciliationStates: [PichiMeetingSummaryActionStatus] = []
-        var requests: [LLMClient.Config] = []
+        var recordedRequests: [LLMClient.Config] = []
+        var requests: [LLMClient.Config] { recordedRequests.filter { !Self.isReview($0) } }
+        private static func isReview(_ config: LLMClient.Config) -> Bool {
+            (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions")
+        }
 
         init(initialStatus: PichiMeetingSummaryActionStatus = .requested, terminalStatus: PichiMeetingSummaryActionStatus? = nil,
              includeAcceptedAction: Bool = false, acceptedFields: [String: String] = [:]) {
@@ -2142,7 +2336,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
 
         func complete(_ config: LLMClient.Config) throws -> String {
-            self.requests.append(config)
+            self.recordedRequests.append(config)
+            if let reviewed = try PichiMeetingSummaryTests.identityReview(config) { return reviewed }
             let prompt = config.messages[0]["content"] as? String ?? ""
             let input = try XCTUnwrap(config.messages.last?["content"] as? String)
             let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
@@ -2197,14 +2392,19 @@ final class PichiMeetingSummaryTests: XCTestCase {
     private actor UpdateOrderTransport {
         let reversed: Bool
         let invalidSecondEvidence: Bool
-        var requests: [LLMClient.Config] = []
+        var recordedRequests: [LLMClient.Config] = []
+        var requests: [LLMClient.Config] { recordedRequests.filter { !Self.isReview($0) } }
+        private static func isReview(_ config: LLMClient.Config) -> Bool {
+            (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions")
+        }
         init(reversed: Bool, invalidSecondEvidence: Bool = false) {
             self.reversed = reversed
             self.invalidSecondEvidence = invalidSecondEvidence
         }
 
         func complete(_ config: LLMClient.Config) throws -> String {
-            self.requests.append(config)
+            self.recordedRequests.append(config)
+            if let reviewed = try PichiMeetingSummaryTests.identityReview(config) { return reviewed }
             let prompt = try XCTUnwrap(config.messages.first?["content"] as? String)
             let input = try XCTUnwrap(config.messages.last?["content"] as? String)
             let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
@@ -2241,11 +2441,16 @@ final class PichiMeetingSummaryTests: XCTestCase {
 
     private actor CompletionStateTransport {
         let omitStatus: Bool
-        var requests: [LLMClient.Config] = []
+        var recordedRequests: [LLMClient.Config] = []
+        var requests: [LLMClient.Config] { recordedRequests.filter { !Self.isReview($0) } }
+        private static func isReview(_ config: LLMClient.Config) -> Bool {
+            (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions")
+        }
         init(omitStatus: Bool = false) { self.omitStatus = omitStatus }
 
         func complete(_ config: LLMClient.Config) throws -> String {
-            self.requests.append(config)
+            self.recordedRequests.append(config)
+            if let reviewed = try PichiMeetingSummaryTests.identityReview(config) { return reviewed }
             let prompt = config.messages[0]["content"] as? String ?? ""
             let input = try XCTUnwrap(config.messages.last?["content"] as? String)
             let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
@@ -2274,7 +2479,11 @@ final class PichiMeetingSummaryTests: XCTestCase {
     }
 
     private actor FixtureTransport {
-        var requests: [LLMClient.Config] = []
+        var recordedRequests: [LLMClient.Config] = []
+        var requests: [LLMClient.Config] { recordedRequests.filter { !Self.isReview($0) } }
+        private static func isReview(_ config: LLMClient.Config) -> Bool {
+            (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions")
+        }
         let cancellationMode: Bool
         let wrongChronology: Bool
         let answerMode: Bool
@@ -2286,7 +2495,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
 
         func complete(_ config: LLMClient.Config) throws -> String {
-            self.requests.append(config)
+            self.recordedRequests.append(config)
+            if let reviewed = try PichiMeetingSummaryTests.identityReview(config) { return reviewed }
             let text = config.messages.last?["content"] as? String ?? ""
             let prompt = config.messages[0]["content"] as? String ?? ""
             let request = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
