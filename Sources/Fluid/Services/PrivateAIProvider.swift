@@ -260,6 +260,7 @@ protocol PrivateAIIntegrationProviding: Sendable {
     var selectedModel: PrivateAIRegisteredModel { get }
     var configuredLocalModelPath: String? { get }
     var modelDirectoryURL: URL { get }
+    /// True only when prewarming can use an installed local runtime without network inference.
     var isLocalRuntimeConfigured: Bool { get }
 
     func expectedLocalModelURL(for model: PrivateAIRegisteredModel) -> URL

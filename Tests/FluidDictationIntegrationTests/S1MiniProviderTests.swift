@@ -6,6 +6,24 @@ import Foundation
 import XCTest
 
 final nonisolated class S1MiniProviderTests: XCTestCase {
+    #if !S1_MINI_STANDALONE_TESTS
+    func testLocalStartupPrewarmLoadsInstalledNativeModelThroughService() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = TestEngine()
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let service = PrivateAIIntegrationService(testingProvider: provider)
+        await service.prewarmDictation(localOnly: true)
+        let loaded = await provider.loadedModelState()
+        let loads = await engine.loads
+        XCTAssertEqual(loaded?.state, .ready)
+        XCTAssertEqual(loads, 1)
+        await provider.shutdownForTermination()
+    }
+    #endif
+
     func testOfficialPromptUsesExactControlsAndEmptyThinkingPrefix() {
         let raw = "привет мир Ёж и ёлка"
         let prompt = S1MiniPrompt.make(transcript: raw)
