@@ -51,26 +51,42 @@ Store personal dictionaries, private audio, and proprietary weights outside Git 
 
 ## Upstream updates
 
-Use one integration branch for each update batch:
+Use one integration branch for each update batch. For a published release, pass its exact upstream tag:
 
 ```bash
-bash scripts/dev/prepare-upstream-sync.sh
-# If an update exists, the script prints the new worktree path.
-# Resolve conflicts there and review inherited workflow changes.
+bash scripts/dev/prepare-upstream-sync.sh v1.6.11
+# Change into the absolute "Sync worktree" path printed by the helper.
+git status --short
+git diff --name-only --diff-filter=U
+# Resolve conflicts there, stage the reviewed files and inspect the combined diff.
 bash scripts/dev/check.sh
+bash scripts/dev/macos.sh build
 bash scripts/dev/macos.sh test
 # Commit the pending merge, push the task branch to origin, and open a PR.
 ```
 
-The helper fetches both `origin/main` and `upstream/main`. If there are new upstream commits, it creates a task worktree from our latest main and starts `git merge --no-ff --no-commit upstream/main`. It never modifies our main automatically and leaves conflicts in the new worktree for review.
+The helper fetches `origin/main`, `upstream/main` and upstream tags, then resolves the chosen target to an immutable commit SHA. It rejects a target outside the fetched upstream main history. Before creating a worktree, it prints the downstream baseline, upstream target, fetched upstream main and common ancestor SHAs. If our main already contains that target, it exits without creating a worktree.
+
+An update uses a unique task worktree at the reported downstream SHA and starts `git merge --no-ff --no-commit <upstream-SHA>`. Later changes to tracking refs cannot change either side of that attempt. The existing `new-worktree.sh` accepts an optional base ref for this purpose; its default still fetches and starts from the latest `origin/main`. The sync helper leaves every conflict unresolved and prints its path with the worktree location. It never commits, pushes or changes either repository's main branch.
+
+Omitting the argument preserves the original `upstream/main` workflow. This intentionally includes the fetched main revision, which may contain commits after the latest release. To repeat the exact upstream selection later, use the recorded target SHA as the argument. The helper will use the then-current downstream main. To reproduce both sides of an earlier attempt, create a new worktree with `bash scripts/dev/new-worktree.sh upstream-replay <recorded-downstream-SHA>` and merge the recorded upstream SHA there. Retain the full SHAs rather than relying on a tag or branch name that might move.
 
 | Method | Role |
 | --- | --- |
-| Merge upstream main | Default; preserves ancestry and imports the upstream changes in the selected batch |
+| Merge a pinned upstream release or main revision | Preserves ancestry and imports the selected batch; the helper defaults to main |
 | Rebase | Only for unpublished task branches; do not rewrite the shared main branch |
 | Cherry-pick | An urgent individual fix when a full update is unsuitable; record its upstream commit |
 
-No branching strategy guarantees zero conflicts. Separate files and small integration points reduce their frequency and make conflict resolution reviewable. Recheck our Codex files, private-data ignores, workflow guards, and app/model update configuration after every upstream merge.
+No branching strategy guarantees zero conflicts. Separate files and small integration points reduce their frequency and make conflict resolution reviewable. A clean Git merge also needs semantic review: upstream can change a contract without touching a downstream adapter's file.
+
+For each batch, save a reviewable update report in `docs/development/` with:
+
+1. The upstream release/ref, all baseline SHAs, integrated revision and release scope.
+2. Every conflicted path, the reason both sides changed it, and the behavior preserved by the resolution. Review individual hunks rather than choosing an entire side automatically.
+3. Concrete extension-boundary decisions. Check provider and meeting registries, model/artifact snapshots, cancellation, resource ownership, shared service operations, branding and localization. Refactor only when the conflict or contract change identifies a specific limitation; follow [AGENTS.md](../../AGENTS.md#architecture-requirements-for-every-agent).
+4. Checks actually run against the combined result, with downstream and inherited upstream regressions listed separately. Recheck Codex files, private-data ignores, workflow guards and app/model update configuration.
+5. Independent automated review of the integrated revision, corrected findings and remaining limitations. Portable checks include offline synthetic Git regressions for the sync helper; they do not compile the app or verify model inference.
+6. Interactive evidence from the exact frozen signed revision when permissions, capture, typing, UI or model behavior is tested. Follow the signing and screenshot rules in [AGENTS.md](../../AGENTS.md#verification). An earlier revision's permission or capture result cannot establish the new revision's result.
 
 A manual sync check is sufficient initially. A future scheduled update workflow should create a review branch or PR and run checks, without auto-merging or shipping. No recurring update automation is enabled by this setup.
 
