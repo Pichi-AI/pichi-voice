@@ -775,7 +775,6 @@ struct ContentView: View {
         }
 
         self.loadProviderState()
-        self.prewarmAIDictationIfNeeded(for: .primary, localOnly: true)
         self.installShortcutCaptureMonitor()
     }
 
@@ -4745,7 +4744,7 @@ struct ContentView: View {
         return OllamaChatAdapter.supports(route.baseURL) ? route : nil
     }
 
-    private func prewarmAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot, localOnly: Bool = false) {
+    private func prewarmAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
         let appBundleID = self.asr.isRunningOrStarting ? self.recordingAppInfo?.bundleId : DictationAppSession.shared.appID
         let settings = SettingsStore.shared
         let route = DictationProviderRoute.resolve(
@@ -4754,8 +4753,8 @@ struct ContentView: View {
             appBundleID: appBundleID
         )
         let nativeLocal = OllamaChatAdapter.supports(route.baseURL)
-        self.appServices.refreshLocalAIResidency(for: localOnly ? nil : slot)
-        if nativeLocal || localOnly {
+        self.appServices.refreshLocalAIResidency(for: slot)
+        if nativeLocal {
             // App-owned work survives window closure and rechecks daemon eviction.
             return
         }
