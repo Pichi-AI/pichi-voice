@@ -217,10 +217,89 @@ final class SettingsNavigationStateTests: XCTestCase {
         }
     }
 
+    func testNativeSearchBrandInkPreservesEditorAndSelection() async throws {
+        let state = SearchLocaleFixture()
+        let host = NSHostingView(rootView: SearchLocaleHost(state: state, source: "Search"))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        let field = try XCTUnwrap(try await self.waitForSearch(in: host, placeholder: "Search", query: state.query))
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.setSelectedRange(NSRange(location: 2, length: 3))
+        for (package, scheme) in try self.brandInkFixtures() {
+            state.package = package
+            state.scheme = scheme
+            let palette = AppTheme.adaptive(accent: .purple, colorScheme: scheme, package: package).palette
+            let ink = NSColor(palette.primaryText)
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if field.textColor == ink && editor.insertionPointColor == ink { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertTrue(self.descendants(of: NSSearchField.self, in: host).first === field)
+            XCTAssertTrue(field.currentEditor() === editor)
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 2, length: 3))
+            XCTAssertEqual(field.stringValue, "Settings Иван")
+            XCTAssertEqual(state.query, "Settings Иван")
+            XCTAssertEqual(field.textColor, ink)
+            XCTAssertEqual(editor.textColor, ink)
+            XCTAssertEqual(editor.insertionPointColor, ink)
+            let placeholder = try XCTUnwrap(field.placeholderAttributedString)
+            XCTAssertEqual(placeholder.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                           NSColor(palette.secondaryText))
+        }
+    }
+
+    func testPromptBrandInkPreservesTextViewAndSelection() async throws {
+        let state = SearchLocaleFixture()
+        let host = NSHostingView(rootView: PromptInkHost(state: state))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if !self.descendants(of: NSTextView.self, in: host).isEmpty { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let editor = try XCTUnwrap(self.descendants(of: NSTextView.self, in: host).first)
+        XCTAssertTrue(window.makeFirstResponder(editor))
+        editor.setSelectedRange(NSRange(location: 2, length: 3))
+        for (package, scheme) in try self.brandInkFixtures() {
+            state.package = package
+            state.scheme = scheme
+            let ink = NSColor(AppTheme.adaptive(accent: .purple, colorScheme: scheme, package: package).palette.primaryText)
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if editor.textColor == ink && editor.insertionPointColor == ink { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertTrue(self.descendants(of: NSTextView.self, in: host).first === editor)
+            XCTAssertEqual(editor.string, "Settings Иван")
+            XCTAssertEqual(state.query, "Settings Иван")
+            XCTAssertEqual(editor.selectedRange(), NSRange(location: 2, length: 3))
+            XCTAssertEqual(editor.textColor, ink)
+            XCTAssertEqual(editor.insertionPointColor, ink)
+            XCTAssertEqual(editor.typingAttributes[.foregroundColor] as? NSColor, ink)
+        }
+    }
+
+    private func brandInkFixtures() throws -> [(BrandPackage, ColorScheme)] {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try ["Sources/Fluid/Branding/brand-package.json", "Configuration/BrandExamples/alfa-demo.json"].flatMap { path in
+            let package = try BrandPackage.decode(Data(contentsOf: root.appendingPathComponent(path)))
+            return [(package, ColorScheme.light), (package, ColorScheme.dark)]
+        }
+    }
+
     private final class SearchLocaleFixture: ObservableObject {
         @Published var locale = Locale(identifier: "en")
         @Published var query = "Settings Иван"
         @Published var style: BrandStyle? = nil
+        @Published var package: BrandPackage? = nil
+        @Published var scheme: ColorScheme = .light
     }
 
     private struct SearchLocaleHost: View {
@@ -228,8 +307,18 @@ final class SettingsNavigationStateTests: XCTestCase {
         let source: String
         var body: some View {
             SidebarSearchField(text: self.$state.query, placeholder: self.source, isActive: true)
-                .appTheme(AppTheme.adaptive(accent: .purple, colorScheme: .light, package: BrandPackage(profile: .neutral, style: self.state.style)))
+                .appTheme(AppTheme.adaptive(accent: .purple, colorScheme: self.state.scheme,
+                    package: self.state.package ?? BrandPackage(profile: .neutral, style: self.state.style)))
                 .environment(\.locale, self.state.locale)
+        }
+    }
+
+    private struct PromptInkHost: View {
+        @ObservedObject var state: SearchLocaleFixture
+        var body: some View {
+            PromptTextView(text: self.$state.query)
+                .appTheme(AppTheme.adaptive(accent: .purple, colorScheme: self.state.scheme,
+                    package: self.state.package ?? BrandPackage(profile: .neutral)))
         }
     }
 
