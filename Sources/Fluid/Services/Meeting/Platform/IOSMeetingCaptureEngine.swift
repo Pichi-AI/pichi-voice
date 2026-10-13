@@ -228,6 +228,15 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
         return identity
     }
 
+    /// HFP couples headset input and output and has priority over A2DP. Enabling it for a
+    /// different frozen input lets iOS replace that input while the engine starts. Select only
+    /// the required input capability; A2DP remains available for presentation playback.
+    nonisolated static func captureCategoryOptions(for selectedInputPort: AVAudioSession.Port) -> AVAudioSession.CategoryOptions {
+        var options: AVAudioSession.CategoryOptions = [.mixWithOthers, .allowAirPlay, .defaultToSpeaker]
+        options.insert(selectedInputPort == .bluetoothHFP ? .allowBluetoothHFP : .allowBluetoothA2DP)
+        return options
+    }
+
     private static func protectSessionDirectory(_ directory: URL) throws {
         // `.complete` would make new chunks unavailable while the screen is locked. This policy
         // permits an ongoing recording after first unlock and still enables OS data protection.
@@ -311,8 +320,18 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
 #if DEBUG
                     self.trace("runtime.category.before")
 #endif
+                    var selectedInput = audioSession.availableInputs?.first(where: { $0.uid == self.microphone.captureDeviceID })
+                    if selectedInput == nil {
+                        // A saved HFP input can be hidden by a playback-only category. Enumerate
+                        // without activation, then require the exact requested UID before routing.
+                        try audioSession.setCategory(.playAndRecord, mode: .default,
+                                                     options: [.mixWithOthers, .allowBluetoothHFP])
+                        self.configuredSession = true
+                        selectedInput = audioSession.availableInputs?.first(where: { $0.uid == self.microphone.captureDeviceID })
+                    }
+                    guard let selectedInput else { throw MeetingCaptureError.microphoneUnavailable }
                     try audioSession.setCategory(.playAndRecord, mode: .default,
-                                                 options: [.mixWithOthers, .allowBluetoothHFP, .allowAirPlay, .defaultToSpeaker])
+                                                 options: IOSMeetingCaptureEngine.captureCategoryOptions(for: selectedInput.portType))
                     self.configuredSession = true
 #if DEBUG
                     self.trace("runtime.category.after")
@@ -358,6 +377,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
 #if DEBUG
                     self.trace("runtime.engineStart.after")
 #endif
+                    guard audioSession.currentRoute.inputs.contains(where: { $0.uid == self.microphone.captureDeviceID }) else {
+                        throw MeetingCaptureError.microphoneUnavailable
+                    }
                     self.observeLifecycle()
                     continuation.resume()
                 } catch {
