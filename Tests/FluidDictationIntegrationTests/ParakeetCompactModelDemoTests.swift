@@ -167,6 +167,7 @@ final class WindowSizingRegressionTests: XCTestCase {
         await self.settleHosting(host.view)
         XCTAssertEqual(window.frame.height, initialFrame.height, accuracy: 1,
                        "Opening the library must preserve the user's window height")
+        self.assertSidebarFooterVisible(state)
         let library = self.scrollViews(in: host.view).first { ($0.documentView?.bounds.height ?? 0) > 900 }
         XCTAssertNotNil(library, "The actual hosted library must retain a native scroll viewport")
         guard let library, let document = library.documentView else { return }
@@ -189,6 +190,7 @@ final class WindowSizingRegressionTests: XCTestCase {
             window.setContentSize(size)
             await self.settleHosting(host.view)
             XCTAssertEqual(host.view.bounds.height, size.height, accuracy: 1)
+            self.assertSidebarFooterVisible(state)
             let library = self.scrollViews(in: host.view).first { ($0.documentView?.bounds.height ?? 0) > 900 }
             XCTAssertNotNil(library)
             if let library { XCTAssertLessThanOrEqual(library.contentSize.height, size.height) }
@@ -200,6 +202,16 @@ final class WindowSizingRegressionTests: XCTestCase {
             view.layoutSubtreeIfNeeded()
             try? await Task.sleep(for: .milliseconds(30))
         }
+    }
+
+    private func assertSidebarFooterVisible(_ state: LibraryLayoutSelection,
+                                            file: StaticString = #filePath, line: UInt = #line) {
+        guard let viewport = state.sidebarViewport, let footer = state.footerFrame else {
+            XCTFail("The hosted sidebar must report its viewport and pinned footer", file: file, line: line)
+            return
+        }
+        XCTAssertGreaterThanOrEqual(footer.minY, -1, file: file, line: line)
+        XCTAssertLessThanOrEqual(footer.maxY, viewport.height + 1, file: file, line: line)
     }
 
     private func scrollViews(in view: NSView) -> [NSScrollView] {
@@ -287,6 +299,8 @@ final class WindowSizingRegressionTests: XCTestCase {
 @MainActor
 private final class LibraryLayoutSelection: ObservableObject {
     @Published var showsLibrary = false
+    var sidebarViewport: CGSize?
+    var footerFrame: CGRect?
 }
 
 @MainActor
@@ -295,18 +309,39 @@ private struct LibraryLayoutFixture: View {
 
     var body: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                Text("Search")
-                List(0..<20, id: \.self) { index in Text("Sidebar \(index)") }
-                Text("Settings")
+            ZStack {
+                VStack(spacing: 0) {
+                    Text("Search")
+                    List(0..<20, id: \.self) { index in Text("Sidebar \(index)") }
+                    Text("Settings")
+                        .onGeometryChange(for: CGRect.self) { geometry in
+                            geometry.frame(in: .named("library-layout-sidebar"))
+                        } action: { self.selection.footerFrame = $0 }
+                }
+                // The production sidebar keeps the settings navigation mounted too.
+                VStack {
+                    Text("Settings Search")
+                    List(0..<30, id: \.self) { index in Text("Setting \(index)") }
+                    Text("Back")
+                }
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
+            .fluidViewport()
+            .coordinateSpace(name: "library-layout-sidebar")
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { self.selection.sidebarViewport = $0 }
             .navigationSplitViewColumnWidth(min: 264, ideal: 300, max: 360)
         } detail: {
-            if self.selection.showsLibrary {
-                VoiceEngineSettingsScreen(appServices: .shared, theme: .dark)
-            } else {
-                Text("Overview").frame(maxWidth: .infinity, maxHeight: .infinity)
+            ZStack {
+                Color.clear
+                if self.selection.showsLibrary {
+                    VoiceEngineSettingsScreen(appServices: .shared, theme: .dark)
+                } else {
+                    Text("Overview").frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
+            .fluidViewport()
         }
         .navigationSplitViewStyle(.balanced)
         .fluidWindowSizing(.minimum(width: 800, height: 500))
