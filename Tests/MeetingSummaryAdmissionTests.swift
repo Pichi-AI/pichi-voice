@@ -5,6 +5,7 @@ import Foundation
 // Settings snapshot/getter, catalog, resolver, RemoteService and LLMClient unchanged.
 extension UserDefaults {
     func dictionary(forKey key: String) -> [String: Any]? { self.values[key] as? [String: Any] }
+    func data(forKey key: String) -> Data? { self.values[key] as? Data }
 }
 extension SettingsStore {
     struct ModelReasoningConfig {
@@ -73,6 +74,45 @@ nonisolated enum LocalAIModelResidencyPolicy {
         let response = try await self.callLLM(isOutputValid: { true })
         self.responseHandlerCount += 1
         return response.content
+    }
+}
+
+// UI admission runs production Generate/resolveRoute bodies. The controller is
+// an effect recorder, and every resulting HTTP request still uses the injected
+// session below. No NSApplication, private runtime or app defaults are accessed.
+@MainActor final class TemplateSummaryAdmissionOwner {
+    struct Session {}
+    final class Controller {
+        let busy = false
+        let checking = false
+        var route: MeetingSummaryRoute?
+        var dispatchCount = 0
+        func summarize(session _: Session, kind _: MeetingSummaryKind, route: MeetingSummaryRoute, customPrompt _: String) {
+            self.route = route
+            self.dispatchCount += 1
+        }
+        func summarizeOnDevice(session _: Session, kind _: MeetingSummaryKind, customPrompt _: String, thinking _: Bool, asr _: ASRService) {
+            fatalError("Template credential admission cannot invoke a private runtime")
+        }
+    }
+    let settings: SettingsStore
+    let preferences = MeetingSummaryPreferences(defaults: UserDefaults())
+    let controller = Controller()
+    var session: Session? = Session()
+    let isQuiescent = true
+    let usesOnDevice = false
+    let needsCustomPrompt = false
+    let asrService: ASRService? = nil
+    var route: MeetingSummaryRoute?
+    var readinessIssue: String?
+    init(selection: MeetingSummarySelection, settings: SettingsStore) {
+        self.preferences.selection = selection
+        self.settings = settings
+        // A previously displayed route is intentionally stale. Only a fresh
+        // click-time resolver may authorize a request with current credentials.
+        self.route = MeetingSummaryRoute(providerID: "stale-display", providerName: "Synthetic display",
+            modelID: "stale-model", baseURL: "https://api.openai.com/v1", apiKey: "stale-display-key",
+            reasoning: nil, supportsTemperature: true)
     }
 }
 
@@ -242,6 +282,22 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
                              remote: MeetingSummaryRemoteService) async throws -> MeetingSummaryRoute {
         let route = try await self.sendSummary(selection, settings: settings, remote: remote)
         _ = try await self.sendCommand(settings: settings)
+        _ = try await self.sendTemplate(selection, settings: settings, remote: remote)
+        return route
+    }
+    private static func sendTemplate(_ selection: MeetingSummarySelection, settings: SettingsStore,
+                                     remote: MeetingSummaryRemoteService) async throws -> MeetingSummaryRoute {
+        let owner = TemplateSummaryAdmissionOwner(selection: selection, settings: settings)
+        owner.generate()
+        guard let route = owner.controller.route else {
+            self.check(owner.controller.dispatchCount == 0 && owner.readinessIssue != nil,
+                "Rejected actual Generate click must not dispatch the controller")
+            throw LLMError.invalidRequest("Synthetic template admission rejected")
+        }
+        self.check(owner.controller.dispatchCount == 1 && route.providerID != "stale-display",
+            "Actual Generate action must replace its cached presentation route with fresh verified admission")
+        let result = try await remote.generate(transcript: "Synthetic meeting only.", kind: .executive, route: route)
+        self.check(result == "Synthetic summary", "Admitted template route reaches only the intercepted transport")
         return route
     }
     private static func sendCommand(settings: SettingsStore) async throws -> CommandAdmissionOwner {
@@ -253,13 +309,14 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
     }
     private static func rejects(_ selection: MeetingSummarySelection, settings: SettingsStore,
                                 remote: MeetingSummaryRemoteService, reason: String,
-                                callers: [String] = ["summary", "command"]) async {
+                                callers: [String] = ["summary", "command", "template"]) async {
         for caller in callers {
             let count = AdmissionURLProtocol.requestCount
             let owner = CommandAdmissionOwner(llmClient: self.commandClient)
             SettingsStore.shared = settings
             do {
                 if caller == "summary" { _ = try await self.sendSummary(selection, settings: settings, remote: remote) }
+                else if caller == "template" { _ = try await self.sendTemplate(selection, settings: settings, remote: remote) }
                 else { _ = try await owner.send() }
                 self.check(false, "\(reason), \(caller): admitted intercepted request, authorization present=\(AdmissionURLProtocol.lastAuthorization != nil)")
             } catch {
@@ -279,25 +336,51 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         defer { session.invalidateAndCancel() }
         self.commandClient = LLMClient(session: session)
         let remote = MeetingSummaryRemoteService(session: session)
+        if ProcessInfo.processInfo.environment["PICHI_TEMPLATE_UI_ADMISSION_PENDING_ONLY"] == "1" {
+            try await self.templatePendingProbe()
+            self.check(AdmissionURLProtocol.requestCount == 0, "Pending click probe must post no HTTP request")
+            print("PASS: actual Template Generate pending-credential probe; no controller dispatch or HTTP")
+            return
+        }
+        try await self.templatePendingProbe()
         try await self.refreshAdmission(remote)
         try await self.keylessAdmission(remote)
         try await self.aliasAndStaleConfiguration(remote)
         try await self.localAPIAdmission()
-        self.check(AdmissionURLProtocol.requestCount == 20 && AdmissionURLProtocol.unexpectedURLCount == 0,
-            "All 20 expected positive requests are intercepted; unknown URLs fail closed")
+        self.check(AdmissionURLProtocol.requestCount == 27 && AdmissionURLProtocol.unexpectedURLCount == 0,
+            "All 27 expected positive requests are intercepted; unknown URLs fail closed")
         if let path = ProcessInfo.processInfo.environment["PICHI_ADMISSION_REPORT_PATH"] {
             let report: [String: Any] = [
                 "status": "PASS", "admission_assertions": self.checks,
                 "intercepted_requests": AdmissionURLProtocol.requestCount,
                 "unexpected_urls": AdmissionURLProtocol.unexpectedURLCount,
                 "credential_backend": "injected_only", "transport": "explicit_session_protocol_classes",
-                "tested_callers": ["MeetingSummaryRoute.resolve + RemoteService + LLMClient", "CommandModeService.callLLM + LLMClient", "InferenceAPIController.handle + DictationPostProcessingService.process + LLMClient"],
+                "tested_callers": ["MeetingSummaryRoute.resolve + RemoteService + LLMClient", "TemplateMeetingSummaryView.generate + fresh resolveRoute + recorded controller dispatch + RemoteService + LLMClient", "CommandModeService.callLLM + LLMClient", "InferenceAPIController.handle + DictationPostProcessingService.process + LLMClient"],
                 "revision": ProcessInfo.processInfo.environment["PICHI_ADMISSION_SOURCE_REVISION"] ?? "unknown",
                 "source_dirty": ProcessInfo.processInfo.environment["PICHI_ADMISSION_SOURCE_DIRTY"] != "0",
             ]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
         }
         print("PASS: \(self.checks) summary, command and Local API credential admission checks; production storage/operations/HTTP, injected backend and intercepted requests only")
+    }
+
+    private static func templatePendingProbe() async throws {
+        let backend = AdmissionBackend(["openai": "synthetic-key"])
+        let (settings, service, selection) = self.fixture(backend)
+        await self.load(service)
+        let owner = TemplateSummaryAdmissionOwner(selection: selection, settings: settings)
+        owner.route = try MeetingSummaryRoute.resolve(selection, settings: settings)
+        backend.failNextReadWhileBlocked()
+        var settled = false
+        self.check(service.loadInBackground { _ in settled = true }, "Template pending refresh admitted")
+        await self.waitUntil { backend.isBlocked }
+        self.check(service.loadedKeys == nil && settings.commandModeModelCatalog().contains { $0.providerID == "openai" },
+            "Actual template click starts with old verified display data but no loaded credential snapshot")
+        owner.generate()
+        self.check(owner.controller.dispatchCount == 0 && owner.route == nil && owner.readinessIssue != nil,
+            "Actual Generate must invalidate the formerly verified cached route before any controller dispatch")
+        backend.unblockFailure()
+        await self.waitUntil { settled && service.readiness == .unavailable }
     }
 
     private static func refreshAdmission(_ remote: MeetingSummaryRemoteService) async throws {
@@ -394,7 +477,7 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         settings.availableModelsByProvider["custom:alias"] = ["replacement-model"]
         self.check(settings.verifiedChatModelConfiguration(providerID: "alias", modelID: "synthetic-model") == nil,
             "The shared boundary refuses a stale explicit model")
-        await self.rejects(selection, settings: settings, remote: remote, reason: "Selected summary model no longer belongs to provider", callers: ["summary"])
+        await self.rejects(selection, settings: settings, remote: remote, reason: "Selected summary model no longer belongs to provider", callers: ["summary", "template"])
         _ = try await self.sendCommand(settings: settings)
         self.check(AdmissionURLProtocol.lastModel == "replacement-model", "Command Mode retains its existing fallback to the current eligible model")
         settings.availableModelsByProvider["custom:alias"] = ["text-embedding-fixture"]

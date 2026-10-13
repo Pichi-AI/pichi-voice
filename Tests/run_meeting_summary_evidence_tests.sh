@@ -28,3 +28,4 @@ sed '/^@MainActor/,$d' Sources/Fluid/Views/CommandMarkdownContent.swift > "$task
 xcrun swiftc -parse-as-library Sources/Fluid/Localization/PichiLocalization.swift \
     "$task_test_dir/SummaryEvidence.swift" "$task_test_dir/Markdown.swift" Tests/MeetingSummaryEvidenceTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"
+python3 -S Tests/meeting_summary_ui_parity.py

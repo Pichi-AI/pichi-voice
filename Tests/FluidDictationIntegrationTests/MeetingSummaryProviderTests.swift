@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor
 final class MeetingSummaryProviderTests: XCTestCase {
+    func testSummaryTypeAndCustomPromptPersistIndependentlyFromDictation() throws {
+        let suite = "MeetingSummaryTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("dictation-model", forKey: "SelectedModel")
+        let preferences = MeetingSummaryPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.kind, .executive)
+        preferences.kind = .custom
+        preferences.customPrompt = "Список задач для Ёжика. Preserve user wording."
+        let restored = MeetingSummaryPreferences(defaults: defaults)
+        XCTAssertEqual(restored.kind, .custom)
+        XCTAssertEqual(restored.customPrompt, preferences.customPrompt)
+        XCTAssertEqual(defaults.string(forKey: "SelectedModel"), "dictation-model")
+        defaults.set("unsupported-future-template", forKey: "MeetingSummaryKind")
+        XCTAssertEqual(MeetingSummaryPreferences(defaults: defaults).kind, .executive)
+    }
+
     func testMeetingSelectionPersistsWithoutChangingGlobalSelections() throws {
         let suite = "MeetingSummaryTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

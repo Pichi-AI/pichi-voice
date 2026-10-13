@@ -41,6 +41,10 @@ final class MeetingSummaryPreferences: ObservableObject {
     private static let key = "MeetingSummarySelection"
     private static let customPromptKey = "MeetingSummaryCustomPrompt"
     private static let thinksFirstKey = "MeetingSummaryThinksFirst"
+    private static let kindKey = "MeetingSummaryKind"
+    @Published var kind: MeetingSummaryKind {
+        didSet { self.defaults.set(self.kind.rawValue, forKey: Self.kindKey) }
+    }
     @Published var selection: MeetingSummarySelection {
         didSet {
             if let data = try? JSONEncoder().encode(self.selection) {
@@ -65,6 +69,7 @@ final class MeetingSummaryPreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.kind = MeetingSummaryKind(rawValue: defaults.string(forKey: Self.kindKey) ?? "") ?? .executive
         self.customPrompt = defaults.string(forKey: Self.customPromptKey) ?? ""
         self.thinksFirst = defaults.object(forKey: Self.thinksFirstKey) as? Bool ?? true
         var selection = defaults.data(forKey: Self.key)

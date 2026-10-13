@@ -64,6 +64,26 @@ remote = source[source.index('/// Uses a dedicated session'):]
 kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryController.swift').read_text()
 kind = kind_source[kind_source.index('nonisolated enum MeetingSummaryKind:'):kind_source.index('nonisolated enum MeetingSummaryInput {')]
 (out / 'AdmissionRoute.swift').write_text('import Combine\nimport CryptoKit\nimport Foundation\n' + selection + route + kind + remote)
+def declaration(text, marker):
+    start = text.index(marker)
+    brace = text.index('{', start)
+    depth, end = 1, brace + 1
+    while depth:
+        depth += (text[end] == '{') - (text[end] == '}')
+        end += 1
+    return text[start:end]
+# Exercise the restored UI's exact Generate click and fresh route resolution,
+# without creating a SwiftUI view or an application service. Effects are captured
+# by an inert controller before the same explicit, intercepted transport is used.
+ui = Path('Sources/Fluid/UI/MeetingSummaryView.swift').read_text()
+preferences = declaration(Path('Sources/Fluid/Services/Meeting/MeetingSummaryProvider.swift').read_text(), 'final class MeetingSummaryPreferences:')
+generate = declaration(ui, 'private func generate()').replace('private ', '', 1)
+if os.environ.get('PICHI_TEMPLATE_UI_ADMISSION_NEGATIVE_CACHE_ONLY') == '1':
+    assert generate.count('self.resolveRoute()') == 1
+    generate = generate.replace('self.resolveRoute()', '// Negative control: reuse the stale displayed route')
+resolve = declaration(ui, 'private func resolveRoute()').replace('private ', '', 1)
+(out / 'AdmissionTemplateUI.swift').write_text('import Combine\nimport Foundation\n@MainActor\n' + preferences
+    + '\n@MainActor extension TemplateSummaryAdmissionOwner {\n' + generate + '\n' + resolve + '\n}\n')
 command = Path('Sources/Fluid/Services/CommandModeService.swift').read_text()
 assert 'init(llmClient: LLMClient = .shared)' in command and 'self.llmClient = llmClient' in command
 command_baseline = os.environ.get('PICHI_COMMAND_ADMISSION_BASELINE_REF')
@@ -106,6 +126,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND
     -module-cache-path "$task_test_dir/AdmissionModuleCache" \
     "$task_test_dir/ModelRepository.swift" "$task_test_dir/AdmissionMetadata.swift" \
     "$task_test_dir/AdmissionCredentials.swift" "$task_test_dir/AdmissionRoute.swift" "$task_test_dir/AdmissionCommand.swift" \
+    "$task_test_dir/AdmissionTemplateUI.swift" \
     "$task_test_dir/AdmissionDictation.swift" "$task_test_dir/AdmissionErrors.swift" \
     Sources/Fluid/Services/DictationPromptRequest.swift Sources/Fluid/Services/DictationAIPostProcessingGate.swift \
     Sources/Fluid/Services/LocalAPI/LocalAPIModels.swift Sources/Fluid/Services/LocalAPI/InferenceAPIController.swift \
