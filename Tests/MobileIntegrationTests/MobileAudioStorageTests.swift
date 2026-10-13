@@ -60,8 +60,27 @@ final class MobileAudioStorageTests: XCTestCase {
         for case let file as URL in files {
             guard try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
             let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+            #if targetEnvironment(simulator)
+            // Simulator files live on macOS; this runtime returns no iOS protection class.
+            if let actual = attributes[.protectionKey] as? String {
+                XCTAssertEqual(actual, FileProtectionType.completeUntilFirstUserAuthentication.rawValue, file.lastPathComponent)
+            }
+            #else
             XCTAssertEqual(attributes[.protectionKey] as? String,
                 FileProtectionType.completeUntilFirstUserAuthentication.rawValue, file.lastPathComponent)
+            #endif
         }
+    }
+
+    func testFileProtectionClassOnPhysicalDevice() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("The iOS Simulator does not implement device Data Protection. Verify on a physical iPad or iPhone.")
+        #else
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data([1]).write(to: url, options: .completeFileProtectionUntilFirstUserAuthentication)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        XCTAssertEqual(attributes[.protectionKey] as? String, FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
+        #endif
     }
 }

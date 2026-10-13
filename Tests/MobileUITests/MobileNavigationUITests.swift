@@ -29,12 +29,12 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertEqual(app.switches["privacy.saveAudio"].value as? String, "1")
         XCTAssertEqual(app.switches["privacy.pii"].value as? String, "0")
         capture("03-privacy-defaults")
-        app.switches["privacy.saveAudio"].tap()
+        try tapNativeSwitch("privacy.saveAudio")
         capture("04-privacy-after-tap")
         let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == '0'"), object: app.switches["privacy.saveAudio"])
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed)
         capture("04-privacy-audio-off")
-        app.switches["privacy.saveAudio"].tap()
+        try tapNativeSwitch("privacy.saveAudio")
         XCUIDevice.shared.orientation = .portrait
         waitForOrientation(portrait: true)
         capture("05-privacy-portrait")
@@ -86,6 +86,18 @@ final class MobileNavigationUITests: XCTestCase {
     private func openNavigation(_ identifier: String, title: String) {
         let sidebar = app.buttons["navigation.\(identifier)"]
         if sidebar.exists { sidebar.tap() } else { app.tabBars.buttons[title].tap() }
+    }
+
+    private func tapNativeSwitch(_ identifier: String) throws {
+        let row = app.switches[identifier]
+        // SwiftUI exposes an identified full-width row plus its native UISwitch.
+        // A row-center tap lands on the label; operate the observed backing control.
+        let bounds = row.frame
+        let control = try XCTUnwrap(app.switches.allElementsBoundByIndex.first {
+            bounds.contains($0.frame) && $0.frame.width > 0 && $0.frame.width < bounds.width / 2
+        })
+        XCTAssertTrue(control.isHittable)
+        control.tap()
     }
 
     private func capture(_ step: String) {

@@ -47,7 +47,13 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             XCTAssertFalse(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("Иван Тестов"))
             XCTAssertFalse(payload.includesAudio)
             let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            #if targetEnvironment(simulator)
+            if let actual = attributes[.protectionKey] as? String {
+                XCTAssertEqual(actual, FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
+            }
+            #else
             XCTAssertEqual(attributes[.protectionKey] as? String, FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
+            #endif
         }
         let sessionDirectory = try await store.sessionDirectory(for: loaded.id)
         do {
