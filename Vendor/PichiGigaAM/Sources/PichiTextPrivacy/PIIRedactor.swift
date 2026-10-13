@@ -49,12 +49,19 @@ public struct PIIRedactionResult: Sendable, Equatable {
 public struct PIIRedactedSpan: Sendable, Equatable {
     public let range: NSRange
     public let replacement: String
+    /// Full source match of a validated contextual field. This is evidence for
+    /// its cue only, not permission to publish unmasked words within the context.
+    public let resolvedContextRange: NSRange?
+    init(range: NSRange, replacement: String, resolvedContextRange: NSRange? = nil) {
+        self.range = range; self.replacement = replacement; self.resolvedContextRange = resolvedContextRange
+    }
 }
 
 struct PIIDetection: Sendable {
     var range: NSRange
     let kind: PIIKind
     let contextual: Bool
+    var resolvedContextRange: NSRange? = nil
     var priority: Int { kind.priority + (contextual && [.passport, .snils].contains(kind) ? 2 : 0) }
 }
 
@@ -102,7 +109,9 @@ public enum PIIRedactor {
             position = NSMaxRange(entity.range)
         }
         output += source.substring(from: position)
-        return .init(text: output, counts: counts, spans: merged.map { .init(range: $0.range, replacement: $0.kind.placeholder) })
+        return .init(text: output, counts: counts, spans: merged.map {
+            .init(range: $0.range, replacement: $0.kind.placeholder, resolvedContextRange: $0.resolvedContextRange)
+        })
     }
 
     private static func structured(_ text: String) throws -> [PIIDetection] {
@@ -115,7 +124,8 @@ public enum PIIRedactor {
                 let range = match.range(at: capture)
                 guard range.location != NSNotFound, range.length > 0, Range(range, in: text) != nil else { continue }
                 if let validate, !validate(source.substring(with: range)) { continue }
-                entities.append(.init(range: range, kind: kind, contextual: contextual))
+                entities.append(.init(range: range, kind: kind, contextual: contextual,
+                                      resolvedContextRange: capture > 0 ? match.range : nil))
             }
         }
         try matches(#"[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}"#, .email)
@@ -215,7 +225,8 @@ public enum PIIRedactor {
                 // Keep the whole union, unlike dropping the lower-priority match:
                 // overlapping detection must not expose the unmatched tail.
                 let winner = entity.priority > last.priority ? entity : last
-                result[result.count - 1] = .init(range: NSUnionRange(last.range, entity.range), kind: winner.kind, contextual: winner.contextual)
+                result[result.count - 1] = .init(range: NSUnionRange(last.range, entity.range), kind: winner.kind,
+                    contextual: winner.contextual, resolvedContextRange: winner.resolvedContextRange)
             } else { result.append(entity) }
         }
         return result

@@ -266,6 +266,38 @@ struct MeetingPrivacyContextTests {
                   "short benign English medical speech remained blank without a word whitelist")
         _ = try await englishContext.finish()
 
+        // A fully masked entity in retained raw linguistic context must not
+        // block the next benign held sentence. Only held text enters preview.
+        let maskedContext = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let longText = Array(repeating: "документ", count: 40).joined(separator: " ")
+        let priorPhone = segment("телефон 273 55 11 " + longText + ".", track: track, start: 0)
+        _ = try await maskedContext.redact(.init(segments: [priorPhone]))
+        let releasedPhone = try await maskedContext.redact(.init(segments: [segment(longText + ".", track: track, start: 8)]))
+        try check(releasedPhone.segments.map(\.text).joined(separator: " ").contains("273") == false,
+                  "the prior contextual phone was not canonically masked")
+        let afterPhone = try await maskedContext.redact(.init(segments: [segment(benign, track: track, start: 16)]))
+        try check(afterPhone.livePreview?.text.contains("Сегодня обсуждаем применение") == true,
+                  "a fully masked phone in previous source context froze a benign preview")
+        try check(afterPhone.livePreview?.text.contains("273") == false && afterPhone.livePreview?.text.contains("55 11") == false,
+                  "previous raw phone context reached provisional display")
+        _ = try await maskedContext.finish()
+
+        let namedContext = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let named = segment("доктор анна сергеевна кузнецова, сегодня обсуждает схему назначения терапии и переносимость препарата.",
+                            track: track, start: 0)
+        let namedUpdate = try await namedContext.redact(.init(segments: [named]))
+        let namedDisplay = namedUpdate.livePreview?.text ?? ""
+        try check(namedUpdate.segments.isEmpty && namedDisplay.contains(PIIKind.person.placeholder)
+                  && namedDisplay.contains("обсуждает схему назначения"),
+                  "a completely masked name and benign continuation remained withheld")
+        for value in ["анна", "сергеевна", "кузнецова"] {
+            try check(!namedDisplay.contains(value), "canonical name replacement exposed a private source fragment")
+        }
+        let namedTail = try await namedContext.finish()
+        let namedReference = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: [named]), using: redactor)
+        try check(namedTail?.segments == namedReference.segments && namedTail?.livePreview == nil,
+                  "continued masked preview changed canonical name publication")
+
         let cases: [([String], [String], String)] = [
             (["телефон", "273", "55", "11", "метформин 500 мг"], ["273", "55", "11"], "метформин 500 мг"),
             (["карта", "4111", "1111", "1111", "1111", "метформин 500 мг"], ["4111", "1111"], "метформин 500 мг"),
@@ -290,6 +322,15 @@ struct MeetingPrivacyContextTests {
             (["Анна 500 мг обсуждает переносимость терапии и схему лечения.", "метформин 500 мг"], ["Анна"], "метформин 500 мг"),
             (["доктор Сидоров 500 мг обсуждает переносимость терапии и схему лечения.", "метформин 500 мг"], ["Сидоров"], "метформин 500 мг"),
             (["сидоров 1980 г. обсуждал применение препарата сегодня.", "метформин 500 мг"], ["сидоров"], "метформин 500 мг"),
+            (["паспорт email john", "123456", "обсудили переносимость терапии и схему лечения.", "метформин 500 мг"],
+             ["john", "123456"], "метформин 500 мг"),
+            (["домашний адрес улица розовая дом 12", "корпус а", "обсуждаем препарат сегодня.", "метформин 500 мг"],
+             ["розовая", "корпус а"], "метформин 500 мг"),
+            (["домашний адрес улица розовая дом 12", "строение второй", "обсуждаем препарат сегодня.", "метформин 500 мг"],
+             ["розовая", "строение второй"], "метформин 500 мг"),
+            (["доктор иван", "рид", "обсуждает лекарство сегодня.", "метформин 500 мг"], ["иван", "рид"], "метформин 500 мг"),
+            (["доктор иван,", "рид", "обсуждает лекарство сегодня.", "метформин 500 мг"], ["иван", "рид"], "метформин 500 мг"),
+            (["родился в мае", "1980 году", "обсуждаем препарат сегодня.", "метформин 500 мг"], ["мае", "1980"], "метформин 500 мг"),
         ]
         for (pieces, sensitive, medication) in cases {
             let streaming = MeetingTranscriptPrivacyContext(redactor: redactor)
@@ -329,6 +370,28 @@ struct MeetingPrivacyContextTests {
         let lowConfidence = try PIIRedactor.provisionalSafePrefix(in: candidateText,
             ner: [.init(range: candidateRange, label: "PER", score: 0.2)], redactedSpans: [])
         try check((lowConfidence ?? 0) <= candidateRange.location, "short low-confidence/mixed-script NER candidate was treated as safe")
+        let coveredPersonText = "Сегодня анна обсуждает переносимость терапии и схему назначения препарата."
+        let coveredPersonRange = (coveredPersonText as NSString).range(of: "анна")
+        let coveredPersonNER = [PIINERSpan(range: coveredPersonRange, label: "PER", score: 0.9)]
+        let coveredPersonRedaction = try PIIRedactor.redact(coveredPersonText, ner: coveredPersonNER)
+        let coveredPersonLimit = try PIIRedactor.provisionalSafePrefix(in: coveredPersonText,
+            ner: coveredPersonNER, redactedSpans: coveredPersonRedaction.spans)
+        try check((coveredPersonLimit ?? 0) > NSMaxRange(coveredPersonRange),
+                  "a fully canonical-covered PER candidate still blocked benign continuation")
+        let englishPersonText = "Doctor John Smith, discusses amoxicillin prescribing and monitoring tolerability during therapy."
+        let englishPersonRange = (englishPersonText as NSString).range(of: "John Smith")
+        let englishPersonNER = [PIINERSpan(range: englishPersonRange, label: "PER", score: 0.99)]
+        let englishPersonRedaction = try PIIRedactor.redact(englishPersonText, ner: englishPersonNER)
+        let englishPersonLimit = try PIIRedactor.provisionalSafePrefix(in: englishPersonText,
+            ner: englishPersonNER, redactedSpans: englishPersonRedaction.spans)
+        try check((englishPersonLimit ?? 0) > NSMaxRange(englishPersonRange),
+                  "a resolved capitalized person title still froze a fully masked English name")
+        let edgeText = "Сегодня обсуждаем анна сергеевна кузнецова лекарство схему"
+        let edgeRedaction = try PIIRedactor.redact(edgeText, ner: [])
+        let edgeLimit = try PIIRedactor.provisionalSafePrefix(in: edgeText, ner: [], redactedSpans: edgeRedaction.spans)
+        try check(edgeLimit != nil && edgeRedaction.spans.contains { (edgeLimit ?? Int.max) <= $0.range.location }
+                  && !edgeRedaction.spans.contains { $0.range.location < (edgeLimit ?? 0) && (edgeLimit ?? 0) < NSMaxRange($0.range) },
+                  "lexical edge bisected a canonical person replacement: limit=\(edgeLimit ?? -1), spans=\(edgeRedaction.spans.map(\.range))")
         let doseText = "Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения."
         let doseContext = MeetingTranscriptPrivacyContext(redactor: redactor)
         let doseSegment = segment(doseText, track: track, start: 0)
