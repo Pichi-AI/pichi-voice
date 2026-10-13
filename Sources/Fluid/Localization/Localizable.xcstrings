@@ -47365,6 +47365,227 @@
           }
         }
       }
+    },
+    "What’s new in this release": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What’s new in this release"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что нового в этом выпуске"
+          }
+        }
+      }
+    },
+    "Dictation controls, smoother meetings, and AI connection fixes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation controls, smoother meetings, and AI connection fixes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Управление диктовкой, работа со встречами и исправления подключений к ИИ."
+          }
+        }
+      }
+    },
+    "MEETINGS, WITH LESS WAITING": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEETINGS, WITH LESS WAITING"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ВСТРЕЧИ БЕЗ ЛИШНЕГО ОЖИДАНИЯ"
+          }
+        }
+      }
+    },
+    "Meetings without the wait": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meetings without the wait"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встречи без ожидания"
+          }
+        }
+      }
+    },
+    "Cancel waiting model preparation promptly. Russian transcription and summaries with source references share the meeting workspace.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel waiting model preparation promptly. Russian transcription and summaries with source references share the meeting workspace."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидающую подготовку модели можно сразу отменить. Русская транскрипция и резюме со ссылками на исходный текст доступны в окне встреч."
+          }
+        }
+      }
+    },
+    "Open meetings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open meetings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть встречи"
+          }
+        }
+      }
+    },
+    "DICTATION, ON YOUR TERMS": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DICTATION, ON YOUR TERMS"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ДИКТОВКА ПОД ВАШИМ КОНТРОЛЕМ"
+          }
+        }
+      }
+    },
+    "More control while dictating": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More control while dictating"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Больше контроля при диктовке"
+          }
+        }
+      }
+    },
+    "Enable hold-Space mute to skip background speech. Button clicks now match their visible shapes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable hold-Space mute to skip background speech. Button clicks now match their visible shapes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включите заглушение микрофона при удержании пробела. Область нажатия кнопок теперь совпадает с их видимой формой."
+          }
+        }
+      }
+    },
+    "Open dashboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open dashboard"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть главную"
+          }
+        }
+      }
+    },
+    "Compatible AI connections": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compatible AI connections"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Совместимые подключения к ИИ"
+          }
+        }
+      }
+    },
+    "Claude 5 requests use supported parameters. Local cleanup and Russian provider connections join your AI setup, with less duplicate diagnostic logging.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 5 requests use supported parameters. Local cleanup and Russian provider connections join your AI setup, with less duplicate diagnostic logging."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросы к Claude 5 используют поддерживаемые параметры. Доступны локальная обработка и российские провайдеры ИИ. В диагностике стало меньше повторных записей."
+          }
+        }
+      }
+    },
+    "Claude 5 requests use supported parameters. Russian provider connections join your AI setup, with less duplicate diagnostic logging.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 5 requests use supported parameters. Russian provider connections join your AI setup, with less duplicate diagnostic logging."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросы к Claude 5 используют поддерживаемые параметры. Доступны российские провайдеры ИИ. В диагностике стало меньше повторных записей."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

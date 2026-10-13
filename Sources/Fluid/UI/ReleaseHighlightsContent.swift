@@ -22,37 +22,37 @@ struct ReleaseHighlightsContent {
 
     static func current(hasPrivateAI: Bool) -> Self {
         Self(
-            release: "1.6.10",
-            title: "Say hello to what’s new.",
-            subtitle: AppBrand.text("Three new ways to make FluidVoice yours."),
+            release: "1.6.11",
+            title: "What’s new in this release",
+            subtitle: "Dictation controls, smoother meetings, and AI connection fixes.",
             features: [
                 Feature(
                     id: "fluidmeet",
                     preview: .meeting,
-                    eyebrow: "YOUR MEETINGS, ORGANIZED",
-                    title: AppBrand.text("Introducing FluidMeet"),
-                    detail: "Stay in the conversation. Local recording, live captions, and AI summaries.",
-                    action: AppBrand.text("Open FluidMeet"),
+                    eyebrow: "MEETINGS, WITH LESS WAITING",
+                    title: "Meetings without the wait",
+                    detail: "Cancel waiting model preparation promptly. Russian transcription and summaries with source references share the meeting workspace.",
+                    action: "Open meetings",
                     destination: .meetings
                 ),
                 Feature(
                     id: "redesign",
                     preview: .dashboard,
-                    eyebrow: "A FRESH PERSPECTIVE",
-                    title: "Beautifully redesigned",
-                    detail: "Your own dashboard. Search across the app. Everything feels right at home.",
-                    action: "See the new look",
+                    eyebrow: "DICTATION, ON YOUR TERMS",
+                    title: "More control while dictating",
+                    detail: "Enable hold-Space mute to skip background speech. Button clicks now match their visible shapes.",
+                    action: "Open dashboard",
                     destination: .dashboard
                 ),
                 Feature(
                     id: "models",
                     preview: .models,
-                    eyebrow: hasPrivateAI ? "ON YOUR MAC. FOR YOU." : "YOUR AI, YOUR WAY",
-                    title: hasPrivateAI ? "Meet the Fluid models" : "Find your AI",
+                    eyebrow: "YOUR AI, YOUR WAY",
+                    title: "Compatible AI connections",
                     detail: hasPrivateAI
-                        ? "Fast cleanup to thoughtful rewrites. Explore local AI built for your words."
-                        : "Choose your AI provider and make every dictation sound more like you.",
-                    action: hasPrivateAI ? "Explore the models" : "Explore AI providers",
+                        ? "Claude 5 requests use supported parameters. Local cleanup and Russian provider connections join your AI setup, with less duplicate diagnostic logging."
+                        : "Claude 5 requests use supported parameters. Russian provider connections join your AI setup, with less duplicate diagnostic logging.",
+                    action: "Explore AI providers",
                     destination: .aiProviders
                 ),
             ]

@@ -78,9 +78,15 @@ struct ReleaseHighlightsPolicyTests {
         let plist = try Data(contentsOf: URL(fileURLWithPath: "Info.plist"))
         let info = try require(PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any])
         let version = try require(info["CFBundleShortVersionString"] as? String)
+        let catalogData = try Data(contentsOf: URL(fileURLWithPath: "Sources/Fluid/Localization/Localizable.xcstrings"))
+        let catalog = try require(JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
+        let entries = try require(catalog["strings"] as? [String: [String: Any]])
         for privateAI in [false, true] {
             let content = ReleaseHighlightsContent.current(hasPrivateAI: privateAI)
             precondition(ReleaseHighlightsPolicy.matches(version: version, release: content.release), "Update release highlights when bumping the app version")
+            var automaticPolicy = ReleaseHighlightsPolicy()
+            let automatic = automaticPolicy.request(owner: owner, version: version, release: content.release, eligible: true)
+            precondition(automatic?.version == version && automatic?.manual == false, "The shipped release must be offered automatically before acknowledgment")
             // Help must replay the shipped notes even after their automatic offer was acknowledged.
             var shippedVersionPolicy = ReleaseHighlightsPolicy(seenVersions: [version])
             let manual = shippedVersionPolicy.request(owner: owner, version: version, release: content.release, eligible: true, manual: true)
@@ -90,12 +96,23 @@ struct ReleaseHighlightsPolicyTests {
             for feature in content.features {
                 precondition(!feature.title.isEmpty && !feature.detail.isEmpty && !feature.action.isEmpty)
             }
+            // These fields are trusted interface keys, with no imported brand or user data.
+            let copy = [content.title, content.subtitle] + content.features.flatMap { [$0.eyebrow, $0.title, $0.detail, $0.action] }
+            for key in copy {
+                let entry = try require(entries[key])
+                let localizations = try require(entry["localizations"] as? [String: [String: Any]])
+                for language in ["en", "ru"] {
+                    let localization = try require(localizations[language])
+                    let unit = try require(localization["stringUnit"] as? [String: String])
+                    precondition(unit["state"] == "translated" && unit["value"]?.isEmpty == false, "Every release field needs complete English and Russian copy")
+                }
+            }
             if !privateAI {
                 let last = try require(content.features.last)
                 precondition(!last.title.contains("Fluid models"))
             }
         }
-        print("PASS: version ledger, persistence, multiple owners, rapid dismissal, interruption/retry, stale callbacks, bounded history, release content, and manual replay for the shipped release")
+        print("PASS: version ledger, persistence, multiple owners, rapid dismissal, interruption/retry, stale callbacks, bounded history, shipped automatic/manual requests, and complete English/Russian release content")
     }
 
     private static func require<T>(_ value: T?) throws -> T {
