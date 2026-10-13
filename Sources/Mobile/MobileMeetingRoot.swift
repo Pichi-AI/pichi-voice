@@ -14,6 +14,11 @@ struct MobileMeetingRoot: View {
     @Environment(\.theme) private var theme
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var destination = Destination.meetings
+    @State private var settingsPath: [MobileSettingsDestination] = []
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var isPreparingPrivacy = false
+    @State private var privacyPreparationProgress: Double?
+    @State private var privacyPreparationTask: Task<Void, Never>?
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
     @State private var selectedHistory: MeetingSession?
@@ -52,11 +57,11 @@ struct MobileMeetingRoot: View {
     var body: some View {
         GeometryReader { geometry in
             if UIDevice.current.userInterfaceIdiom == .pad && geometry.size.width >= 700 {
-                HStack(spacing: 0) {
-                    sidebar.frame(width: 220)
-                    Divider()
-                    navigation.frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+                NavigationSplitView(columnVisibility: $columnVisibility) {
+                    sidebar.navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+                } detail: {
+                    navigation(for: destination)
+                }.navigationSplitViewStyle(.balanced)
             } else {
                 TabView(selection: $destination) {
                     ForEach(Destination.allCases) { item in
@@ -79,7 +84,7 @@ struct MobileMeetingRoot: View {
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
         .sheet(isPresented: $showRecordingSettings) {
-            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities) }
+            NavigationStack { MobileRecordingSettings(microphones: microphoneSnapshot.identities, isPresentedAsSheet: true) }
         }
         .sheet(item: $edit) { draft in
             MeetingEditSheet(draft: draft) { updated in
@@ -153,31 +158,47 @@ struct MobileMeetingRoot: View {
                         .padding(.horizontal, 12)
                         .background(destination == item ? theme.palette.accent : .clear, in: RoundedRectangle(cornerRadius: theme.metrics.corners.md))
                         .foregroundStyle(destination == item ? theme.palette.accentForeground : theme.palette.primaryText)
-                }.buttonStyle(.plain).accessibilityIdentifier("navigation.\(item.rawValue)")
+                }.buttonStyle(.plain)
+                    .accessibilityIdentifier("navigation.\(item.rawValue)")
+                    .accessibilityAddTraits(destination == item ? .isSelected : [])
             }
             Spacer()
         }.padding(16).background(theme.palette.sidebarBackground)
     }
 
-    private var navigation: some View { navigation(for: destination) }
-
-    private func navigation(for item: Destination) -> some View {
-        NavigationStack {
-            Group {
-                switch item {
-                case .meetings: currentMeeting
-                case .history: history
-                case .settings: MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities, reportError: report)
-                }
+    @ViewBuilder private func navigation(for item: Destination) -> some View {
+        // Each section owns its stack. A settings push must never cover another section,
+        // and its explicit path survives switching sections or the adaptive layout.
+        switch item {
+        case .settings:
+            NavigationStack(path: $settingsPath) {
+                sectionRoot(for: item)
             }
-            .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button { newMeeting() } label: { Label(PichiLocalization.text("New Meeting"), systemImage: "plus") }
-                            .accessibilityIdentifier("meeting.new")
-                    }
+        case .meetings:
+            NavigationStack { sectionRoot(for: item) }
+        case .history:
+            NavigationStack { sectionRoot(for: item) }
+        }
+    }
+
+    private func sectionRoot(for item: Destination) -> some View {
+        Group {
+            switch item {
+            case .meetings: currentMeeting
+            case .history: history
+            case .settings:
+                MobileSettingsRoot(asr: asr, privacy: privacy, microphones: microphoneSnapshot.identities,
+                    isPreparingPrivacy: $isPreparingPrivacy, privacyPreparationProgress: $privacyPreparationProgress,
+                    privacyPreparationTask: $privacyPreparationTask, reportError: report)
+            }
+        }
+        .navigationTitle(item == .meetings ? AppBrand.meetingName : PichiLocalization.text(item.title))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if item == .meetings, coordinator.isQuiescent, !coordinator.isRecording {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { newMeeting() } label: { Label(PichiLocalization.text("New Meeting"), systemImage: "plus") }
+                        .accessibilityIdentifier("meeting.new")
                 }
             }
         }

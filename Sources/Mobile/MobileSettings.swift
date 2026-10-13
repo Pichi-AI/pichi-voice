@@ -1,11 +1,19 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Settings routes belong to the Settings stack, rather than to the selected app section.
+enum MobileSettingsDestination: Hashable {
+    case general, recording, models, privacy
+}
+
 /// The mobile subset keeps the desktop destinations and their existing preference owner.
 struct MobileSettingsRoot: View {
     @ObservedObject var asr: ASRService
     let privacy: PichiTranscriptPrivacyService
     let microphones: [MeetingMicrophoneIdentity]
+    @Binding var isPreparingPrivacy: Bool
+    @Binding var privacyPreparationProgress: Double?
+    @Binding var privacyPreparationTask: Task<Void, Never>?
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
@@ -13,15 +21,15 @@ struct MobileSettingsRoot: View {
     var body: some View {
         List {
             Section {
-                NavigationLink { MobileGeneralSettings() } label: { Label(PichiLocalization.text("General"), systemImage: "gearshape") }
+                NavigationLink(value: MobileSettingsDestination.general) { Label(PichiLocalization.text("General"), systemImage: "gearshape") }
                     .accessibilityIdentifier("settings.general")
-                NavigationLink { MobileRecordingSettings(microphones: microphones) } label: {
+                NavigationLink(value: MobileSettingsDestination.recording) {
                     Label(PichiLocalization.text("Recording"), systemImage: "waveform")
                 }.accessibilityIdentifier("settings.recording")
-                NavigationLink { MobileVoiceEngineSettings(asr: asr, reportError: reportError) } label: {
+                NavigationLink(value: MobileSettingsDestination.models) {
                     Label(PichiLocalization.text("Voice Engine"), systemImage: "waveform")
                 }.accessibilityIdentifier("settings.models")
-                NavigationLink { MobilePrivacySettings(privacy: privacy, reportError: reportError) } label: {
+                NavigationLink(value: MobileSettingsDestination.privacy) {
                     Label(PichiLocalization.text("Privacy"), systemImage: "lock.shield")
                 }.accessibilityIdentifier("settings.privacy")
             }
@@ -30,6 +38,17 @@ struct MobileSettingsRoot: View {
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.listStyle(.insetGrouped).accessibilityIdentifier("settings.root")
+            .navigationDestination(for: MobileSettingsDestination.self) { destination in
+                switch destination {
+                case .general: MobileGeneralSettings()
+                case .recording: MobileRecordingSettings(microphones: microphones)
+                case .models: MobileVoiceEngineSettings(asr: asr, reportError: reportError)
+                case .privacy:
+                    MobilePrivacySettings(privacy: privacy, isPreparing: $isPreparingPrivacy,
+                        progress: $privacyPreparationProgress, preparationTask: $privacyPreparationTask,
+                        reportError: reportError)
+                }
+            }
     }
 }
 
@@ -45,12 +64,13 @@ private struct MobileGeneralSettings: View {
                     Text(PichiLocalization.text(item.displayName)).tag(item)
                 }
             }.accessibilityIdentifier("settings.appearance")
-        }.navigationTitle(PichiLocalization.text("General"))
+        }.navigationTitle(PichiLocalization.text("General")).accessibilityIdentifier("settings.general.detail")
     }
 }
 
 struct MobileRecordingSettings: View {
     let microphones: [MeetingMicrophoneIdentity]
+    var isPresentedAsSheet = false
     @ObservedObject private var settings = SettingsStore.shared
     @ObservedObject private var diarization = MeetingDiarizationModelStore.shared
     @Environment(\.dismiss) private var dismiss
@@ -81,6 +101,13 @@ struct MobileRecordingSettings: View {
             value.isConfigured = true; value.mode = .inRoom; value.languageCode = code
             settings.meetingRecordingDefaults = value
         })
+    }
+
+    private var speakerResourcesBusy: Bool {
+        switch diarization.state {
+        case .checking, .downloading: return true
+        default: return false
+        }
     }
 
     var body: some View {
@@ -114,13 +141,20 @@ struct MobileRecordingSettings: View {
                             defer { isPreparing = false }
                             do { _ = try await diarization.ensureInstalled(includingVoiceEncoder: true) } catch { self.error = error.localizedDescription }
                         }
-                    }.disabled(isPreparing).accessibilityIdentifier("recording.downloadSpeakerModel")
+                    }.disabled(isPreparing || speakerResourcesBusy).accessibilityIdentifier("recording.downloadSpeakerModel")
                     Text(PichiLocalization.text("Speaker labels are added after recording."))
                 }
             }
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }.navigationTitle(PichiLocalization.text("Recording"))
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(PichiLocalization.text("Done")) { dismiss() } } }
+            .toolbar {
+                if isPresentedAsSheet {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(PichiLocalization.text("Done")) { dismiss() }
+                            .accessibilityIdentifier("settings.recording.done")
+                    }
+                }
+            }
             .accessibilityIdentifier("settings.recording.detail")
     }
 
@@ -242,12 +276,12 @@ private struct MobileVoiceEngineSettings: View {
 
 private struct MobilePrivacySettings: View {
     let privacy: PichiTranscriptPrivacyService
+    @Binding var isPreparing: Bool
+    @Binding var progress: Double?
+    @Binding var preparationTask: Task<Void, Never>?
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
-    @State private var isPreparing = false
-    @State private var progress: Double?
-    @State private var preparationTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -283,8 +317,11 @@ private struct MobilePrivacySettings: View {
                     }))
                     .disabled(isPreparing).accessibilityIdentifier("privacy.pii")
                 if isPreparing {
-                    if let progress { ProgressView(value: progress) } else { ProgressView() }
+                    Group {
+                        if let progress { ProgressView(value: progress) } else { ProgressView() }
+                    }.accessibilityIdentifier("privacy.pii.progress")
                     Button(PichiLocalization.text("Cancel")) { preparationTask?.cancel() }
+                        .accessibilityIdentifier("privacy.pii.cancel")
                 }
                 Text(PichiLocalization.text("Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."))
                     .font(theme.typography.caption).foregroundStyle(.secondary)
