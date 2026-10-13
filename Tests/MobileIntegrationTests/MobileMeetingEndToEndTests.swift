@@ -56,10 +56,8 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
     func testStrictMeetingThroughActualMobileCompositionPersistsAndExports() async throws {
-        guard let path = ProcessInfo.processInfo.environment["PICHI_MOBILE_INFERENCE_ASSETS"] else {
-            throw XCTSkip("Requires explicitly staged public ASR artifacts and synthetic PCM fixtures")
-        }
-        let input = try AVAudioFile(forReading: URL(fileURLWithPath: path).appendingPathComponent("audio/ru.wav"))
+        let assets = try MobileInferenceTestAssets.resolve()
+        let input = try AVAudioFile(forReading: assets.appendingPathComponent("audio/ru.wav"))
         let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: AVAudioFrameCount(input.length)))
         try input.read(into: pcm)
         let samples = Array(UnsafeBufferPointer(start: try XCTUnwrap(pcm.floatChannelData?[0]), count: Int(pcm.frameLength)))

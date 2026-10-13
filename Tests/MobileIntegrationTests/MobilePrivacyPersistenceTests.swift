@@ -60,10 +60,8 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
     }
 
     func testNativePIIAcrossSegmentsAndStrictWindowsBeforePersistence() async throws {
-        guard let path = ProcessInfo.processInfo.environment["PICHI_MOBILE_INFERENCE_ASSETS"] else {
-            throw XCTSkip("Requires explicitly staged public privacy artifacts")
-        }
-        let models = URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("models/privacy", isDirectory: true)
+        let assets = try MobileInferenceTestAssets.resolve()
+        let models = assets.appendingPathComponent("models/privacy", isDirectory: true)
         let installed = models.appendingPathComponent(PichiTranscriptPrivacyModelStore.descriptor.id, isDirectory: true)
         guard FileManager.default.fileExists(atPath: installed.appendingPathComponent("model_int8.onnx").path) else {
             throw XCTSkip("Stage public privacy model under models/privacy/rubert-tiny-news-int8")

@@ -9,6 +9,78 @@ import XCTest
 @testable import FluidVoice_Debug
 #endif
 
+/// Test-only staging root shared by desktop and app-hosted mobile integration tests.
+/// The sentinel avoids putting a host path or a changing device-container UUID in xctestrun.
+nonisolated enum MobileInferenceTestAssets {
+    static let environmentKey = "PICHI_MOBILE_INFERENCE_ASSETS"
+    static let applicationSupportLocation = "application-support"
+
+    enum ResolutionError: Error, Equatable {
+        case invalidRoot
+        case applicationSupportUnavailable
+    }
+
+    static func resolve(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        applicationSupportDirectory: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    ) throws -> URL {
+        guard let location = environment[self.environmentKey], !location.isEmpty else {
+            throw XCTSkip("Set PICHI_MOBILE_INFERENCE_ASSETS to an absolute public-model/synthetic-audio directory or application-support.")
+        }
+        if location == self.applicationSupportLocation {
+            guard let directory = applicationSupportDirectory, directory.isFileURL else {
+                throw ResolutionError.applicationSupportUnavailable
+            }
+            return directory.appendingPathComponent("MobileInferenceAssets", isDirectory: true)
+        }
+        guard (location as NSString).isAbsolutePath else { throw ResolutionError.invalidRoot }
+        return URL(fileURLWithPath: location, isDirectory: true)
+    }
+}
+
+@MainActor
+final class MobileInferenceTestAssetsTests: XCTestCase {
+    func testMissingOrEmptyConfigurationSkipsOptInInference() {
+        for environment in [[:], [MobileInferenceTestAssets.environmentKey: ""]] {
+            XCTAssertThrowsError(try MobileInferenceTestAssets.resolve(environment: environment)) { error in
+                XCTAssertTrue(error is XCTSkip)
+            }
+        }
+    }
+
+    func testApplicationSupportSentinelUsesTheCurrentAppContainer() throws {
+        let directory = URL(fileURLWithPath: "/test-app-container/Library/Application Support", isDirectory: true)
+        let root = try MobileInferenceTestAssets.resolve(
+            environment: [MobileInferenceTestAssets.environmentKey: "application-support"],
+            applicationSupportDirectory: directory
+        )
+        XCTAssertEqual(root.path, "/test-app-container/Library/Application Support/MobileInferenceAssets")
+        XCTAssertTrue(root.hasDirectoryPath)
+    }
+
+    func testAbsoluteHostFixturePathRemainsUnchanged() throws {
+        let root = try MobileInferenceTestAssets.resolve(
+            environment: [MobileInferenceTestAssets.environmentKey: "/test-host/public fixtures"],
+            applicationSupportDirectory: nil
+        )
+        XCTAssertEqual(root.path, "/test-host/public fixtures")
+    }
+
+    func testInvalidConfigurationFailsInsteadOfUsingTheWorkingDirectory() {
+        XCTAssertThrowsError(try MobileInferenceTestAssets.resolve(
+            environment: [MobileInferenceTestAssets.environmentKey: "relative-fixtures"]
+        )) { error in
+            XCTAssertEqual(error as? MobileInferenceTestAssets.ResolutionError, .invalidRoot)
+        }
+        XCTAssertThrowsError(try MobileInferenceTestAssets.resolve(
+            environment: [MobileInferenceTestAssets.environmentKey: "application-support"],
+            applicationSupportDirectory: nil
+        )) { error in
+            XCTAssertEqual(error as? MobileInferenceTestAssets.ResolutionError, .applicationSupportUnavailable)
+        }
+    }
+}
+
 /// Explicitly enabled public artifacts plus synthetic audio only. The same source runs
 /// in the hosted mobile target; that execution uses the adapters' actual CPU-only route.
 @MainActor
@@ -44,10 +116,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
     }
 
     private func assets() throws -> URL {
-        guard let path = ProcessInfo.processInfo.environment["PICHI_MOBILE_INFERENCE_ASSETS"], !path.isEmpty else {
-            throw XCTSkip("Set PICHI_MOBILE_INFERENCE_ASSETS to an isolated public-model/synthetic-audio directory.")
-        }
-        return URL(fileURLWithPath: path, isDirectory: true)
+        try MobileInferenceTestAssets.resolve()
     }
 
     private func pcm(_ file: String, in root: URL) throws -> [Float] {
