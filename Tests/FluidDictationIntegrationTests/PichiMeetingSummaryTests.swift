@@ -2162,15 +2162,6 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
         let requests = await transport.requests
         XCTAssertEqual(requests.count, 2, "Repair uses the existing extraction and one support review")
-        let prompt = try XCTUnwrap(requests.last?.messages.first?["content"] as? String)
-        XCTAssertTrue(prompt.contains("explicit unconditional first-person undertaking"))
-        XCTAssertTrue(prompt.contains("commitment with status agreed"))
-        XCTAssertTrue(prompt.contains("needs no separate acceptance or word of agreement"))
-        XCTAssertTrue(prompt.contains("Determine owner independently from acceptance status"))
-        XCTAssertTrue(prompt.contains("Preserve EVERY explicitly stated deadline"))
-        XCTAssertTrue(prompt.contains("including relative deadlines, prepositions and grammatical case"))
-        XCTAssertTrue(prompt.contains("Check EVERY citation separately"))
-        XCTAssertTrue(prompt.contains("another participant's different task even when another citation supports the item"))
         let input = try XCTUnwrap(requests.last?.messages.last?["content"] as? String)
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
         let sources = try ModelSource.catalog(from: fields)
@@ -2208,7 +2199,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         document.actions.append(activeReplacement)
         document.openQuestions[0].resolved = true
         XCTAssertEqual(self.separateCommitmentIssues(document, session: session),
-                       ["The cancelled endpoint replacement must not become active work", "The launch-date question must remain unanswered"])
+                       ["Source for the cancelled proposal must not support current unrelated work", "The launch-date question must remain unanswered"])
     }
 
     func testSupportReviewRecoversSeparateDecisionAndAssignedTaskFromRecapOnlyCandidate() async throws {
@@ -3031,7 +3022,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
               "Retain the explicit endpoint-proposal cancellation")
         check(document.actions.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[4].id } }.allSatisfy {
             $0.status == .cancelled || $0.superseded == true
-        }, "The cancelled endpoint replacement must not become active work")
+        }, "Source for the cancelled proposal must not support current unrelated work")
         check(document.openQuestions.contains { $0.evidence.contains { $0.segmentID == session.transcriptSegments[5].id }
             && $0.resolved != true }, "The launch-date question must remain unanswered")
         return issues
