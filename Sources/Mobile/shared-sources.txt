@@ -50,6 +50,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingEpochAudioMaterializer.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingLegacyCompatibilityBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingModelInstaller.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingNemotronModelLocator.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingNemotronCompiledModelOwner.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingParakeetNemotronBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingParakeetNemotronRuntime.swift
