@@ -342,7 +342,11 @@ final class SettingsNavigationStateTests: XCTestCase {
     private func waitForSearch(in root: NSView, placeholder: String, query: String) async throws -> NSSearchField? {
         for _ in 0..<100 {
             root.layoutSubtreeIfNeeded()
-            if let field = self.descendants(of: NSSearchField.self, in: root).first(where: { $0.placeholderString == placeholder && $0.stringValue == query }) {
+            if let field = self.descendants(of: NSSearchField.self, in: root).first(where: {
+                // AppKit exposes one placeholder representation at a time.
+                // The colored production placeholder is an attributed string.
+                ($0.placeholderAttributedString?.string ?? $0.placeholderString) == placeholder && $0.stringValue == query
+            }) {
                 return field
             }
             try await Task.sleep(nanoseconds: 10_000_000)
