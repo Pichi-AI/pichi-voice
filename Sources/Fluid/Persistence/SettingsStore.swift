@@ -1477,6 +1477,10 @@ final class SettingsStore: ObservableObject {
             self.apiKey = apiKey
             self.models = models
         }
+
+        nonisolated func redactingAPIKey() -> Self {
+            Self(id: self.id, name: self.name, baseURL: self.baseURL, models: self.models)
+        }
     }
 
     var enableAIProcessing: Bool {
@@ -3619,7 +3623,7 @@ final class SettingsStore: ObservableObject {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
             selectedModelByProvider: self.selectedModelByProvider,
-            savedProviders: self.savedProviders,
+            savedProviders: self.savedProviders.map { $0.redactingAPIKey() },
             modelReasoningConfigs: self.modelReasoningConfigs,
             privateAIPrefixKVCacheEnabled: self.privateAIPrefixKVCacheEnabled,
             privateAIBoostEnabled: self.privateAIBoostEnabled,
