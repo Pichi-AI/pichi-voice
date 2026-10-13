@@ -57,16 +57,49 @@ final class DictionaryDrawerLayoutTests: XCTestCase {
                             let title = try XCTUnwrap(frames[.replacement], context)
                             let triggerFrame = try XCTUnwrap(frames[.aliases], context)
                             XCTAssertEqual(title.minX, 0, accuracy: 0.5, context)
-                            XCTAssertEqual(title.width, contentWidth, accuracy: 0.5, context)
-                            XCTAssertEqual(triggerFrame.width, contentWidth, accuracy: 0.5, context)
-                            // Independent native Text at the intended width is the wrapping oracle.
-                            // The old compressed text column has a larger line count for the short phrase.
-                            let reference = NSHostingController(rootView: Text(verbatim: entry.replacement)
-                                .font(theme.typography.bodyStrong)
-                                .fixedSize(horizontal: false, vertical: true)
+                            // Compare native bounds with native bounds. An unbroken sans word
+                            // can fit at 189 points for a fractional 188.4-point proposal, with
+                            // its edges aligned at -0.5 and 188.5. Do not widen the tolerance
+                            // or compare that measured CGRect with an unrounded formula.
+                            var referenceFrames: [DictionaryDrawerEntryRow.Part: CGRect] = [:]
+                            let referenceID = UUID()
+                            let reference = NSHostingController(rootView: VStack(alignment: .leading, spacing: theme.metrics.spacing.sm) {
+                                Text(verbatim: entry.replacement)
+                                    .font(theme.typography.bodyStrong)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(referenceID)) } action: {
+                                        referenceFrames[.replacement] = $0
+                                    }
+                                Text(verbatim: entry.triggers.joined(separator: ", "))
+                                    .font(theme.typography.caption)
+                                    .lineLimit(3)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(referenceID)) } action: {
+                                        referenceFrames[.aliases] = $0
+                                    }
+                            }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .coordinateSpace(name: referenceID)
                                 .frame(width: contentWidth)
-                                .environment(\.locale, Locale(identifier: language)))
-                            let expectedTitle = reference.sizeThatFits(in: NSSize(width: contentWidth, height: 1))
+                                .padding(.horizontal, theme.metrics.spacing.lg)
+                                .appTheme(theme)
+                                .environment(\.locale, Locale(identifier: language))
+                                .environment(\.colorScheme, scheme))
+                            let referenceSize = reference.sizeThatFits(in: NSSize(width: drawerWidth, height: 1000))
+                            reference.view.frame = NSRect(origin: .zero, size: referenceSize)
+                            reference.view.layoutSubtreeIfNeeded()
+                            reference.view.displayIfNeeded()
+                            let referenceDeadline = Date().addingTimeInterval(1)
+                            while referenceFrames.count < 2, Date() < referenceDeadline {
+                                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                                reference.view.layoutSubtreeIfNeeded()
+                            }
+                            let expectedTitle = try XCTUnwrap(referenceFrames[.replacement], context)
+                            let expectedAliases = try XCTUnwrap(referenceFrames[.aliases], context)
+                            XCTAssertEqual(title.width, expectedTitle.width, accuracy: 0.5, context)
+                            XCTAssertEqual(triggerFrame.width, expectedAliases.width, accuracy: 0.5, context)
                             XCTAssertEqual(title.height, expectedTitle.height, accuracy: 0.5, context)
                             let rowBounds = CGRect(x: 0, y: 0, width: contentWidth, height: size.height)
                             for part in DictionaryDrawerEntryRow.Part.allCases {
