@@ -55,24 +55,26 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
                 mode: .inRoom, title: "Synthetic offline meeting"
             )
         }
-        defer {
+        let configuration: MeetingCaptureConfiguration
+        do {
+            try await entered.wait()
+            XCTAssertEqual(requestedUID, "initial-microphone")
+            settings.meetingSaveAudio = true
+            settings.meetingSpeakerLabelsEnabled = true
+            settings.meetingPIIRedactionEnabled = true
+            var changedDefaults = settings.meetingRecordingDefaults
+            changedDefaults.microphoneCaptureDeviceID = "replacement-microphone"
+            changedDefaults.microphoneCoreAudioUID = "replacement-microphone"
+            changedDefaults.languageCode = "en"
+            settings.meetingRecordingDefaults = changedDefaults
+            release.open()
+            configuration = try await pending.value
+        } catch {
             release.open()
             pending.cancel()
+            _ = try? await pending.value
+            throw error
         }
-
-        try await entered.wait()
-        XCTAssertEqual(requestedUID, "initial-microphone")
-        settings.meetingSaveAudio = true
-        settings.meetingSpeakerLabelsEnabled = true
-        settings.meetingPIIRedactionEnabled = true
-        var changedDefaults = settings.meetingRecordingDefaults
-        changedDefaults.microphoneCaptureDeviceID = "replacement-microphone"
-        changedDefaults.microphoneCoreAudioUID = "replacement-microphone"
-        changedDefaults.languageCode = "en"
-        settings.meetingRecordingDefaults = changedDefaults
-        release.open()
-
-        let configuration = try await pending.value
         XCTAssertEqual(configuration.audioStorageMode, .memoryOnly)
         XCTAssertEqual(configuration.speakerLabelsEnabled, false)
         XCTAssertEqual(configuration.piiRedactionEnabled, false)
