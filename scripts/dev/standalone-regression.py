@@ -216,7 +216,7 @@ SHELL_PROBES = (
     "stats_snapshot", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
-    "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_backup_refresh",
+    "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_backup_refresh",
     "settings_backup_concurrency",
 )
 PROBES = tuple(sorted(

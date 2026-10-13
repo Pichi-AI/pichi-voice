@@ -74,7 +74,7 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## Reproducible macOS regression
 
-Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 42 current runners, including native export, file-error localization, relative dates, contrast, command localization, Settings owned copy, Local API harness self-tests and pinned upstream sync. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
+Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 44 current runners, including native export, file-error localization, relative dates, contrast, command localization, Settings owned copy, Local API harness self-tests, diarization artifact comparison self-tests and pinned upstream sync. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
 
 Full runs require an isolated worktree, macOS and full Xcode. The runner prevents simultaneous standalone runs in one worktree. `--list` lists the names without starting native probes and is portable. Narrow a repeat run with repeated `--only NAME` options:
 
@@ -88,6 +88,18 @@ Each probe owns a separate process session. INT and TERM trigger bounded TERM/KI
 The update prompt probe can activate test UI. It is recorded as `SKIP` by default and runs only with the explicit `--include-ui` flag. Selecting it with `--only update_prompt` does not implicitly enable UI. Skipped probes are never counted as passes, and an all-skipped run returns failure.
 
 Every started suite keeps `summary.json`, `summary.txt` and one combined stdout/stderr log per selected probe under a unique ignored `.build/standalone-regression/` directory. Reports include the exact revision, dirty/clean state, interpreter, argv, exit code, duration and PASS/FAIL/SKIP accounting. Any failed probe, missing script, launch error or interrupted run returns nonzero. These counts describe standalone probes, not the assertions reported inside each probe or full application XCTest coverage. Setup errors stop before starting the suite. Verify runner behavior portably with `python3 -S Tests/test_standalone_regression.py`.
+
+The registered `diarization_repeatability` probe runs standard-library comparator tests against invented metadata only. It does not run speech models, inspect app history or change preferences. The optional [check-diarization-repeatability.py](../../scripts/dev/check-diarization-repeatability.py) command compares two caller-supplied raw diarizer JSON artifacts:
+
+```bash
+python3 -S scripts/dev/check-diarization-repeatability.py \
+  .build/diarization/raw-run-a.json .build/diarization/raw-run-b.json \
+  --tolerance-seconds 0.1
+```
+
+Each artifact must contain `segments`, with string `speakerID` and numeric `start`/`end` seconds. Arbitrary speaker IDs are normalized by chronological first appearance; numeric trajectories resolve simultaneous first-appearance ties. Metadata such as embeddings or text does not enter the comparison or report. Inputs are limited to 8 MiB, 10,000 segments, 256-character printable IDs and timestamps from 0 through 86,400 seconds. Positive duration is required. Boundary tolerance must be finite and from 0 through 60 seconds; zero requires exact boundaries. Boolean/nonnumeric times, nonfinite numbers, duplicate JSON keys and malformed artifacts return `ERROR` with exit 2. A changed speaker partition, segment count or boundary beyond tolerance returns `FAIL` with exit 1; equivalent partitions return `PASS` with exit 0. Reports contain counts and stable reason codes, without transcript content, raw speaker names or input paths.
+
+This diagnostic compares repeatability, not speaker-identity accuracy. Even two empty artifacts compare equal; they do not prove usable transcription. On the observed synthetic `d346e915` run, repeated exact-two-speaker inference changed meaningful partitions after ID normalization. The pinned engine's public API does not promise deterministic partitions or expose its internal clustering seed. That observed limitation remains unresolved. Passing comparator self-tests does not fix engine quality, establish an audited two-voice reference, or replace a real-model regression with verified speaker provenance. Keep supplied audio, model weights, raw inference artifacts and history outside Git.
 
 The registered `local_api_live_harness` probe runs portable harness self-tests with fake sockets and synthetic metadata. It performs no live HTTP or application inference. The separate [local-api-live.py](../../scripts/dev/local-api-live.py) command defaults to `DRY_RUN`; only `--run-live` permits requests against a caller-selected, already running frozen app:
 
