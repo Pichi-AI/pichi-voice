@@ -950,6 +950,14 @@ final class ASRService: ObservableObject {
         }
     }
 
+    var recoveryFormatInvalidationHandlerForTesting: @Sendable (DirectCoreAudioLifecycleController.FormatInvalidation) -> Void {
+        { [weak self] invalidation in
+            Task { @MainActor in
+                await self?.handleDirectCaptureFormatInvalidation(invalidation)
+            }
+        }
+    }
+
     func configureAudioRouteRecoveryForTesting(
         controller: DirectCoreAudioLifecycleController,
         devices: [AudioDevice.Device],
@@ -1990,7 +1998,9 @@ final class ASRService: ObservableObject {
             do {
                 try self.checkCaptureStartGeneration(startGeneration)
                 if self.directAudioLifecycleController.isRecoveringHardware {
-                    let available = await self.directAudioLifecycleController.waitForPendingHardwareRetirement()
+                    let available = await self.directAudioLifecycleController.waitForPendingHardwareRetirement(
+                        timeout: AudioCaptureIdlePolicy.interruptedStartupRetirementTimeout
+                    )
                     try self.checkCaptureStartGeneration(startGeneration)
                     guard available else { throw BoundedAudioHardwareQueue.Failure.recovering }
                 }
@@ -3090,9 +3100,12 @@ final class ASRService: ObservableObject {
                     )
                 } catch {
                     try self.checkCaptureStartGeneration(startGeneration)
-                    guard error is BoundedAudioHardwareQueue.Failure == false,
-                          error is CancellationError == false,
-                          self.directAudioLifecycleController.isRecoveringHardware == false
+                    let hardwareFailure = error as? BoundedAudioHardwareQueue.Failure
+                    let retriesInterruptedStart = hardwareFailure == .deviceStopped && immediatelyRetriedInputUID == nil
+                    guard error is CancellationError == false,
+                          retriesInterruptedStart || (
+                              hardwareFailure == nil && self.directAudioLifecycleController.isRecoveringHardware == false
+                          )
                     else { throw error }
                     guard let failedUID = self.audioStartAttemptInputUID else { throw error }
                     let now = ProcessInfo.processInfo.systemUptime
@@ -3112,7 +3125,13 @@ final class ASRService: ObservableObject {
                             reason: error.localizedDescription
                         )
                     } else {
-                        forcedInputUID = nil
+                        forcedInputUID = retriesInterruptedStart ? failedUID : nil
+                        if retriesInterruptedStart {
+                            DebugLogger.shared.warning(
+                                "Microphone stopped during startup; retrying once after serialized hardware cleanup",
+                                source: "ASRService"
+                            )
+                        }
                         if bluetoothStabilization.inputUID == failedUID {
                             self.logBluetoothStartupStabilizationEnded(
                                 uid: failedUID,
@@ -5698,6 +5717,20 @@ final class ASRService: ObservableObject {
                 "device=\(invalidation.deviceID) property=\(invalidation.reason) " +
                 "wasRunning=\(invalidation.wasRunning) isStarting=\(self.isStarting)"
         )
+        if invalidation.reason == "io_stopped_abnormally",
+           self.isStarting, self.isRunning == false,
+           self.directAudioLifecycleController.isRecoveringHardware
+        {
+            // The startup loop already owns the failed native call and its one
+            // retry. A parallel five-second route recovery would cancel that
+            // retry while Core Audio is still draining the old call.
+            self.audioRouteRecoveryGeneration &+= 1
+            DebugLogger.shared.warning(
+                "Abnormal microphone startup stop deferred to the current capture retry",
+                source: "ASRService"
+            )
+            return
+        }
         AppServices.shared.audioObserver.signalInputAvailabilityChanged()
         if invalidation.reason == "audio_service_restarted" {
             self.reestablishAudioHardwareListenersAfterServiceReset()

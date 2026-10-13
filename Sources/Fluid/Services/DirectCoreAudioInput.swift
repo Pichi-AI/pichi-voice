@@ -804,8 +804,8 @@ final nonisolated class DirectCoreAudioLifecycleController: @unchecked Sendable 
         await self.deviceQueries.waitUntilAvailable(timeout: self.recoveryTimeout)
     }
 
-    func waitForPendingHardwareRetirement() async -> Bool {
-        await self.hardwareOperations.waitUntilAvailable(timeout: self.recoveryTimeout)
+    func waitForPendingHardwareRetirement(timeout: TimeInterval? = nil) async -> Bool {
+        await self.hardwareOperations.waitUntilAvailable(timeout: timeout ?? self.recoveryTimeout)
     }
 
     func cancelPendingStartup() {
