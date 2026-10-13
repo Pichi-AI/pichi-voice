@@ -16,11 +16,24 @@ struct AudioWaveformBars: View {
     var glowIntensity: CGFloat = 0
     var glowRadius: CGFloat = 0
 
+    #if DEBUG
+    // Apple's accessibility environment is read-only. Exercise the real static rendering
+    // path without changing the user's system accessibility preference.
+    var reducedMotionOverrideForTesting: Bool?
+    #endif
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var simulation = WaveformSimulation()
 
+    private var isMotionReduced: Bool {
+        #if DEBUG
+        if let override = self.reducedMotionOverrideForTesting { return override }
+        #endif
+        return self.reduceMotion
+    }
+
     var body: some View {
-        if self.isAnimating && !self.reduceMotion {
+        if self.isAnimating && !self.isMotionReduced {
             TimelineView(.animation(minimumInterval: 1.0 / 50.0)) { timeline in
                 self.bars(heights: self.simulation.step(
                     at: timeline.date,

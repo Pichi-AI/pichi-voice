@@ -129,13 +129,14 @@ final class WaveformSimulationTests: XCTestCase {
     func testReducedMotionAndHiddenRendererDoNotReadAudioLevels() throws {
         for (animating, reducedMotion) in [(true, true), (false, false), (false, true)] {
             var audioReads = 0
-            let renderer = AudioWaveformBars(
+            var waveform = AudioWaveformBars(
                 color: .blue, barCount: 11, barWidth: 3, barSpacing: 2,
                 minHeight: 3, maxHeight: 24, level: { audioReads += 1; return 1 },
                 noiseThreshold: 0, isAnimating: animating, isIdleWaveEnabled: true
             )
+            waveform.reducedMotionOverrideForTesting = reducedMotion
+            let renderer = waveform
             .foregroundStyle(.red)
-            .environment(\.accessibilityReduceMotion, reducedMotion)
             .frame(width: 80, height: 30)
             let host = NSHostingView(rootView: renderer)
             host.frame = NSRect(x: 0, y: 0, width: 80, height: 30)
