@@ -47941,8 +47941,91 @@
         }
       }
     },
-<<<<<<< HEAD
-=======
+    "The selected meeting runtime does not support in-memory audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting runtime does not support in-memory audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
+          }
+        }
+      }
+    },
+    "Prepare the local privacy model before enabling sensitive data redaction.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prepare the local privacy model before enabling sensitive data redaction."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовьте локальную модель приватности перед включением удаления чувствительных данных."
+          }
+        }
+      }
+    },
+    "Sensitive data redaction requires a compatible meeting backend.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction requires a compatible meeting backend."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+          }
+        }
+      }
+    },
+    "In-memory transcription stopped. Completed text was preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription stopped. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание из памяти остановлено. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "Sensitive data redaction stopped. Recording was interrupted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction stopped. Recording was interrupted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление чувствительных данных остановлено. Запись прервана."
+          }
+        }
+      }
+    },
     "Whisper CPU backend is unavailable on this device.": {
       "extractionState": "manual",
       "localizations": {
@@ -48058,96 +48141,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
-          }
-        }
-      }
-    },
->>>>>>> 75bdfd5f (Add universal mobile target and compose existing meeting owners)
-    "The selected meeting runtime does not support in-memory audio.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected meeting runtime does not support in-memory audio."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-<<<<<<< HEAD
-            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
-          }
-        }
-      }
-    },
-    "Prepare the local privacy model before enabling sensitive data redaction.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prepare the local privacy model before enabling sensitive data redaction."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Подготовьте локальную модель приватности перед включением удаления чувствительных данных."
-          }
-        }
-      }
-    },
-    "Sensitive data redaction requires a compatible meeting backend.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sensitive data redaction requires a compatible meeting backend."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
-          }
-        }
-      }
-    },
-    "In-memory transcription stopped. Completed text was preserved.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-memory transcription stopped. Completed text was preserved."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание из памяти остановлено. Готовый текст сохранён."
-          }
-        }
-      }
-    },
-    "Sensitive data redaction stopped. Recording was interrupted.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sensitive data redaction stopped. Recording was interrupted."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удаление чувствительных данных остановлено. Запись прервана."
-=======
-            "value": "Выбранный модуль распознавания встреч не поддерживает обработку аудио только в памяти."
->>>>>>> 75bdfd5f (Add universal mobile target and compose existing meeting owners)
           }
         }
       }
