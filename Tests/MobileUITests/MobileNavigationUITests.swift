@@ -36,15 +36,21 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["settings.root"].exists || app.buttons["settings.privacy"].exists)
         app.buttons["settings.privacy"].tap()
         XCTAssertTrue(app.switches["privacy.saveAudio"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.switches["privacy.saveAudio"].value as? String, "1")
-        XCTAssertEqual(app.switches["privacy.pii"].value as? String, "0")
-        capture("03-privacy-defaults")
-        try tapNativeSwitch("privacy.saveAudio")
+        // The app may already contain user-selected preferences. Fresh defaults belong to
+        // isolated SettingsStore tests; UI navigation must preserve this installation's choice.
+        let originalAudioChoice = try XCTUnwrap(app.switches["privacy.saveAudio"].value as? String)
+        XCTAssertTrue(["0", "1"].contains(originalAudioChoice))
+        XCTAssertTrue(["0", "1"].contains(app.switches["privacy.pii"].value as? String ?? ""))
+        capture("03-privacy-settings")
+        if originalAudioChoice == "1" { try tapNativeSwitch("privacy.saveAudio") }
         capture("04-privacy-after-tap")
         let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == '0'"), object: app.switches["privacy.saveAudio"])
         XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed)
         capture("04-privacy-audio-off")
         try tapNativeSwitch("privacy.saveAudio")
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == '1'"), object: app.switches["privacy.saveAudio"])
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 3), .completed)
+        if originalAudioChoice == "0" { try tapNativeSwitch("privacy.saveAudio") }
         XCUIDevice.shared.orientation = .portrait
         waitForOrientation(portrait: true)
         capture("05-privacy-portrait")
