@@ -67,6 +67,8 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch
     nonisolated func speakerVoiceProfiles(
         samples: [MeetingSpeakerVoiceSamples]
     ) async throws -> [MeetingSpeakerVoiceProfile]
@@ -84,8 +86,18 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 }
 
 extension MeetingParakeetNemotronRunning {
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
+        throw MeetingPCMInputError.unsupportedRuntime
+    }
+
     /// Existing injected runtimes without a voice encoder retain separate speaker identities.
     nonisolated func speakerVoiceProfiles(
         samples _: [MeetingSpeakerVoiceSamples]
     ) async throws -> [MeetingSpeakerVoiceProfile] { [] }
+}
+
+nonisolated enum MeetingPCMInputError: LocalizedError {
+    case unsupportedRuntime
+    var errorDescription: String? { PichiLocalization.text("The selected meeting runtime does not support in-memory audio.") }
 }

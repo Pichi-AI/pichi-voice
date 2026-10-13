@@ -1,3 +1,4 @@
+#if os(macOS)
 import Accelerate
 import AVFoundation
 import Combine
@@ -9,70 +10,6 @@ import FluidAudio
 import AppKit
 import AudioToolbox
 import CoreAudio
-
-/// Serializes transcription operations and lets teardown cancel the real queued work.
-actor TranscriptionExecutor {
-    private var lastTask: Task<Void, Never>?
-    private var lastTaskID: UUID?
-    private var operationCancellations: [UUID: () -> Void] = [:]
-
-    #if DEBUG
-    var pendingOperationCountForTesting: Int { self.operationCancellations.count }
-    #endif
-
-    func run<T>(benchmarkSessionID: Int? = nil, _ operation: @escaping () async throws -> T) async throws -> T {
-        try Task.checkCancellation()
-        logTranscriptionExecutorPhase("entered", sessionID: benchmarkSessionID)
-        let previous = self.lastTask
-        let operationID = UUID()
-        let task = Task<T, Error> {
-            logTranscriptionExecutorPhase("task_started", sessionID: benchmarkSessionID)
-            _ = await previous?.result
-            logTranscriptionExecutorPhase("previous_finished", sessionID: benchmarkSessionID)
-            try Task.checkCancellation()
-            let result = try await operation()
-            try Task.checkCancellation()
-            return result
-        }
-        self.operationCancellations[operationID] = { task.cancel() }
-        self.lastTask = Task { _ = try? await task.value }
-        self.lastTaskID = operationID
-        defer { self.operationCancellations.removeValue(forKey: operationID) }
-        return try await withTaskCancellationHandler {
-            let result = try await task.value
-            try Task.checkCancellation()
-            return result
-        } onCancel: {
-            task.cancel()
-        }
-    }
-
-    func cancelAndAwaitPending() async {
-        let pending = self.lastTask
-        let pendingID = self.lastTaskID
-        let cancellations = self.operationCancellations
-        for cancel in cancellations.values {
-            cancel()
-        }
-        _ = await pending?.result
-        if self.lastTaskID == pendingID {
-            self.lastTask = nil
-            self.lastTaskID = nil
-        }
-        // A newer queued operation may have arrived while the old work drained.
-        // Retire only the captured ownership set, preserving its cancellation handle.
-        for id in cancellations.keys { self.operationCancellations.removeValue(forKey: id) }
-    }
-}
-
-private nonisolated func logTranscriptionExecutorPhase(_ phase: String, sessionID: Int?) {
-    guard DebugLogger.diagnosticsEnabled, let sessionID else { return }
-    let timestamp = ProcessInfo.processInfo.systemUptime
-    DebugLogger.shared.debug(
-        "ASR_BENCH t=\(timestamp) session=\(sessionID) final_queue_\(phase) mainThread=\(Thread.isMainThread)",
-        source: "ASRBenchmark"
-    )
-}
 
 private nonisolated func logStreamingProviderOperationReturn(
     sessionID: Int,
@@ -381,51 +318,6 @@ enum ASRStopOutcome: Equatable {
     case failed
 }
 
-enum ASRExclusiveActivity: String, Equatable {
-    case dictation
-    case fileTranscription
-    case localAPI
-    case meeting
-    case modelMaintenance
-    case settingsRestore
-
-    var displayName: String {
-        switch self {
-        case .dictation:
-            return "dictation"
-        case .fileTranscription:
-            return "file transcription"
-        case .localAPI:
-            return "local API transcription"
-        case .meeting:
-            return "meeting transcription"
-        case .modelMaintenance:
-            return "voice model maintenance"
-        case .settingsRestore:
-            return "settings import"
-        }
-    }
-}
-
-struct ASRActivityLease: Equatable {
-    let id: UUID
-    let activity: ASRExclusiveActivity
-}
-
-enum ASRActivityError: LocalizedError {
-    case activityInProgress(ASRExclusiveActivity)
-    case settingsRestoreUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case let .activityInProgress(activity):
-            return "Wait for the active \(activity.displayName) to finish."
-        case .settingsRestoreUnavailable:
-            return "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again."
-        }
-    }
-}
-
 nonisolated enum ASRHardwareListenerEventDisposition: Equatable {
     case ignore
     case latchUntilInstalled
@@ -675,7 +567,10 @@ final class ASRService: ObservableObject {
     }
 
     private var meetingASRPreparationOwner: MeetingASRPreparationOwner?
-    private var activeMeetingASRScope: MeetingASRScope?
+    private let meetingPreparedScope = MeetingASRPreparedScope()
+    private var activeMeetingASRScope: MeetingASRPreparedScope? {
+        self.meetingPreparedScope.isActive ? self.meetingPreparedScope : nil
+    }
     private var deferredMeetingActivityLeaseRelease: ASRActivityLease?
     #if DEBUG
     /// Test seam replacing the lazily wired production owner so scope tests use fake providers.
@@ -1161,10 +1056,7 @@ final class ASRService: ObservableObject {
         // outside the CoreML executor. Termination must join that work before releasing
         // its provider claim or the meeting activity lease.
         if let scope = self.activeMeetingASRScope {
-            scope.cancelBody?()
-            if let awaitBodyCompletion = scope.awaitBodyCompletion {
-                await awaitBodyCompletion()
-            }
+            await scope.cancelAndWait()
         }
         if let meetingOwner = self.activeMeetingASRPreparationOwner,
            let claimToken = meetingOwner.currentClaimToken,
@@ -1430,7 +1322,7 @@ final class ASRService: ObservableObject {
             guard let self else { return }
             do {
                 DebugLogger.shared.info("Downloading model: \(model.displayName) (without changing active selection)", source: "ASRService")
-                try await provider.prepare(progressHandler: { progress in
+                try await SpeechModelPreparationOperation.prepare(provider: provider, updateWeights: updateWeights, progress: { progress in
                     Task { @MainActor in
                         guard
                             self.modelDownloadOperationID == operationID,
@@ -1451,17 +1343,6 @@ final class ASRService: ObservableObject {
                 if !updateWeights { try Task.checkCancellation() }
                 DebugLogger.shared.info("Model download completed: \(model.displayName)", source: "ASRService")
             } catch {
-                if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
-                let wasCancelled = Task.isCancelled || Self.isModelPreparationCancellation(error)
-                if wasCancelled, !updateWeights,
-                   provider.shouldClearCacheAfterCancellation,
-                   provider.modelsExistOnDisk() == false
-                {
-                    try? await provider.clearCache()
-                }
-                if wasCancelled {
-                    throw CancellationError()
-                }
                 throw error
             }
         }
@@ -4512,78 +4393,15 @@ final class ASRService: ObservableObject {
         configuration: MeetingFinalProcessingConfiguration,
         body: @escaping (any TranscriptionProvider) async throws -> Result
     ) async throws -> Result {
-        try Task.checkCancellation()
         guard let lease = self.activeActivityLease, lease.activity == .meeting else {
             throw MeetingASRPreparationError.invalidActivityLease
         }
-        guard self.activeMeetingASRScope == nil else {
-            throw MeetingASRPreparationError.preparationInProgress
-        }
-        let scopeID = UUID()
-        self.activeMeetingASRScope = MeetingASRScope(
-            id: scopeID,
-            lease: lease,
-            cancelBody: nil,
-            awaitBodyCompletion: nil
+        defer { self.flushDeferredMeetingLeaseReleaseIfReady() }
+        return try await self.meetingPreparedScope.run(
+            lease: lease, attemptID: attemptID, configuration: configuration,
+            owner: self.meetingASROwner(), isActiveLease: { [weak self] in self?.activeActivityLease == $0 },
+            body: body
         )
-
-        let owner = self.meetingASROwner()
-        let provider: any TranscriptionProvider
-        do {
-            provider = try await owner.prepare(lease: lease, attemptID: attemptID, configuration: configuration)
-        } catch {
-            // The owner already drained the failed preparation.
-            self.finishMeetingASRScope(scopeID: scopeID)
-            throw error
-        }
-        guard self.activeActivityLease == lease,
-              let token = owner.currentClaimToken, token.lease == lease
-        else {
-            if let token = owner.currentClaimToken { await owner.release(token) }
-            self.finishMeetingASRScope(scopeID: scopeID)
-            throw CancellationError()
-        }
-
-        do {
-            let bodyTask = Task { @MainActor in
-                try await body(provider)
-            }
-            guard self.activeMeetingASRScope?.id == scopeID else {
-                bodyTask.cancel()
-                _ = await bodyTask.result
-                throw CancellationError()
-            }
-            self.activeMeetingASRScope?.cancelBody = {
-                bodyTask.cancel()
-            }
-            self.activeMeetingASRScope?.awaitBodyCompletion = {
-                _ = await bodyTask.result
-            }
-            let result = try await withTaskCancellationHandler {
-                try await bodyTask.value
-            } onCancel: {
-                bodyTask.cancel()
-            }
-            // A provider/model call may not observe cooperative cancellation until it
-            // returns. Never publish that late success after the enclosing attempt was
-            // cancelled; teardown still runs below before cancellation escapes.
-            if bodyTask.isCancelled { throw CancellationError() }
-            try Task.checkCancellation()
-            await owner.release(token)
-            self.finishMeetingASRScope(scopeID: scopeID)
-            return result
-        } catch {
-            await owner.release(token)
-            self.finishMeetingASRScope(scopeID: scopeID)
-            throw error
-        }
-    }
-
-    private func finishMeetingASRScope(scopeID: UUID) {
-        if self.activeMeetingASRScope?.id == scopeID {
-            self.activeMeetingASRScope = nil
-        }
-        self.flushDeferredMeetingLeaseReleaseIfReady()
     }
 
     private func flushDeferredMeetingLeaseReleaseIfReady() {
@@ -8619,3 +8437,5 @@ private final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         return mono
     }
 }
+
+#endif

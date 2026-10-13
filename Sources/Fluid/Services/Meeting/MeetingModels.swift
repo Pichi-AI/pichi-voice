@@ -11,6 +11,11 @@ nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case inRoom
 }
 
+nonisolated enum MeetingAudioStorageMode: String, Codable, Sendable {
+    case retainedFiles
+    case memoryOnly
+}
+
 nonisolated enum MeetingSessionState: String, Codable, Sendable {
     case preparing
     case recording
@@ -272,6 +277,10 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var microphone: MeetingMicrophoneIdentity
     var chunkDuration: TimeInterval
     var timestampDefaultTitle: Bool? = nil
+    /// Optional for existing encoded configuration records. Absence keeps retained audio.
+    var audioStorageMode: MeetingAudioStorageMode? = nil
+    var speakerLabelsEnabled: Bool? = nil
+    var piiRedactionEnabled: Bool? = nil
 
     init(
         mode: MeetingCaptureMode,
@@ -281,7 +290,10 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         application: MeetingApplicationIdentity? = nil,
         microphone: MeetingMicrophoneIdentity,
         chunkDuration: TimeInterval = Self.defaultChunkDuration,
-        timestampDefaultTitle: Bool = false
+        timestampDefaultTitle: Bool = false,
+        audioStorageMode: MeetingAudioStorageMode = .retainedFiles,
+        speakerLabelsEnabled: Bool = true,
+        piiRedactionEnabled: Bool = false
     ) {
         self.mode = mode
         self.title = title
@@ -291,10 +303,13 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.microphone = microphone
         self.chunkDuration = max(60, chunkDuration)
         self.timestampDefaultTitle = timestampDefaultTitle
+        self.audioStorageMode = audioStorageMode
+        self.speakerLabelsEnabled = speakerLabelsEnabled
+        self.piiRedactionEnabled = piiRedactionEnabled
     }
 
     func validate() throws {
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
+        guard self.languageCode == "auto" || VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.microphone.captureDeviceID.isEmpty else {
@@ -470,6 +485,7 @@ nonisolated struct MeetingTrackHealth: Codable, Equatable, Sendable {
 nonisolated enum MeetingAudioTrackCaptureMethod: String, Codable, Sendable {
     case screenCaptureKit
     case avCaptureSession
+    case audioEngine
     case voiceProcessing
 }
 
@@ -862,6 +878,10 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Backend selected at capture start, used by the first processing attempt. Older sessions have no pin.
     var recordingBackendID: String? = nil
     var recordingASRArtifactFingerprint: String? = nil
+    /// Immutable privacy/attribution policy captured when the meeting begins.
+    var audioStorageMode: MeetingAudioStorageMode? = nil
+    var speakerLabelsEnabled: Bool? = nil
+    var piiRedactionEnabled: Bool? = nil
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
@@ -886,6 +906,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         } ?? configuration.title
         self.languageCode = configuration.languageCode
         self.mode = configuration.mode
+        self.audioStorageMode = configuration.audioStorageMode
+        self.speakerLabelsEnabled = configuration.speakerLabelsEnabled
+        self.piiRedactionEnabled = configuration.piiRedactionEnabled
         self.platform = configuration.platform
         self.capturedApplication = configuration.application
         self.selectedMicrophone = configuration.microphone
@@ -1013,7 +1036,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         else {
             throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
         }
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
+        guard self.languageCode == "auto" || VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.selectedMicrophone.captureDeviceID.isEmpty else {
@@ -1137,6 +1160,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 }
 
 extension MeetingSession {
+    var savesAudio: Bool { self.audioStorageMode != .memoryOnly }
+
     var hasFinalizedAudio: Bool {
         self.audioTracks.contains { track in
             track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }

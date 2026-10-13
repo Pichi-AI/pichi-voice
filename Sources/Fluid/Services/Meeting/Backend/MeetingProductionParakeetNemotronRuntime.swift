@@ -97,7 +97,7 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
 /// The prepared provider session. The inherited interface name is retained; both references use ASRService's
 /// own main-actor scope and meeting executor, never from the caller's context directly.
 private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession, @unchecked Sendable {
-    let asrService: ASRService
+    let asrService: any MeetingASRServicing
     let provider: any TranscriptionProvider
 
     func transcribeWithTimings(
@@ -108,11 +108,11 @@ private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession
 }
 
 final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronRunning {
-    private let asrServiceProvider: @MainActor () -> ASRService
+    private let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let modelLocator: any MeetingNemotronModelLocating
 
     init(
-        asrServiceProvider: @escaping @MainActor () -> ASRService,
+        asrServiceProvider: @escaping @MainActor () -> any MeetingASRServicing,
         modelLocator: any MeetingNemotronModelLocating
     ) {
         self.asrServiceProvider = asrServiceProvider

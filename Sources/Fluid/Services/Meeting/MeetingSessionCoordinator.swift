@@ -34,7 +34,6 @@ protocol ASRActivityLeasing: AnyObject {
     func completeMeetingAudioHandback(_ lease: ASRActivityLease) async
 }
 
-extension ASRService: ASRActivityLeasing {}
 
 @MainActor
 final class AudioActivityArbiter: MeetingAudioActivityArbitrating {
@@ -122,6 +121,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     private let capture: any MeetingCaptureControlling
     private let processing: any MeetingProcessingControlling
     private let audioArbiter: any MeetingAudioActivityArbitrating
+    private let settings: SettingsStore
+    private let defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)?
+    private let redactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
     private let preferredMicrophoneUID: @MainActor () -> String?
 
     private enum DegradeReason { case silence, sourceLoss, startupWriterFailure, sticky }
@@ -203,6 +205,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         processing: any MeetingProcessingControlling,
         audioArbiter: any MeetingAudioActivityArbitrating,
         preferredMicrophoneUID: @escaping @MainActor () -> String? = { nil },
+        settings: SettingsStore = .shared,
+        defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)? = nil,
+        redactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
         validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
         processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
@@ -213,6 +218,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.processing = processing
         self.audioArbiter = audioArbiter
         self.preferredMicrophoneUID = preferredMicrophoneUID
+        self.settings = settings
+        self.defaultConfigurationResolver = defaultConfigurationResolver
+        self.redactorProvider = redactorProvider
         self.validateRecordingModels = validateRecordingModels
         self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.processingLogger = processingLogger
@@ -311,6 +319,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         preferredWindowID: UInt32?,
         requirePreferredApplication: Bool = false
     ) async throws -> MeetingCaptureConfiguration {
+        if let defaultConfigurationResolver { return try await defaultConfigurationResolver(mode, title) }
+        #if os(macOS)
         let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: self.preferredMicrophoneUID()
         )
@@ -332,12 +342,18 @@ final class MeetingSessionCoordinator: ObservableObject {
         return MeetingCaptureConfiguration(
             mode: mode,
             title: title,
-            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode
-                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: SettingsStore.shared.selectedSpeechModel.rawValue) ?? "ru",
+            languageCode: self.settings.meetingRecordingDefaults.languageCode
+                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru",
             application: application,
             microphone: microphone,
-            timestampDefaultTitle: true
+            timestampDefaultTitle: true,
+            audioStorageMode: self.settings.meetingSaveAudio ? .retainedFiles : .memoryOnly,
+            speakerLabelsEnabled: self.settings.meetingSpeakerLabelsEnabled,
+            piiRedactionEnabled: self.settings.meetingPIIRedactionEnabled
         )
+        #else
+        throw MeetingProcessingError.modelUnavailable
+        #endif
     }
 
     @discardableResult
@@ -377,7 +393,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws -> MeetingSession {
         try Task.checkCancellation()
         try configuration.validate()
-        let selectedModelID = SettingsStore.shared.selectedSpeechModel.rawValue
+        let selectedModelID = self.settings.selectedSpeechModel.rawValue
         if PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
             _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
                 asrModel: selectedModelID,
@@ -412,6 +428,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             throw MeetingCoordinatorError.maintenanceInProgress
         }
 
+        var publicationConfiguration = configuration
+        if configuration.piiRedactionEnabled == true {
+            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            publicationConfiguration.title = try await redactor.redact(configuration.title)
+            publicationConfiguration.microphone.displayName = try await redactor.redact(configuration.microphone.displayName)
+        }
         let lease = try await self.audioArbiter.acquireMeetingCapture()
         let recordingModelID: String
         let recordingBackendID: MeetingBackendID
@@ -427,14 +449,15 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             // Permission prompts deliberately run without an ASR lease. Resolve and validate
             // the actual recording snapshot only once admission closes model/artifact changes.
-            recordingModelID = SettingsStore.shared.selectedSpeechModel.rawValue
+            recordingModelID = self.settings.selectedSpeechModel.rawValue
             recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(
                 languageCode: configuration.languageCode,
                 selectedModelID: recordingModelID
             )
             recordingASRConfiguration = PichiMeetingProviderFactory.configuration(
                 backendID: recordingBackendID,
-                languageCode: configuration.languageCode
+                languageCode: configuration.languageCode,
+                diarizationEnabled: configuration.speakerLabelsEnabled ?? true
             )
             _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
             try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
@@ -454,10 +477,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             self.state = .idle
         }
         let timebase = Self.makeTimebase()
-        var session = MeetingSession(configuration: configuration, timebase: timebase)
+        var session = MeetingSession(configuration: publicationConfiguration, timebase: timebase)
         session.recordingBackendID = recordingBackendID.rawValue
         session.recordingASRArtifactFingerprint = recordingASRConfiguration.asrArtifactFingerprint
-        session.retention.retainAudioUntil = SettingsStore.shared.meetingAudioRetentionPolicy
+        session.retention.retainAudioUntil = self.settings.meetingAudioRetentionPolicy
             .retainUntil(startedAt: session.startedAt)
         self.activeSession = session
         self.state = .preparing(session.id)
@@ -483,12 +506,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
+        if configuration.audioStorageMode != .memoryOnly && configuration.piiRedactionEnabled != true {
         liveTranscriptionCoordinator.start(
             mode: configuration.mode,
             languageCode: configuration.languageCode,
             modelID: recordingModelID,
             artifactFingerprint: session.recordingASRArtifactFingerprint
         )
+        }
 
         do {
             try await self.store.create(session)
@@ -498,6 +523,14 @@ final class MeetingSessionCoordinator: ObservableObject {
                   self.terminationTask == nil,
                   !Task.isCancelled
             else { throw CancellationError() }
+            if configuration.audioStorageMode == .memoryOnly {
+                _ = try await self.processing.prepareMemoryAudio(
+                    session: session, sessionDirectory: sessionDirectory
+                ) { [weak self] batch in
+                    guard let self, self.captureGeneration == generation else { throw CancellationError() }
+                    try await self.checkpointMemoryTranscript(batch, sessionID: session.id, generation: generation)
+                }
+            }
             captureStartAttempted = true
             let startResult = try await self.capture.start(
                 session: session,
@@ -531,6 +564,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             // one-shot event and the settled writer health instead of replacing them with the
             // original preparing snapshot.
             session.events = self.activeSession?.events ?? session.events
+            if configuration.audioStorageMode == .memoryOnly, let latest = self.activeSession {
+                session.transcriptSegments = latest.transcriptSegments
+                session.speakers = latest.speakers
+            }
             if let firstPresentationTime = startResult.firstPresentationTime {
                 session.timebase.firstPresentationTime = firstPresentationTime
             }
@@ -607,6 +644,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             if let latestSession = self.activeSession, latestSession.id == session.id {
                 session.events = latestSession.events
             }
+            await self.processing.cancelMemoryAudio(sessionID: session.id)
             let hasRecoverableAudio = Self.hasRecoverableAudio(session)
             let failureDomain: MeetingFailureDomain = captureStarted
                 ? .persistence
@@ -1164,7 +1202,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             )
             return
         }
-        let policy = SettingsStore.shared.meetingAudioRetentionPolicy
+        let policy = self.settings.meetingAudioRetentionPolicy
         let now = Date()
         var nextDeadline: Date?
 
@@ -1573,6 +1611,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.captureGeneration = nil
         self.degradeReason = nil
+        if session.audioStorageMode == .memoryOnly, let latest = self.activeSession, latest.id == session.id {
+            session.transcriptSegments = latest.transcriptSegments
+            session.speakers = latest.speakers
+        }
         Self.apply(stopResult, to: &session)
         session.state = .processing
         session.processingAttempts.append(Self.pendingProcessingAttempt())
@@ -1587,6 +1629,29 @@ final class MeetingSessionCoordinator: ObservableObject {
         return processed
     }
 
+    private func checkpointMemoryTranscript(_ batch: MeetingPCMTranscriptBatch, sessionID: UUID, generation: UUID) async throws {
+        guard self.captureGeneration == generation, var session = self.activeSession, session.id == sessionID else { throw CancellationError() }
+        let existing = Set(session.transcriptSegments.map(\.id))
+        session.transcriptSegments.append(contentsOf: batch.segments.filter { !existing.contains($0.id) })
+        let speakers = Set(session.speakers.map(\.id))
+        session.speakers.append(contentsOf: batch.speakers.filter { !speakers.contains($0.id) })
+        session.transcriptTimeDomain = .meetingRelative
+        session.transcriptIsComplete = batch.isComplete
+        session.updatedAt = Date()
+        self.activeSession = session
+        await self.persistence.flush()
+        guard self.captureGeneration == generation else { throw CancellationError() }
+        try await self.store.save(session)
+        // Only durable, privacy-filtered text is published by the strict path.
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.revision = self.liveTranscript.revision + 1
+        snapshot.utterances = session.transcriptSegments.suffix(100).map {
+            MeetingLiveUtterance(id: $0.id, speaker: .you, text: $0.text, start: $0.start.seconds, end: $0.end.seconds)
+        }
+        snapshot.availability = .available
+        self.liveTranscript = snapshot
+    }
+
     private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
         let diagnosticStarted = ContinuousClock.now
         var diagnosticStage = MeetingProcessingStage.pending
@@ -1596,7 +1661,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             let elapsed = diagnosticStarted.duration(to: .now).components
             let elapsedMs = elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000
             var line = "Meeting processing outcome=\(diagnosticOutcome) session=\(inputSession.id) stage=\(diagnosticStage.rawValue) elapsedMs=\(elapsedMs)"
-            if let failure = diagnosticFailure {
+            if let failure = diagnosticFailure, inputSession.piiRedactionEnabled != true {
                 // One bounded line; never add meeting titles, transcripts or audio contents.
                 let detail = String(failure.message.prefix(512)).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
                 let code = String(failure.code.prefix(128)).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")

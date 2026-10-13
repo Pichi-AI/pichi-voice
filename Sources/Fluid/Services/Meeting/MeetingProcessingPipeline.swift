@@ -5,11 +5,20 @@ import Foundation
 
 @MainActor
 protocol MeetingProcessingControlling: AnyObject {
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws
+    func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult
+}
+
+extension MeetingProcessingControlling {
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws {
+        throw MeetingProcessingError.noRecoverableAudio
+    }
+    func cancelMemoryAudio(sessionID: MeetingSessionID) async {}
 }
 
 actor MeetingProcessingSerializationGate {
@@ -1322,12 +1331,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let sessionDirectory: URL
         let provider: any TranscriptionProvider
         let languageCode: String
-        let asrService: ASRService
+        let asrService: any MeetingASRServicing
         let languagePin: MeetingProviderLanguagePin
     }
 
+    var memoryAttempts: [MeetingSessionID: MeetingMemoryProcessingAttempt] = [:]
+    let privacyRedactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
     private let managesModelResidency: Bool
-    private let asrServiceProvider: @MainActor () -> ASRService
+    let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let serializationGate: MeetingProcessingSerializationGate
     private let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
@@ -1341,7 +1352,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)?
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
-    private let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
@@ -1351,8 +1362,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let canonicalSidecarVerifiedProbe: (MeetingResultSidecarReference) -> Void
 
     init(
-        asrServiceProvider: @escaping @MainActor () -> ASRService,
+        asrServiceProvider: @escaping @MainActor () -> any MeetingASRServicing,
         managesModelResidency: Bool = true,
+        privacyRedactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
         serializationGate: MeetingProcessingSerializationGate = .shared,
         backendRegistry: MeetingTranscriptionBackendRegistry? = nil,
         backendID: MeetingBackendID? = nil,
@@ -1364,6 +1376,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
+        self.privacyRedactorProvider = privacyRedactorProvider
         self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
@@ -1402,6 +1415,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
+        if session.audioStorageMode == .memoryOnly { return try await self.finishMemoryAudio(session: session, progress: progress) }
+        if session.piiRedactionEnabled == true, try self.privacyRedactorProvider() == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         if let languages = self.backendRegistry.supportedLanguageCodes, !languages.contains(session.languageCode) {
             throw MeetingProcessingError.unsupportedLanguage
         }
@@ -1442,7 +1457,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             configuration: PichiMeetingProviderFactory.configuration(
                 backendID: backendID,
                 languageCode: session.languageCode,
-                artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil
+                artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
+                diarizationEnabled: session.speakerLabelsEnabled ?? true
             )
         )
         let backend = try self.backendRegistry.makeBackend(
@@ -1496,6 +1512,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 var processed: MeetingProcessingResult
                 switch plan.resultContract {
                 case .legacyResult:
+                    if session.piiRedactionEnabled == true { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
                     let legacyWork: () async throws -> MeetingProcessingResult = {
                         let outcome = try await backend.execute(plan: plan, manifest: nil, progress: progress)
                         try Task.checkCancellation()
@@ -1588,6 +1605,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             )
         }
 
+        let publishedEvidence: MeetingFinalTranscriptEvidence
+        if request.session.piiRedactionEnabled == true {
+            guard let redactor = try self.privacyRedactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            publishedEvidence = try await MeetingTranscriptPrivacyPolicy.redactedEvidence(bundle.evidence, using: redactor)
+        } else { publishedEvidence = bundle.evidence }
+
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
             ?? backend.echoVerdictProvider
             ?? MeetingFailClosedEchoVerdictProvider()
@@ -1602,7 +1625,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let assemblyInput = MeetingAssemblyInput(
             plan: plan,
             manifest: manifest,
-            evidence: bundle.evidence,
+            evidence: publishedEvidence,
             coverageReceipts: bundle.coverageReceipts,
             echoVerdicts: echoVerdicts
         )
@@ -2997,7 +3020,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         fileURL: URL,
         provider: any TranscriptionProvider,
         languageCode: String,
-        asrService: ASRService,
+        asrService: any MeetingASRServicing,
         languagePin: MeetingProviderLanguagePin
     ) async throws -> String {
         var samples = try await Task.detached(priority: .userInitiated) {
@@ -3025,7 +3048,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         _ fileURL: URL,
         provider: any TranscriptionProvider,
         languageCode: String,
-        asrService: ASRService,
+        asrService: any MeetingASRServicing,
         languagePin: MeetingProviderLanguagePin
     ) async throws -> String? {
         let result: ASRTranscriptionResult
@@ -3053,7 +3076,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         _ samples: [Float],
         provider: any TranscriptionProvider,
         languageCode: String,
-        asrService: ASRService,
+        asrService: any MeetingASRServicing,
         languagePin: MeetingProviderLanguagePin
     ) async throws -> ASRTranscriptionResult {
         languagePin.apply()
