@@ -650,6 +650,7 @@ final class PasteDeliveryCoordinator {
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
         self.log("delivery_policy keepTranscript=\(preserveTranscriptOnClipboard) auditSchema=1")
+        let requestedChangeCount = self.pasteboard.changeCount
         let slotRequestedAt = ProcessInfo.processInfo.systemUptime
         await self.acquireDeliverySlot()
         let slotAcquiredAt = ProcessInfo.processInfo.systemUptime
@@ -660,7 +661,11 @@ final class PasteDeliveryCoordinator {
 
         guard isOutputValid() else { return .cancelled }
         guard targetIsReady() else {
-            if preserveTranscriptOnClipboard, isOutputValid() {
+            // Match copyBackup admission without acquiring the slot we already own.
+            if preserveTranscriptOnClipboard, isOutputValid(),
+               self.pasteboard.changeCount == requestedChangeCount ||
+               self.pasteboard.changeCount == self.lastWrittenChangeCount
+            {
                 self.generation &+= 1
                 self.writeBackup(text)
             }
