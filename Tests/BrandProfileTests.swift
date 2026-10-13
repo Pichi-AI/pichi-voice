@@ -36,6 +36,7 @@ struct BrandProfileTests {
             precondition(demo.logos != nil && demo.theme != nil)
             precondition(!demo.profile.appName.contains("Pichi"))
         }
+        try self.verifyPaletteForegroundContrast(packaged)
         try self.require(try BrandPackage.decode(packaged.encoded()) == packaged)
         let valid = try JSONEncoder().encode(packaged.profile)
         try self.require(try BrandProfile.decode(valid) == packaged.profile)
@@ -95,6 +96,10 @@ struct BrandProfileTests {
         let previousFile = try Data(contentsOf: active)
         let previousRevision = store.revision
         self.reject { _ = try store.importData(Data("{invalid".utf8)) }
+        // A structurally valid package with an invisible text accent must also
+        // fail atomically, even though its dark button label is readable.
+        let unsafeAccent = try self.invisibleAccentPackage(packaged, appearance: "light", background: "cardBackground")
+        self.reject { _ = try store.importData(unsafeAccent) }
         precondition(store.current() == sizeable && store.revision == previousRevision)
         try self.require(try Data(contentsOf: active) == previousFile)
         try self.require(try BrandPackage.decode(store.exportData()) == sizeable)
@@ -162,6 +167,64 @@ struct BrandProfileTests {
         try signedPolicy.validate()
         precondition(!signedPolicy.updatesAllowedForCurrentSignature, "Unsigned local tools must not enable the updater")
         print("Portable brand package: validation, atomic activation, cache, legacy migration and identity isolation passed")
+    }
+
+    static func invisibleAccentPackage(_ packaged: BrandPackage, appearance: String, background: String, paletteColors: [String: String]? = nil) throws -> Data {
+        var object = try JSONSerialization.jsonObject(with: packaged.encoded()) as! [String: Any]
+        var profile = object["profile"] as! [String: Any]
+        var theme = object["theme"] as! [String: Any]
+        var palette = theme[appearance] as! [String: Any]
+        var colors = paletteColors ?? (palette["colors"] as! [String: String])
+        // Keep button ink valid so only the standalone accent contract rejects it.
+        profile[appearance == "light" ? "accentLight" : "accentDark"] = colors[background]!
+        colors["accentForeground"] = colors["primaryText"]!
+        palette["colors"] = colors
+        theme[appearance] = palette
+        object["profile"] = profile
+        object["theme"] = theme
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    static func verifyPaletteForegroundContrast(_ packaged: BrandPackage) throws {
+        let backgrounds = ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"]
+        for (appearance, palette) in [("light", packaged.theme!.light), ("dark", packaged.theme!.dark)] {
+            let accent = appearance == "light" ? packaged.profile.accentLight : packaged.profile.accentDark
+            for background in backgrounds {
+                // Isolate one background: #767676 passes 3:1 against BOTH black
+                // and white but disappears only on that one selected surface.
+                // Primary ink and every other role remain valid there, so skipping
+                // any one of the six backgrounds would accept this fixture.
+                let base = appearance == "light" ? "#FFFFFF" : "#000000"
+                let ink = appearance == "light" ? "#000000" : "#FFFFFF"
+                var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, ink) })
+                for token in backgrounds { colors[token] = base }
+                colors[background] = "#767676"
+                colors["accentForeground"] = base
+                try BrandPalette(colors: colors).validate(accent: ink)
+                for token in ["secondaryText", "tertiaryText", "warning", "success"] {
+                    var invalid = colors
+                    invalid[token] = "#767676"
+                    self.reject { try BrandPalette(colors: invalid).validate(accent: ink) }
+                }
+                self.reject { _ = try BrandPackage.decode(self.invisibleAccentPackage(packaged, appearance: appearance, background: background, paletteColors: colors)) }
+            }
+            for token in ["primaryText", "secondaryText", "tertiaryText", "warning", "success", "accentForeground", "cardBackground"] {
+                for alphaColor in ["#FFFFFF00", "#FFFFFFFF"] {
+                    var colors = palette.colors
+                    colors[token] = alphaColor
+                    self.reject { try BrandPalette(colors: colors).validate(accent: accent) }
+                }
+            }
+        }
+        // The new standalone-accent rule must still permit readable portable
+        // themes. Shipped and both bank packages are decoded earlier in main.
+        for (background, foreground, accent) in [("#FFFFFF", "#000000", "#0000FF"), ("#000000", "#FFFFFF", "#00FFFF")] {
+            var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, foreground) })
+            for token in backgrounds { colors[token] = background }
+            colors["accentForeground"] = background
+            try BrandPalette(colors: colors).validate(accent: accent)
+        }
+        print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections and 2 readable palette checks passed")
     }
 
     static func verifyDiagnosticLogIsolation() throws {

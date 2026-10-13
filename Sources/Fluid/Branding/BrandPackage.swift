@@ -114,8 +114,14 @@ nonisolated struct BrandPalette: Codable, Equatable, Sendable {
         for value in self.colors.values { try BrandProfile.validateColor(value) }
         // Validate readable text across the actual surfaces used by the shared theme.
         for background in ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"] {
-            guard Self.contrast(self.colors["primaryText"]!, self.colors[background]!) >= 4.5,
-                  Self.contrast(self.colors["secondaryText"]!, self.colors[background]!) >= 3 else {
+            let surface = self.colors[background]!
+            guard Self.contrast(self.colors["primaryText"]!, surface) >= 4.5,
+                  ["secondaryText", "tertiaryText", "warning", "success"].allSatisfy({
+                      Self.contrast(self.colors[$0]!, surface) >= 3
+                  }), Self.contrast(accent, surface) >= 3 else {
+                // Accent and status colors are also used as text and standalone icons,
+                // not only as button fills. Checking the paired button label alone
+                // would accept a white accent that disappears on a light surface.
                 throw BrandProfile.ValidationError.invalid("Theme text needs more contrast against its backgrounds.")
             }
         }
