@@ -1416,7 +1416,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
         if session.audioStorageMode == .memoryOnly { return try await self.finishMemoryAudio(session: session, progress: progress) }
-        if session.piiRedactionEnabled == true, try self.privacyRedactorProvider() == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
+        let attemptRedactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
+        if session.piiRedactionEnabled == true, attemptRedactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         if let languages = self.backendRegistry.supportedLanguageCodes, !languages.contains(session.languageCode) {
             throw MeetingProcessingError.unsupportedLanguage
         }
@@ -1536,7 +1537,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         processed = try await legacyWork()
                     }
                 case .canonicalEvidence:
-                    processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, progress: progress)
+                    processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, redactor: attemptRedactor, progress: progress)
                 }
                 if self.managesModelResidency, summaryProvider != nil {
                     processed.postProcessing = await MeetingPostProcessingRegistry.shared.process(
@@ -1573,6 +1574,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private func processCanonicalAttempt(
         plan: MeetingBackendPlan,
         backend: any MeetingTranscriptionBackend,
+        redactor: (any TranscriptTextRedacting)?,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
         let request = plan.request
@@ -1607,7 +1609,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
         let publishedEvidence: MeetingFinalTranscriptEvidence
         if request.session.piiRedactionEnabled == true {
-            guard let redactor = try self.privacyRedactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            guard let redactor else { throw MeetingPrivacyPublicationError.redactorUnavailable }
             publishedEvidence = try await MeetingTranscriptPrivacyPolicy.redactedEvidence(bundle.evidence, using: redactor)
         } else { publishedEvidence = bundle.evidence }
 

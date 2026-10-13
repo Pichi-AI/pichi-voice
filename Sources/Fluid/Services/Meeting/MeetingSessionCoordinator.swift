@@ -1682,7 +1682,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         let speakers = Set(session.speakers.map(\.id))
         session.speakers.append(contentsOf: batch.speakers.filter { !speakers.contains($0.id) })
         session.transcriptTimeDomain = .meetingRelative
-        session.transcriptIsComplete = batch.isComplete
+        session.transcriptIsComplete = (session.transcriptIsComplete ?? true) && batch.isComplete
         session.updatedAt = Date()
         self.activeSession = session
         await self.persistence.flush()
