@@ -71,6 +71,8 @@ help_action = snippet(config_file,
     '                .buttonStyle(.plain)') + '                .buttonStyle(.plain)\n'
 help_method = snippet(config_file, '    func helpStep(', '    var providerStepContent:')
 help_number = help_method[help_method.index('            ZStack {'):help_method.index('            Image(systemName: icon)')]
+warning_method = snippet(config_file, '    var apiKeyWarningView:', '    var helpSectionView:')
+warning = warning_method[warning_method.index('        HStack(spacing: 10) {'):warning_method.index('\n    }\n')]
 words = snippet('Sources/Fluid/UI/StatsShareCard.swift',
     '            Text(self.content.totalWords.formatted())', '            Text("words dictated")')
 def fallback(control):
@@ -117,6 +119,9 @@ with Path(sys.argv[1]).open('a') as output:
         '    @Environment(\\.theme) private var theme\n'
         '    private struct Content { let totalWords = 12345 }; private let content = Content()\n'
         '    var body: some View {\n' + words + '\n    }\n}\n')
+    output.write('struct ProductionAPIKeyWarningFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n'
+        '    var body: some View {\n' + warning + '\n    }\n}\n')
     output.write('struct CopyToastFixture: View {\n'
         '    @Environment(\\.theme) private var theme\n'
         '    var body: some View {\n' + toast + '\n    }\n}\n')
@@ -147,6 +152,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/ThemeEnvironment.swift \
     Sources/Fluid/Theme/NativeButtonStyles.swift \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
+    Sources/Fluid/Theme/Components/FluidIconTile.swift \
     Sources/Fluid/Theme/Components/FluidDropdown.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
     Sources/Fluid/UI/AISettingsComponents.swift \

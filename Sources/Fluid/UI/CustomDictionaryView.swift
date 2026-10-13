@@ -293,7 +293,7 @@ struct CustomDictionaryView: View {
                         .clipped()
                         .background {
                             Rectangle()
-                                .fill(self.theme.materials.sidebar)
+                                .fill(self.theme.palette.sidebarBackground)
                                 .ignoresSafeArea(.container, edges: [.top, .bottom])
                                 .allowsHitTesting(false)
                                 .accessibilityHidden(true)

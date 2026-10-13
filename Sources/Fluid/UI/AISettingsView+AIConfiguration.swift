@@ -293,9 +293,9 @@ extension AIEnhancementSettingsView {
             Spacer()
         }
         .padding(12)
-        .background(.orange.opacity(0.12))
+        .background(self.theme.palette.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.orange.opacity(0.3), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(self.theme.palette.warning.opacity(0.3), lineWidth: 1))
         .padding(.horizontal, 4)
     }
 

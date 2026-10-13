@@ -293,7 +293,8 @@ struct UIContrastTests {
                                                 ("opposite-inks", "#606060", "#FFFFFF", "#000000")] {
             let backgrounds: Set<String> = ["windowBackground", "contentBackground", "sidebarBackground",
                                            "cardBackground", "elevatedCardBackground", "toolbarBackground"]
-            let colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, backgrounds.contains($0) ? background : ink) })
+            var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, backgrounds.contains($0) ? background : ink) })
+            if name == "gray-accent" { colors["warning"] = accent }
             let profile = BrandProfile(appName: "Contrast", meetingName: "Meet", assistantName: "AI", tagline: "Synthetic fixture",
                                        accentLight: accent, accentDark: accent, website: "https://example.invalid", support: "https://example.invalid")
             let palette = BrandPalette(colors: colors)
@@ -309,6 +310,13 @@ struct UIContrastTests {
                         expectedForeground: theme.palette.primaryText)
                     reviewChecks += 1
                 }
+                try self.verify(ProductionAPIKeyWarningFixture(), name: "review-warning-\(suffix)", theme: theme, scheme: scheme,
+                    textBackground: self.components(theme.palette.cardBackground), directory: directory,
+                    expectedForeground: theme.palette.readableText(theme.palette.warning), requiredContrast: 3)
+                try self.verify(FluidIconTile(icon: "gearshape.fill", tint: theme.palette.accent), name: "review-icon-tile-\(suffix)",
+                    theme: theme, scheme: scheme, textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+                    expectedForeground: theme.palette.readableText(theme.palette.accent), requiredContrast: 3)
+                reviewChecks += 2
             }
         }
         print("Production disabled command glyph, Help and word metric: \(reviewChecks) review regression rendering checks passed")
