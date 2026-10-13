@@ -292,6 +292,8 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             previous = geometry
             try await Task.sleep(nanoseconds: 50_000_000)
         }
+        print("[NATIVE_CAPTION] timeout=\(reason) geometry=\(String(describing: previous))")
+        capture(host, step: "timeout", scheme: host.controller.overrideUserInterfaceStyle == .dark ? .dark : .light)
         XCTFail(reason)
         throw CaptionNativeHost.LayoutTimeout()
     }

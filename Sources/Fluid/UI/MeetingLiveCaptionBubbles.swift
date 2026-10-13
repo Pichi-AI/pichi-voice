@@ -144,7 +144,7 @@ struct MeetingLiveBubbleScrollList: View {
                         }
                     }
                 }
-                .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
+                .animation(self.documentStyle || self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
                 .modifier(MeetingCaptionScrollTracking(
                     viewport: self.scrollViewport, isPinnedToBottom: self.$isPinnedToBottom,
                     onLayoutChange: { self.scrollToBottomIfPinned(proxy: proxy) }
@@ -304,9 +304,13 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                     if let previous = self.previousGeometry {
                         // Content growth and rotation change layout, not the user's follow choice.
                         // Offset-only changes also cover deceleration and non-touch scrolling.
+                        let wasFollowing = self.isPinnedToBottom
                         self.isPinnedToBottom = geometry.fallbackFollowPreference(after: previous,
                             currentlyFollowing: self.isPinnedToBottom,
                             upwardDrag: self.isDraggingUp)
+                        if wasFollowing != self.isPinnedToBottom {
+                            DebugLogger.shared.debug("following=\(self.isPinnedToBottom) upwardDrag=\(self.isDraggingUp) layoutChanged=\(geometry.layoutChanged(from: previous)) offset=\(geometry.contentOffset ?? 0) previousOffset=\(previous.contentOffset ?? 0) height=\(geometry.contentHeight ?? 0)", source: "MeetingCaptionScroll")
+                        }
                         if geometry.layoutChanged(from: previous) { self.onLayoutChange() }
                     }
                 }
