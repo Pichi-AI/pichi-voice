@@ -20,7 +20,20 @@
   "state": "completed",
   "events": [],
   "failures": [],
-  "audioTracks": [],
+  "audioStorageMode": "transcriptOnlyMemory",
+  "audioTracks": [{
+    "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+    "kind": "microphone",
+    "sourceIdentifier": "synthetic-navigation-microphone",
+    "sourceDisplayName": "Synthetic microphone",
+    "timebase": {
+      "startedHostTime": 0,
+      "machTimebaseNumerator": 1,
+      "machTimebaseDenominator": 1
+    },
+    "health": { "status": "stopped", "level": 0, "droppedSampleCount": 0 },
+    "chunks": []
+  }],
   "speakers": [],
   "transcriptSegments": [],
   "retention": {},

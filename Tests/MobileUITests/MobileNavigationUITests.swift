@@ -103,6 +103,8 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 5))
         XCUIDevice.shared.orientation = .landscapeLeft
         waitForOrientation(portrait: false)
+        XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 5),
+                      "Rotating the layout must preserve the selected settings detail")
         capture("models-landscape")
         openNavigation("meetings", title: "Meetings")
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
@@ -142,7 +144,7 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testReselectingHistoryClosesMeetingDetail() throws {
         openNavigation("history", title: "History")
-        let meeting = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).firstMatch
+        let meeting = app.buttons["history.session.DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"]
         guard meeting.waitForExistence(timeout: 5) else {
             throw XCTSkip("Stage the synthetic NavigationMeeting.json in the simulator's meeting store before this test")
         }
