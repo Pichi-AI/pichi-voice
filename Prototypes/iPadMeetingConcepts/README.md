@@ -47,6 +47,8 @@ The parent session owns interactive UI inspection. Launch the compiled executabl
 .build/ipad-meeting-concepts/mac/MeetingConcepts.app/Contents/MacOS/MeetingConcepts --layout A --screen active --width 1194 --height 834
 ```
 
+The native Mac preview has a **Rotate** toolbar action and an **Orientation** menu with Landscape/Portrait choices. Command-R swaps the logical device width and height. The same root view retains its current meeting, live replay, navigation and settings. A portrait canvas scales down to fit the Mac screen, while layout still uses the full logical device dimensions shown in the window subtitle. Resizing the Mac window changes preview magnification. The toolbar is preview-only chrome, outside the app canvas; offscreen exports and the iOS target do not include it. Closing the preview window terminates this standalone host.
+
 Options:
 
 | Flag | Values |

@@ -53,6 +53,121 @@ struct PrototypeOptions {
 #if os(macOS)
 import AppKit
 
+/// Native preview controls stay outside the simulated device canvas.
+/// One stable root preserves meeting/navigation state while its logical size changes.
+@MainActor
+final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegate, NSWindowDelegate {
+    @Published private(set) var canvasSize: CGSize
+    private weak var window: NSWindow?
+    private let landscapeSize: CGSize
+    private static let rotateItem = NSToolbarItem.Identifier("prototype.rotate")
+
+    init(size: CGSize) {
+        canvasSize = size
+        landscapeSize = CGSize(width: max(size.width, size.height), height: min(size.width, size.height))
+        super.init()
+    }
+
+    func attach(to window: NSWindow) {
+        self.window = window
+        window.delegate = self
+        let toolbar = NSToolbar(identifier: "prototype.preview")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+
+        let menu = NSMenu()
+        let applicationItem = NSMenuItem()
+        let applicationMenu = NSMenu(title: PrototypeBrand.shared.profile.appName)
+        let quit = NSMenuItem(title: Copy.text("preview_quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        applicationMenu.addItem(quit)
+        applicationItem.submenu = applicationMenu
+        menu.addItem(applicationItem)
+        let orientationItem = NSMenuItem()
+        let orientationMenu = NSMenu(title: Copy.text("preview_orientation"))
+        for (key, action, shortcut) in [("preview_landscape", #selector(landscape(_:)), ""),
+                                       ("preview_portrait", #selector(portrait(_:)), ""),
+                                       ("preview_rotate", #selector(rotate(_:)), "r")] {
+            let item = NSMenuItem(title: Copy.text(key), action: action, keyEquivalent: shortcut)
+            item.target = self
+            orientationMenu.addItem(item)
+        }
+        orientationItem.submenu = orientationMenu
+        menu.addItem(orientationItem)
+        NSApp.mainMenu = menu
+        fitWindow()
+    }
+
+    @objc private func rotate(_ sender: Any?) {
+        canvasSize = CGSize(width: canvasSize.height, height: canvasSize.width)
+        fitWindow()
+    }
+
+    @objc private func landscape(_ sender: Any?) {
+        canvasSize = landscapeSize
+        fitWindow()
+    }
+
+    @objc private func portrait(_ sender: Any?) {
+        canvasSize = CGSize(width: landscapeSize.height, height: landscapeSize.width)
+        fitWindow()
+    }
+
+    private func fitWindow() {
+        guard let window, let screen = window.screen ?? NSScreen.main else { return }
+        let available = screen.visibleFrame.insetBy(dx: 20, dy: 20)
+        let chromeHeight = window.frame.height - window.contentLayoutRect.height
+        let scale = max(0.1, min(1, available.width / canvasSize.width,
+                                (available.height - chromeHeight) / canvasSize.height))
+        window.setContentSize(NSSize(width: canvasSize.width * scale, height: canvasSize.height * scale))
+        window.subtitle = "\(Int(canvasSize.width)) × \(Int(canvasSize.height))"
+        window.center()
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, Self.rotateItem]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        toolbarDefaultItemIdentifiers(toolbar)
+    }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard identifier == Self.rotateItem else { return nil }
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = Copy.text("preview_rotate")
+        item.toolTip = Copy.text("preview_orientation")
+        item.image = NSImage(systemSymbolName: "rotate.right", accessibilityDescription: item.label)
+        item.target = self
+        item.action = #selector(rotate(_:))
+        return item
+    }
+
+    func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
+}
+
+private struct PrototypeNativeCanvas: View {
+    let options: PrototypeOptions
+    @ObservedObject var preview: PrototypeWindowPreview
+
+    var body: some View {
+        GeometryReader { geometry in
+            let size = preview.canvasSize
+            let scale = min(1, geometry.size.width / size.width, geometry.size.height / size.height)
+            PrototypeRoot(options: options)
+                .frame(width: size.width, height: size.height)
+                .scaleEffect(scale)
+                .frame(width: size.width * scale, height: size.height * scale)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(PrototypeTheme(dark: options.dark).color("windowBackground"))
+        .environment(\.locale, Locale(identifier: options.language))
+        .environment(\.colorScheme, options.dark ? .dark : .light)
+    }
+}
+
 @main
 struct PrototypeApp {
     @MainActor static func main() {
@@ -90,8 +205,9 @@ struct PrototypeApp {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: options.width, height: options.height),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "\(PrototypeBrand.shared.profile.appName) | \(Copy.text("prototype")) \(options.layout)"
-        window.contentView = NSHostingView(rootView: view)
-        window.center()
+        let preview = PrototypeWindowPreview(size: CGSize(width: options.width, height: options.height))
+        window.contentView = NSHostingView(rootView: PrototypeNativeCanvas(options: options, preview: preview))
+        preview.attach(to: window)
         window.makeKeyAndOrderFront(nil)
         app.activate(ignoringOtherApps: true)
         app.run()
