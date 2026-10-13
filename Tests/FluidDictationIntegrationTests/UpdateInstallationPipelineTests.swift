@@ -6,6 +6,79 @@ import Security
 import XCTest
 
 final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
+    func testSigningFixturePrerequisiteUsesExactCertificateOUAndApprovedTeams() {
+        for team in Fixture.approvedTeams {
+            let values = self.certificateProperties(team: team)
+            XCTAssertEqual(Fixture.certificateTeamIdentifier(from: values), team)
+            XCTAssertTrue(Fixture.acceptsCertificateTeam(values))
+        }
+        XCTAssertFalse(Fixture.acceptsCertificateTeam(self.certificateProperties(team: "ZZZZZZZZZZ")))
+    }
+
+    func testSigningFixturePrerequisiteDoesNotTrustDisplayLabelsOrTeamSubstrings() throws {
+        var values = self.certificateProperties(team: "ZZZZZZZZZZ")
+        let approved = try XCTUnwrap(Fixture.approvedTeams.sorted().first)
+        values[kSecOIDCommonName as String] = [kSecPropertyKeyType as String: kSecPropertyTypeString,
+                                            kSecPropertyKeyValue as String: "Apple Development: Fixture (" + approved + ")"]
+        XCTAssertFalse(Fixture.acceptsCertificateTeam(values))
+        XCTAssertFalse(Fixture.acceptsCertificateTeam(self.certificateProperties(team: approved + "-OTHER")))
+        XCTAssertFalse(Fixture.acceptsCertificateTeam(self.certificateProperties(team: " " + approved)))
+        XCTAssertFalse(Fixture.acceptsCertificateTeam(self.certificateProperties(team: approved.lowercased())))
+    }
+
+    func testSigningFixturePrerequisiteRejectsMissingAndMalformedCertificateOU() {
+        XCTAssertNil(Fixture.certificateTeamIdentifier(from: [:]))
+        for value: Any in [42, Data([0x01]), ["V4J43B279J"], ""] {
+            let values: [String: Any] = [kSecOIDOrganizationalUnitName as String:
+                [kSecPropertyKeyType as String: kSecPropertyTypeString, kSecPropertyKeyValue as String: value]]
+            XCTAssertFalse(Fixture.acceptsCertificateTeam(values))
+        }
+        let wrongType: [String: Any] = [kSecOIDOrganizationalUnitName as String:
+            [kSecPropertyKeyType as String: kSecPropertyTypeNumber, kSecPropertyKeyValue as String: "V4J43B279J"]]
+        XCTAssertNil(Fixture.certificateTeamIdentifier(from: wrongType))
+    }
+
+    private func certificateProperties(team: String) -> [String: Any] {
+        [kSecOIDOrganizationalUnitName as String:
+            [kSecPropertyKeyType as String: kSecPropertyTypeString, kSecPropertyKeyValue as String: team]]
+    }
+
+    func testUnconfiguredProductionUpdaterTrustRejectsPreparationWithoutTouchingSyntheticBundles() throws {
+        // The downstream production policy is intentionally empty. An available
+        // development identity must not turn this into an installation success.
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory.appendingPathComponent("UpdateDisabledTrustTests-" + UUID().uuidString)
+        defer { try? manager.removeItem(at: root) }
+        let installed = root.appendingPathComponent("Applications/Fixture.app")
+        let incoming = root.appendingPathComponent("Downloads/Incoming.app")
+        let backup = root.appendingPathComponent("Backups/Previous.app")
+        let payload = Data("synthetic preserved marker".utf8)
+        let plist = try PropertyListSerialization.data(fromPropertyList: [
+            "CFBundleIdentifier": Fixture.identifier, "CFBundleShortVersionString": Fixture.installedVersion,
+            "CFBundleVersion": Fixture.installedBuild, "CFBundleExecutable": "Fixture", "CFBundlePackageType": "APPL",
+        ], format: .xml, options: 0)
+        for bundle in [installed, incoming] {
+            try manager.createDirectory(at: bundle.appendingPathComponent("Contents/Resources"), withIntermediateDirectories: true)
+            try plist.write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+            try payload.write(to: bundle.appendingPathComponent("Contents/Resources/payload.txt"))
+        }
+        XCTAssertThrowsError(try SimpleUpdater.prepareValidatedInstallation(installedAppURL: installed, downloadedAppURL: incoming,
+            installedExpectation: .init(bundleIdentifier: Fixture.identifier, version: Fixture.installedVersion, build: Fixture.installedBuild),
+            expectedVersion: Fixture.incomingVersion, backupURL: backup, isRollback: false)) { error in
+            let underlying = (error as? UpdateAppReplacement.Failure)?.underlyingError ?? error
+            XCTAssertEqual(underlying as? UpdateBundleValidator.ValidationError, .invalidExpectation)
+        }
+        for bundle in [installed, incoming] {
+            XCTAssertEqual(try Data(contentsOf: bundle.appendingPathComponent("Contents/Info.plist")), plist)
+            XCTAssertEqual(try Data(contentsOf: bundle.appendingPathComponent("Contents/Resources/payload.txt")), payload)
+            XCTAssertEqual(try manager.contentsOfDirectory(atPath: bundle.appendingPathComponent("Contents").path).sorted(), ["Info.plist", "Resources"])
+        }
+        XCTAssertFalse(manager.fileExists(atPath: backup.path))
+        let parentEntries = try manager.contentsOfDirectory(atPath: installed.deletingLastPathComponent().path)
+        XCTAssertFalse(parentEntries.contains { $0.hasSuffix(".staging") })
+        XCTAssertFalse(manager.fileExists(atPath: backup.deletingLastPathComponent().path))
+    }
+
     func testReleaseInstallationHasVerifiedBackupAndCanRecoverWithoutConsumingSource() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -187,14 +260,23 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
         var lockURL: URL { self.installed.deletingLastPathComponent().appendingPathComponent(".fluidvoice-update-\(self.installed.lastPathComponent).lock") }
 
         init(incomingDeveloperID: Bool = true, candidateVersion: String = Self.incomingVersion) throws {
+            // Positive pipeline fixtures additionally require configured production
+            // distribution trust. The current downstream deliberately disables it.
+            guard AppBrand.updatesEnabled else {
+                throw XCTSkip("Signed installation pipeline fixtures require configured production updater trust; the downstream updater is intentionally disabled.")
+            }
+            // Admit every required identity before creating or signing a bundle.
+            // A trusted certificate from another team is not a pipeline fixture prerequisite.
+            let installedIdentity = try Self.signingIdentity(developerID: false)
+            let incomingIdentity = incomingDeveloperID ? try Self.signingIdentity(developerID: true) : installedIdentity
             self.root = FileManager.default.temporaryDirectory.appendingPathComponent("UpdateInstallationPipelineTests-" + UUID().uuidString, isDirectory: true)
             self.installed = self.root.appendingPathComponent("Applications/Fixture.app")
             self.incoming = self.root.appendingPathComponent("Downloads/Incoming.app")
             self.backup = self.root.appendingPathComponent("Backups/Previous.app")
             self.candidateVersion = candidateVersion
             do {
-                try self.makeBundle(at: self.installed, version: Self.installedVersion, build: Self.installedBuild, payload: "installed", developerID: false)
-                try self.makeBundle(at: self.incoming, version: candidateVersion, build: "27", payload: "incoming", developerID: incomingDeveloperID)
+                try self.makeBundle(at: self.installed, version: Self.installedVersion, build: Self.installedBuild, payload: "installed", identity: installedIdentity)
+                try self.makeBundle(at: self.incoming, version: candidateVersion, build: "27", payload: "incoming", identity: incomingIdentity)
             } catch {
                 self.cleanup()
                 throw error
@@ -243,7 +325,7 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             XCTAssertFalse(contents.contains { $0.hasSuffix(".staging") })
         }
 
-        private func makeBundle(at bundle: URL, version: String, build: String, payload: String, developerID: Bool) throws {
+        private func makeBundle(at bundle: URL, version: String, build: String, payload: String, identity: String) throws {
             let executableDirectory = bundle.appendingPathComponent("Contents/MacOS", isDirectory: true)
             let resources = bundle.appendingPathComponent("Contents/Resources", isDirectory: true)
             try FileManager.default.createDirectory(at: executableDirectory, withIntermediateDirectories: true)
@@ -259,22 +341,24 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
             ]
             try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
                 .write(to: bundle.appendingPathComponent("Contents/Info.plist"))
-            try self.sign(bundle, identity: self.signingIdentity(developerID: developerID))
+            try self.sign(bundle, identity: identity)
             _ = try self.validated(bundle)
         }
 
-        private func signingIdentity(developerID: Bool) throws -> String {
+        private static func signingIdentity(developerID: Bool) throws -> String {
             let prefix = developerID ? "Developer ID Application:" : "Apple Development:"
             var result: CFTypeRef?
             let query: [String: Any] = [kSecClass as String: kSecClassIdentity, kSecReturnRef as String: true, kSecMatchLimit as String: kSecMatchLimitAll]
             let status = SecItemCopyMatching(query as CFDictionary, &result)
             guard status == errSecSuccess, let identities = result as? [SecIdentity] else {
-                throw XCTSkip("A \(prefix) signing identity is required for signed pipeline fixtures.")
+                throw XCTSkip("A \(prefix) signing identity from an approved team is required for signed pipeline fixtures.")
             }
             for identity in identities {
                 var certificate: SecCertificate?
                 guard SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess, let certificate,
-                      let summary = SecCertificateCopySubjectSummary(certificate) as String?, summary.hasPrefix(prefix)
+                      let summary = SecCertificateCopySubjectSummary(certificate) as String?, summary.hasPrefix(prefix),
+                      let values = SecCertificateCopyValues(certificate, [kSecOIDOrganizationalUnitName] as CFArray, nil) as? [String: Any],
+                      Self.acceptsCertificateTeam(values)
                 else { continue }
                 var trust: SecTrust?
                 guard let policy = SecPolicyCreateWithProperties(kSecPolicyAppleCodeSigning, nil),
@@ -284,7 +368,18 @@ final nonisolated class UpdateInstallationPipelineTests: XCTestCase {
                 else { continue }
                 return Insecure.SHA1.hash(data: SecCertificateCopyData(certificate) as Data).map { String(format: "%02x", $0) }.joined()
             }
-            throw XCTSkip("A valid \(prefix) signing identity is required for signed pipeline fixtures.")
+            throw XCTSkip("A valid \(prefix) signing identity from an approved team is required for signed pipeline fixtures.")
+        }
+
+        static func certificateTeamIdentifier(from values: [String: Any]) -> String? {
+            guard let property = values[kSecOIDOrganizationalUnitName as String] as? [String: Any],
+                  property[kSecPropertyKeyType as String] as? String == kSecPropertyTypeString as String,
+                  let team = property[kSecPropertyKeyValue as String] as? String, !team.isEmpty else { return nil }
+            return team
+        }
+
+        static func acceptsCertificateTeam(_ values: [String: Any]) -> Bool {
+            self.certificateTeamIdentifier(from: values).map(self.approvedTeams.contains) ?? false
         }
 
         private func sign(_ bundle: URL, identity: String) throws {
