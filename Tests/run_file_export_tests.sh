@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+task_repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$task_repo_dir"
+task_test_dir="$task_repo_dir/.build/file-export-tests"
+mkdir -p "$task_test_dir/Temporary"
+
+# Compile actual export value types, service methods and FileDocument against
+# Apple's native protocol, with inert service/persistence dependencies only.
+python3 -S - "$task_test_dir/ProductionExport.swift" <<'PY'
+from pathlib import Path
+import sys
+service = Path('Sources/Fluid/Services/FileTranscriptionService.swift').read_text()
+view = Path('Sources/Fluid/UI/FileTranscriptionView.swift').read_text()
+def section(text, start, end):
+    assert text.count(start) == 1, f"Ambiguous production boundary: {start}"
+    first = text.index(start)
+    return text[first:text.index(end, first)]
+speaker_types = section(service, 'nonisolated struct SpeakerTranscriptSegment:', 'nonisolated struct SpeakerChunkTranscription:')
+result = section(service, 'nonisolated struct TranscriptionResult:', '/// Stable UI state')
+exports = section(service, '    /// Export transcription result to text file', '    /// Reset the service state')
+format_type = section(view, '    nonisolated enum ExportFormat:', '    private var selectedFileIsVideo:')
+document = section(view, 'nonisolated struct TranscriptionDocument:', '// MARK: - Preview')
+exporter = section(view, '        .fileExporter(', '        .onReceive(self.fileHistoryStore.$entries)')
+Path(sys.argv[1]).write_text('import Foundation\nimport SwiftUI\nimport UniformTypeIdentifiers\n'
+    + speaker_types + result
+    + '@MainActor final class FileTranscriptionService {\n' + exports + '\n}\n'
+    + 'struct FileTranscriptionView {\n' + format_type + '\n}\n'
+    + document
+    + 'struct ExporterContractProbe: View {\n'
+    + '    @State private var showingExportDialog = false\n'
+    + '    @State private var exportDocument: TranscriptionDocument?\n'
+    + '    var body: some View { EmptyView()\n' + exporter + '\n    }\n}\n')
+PY
+xcrun swiftc -parse-as-library -swift-version 6 -module-cache-path "$task_test_dir/ModuleCache" \
+    "$task_test_dir/ProductionExport.swift" \
+    Sources/Fluid/Persistence/FileTranscriptionHistoryStore.swift \
+    Sources/Fluid/Persistence/PersistedHistory.swift \
+    Tests/FileExportTests.swift -o "$task_test_dir/tests"
+"$task_test_dir/tests" "$task_test_dir"

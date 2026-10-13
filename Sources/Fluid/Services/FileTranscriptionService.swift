@@ -317,6 +317,18 @@ nonisolated struct TranscriptionResult: Identifiable, Sendable, Codable {
         }
         return metadata.joined(separator: "\n") + "\n\n---\n\n" + self.text
     }
+
+    /// Shared bytes for direct service exports and immutable FileDocument snapshots.
+    var textExportData: Data {
+        Data(self.textExport.utf8)
+    }
+
+    func jsonExportData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(self)
+    }
 }
 
 /// Stable UI state survives interface-language changes while transcription continues.
@@ -697,17 +709,12 @@ final class FileTranscriptionService: ObservableObject {
 
     /// Export transcription result to text file
     nonisolated func exportToText(_ result: TranscriptionResult, to destinationURL: URL) throws {
-        try result.textExport.write(to: destinationURL, atomically: true, encoding: .utf8)
+        try result.textExportData.write(to: destinationURL, options: .atomic)
     }
 
     /// Export transcription result to JSON
     nonisolated func exportToJSON(_ result: TranscriptionResult, to destinationURL: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-
-        let jsonData = try encoder.encode(result)
-        try jsonData.write(to: destinationURL)
+        try result.jsonExportData().write(to: destinationURL, options: .atomic)
     }
 
     /// Reset the service state
