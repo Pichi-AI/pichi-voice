@@ -5,8 +5,8 @@ nonisolated enum MeetingPrivacyPublicationError: LocalizedError {
     case unsupportedLegacyPublication
     var errorDescription: String? {
         switch self {
-        case .redactorUnavailable: return "Prepare the local privacy model before enabling sensitive data redaction."
-        case .unsupportedLegacyPublication: return "Sensitive data redaction requires a compatible meeting backend."
+        case .redactorUnavailable: return PichiLocalization.text("Prepare the local privacy model before enabling sensitive data redaction.")
+        case .unsupportedLegacyPublication: return PichiLocalization.text("Sensitive data redaction requires a compatible meeting backend.")
         }
     }
 }
