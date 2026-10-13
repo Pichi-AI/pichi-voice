@@ -31,7 +31,6 @@ resource_paths = [
     "Sources/Fluid/Localization/Localizable.xcstrings", "Sources/Fluid/Assets.xcassets",
     "Sources/Fluid/Branding/brand-package.json", "Sources/Fluid/Resources/Notices",
     "Sources/Mobile/Resources/brand-distribution.json", "Sources/Mobile/Resources/MobileAssets.xcassets",
-    "Sources/Mobile/Resources/en.lproj/InfoPlist.strings", "Sources/Mobile/Resources/ru.lproj/InfoPlist.strings",
 ]
 file_ids, source_builds, resource_builds = [], [], []
 for path in sources + resource_paths:
@@ -43,11 +42,14 @@ for path in sources + resource_paths:
     build = obj("Mobile build " + path, f"isa = PBXBuildFile; fileRef = {ref};")
     (source_builds if path in sources else resource_builds).append(build)
 
-# Variant localization group keeps InfoPlist.strings in language folders.
+# Localized references have one physical resource parent. An empty-root variant
+# would make CodeSign recursively consume the entire checkout, including test products.
+locale_refs = []
 for language in ("en", "ru"):
-    ref = uid("Mobile file Sources/Mobile/Resources/" + language + ".lproj/InfoPlist.strings")
-    resource_builds.remove(uid("Mobile build Sources/Mobile/Resources/" + language + ".lproj/InfoPlist.strings"))
-variant = obj("Mobile InfoPlist.strings", f'isa = PBXVariantGroup; children = {arr([uid("Mobile file Sources/Mobile/Resources/"+language+".lproj/InfoPlist.strings") for language in ("en", "ru")])}; name = InfoPlist.strings; sourceTree = "<group>";')
+    locale_refs.append(obj("Mobile localized InfoPlist " + language,
+        f'isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = {language}; path = {quoted(language + ".lproj/InfoPlist.strings")}; sourceTree = "<group>";'))
+variant = obj("Mobile InfoPlist.strings", f'isa = PBXVariantGroup; children = {arr(locale_refs)}; name = InfoPlist.strings; sourceTree = "<group>";')
+localized_resources = obj("Mobile localized resources", f'isa = PBXGroup; children = {arr([variant])}; name = Resources; path = "Sources/Mobile/Resources"; sourceTree = SOURCE_ROOT;')
 resource_builds.append(obj("Mobile InfoPlist.strings resource", f"isa = PBXBuildFile; fileRef = {variant};"))
 
 package_products = []
@@ -121,7 +123,7 @@ integration_product = obj("PichiVoiceMobileIntegrationTests.xctest", 'isa = PBXF
 integration_config = configs("Mobile integration", True, True)
 integration_target = obj("PichiVoiceMobileIntegrationTests", f'isa = PBXNativeTarget; buildConfigurationList = {integration_config}; buildPhases = {arr([integration_sources,integration_frameworks])}; buildRules = (); dependencies = {arr([dependency])}; name = PichiVoiceMobileIntegrationTests; productName = PichiVoiceMobileIntegrationTests; productReference = {integration_product}; productType = "com.apple.product-type.bundle.unit-test";')
 
-mobile_group = obj("Mobile shared sources", f'isa = PBXGroup; children = {arr(file_ids+[variant])}; name = Mobile; sourceTree = "<group>";')
+mobile_group = obj("Mobile shared sources", f'isa = PBXGroup; children = {arr(file_ids+[localized_resources])}; name = Mobile; sourceTree = "<group>";')
 
 text = PROJECT.read_text()
 text = re.sub(r"\n/\* Begin Pichi mobile target \*/.*?/\* End Pichi mobile target \*/\n", "\n", text, flags=re.S)
