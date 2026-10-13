@@ -208,8 +208,8 @@ final class MeetingDetectionPromptController: ObservableObject {
         self.appIcon = PichiBrandMark.appIcon
         let appName = resolved.flatMap {
             FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "")
-        } ?? "Meeting"
-        self.appDisplayName = request.serviceName.map { "\($0) · in \(appName)" } ?? appName
+        } ?? PichiLocalization.text("Meeting")
+        self.appDisplayName = request.serviceName.map { PichiLocalization.format("%@ · in %@", $0, appName) } ?? appName
 
         let panel = self.panelOrCreate()
         self.placeAtDefaultPosition(panel)
@@ -225,7 +225,7 @@ final class MeetingDetectionPromptController: ObservableObject {
         }
         DebugLogger.shared.log("prompt-shown bundle=\(request.bundleIdentifier)", source: "MeetingAutoDetector")
         AccessibilityNotification.Announcement(
-            "Record this meeting? \(self.appDisplayName). Nothing is recording yet."
+            PichiLocalization.format("Record this meeting? %@. Nothing is recording yet.", self.appDisplayName)
         ).post()
 
         self.clearAutoDismiss()
@@ -610,24 +610,25 @@ private struct MeetingDetectionPromptContent: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Record this meeting? \(self.controller.appDisplayName). Nothing is recording yet. Record, or dismiss.")
+        .accessibilityLabel(PichiLocalization.format("Record this meeting? %@. Nothing is recording yet. Record, or dismiss.", self.controller.appDisplayName))
     }
 }
 
-/// "Still recording?" nudge — passive, pill-adjacent, shown once per recording session while our
-/// own recording's originating meeting evidence has been gone for a while.
+/// "Meeting ended?" nudge — passive, pill-adjacent, shown while the meeting behind our own
+/// recording looks over. It stays until the user answers, the call resumes, or the recording stops:
+/// someone who walked away should still find it when they come back.
 @MainActor
 final class MeetingStillRecordingNudgeController: ObservableObject {
     static let shared = MeetingStillRecordingNudgeController()
 
-    private static let panelSize = NSSize(width: 260, height: 64)
-    private static let autoDismissSeconds: TimeInterval = 20
+    static let panelSize = NSSize(width: 332, height: 56)
 
     @Published private(set) var isPresented = false
     var onStop: (() -> Void)?
+    /// The user closed the question without stopping.
+    var onDismiss: (() -> Void)?
 
     private var panel: MeetingFloatingCaptionsPanel?
-    private var autoDismissTask: Task<Void, Never>?
 
     private init() {}
 
@@ -636,24 +637,35 @@ final class MeetingStillRecordingNudgeController: ObservableObject {
         self.isPresented = true
         let panel = self.panelOrCreate()
         if let pillFrame = MeetingRecordingPillController.shared.currentOverlayFrame ?? self.pillFrameFallback() {
-            var frame = pillFrame
-            frame.origin.y += pillFrame.height + 8
-            frame.size = Self.panelSize
-            panel.setFrame(frame, display: false)
+            let screen = NSScreen.screens.first { $0.frame.intersects(pillFrame) }?.visibleFrame
+            panel.setFrame(Self.frame(abovePill: pillFrame, within: screen), display: false)
         }
         panel.orderFrontRegardless()
-        self.autoDismissTask?.cancel()
-        self.autoDismissTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.autoDismissSeconds * 1_000_000_000))
-            guard !Task.isCancelled else { return }
-            self?.hide()
+    }
+
+    /// Centered just above the recording pill, pulled back inside the screen when the pill sits
+    /// near an edge.
+    static func frame(abovePill pillFrame: NSRect, within screen: NSRect?) -> NSRect {
+        var frame = NSRect(
+            x: pillFrame.midX - Self.panelSize.width / 2,
+            y: pillFrame.maxY + 8,
+            width: Self.panelSize.width,
+            height: Self.panelSize.height
+        )
+        if let screen, screen.width >= frame.width {
+            frame.origin.x = min(max(frame.origin.x, screen.minX), screen.maxX - frame.width)
         }
+        return frame
     }
 
     func hide() {
-        self.autoDismissTask?.cancel()
         self.isPresented = false
         self.panel?.orderOut(nil)
+    }
+
+    func dismiss() {
+        self.onDismiss?()
+        self.hide()
     }
 
     private func pillFrameFallback() -> NSRect? {
@@ -699,16 +711,31 @@ private struct MeetingStillRecordingNudgeContent: View {
             Text("Meeting ended?")
                 .font(self.theme.typography.bodySmall)
                 .foregroundStyle(self.theme.palette.primaryText)
-            Spacer()
+                .lineLimit(1)
+                .fixedSize()
+            Spacer(minLength: 0)
             Button("Stop & Transcribe") {
                 self.controller.onStop?()
                 self.controller.hide()
             }
             .fluidButton(.compact, size: .small)
+            Button {
+                self.controller.dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(PichiLocalization.text("Keep recording"))
+            .accessibilityLabel(PichiLocalization.text("Keep recording"))
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
         .padding(.vertical, 10)
-        .frame(width: 260, height: 64)
+        .frame(width: MeetingStillRecordingNudgeController.panelSize.width, height: MeetingStillRecordingNudgeController.panelSize.height)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(self.theme.palette.contentBackground.opacity(0.96))
@@ -719,6 +746,6 @@ private struct MeetingStillRecordingNudgeContent: View {
         )
         .shadow(color: .black.opacity(0.3), radius: 12, x: 0, y: 4)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Meeting may have ended. Stop and transcribe?")
+        .accessibilityLabel(PichiLocalization.text("Meeting may have ended. Stop and transcribe?"))
     }
 }

@@ -1293,6 +1293,16 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
     }
 
+    func testCompatibleProviderIncompleteResponseIsRejectedBeforeGroundedParsing() throws {
+        let complete = LLMClient.Response(thinking: nil, content: "Synthetic summary", toolCalls: [])
+        XCTAssertEqual(try PichiMeetingSummaryTransport.content(from: complete), "Synthetic summary")
+        var partial = complete
+        partial.isIncomplete = true
+        XCTAssertThrowsError(try PichiMeetingSummaryTransport.content(from: partial)) {
+            guard case PichiMeetingSummaryError.invalidOutput = $0 else { return XCTFail("Unexpected error") }
+        }
+    }
+
     func testNativeOutputLimitClassificationExcludesIncompleteAndEmptyResponses() throws {
         func response(done: Bool, reason: String?, content: String) throws -> Data {
             var fields: [String: Any] = ["done": done, "message": ["content": content]]

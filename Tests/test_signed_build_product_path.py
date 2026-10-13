@@ -56,6 +56,11 @@ else:
     framework = pathlib.Path(os.environ['TEST_BUILD_PRODUCT']) / 'Contents/Frameworks/CTranscribe.framework/Versions/A'
     (framework / 'Resources').mkdir(parents=True, exist_ok=True)
     (framework / 'CTranscribe').write_bytes(b'synthetic framework')
+    if os.environ.get('TEST_MISSING_HELPER') != '1':
+        helper = pathlib.Path(os.environ['TEST_BUILD_PRODUCT']) / 'Contents/Helpers/fv-serve'
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_bytes(b'synthetic embedded helper')
+        helper.chmod(0o755)
 """)
         self._executable("codesign", """#!/usr/bin/env python3
 import json, os, sys
@@ -83,7 +88,7 @@ elif '--entitlements' in sys.argv and os.environ.get('TEST_SIGNING_FAILURE') == 
             "FULL_PRODUCT_NAME": name,
         }}]
 
-    def _run(self, settings, product=None, profile="public", signing_failure=""):
+    def _run(self, settings, product=None, profile="public", signing_failure="", missing_helper=False):
         environment = dict(os.environ)
         environment.update({
             "PATH": str(self.bin) + os.pathsep + environment["PATH"],
@@ -95,6 +100,7 @@ elif '--entitlements' in sys.argv and os.environ.get('TEST_SIGNING_FAILURE') == 
             "TEST_SYSTEM_MKTEMP": self.system_mktemp,
             "TEST_MKTEMP_LOG": str(self.mktemp_log),
             "TEST_SIGNING_FAILURE": signing_failure,
+            "TEST_MISSING_HELPER": "1" if missing_helper else "0",
             "TMPDIR": str(self.temporary_files),
         })
         return subprocess.run(["bash", str(self.root / "build.sh"), profile],
@@ -117,6 +123,13 @@ elif '--entitlements' in sys.argv and os.environ.get('TEST_SIGNING_FAILURE') == 
                 self.assertEqual(calls[-1], ["--verify", "--deep", "--strict", str(product)])
                 self.assertTrue((product / "Contents/Frameworks/CTranscribe.framework/CTranscribe").is_symlink())
                 self.assertFalse((self.root / "injected").exists(), "Product text must never be evaluated as shell code")
+
+    def test_missing_embedded_helper_is_rejected_before_final_verification(self):
+        result = self._run(self._settings(), missing_helper=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fv-serve is missing from the built app", result.stderr)
+        signing = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any("--verify" in call for call in signing))
 
     def test_entitlements_temp_is_private_and_removed_after_signing(self):
         result = self._run(self._settings())

@@ -119,6 +119,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private let cloudSession: URLSession
     private let cloudAuthorization: CloudTextProviderAuthorization
 
+    /// Learns which models reject `temperature` so later requests stop sending it.
+    private let temperatureSupport: ModelTemperatureSupport
+    private let ownedSessionDidCreate: (@Sendable (LLMClientSessionLifetime) -> Void)?
+
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = Self.defaultTimeoutSeconds
@@ -132,14 +136,19 @@ final nonisolated class LLMClient: @unchecked Sendable {
         self.localSession = URLSession(configuration: localConfig, delegate: CloudTextProviderTransport.redirectPolicy, delegateQueue: nil)
         self.cloudSession = CloudTextProviderTransport.session
         self.cloudAuthorization = .shared
+        self.temperatureSupport = .shared
+        self.ownedSessionDidCreate = nil
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
-    init(session: URLSession) {
+    init(session: URLSession, temperatureSupport: ModelTemperatureSupport = .shared,
+         ownedSessionDidCreate: (@Sendable (LLMClientSessionLifetime) -> Void)? = nil) {
         self.session = session
         self.localSession = session
         self.cloudSession = session
         self.cloudAuthorization = CloudTextProviderAuthorization(session: session)
+        self.temperatureSupport = temperatureSupport
+        self.ownedSessionDidCreate = ownedSessionDidCreate
     }
 
     // MARK: - Response Types
@@ -151,6 +160,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
         let toolCalls: [ToolCall]
+        /// Non-streaming completion metadata; callers can reject partial text without changing other workflows.
+        var isIncomplete = false
     }
 
     struct ToolCall: @unchecked Sendable {
@@ -186,7 +197,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let apiKey: String
         let streaming: Bool
         let tools: [[String: Any]]
-        let temperature: Double?
+        var temperature: Double?
 
         /// Optional token limit (max_tokens or max_completion_tokens depending on model)
         var maxTokens: Int?
@@ -278,6 +289,21 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
             self.benchmark(config, "call_return")
             return response
+        } catch let LLMError.httpError(400, body) where config.temperature != nil && body.lowercased().contains("temperature") {
+            if let boundedLocalSession {
+                await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
+            }
+            try Task.checkCancellation()
+            // Models keep dropping `temperature` (Opus 4.7+, Haiku 5.5, gpt-5...). The 400 arrives
+            // before any streamed output, so retrying once without it cannot duplicate text.
+            DebugLogger.shared.warning(
+                "LLMClient: \(config.model) rejected temperature; retrying without it",
+                source: "LLMClient"
+            )
+            self.temperatureSupport.record([config.model: false], baseURL: config.baseURL)
+            var retryConfig = config
+            retryConfig.temperature = nil
+            return try await self.call(retryConfig)
         } catch {
             if let boundedLocalSession {
                 await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
@@ -640,6 +666,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         configuration.timeoutIntervalForResource = timeout
         let lifetime = LLMClientSessionLifetime()
         let session = URLSession(configuration: configuration, delegate: lifetime, delegateQueue: nil)
+        self.ownedSessionDidCreate?(lifetime)
         return (session, lifetime)
     }
 
@@ -669,18 +696,27 @@ final nonisolated class LLMClient: @unchecked Sendable {
             throw LLMError.invalidResponse
         }
 
-        let parsed: Response
+        var parsed: Response
         if OllamaChatAdapter.supports(config.baseURL) {
             self.benchmark(config, "native_timing \(OllamaChatAdapter.timingDiagnostics(json))")
             parsed = self.parseMessageResponse(try OllamaChatAdapter.message(json, completed: true))
         } else if self.isResponsesRequest(request) {
             parsed = try self.parseResponsesResponse(json)
+            let status = json["status"] as? String
+            let output = json["output"] as? [[String: Any]] ?? []
+            parsed.isIncomplete = (status != nil && status != "completed") ||
+                json["incomplete_details"] is [String: Any] ||
+                output.contains { $0["status"] as? String == "incomplete" }
         } else {
             guard let choices = json["choices"] as? [[String: Any]],
                   let choice = choices.first,
                   let message = choice["message"] as? [String: Any]
             else { throw LLMError.invalidResponse }
             parsed = self.parseMessageResponse(message)
+            // Only truncation counts; compatible servers use varied names for a normal stop.
+            if let reason = choice["finish_reason"] as? String {
+                parsed.isIncomplete = ["length", "max_tokens", "content_filter"].contains(reason.lowercased())
+            }
         }
         self.benchmark(config, "response_decoded")
         return parsed

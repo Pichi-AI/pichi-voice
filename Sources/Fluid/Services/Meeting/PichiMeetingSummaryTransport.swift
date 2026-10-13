@@ -28,9 +28,17 @@ nonisolated enum PichiMeetingSummaryTransport {
     }
 
     static func complete(_ config: LLMClient.Config) async throws -> String {
-        guard self.usesNativeOllama(config) else { return try await self.client.call(config).content }
+        guard self.usesNativeOllama(config) else {
+            return try self.content(from: await self.client.call(config))
+        }
         return try await self.completeOllama(config, inference: { try await self.session.data(for: $0) },
                                              management: { try await self.managementSession.data(for: $0) })
+    }
+
+    /// Preserve provider completion metadata before the grounded parser sees text.
+    static func content(from response: LLMClient.Response) throws -> String {
+        guard !response.isIncomplete else { throw PichiMeetingSummaryError.invalidOutput }
+        return response.content
     }
 
     // The native adapter owns its existing inference and management sessions.

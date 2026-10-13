@@ -18,40 +18,39 @@ struct ReleaseHighlightsContent {
     let release: String
     let title: String
     let subtitle: String
+    var officialSiteNotice: String? = nil
     let features: [Feature]
 
     static func current(hasPrivateAI: Bool) -> Self {
         Self(
-            release: "1.6.11",
-            title: "What’s new in this release",
-            subtitle: "Dictation controls, smoother meetings, and AI connection fixes.",
+            release: "1.6.12",
+            title: "Meeting summaries and agent integrations",
+            subtitle: "Meeting detection, model compatibility, and read-only agent access.",
             features: [
                 Feature(
-                    id: "fluidmeet",
+                    id: "summaries",
                     preview: .meeting,
-                    eyebrow: "MEETINGS, WITH LESS WAITING",
-                    title: "Meetings without the wait",
-                    detail: "Cancel waiting model preparation promptly. Russian transcription and summaries with source references share the meeting workspace.",
+                    eyebrow: "YOUR MEETINGS, WITH SOURCES",
+                    title: "Meeting summaries with sources",
+                    detail: "Generate grounded summaries with transcript source references. Existing provider connections share the meeting workspace.",
                     action: "Open meetings",
                     destination: .meetings
                 ),
                 Feature(
-                    id: "redesign",
-                    preview: .dashboard,
-                    eyebrow: "DICTATION, ON YOUR TERMS",
-                    title: "More control while dictating",
-                    detail: "Enable hold-Space mute to skip background speech. Button clicks now match their visible shapes.",
-                    action: "Open dashboard",
-                    destination: .dashboard
+                    id: "integrations",
+                    preview: .meeting,
+                    eyebrow: "MEET YOUR CODING AGENTS",
+                    title: "Connect your coding agents",
+                    detail: "Let coding agents read completed transcripts and saved summaries after enabling read-only sharing in meeting settings.",
+                    action: "Open meetings",
+                    destination: .meetings
                 ),
                 Feature(
-                    id: "models",
+                    id: "compatibility",
                     preview: .models,
                     eyebrow: "YOUR AI, YOUR WAY",
-                    title: "Compatible AI connections",
-                    detail: hasPrivateAI
-                        ? "Claude 5 requests use supported parameters. Local cleanup and Russian provider connections join your AI setup, with less duplicate diagnostic logging."
-                        : "Claude 5 requests use supported parameters. Russian provider connections join your AI setup, with less duplicate diagnostic logging.",
+                    title: "AI provider compatibility",
+                    detail: "Sampling support follows provider metadata; local and cloud connections keep their existing configuration.",
                     action: "Explore AI providers",
                     destination: .aiProviders
                 ),
