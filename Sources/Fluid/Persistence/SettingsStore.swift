@@ -62,6 +62,7 @@ final class SettingsStore: ObservableObject {
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
         Self.migrateTextInsertionModeToReliablePasteIfNeeded(defaults: self.defaults)
+        Self.migrateFillerWordDefaultsIfNeeded(defaults: self.defaults)
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
     }
 
@@ -4552,7 +4553,7 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Filler Words
 
-    static let defaultFillerWords = [
+    private static let legacyDefaultFillerWords = [
         "um",
         "uh",
         "er",
@@ -4571,6 +4572,33 @@ final class SettingsStore: ObservableObject {
         "urm",
         "ugh",
     ]
+
+    // Include hesitation sounds in both languages regardless of the interface language.
+    // Words such as "ну", "это" and "типа", and the unit "мм", must remain opt-in.
+    static let defaultFillerWords = SettingsStore.legacyDefaultFillerWords + [
+        "э",
+        "ээ",
+        "эээ",
+        "э-э",
+        "э-э-э",
+        "эм",
+        "эмм",
+        "эммм",
+        "ммм",
+        "м-м",
+        "м-м-м",
+        "хм",
+        "хмм",
+    ]
+
+    static func migrateFillerWordDefaultsIfNeeded(defaults: UserDefaults) {
+        guard !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV1) else { return }
+        // Upgrade only the unchanged old defaults. An empty or customized list is intentional.
+        if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.legacyDefaultFillerWords {
+            defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
+        }
+        defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV1)
+    }
 
     var fillerWords: [String] {
         get {
@@ -5973,6 +6001,7 @@ private extension SettingsStore {
 
         // Filler Words
         static let fillerWords = "FillerWords"
+        static let fillerWordDefaultsMigrationV1 = "FillerWordDefaultsMigrationV1"
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
         static let autoConvertPunctuationEnabled = "AutoConvertPunctuationEnabled"
         static let literalDictationFormattingEnabled = "LiteralDictationFormattingEnabled"
