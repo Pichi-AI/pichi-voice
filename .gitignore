@@ -261,6 +261,8 @@ builds/
 /scripts/dev/*
 !/scripts/dev/*.sh
 !/scripts/dev/check-localization.py
+!/scripts/dev/check-xcode-build-settings.py
+!/docs/development/upstream-sync-1.6.11.md
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/

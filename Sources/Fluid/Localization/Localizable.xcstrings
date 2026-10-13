@@ -1,6 +1,92 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Hold Space to Mute": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold Space to Mute"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удерживайте пробел для отключения микрофона"
+          }
+        }
+      }
+    },
+    "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Во время диктовки удерживайте пробел, чтобы отключить микрофон. Отпустите, чтобы продолжить. Короткое нажатие вводит пробел. Другие сочетания с пробелом имеют приоритет."
+          }
+        }
+      }
+    },
+    "Muted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон отключён"
+          }
+        }
+      }
+    },
+    "Dictation muted. Release Space to resume.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation muted. Release Space to resume."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон диктовки отключён. Отпустите пробел, чтобы продолжить."
+          }
+        }
+      }
+    },
+    "Release Space to resume dictation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release Space to resume dictation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отпустите пробел, чтобы продолжить диктовку"
+          }
+        }
+      }
+    }
+,
     "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
       "extractionState": "manual",
       "localizations": {
