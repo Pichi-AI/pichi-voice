@@ -1833,11 +1833,43 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
 
                     var candidate: SCStream?
                     do {
-                        let microphone = self.stateLock.withLock { self.activeMicrophone }
+                        let attempt = self.stateLock.withLock { (microphone: self.activeMicrophone, revision: self.outputRouteRevision) }
+                        let microphone: MeetingMicrophoneIdentity
+                        let inputChanged: Bool
+                        if self.includeMicrophone {
+                            switch await MeetingCaptureDeviceElection.transition(from: attempt.microphone) {
+                            case .unavailable:
+                                // The default input may be between devices after unplugging a headset.
+                                // Keep this owner alive, but never retry the removed device indefinitely.
+                                continue
+                            case let .unchanged(election):
+                                microphone = try MeetingAVCaptureMicrophoneResolver.resolve(election.identity)
+                                inputChanged = false
+                            case let .changed(election):
+                                microphone = try MeetingAVCaptureMicrophoneResolver.resolve(election.identity)
+                                inputChanged = true
+                            }
+                        } else {
+                            microphone = attempt.microphone
+                            inputChanged = false
+                        }
+                        guard self.isCurrentRouteRevision(attempt.revision) else { continue }
+                        let microphoneBoundary: MeetingMediaTime?
+                        if inputChanged {
+                            // Old producer is stopped and admission is closed. Drain accepted samples
+                            // before sealing its chunks, without writing an era for a mere candidate.
+                            self.performOnCallbackQueueSynchronously {}
+                            _ = await self.applicationWriter.beginSplice()
+                            microphoneBoundary = await self.microphoneWriter.beginSplice()
+                        } else {
+                            microphoneBoundary = nil
+                        }
+                        guard self.isCurrentRouteRevision(attempt.revision) else { continue }
                         let built = try await Self.buildStream(
                             audioSource: self.audioSource, microphone: microphone, includeMicrophone: self.includeMicrophone
                         )
                         guard self.stateLock.withLock({ !self.stopping && self.rebuildOwner == owner }) else { return }
+                        guard self.isCurrentRouteRevision(attempt.revision) else { continue }
                         built.delegateProxy.owner = self
                         try self.attachOutputs(to: built.stream)
                         let candidateRegistered = self.stateLock.withLock { () -> Bool in
@@ -1858,7 +1890,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                         self.performOnCallbackQueueSynchronously {
                             publication = self.stateLock.withLock { () -> MeetingCaptureStreamPublication in
                                 let decision = MeetingCaptureOwnershipGate.mayPublishReplacement(
-                                    authorizedRevision: self.outputRouteRevision,
+                                    authorizedRevision: attempt.revision,
                                     currentRevision: self.outputRouteRevision,
                                     stopping: self.stopping,
                                     candidateFailed: self.pendingStreamFailed,
@@ -1871,11 +1903,28 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                                 self.stream = built.stream
                                 self.currentStreamStopped = false
                                 self.streamGeneration &+= 1
+                                self.activeMicrophone = microphone
                                 self.scope = built.scope
                                 self.delegateProxy = built.delegateProxy
                                 self.pendingStream = nil
                                 _ = self.endRebuildLocked(owner)
                                 return .commit
+                            }
+                            if publication == .commit, inputChanged {
+                                _ = self.microphoneTranscriptGate.invalidate()
+                                // Publication and this sequenced command share the callback queue.
+                                // Only the committed input gets an era, before any of its PCM writes.
+                                self.microphoneWriter.enqueueMetadata(
+                                    failClosed: true,
+                                    mutate: { track in
+                                        MeetingScreenCaptureRecoveryPolicy.applyRecoveredMicrophoneEra(
+                                            to: &track, microphone: microphone,
+                                            startSeconds: microphoneBoundary?.seconds
+                                        )
+                                    }
+                                ) { [weak self] result in
+                                    if case .failure = result { self?.handleAECTerminalFailure(.metadataPersistence) }
+                                }
                             }
                         }
                         guard publication == .commit else {
@@ -1884,13 +1933,21 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                                 self.reportRebuildFailure(retirementFailure, owner: owner)
                                 return
                             }
-                            if publication == .superseded { return }
+                            if publication == .superseded {
+                                guard self.stateLock.withLock({ !self.stopping && self.rebuildOwner == owner }) else { return }
+                                continue // Route/input changed during start; elect again under the same owner.
+                            }
                             if let failure = candidateFailure,
                                !MeetingScreenCaptureRecoveryPolicy.shouldRetry(failure) {
                                 self.reportRebuildFailure(failure, owner: owner)
                                 return
                             }
                             continue
+                        }
+                        if inputChanged {
+                            // Reuse normal settled route protection to reopen the new microphone
+                            // only after its unprotected era was queued and the output is rechecked.
+                            self.invalidateRawMicrophoneAdmissionAfterRouteChange()
                         }
                         let committedOwnership = self.stateLock.withLock { self.currentStreamOwnershipLocked() }
                         let shouldRearmAEC = self.stateLock.withLock {

@@ -1097,6 +1097,57 @@ final class MeetingScreenCaptureRecoveryTests: XCTestCase {
         XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.shouldRetry(MeetingCaptureError.noCaptureDisplay))
     }
 
+    func testDisconnectedInputIsReelectedDuringRecoveryAndOnlyCommittedInputGetsEra() throws {
+        let headset = MeetingMicrophoneIdentity(
+            captureDeviceID: "headset", coreAudioUID: "headset", avCaptureDeviceID: "headset-av",
+            displayName: "Headset", role: .personal
+        )
+        let builtIn = MeetingMicrophoneIdentity(
+            captureDeviceID: "built-in", coreAudioUID: "built-in", displayName: "Built-in", role: .shared
+        )
+        var track = MeetingAudioTrack(
+            id: UUID(), kind: .microphone, sourceIdentifier: "headset", sourceDisplayName: "Headset",
+            format: nil,
+            timebase: MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: []
+        )
+        track.captureEras = [MeetingCaptureEra(
+            method: .screenCaptureKit, deviceUID: "headset", deviceName: "Headset",
+            roleAtElection: .unknown, echoProtection: .acousticallyClosed, startSeconds: 0
+        )]
+        // An unplug can temporarily leave the CoreAudio default unmatched. Never rebind the
+        // frozen headset or alter its recorded provenance just because a retry is scheduled.
+        XCTAssertEqual(MeetingCaptureDeviceElection.decideTransition(
+            from: headset, catalog: [], defaultInputUID: "headset"
+        ), .unavailable)
+        XCTAssertEqual(track.captureEras?.count, 1)
+        XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.shouldRetry(MeetingCaptureError.microphoneUnavailable))
+        guard case let .changed(elected) = MeetingCaptureDeviceElection.decideTransition(
+            from: headset, catalog: [builtIn], defaultInputUID: "built-in"
+        ) else { return XCTFail("Recovery must elect the newly available default input") }
+        XCTAssertEqual(elected.identity.coreAudioUID, "built-in")
+        XCTAssertNil(elected.identity.avCaptureDeviceID, "Removed headset AVCapture identity cannot leak to the new input")
+        XCTAssertEqual(track.captureEras?.last?.deviceUID, "headset", "An election is not producer publication")
+        XCTAssertEqual(MeetingCaptureOwnershipGate.mayPublishReplacement(
+            authorizedRevision: 4, currentRevision: 5, stopping: false, candidateFailed: false,
+            ownsExpectedOldStream: true, ownsPendingCandidate: true
+        ), .superseded, "A route change during native start requires retirement before a fresh retry")
+        MeetingScreenCaptureRecoveryPolicy.applyRecoveredMicrophoneEra(
+            to: &track, microphone: elected.identity, startSeconds: 12
+        )
+        let eras = try XCTUnwrap(track.captureEras)
+        XCTAssertEqual(eras.count, 2)
+        XCTAssertEqual(eras[0].deviceUID, "headset")
+        XCTAssertEqual(eras[1].deviceUID, "built-in")
+        XCTAssertEqual(eras[1].startSeconds, 12)
+        XCTAssertEqual(eras[1].echoProtection, .unprotected)
+        XCTAssertEqual(MeetingCaptureDeviceElection.decideTransition(
+            from: elected.identity, catalog: [builtIn], defaultInputUID: "built-in"
+        ), .unchanged(MeetingCaptureDeviceElection.decide(
+            original: elected.identity, catalog: [builtIn], defaultInputUID: "built-in"
+        )))
+    }
+
     func testExplicitUserStopRevokedPermissionAndInvalidConfigurationAreTerminal() {
         let codes: [SCStreamError.Code] = [.userStopped, .userDeclined, .missingEntitlements, .invalidParameter, .attemptToStartStreamState]
         for code in codes {

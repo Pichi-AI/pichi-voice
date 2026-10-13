@@ -12,7 +12,7 @@ nonisolated enum MeetingScreenCaptureRecoveryPolicy {
     static func shouldRetry(_ error: Error) -> Bool {
         if let error = error as? MeetingCaptureError {
             switch error {
-            case .applicationUnavailable, .noCaptureDisplay: return true
+            case .applicationUnavailable, .noCaptureDisplay, .microphoneUnavailable: return true
             default: return false
             }
         }
@@ -28,6 +28,34 @@ nonisolated enum MeetingScreenCaptureRecoveryPolicy {
             // future errors. Do not fight explicit cancellation or retry broken ownership.
             return false
         }
+    }
+
+    /// Called only for a published producer, on the callback queue before its first PCM command.
+    /// Failed/rejected candidates cannot replace the identity of the last recorded capture era.
+    static func applyRecoveredMicrophoneEra(
+        to track: inout MeetingAudioTrack,
+        microphone: MeetingMicrophoneIdentity,
+        startSeconds: Double?
+    ) {
+        var eras = track.captureEras ?? []
+        let start = startSeconds ?? eras.last?.startSeconds ?? 0
+        let replacement = MeetingCaptureEra(
+            method: .screenCaptureKit,
+            deviceUID: microphone.coreAudioUID,
+            deviceName: microphone.displayName,
+            roleAtElection: .unknown,
+            echoProtection: .unprotected,
+            startSeconds: start
+        )
+        if let last = eras.last, start > last.startSeconds {
+            eras.append(replacement)
+        } else if eras.isEmpty {
+            eras = [replacement]
+        } else {
+            eras[eras.count - 1] = replacement
+        }
+        track.captureEras = eras
+        track.captureMethod = .screenCaptureKit
     }
 
     static func mayReplaceRetiredCandidate(stopSucceeded: Bool, didStopReceived: Bool) -> Bool {
