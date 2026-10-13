@@ -45,7 +45,11 @@ struct AdaptiveAppTheme<Content: View>: View {
             .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
             .tint(activeAccent)
             .preferredColorScheme(preferredScheme)
+            #if os(macOS)
             .toolbarColorScheme(activeScheme, for: .windowToolbar)
+            #else
+            .toolbarColorScheme(activeScheme, for: .navigationBar)
+            #endif
     }
 }
 

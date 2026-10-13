@@ -32,19 +32,23 @@ struct FluidOutlinedButtonStyle: ButtonStyle {
 
         private var controlHeight: CGFloat {
             if let height { return height }
+            #if os(iOS)
+            return 44
+            #else
             switch self.controlSize {
             case .mini: return 26
             case .small: return 30
             case .large, .extraLarge: return 40
             default: return 34
             }
+            #endif
         }
 
         var body: some View {
             let highlighted = self.isEnabled && self.isHovered
             let pressed = self.isEnabled && self.configuration.isPressed
             let destructive = self.configuration.role == .destructive
-            let tone = destructive ? Color(nsColor: .systemRed) : self.theme.palette.accent
+            let tone = destructive ? Color.red : self.theme.palette.accent
             let shape = RoundedRectangle(cornerRadius: self.theme.metrics.corners.md, style: .continuous)
             self.configuration.label
                 .font(self.theme.typography.bodySmall)
