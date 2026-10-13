@@ -168,6 +168,10 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     /// configuration; capture refuses silent substitution if a wired/Bluetooth input disappears.
     @MainActor static func microphoneSnapshot() async -> MeetingMicrophoneCatalogSnapshot {
         let session = AVAudioSession.sharedInstance()
+#if DEBUG
+        let traceID = UUID().uuidString
+        IOSMeetingCaptureTrace.emit("catalog.begin", owner: traceID)
+#endif
         let savedCategory = session.category
         let savedMode = session.mode
         let savedOptions = session.categoryOptions
@@ -176,12 +180,26 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
             // Input enumeration depends on the category. Do not activate the session or open the
             // microphone merely to display Settings; start() owns actual activation after consent.
             do {
+#if DEBUG
+                IOSMeetingCaptureTrace.emit("catalog.configure.before", owner: traceID)
+#endif
                 try session.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .allowBluetoothHFP])
                 temporarilyConfigured = true
+#if DEBUG
+                IOSMeetingCaptureTrace.emit("catalog.configure.after", owner: traceID)
+#endif
             } catch { return MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil) }
         }
         defer {
-            if temporarilyConfigured { try? session.setCategory(savedCategory, mode: savedMode, options: savedOptions) }
+            if temporarilyConfigured {
+#if DEBUG
+                IOSMeetingCaptureTrace.emit("catalog.restore.before", owner: traceID)
+#endif
+                try? session.setCategory(savedCategory, mode: savedMode, options: savedOptions)
+#if DEBUG
+                IOSMeetingCaptureTrace.emit("catalog.restore.after", owner: traceID)
+#endif
+            }
         }
         let inputs = session.availableInputs ?? session.currentRoute.inputs
         return MeetingMicrophoneCatalogSnapshot(identities: inputs.map {
@@ -255,6 +273,10 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     private var savedPreferredIOBufferDuration: TimeInterval?
     private var configuredSession = false
     private var installedTap = false
+#if DEBUG
+    // Record only the format already read by start; tracing must not create engine nodes.
+    private var traceInputFormat: (sampleRate: Double, channels: UInt32)?
+#endif
 
     init(trackID: MeetingAudioTrackID, microphone: MeetingMicrophoneIdentity,
          writer: MeetingAudioChunkWriter?, memoryConsumer: (any MeetingMemoryAudioConsuming)?,
@@ -274,6 +296,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
             self.controlQueue.async { [self] in
                 do {
                     let audioSession = AVAudioSession.sharedInstance()
+#if DEBUG
+                    self.trace("runtime.begin")
+#endif
                     self.savedCategory = audioSession.category
                     self.savedMode = audioSession.mode
                     self.savedOptions = audioSession.categoryOptions
@@ -283,36 +308,72 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                     // Default mode avoids voice-chat processing that would alter in-room speech.
                     // Mixing keeps other apps' presentation playback eligible; actual routing and
                     // interruption behavior must still be verified on each physical device.
+#if DEBUG
+                    self.trace("runtime.category.before")
+#endif
                     try audioSession.setCategory(.playAndRecord, mode: .default,
                                                  options: [.mixWithOthers, .allowBluetoothHFP, .allowAirPlay, .defaultToSpeaker])
                     self.configuredSession = true
+#if DEBUG
+                    self.trace("runtime.category.after")
+#endif
                     try audioSession.setPreferredSampleRate(48_000)
                     try audioSession.setPreferredIOBufferDuration(0.02)
+#if DEBUG
+                    self.trace("runtime.activate.before")
+#endif
                     try audioSession.setActive(true)
+#if DEBUG
+                    self.trace("runtime.activate.after")
+#endif
                     guard let input = audioSession.availableInputs?.first(where: { $0.uid == self.microphone.captureDeviceID }) else {
                         throw MeetingCaptureError.microphoneUnavailable
                     }
+#if DEBUG
+                    self.trace("runtime.preferred.before")
+#endif
                     try audioSession.setPreferredInput(input)
+#if DEBUG
+                    self.trace("runtime.preferred.after")
+#endif
                     guard audioSession.currentRoute.inputs.contains(where: { $0.uid == input.uid }) else {
                         throw MeetingCaptureError.microphoneUnavailable
                     }
                     let inputNode = self.engine.inputNode
                     let format = inputNode.outputFormat(forBus: 0)
+#if DEBUG
+                    self.lock.withLock { self.traceInputFormat = (format.sampleRate, format.channelCount) }
+                    self.trace("runtime.inputFormat")
+#endif
                     guard format.sampleRate > 0, format.channelCount > 0 else { throw MeetingCaptureError.unsupportedAudioFormat }
                     inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, time in
                         self?.accept(buffer, time: time)
                     }
                     self.installedTap = true
                     self.engine.prepare()
+#if DEBUG
+                    self.trace("runtime.engineStart.before")
+#endif
                     try self.engine.start()
+#if DEBUG
+                    self.trace("runtime.engineStart.after")
+#endif
                     self.observeLifecycle()
                     continuation.resume()
-                } catch { continuation.resume(throwing: error) }
+                } catch {
+#if DEBUG
+                    self.trace("runtime.start.failed")
+#endif
+                    continuation.resume(throwing: error)
+                }
             }
         }
     }
 
     func stop() async throws {
+#if DEBUG
+        self.trace("runtime.stop.begin")
+#endif
         self.lock.withLock { self.stopping = true }
         self.gate.close()
         await withCheckedContinuation { continuation in
@@ -345,6 +406,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                 do {
                     if self.configuredSession {
                         let session = AVAudioSession.sharedInstance()
+#if DEBUG
+                        self.trace("runtime.restore.before")
+#endif
                         var restorationFailure: Error?
                         func restore(_ operation: () throws -> Void) {
                             do { try operation() } catch { restorationFailure = restorationFailure ?? error }
@@ -366,6 +430,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                             restore { try session.setCategory(category, mode: mode, options: options) }
                         }
                         self.configuredSession = false
+#if DEBUG
+                        self.trace("runtime.restore.after")
+#endif
                         if let restorationFailure { throw restorationFailure }
                     }
                     if let failure = self.lock.withLock({ self.terminalFailure }) { throw failure }
@@ -409,6 +476,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     }
 
     private func deliver(_ sample: CMSampleBuffer) {
+#if DEBUG
+        let firstPCM = self.lock.withLock { self.health.lastSampleAt == nil }
+#endif
         if let writer, !writer.enqueue(sample) {
             self.fail(MeetingCaptureError.writerFailed(PichiLocalization.text("The bounded audio writer rejected microphone PCM.")), kind: .writerBackpressure)
             return
@@ -436,6 +506,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
             self.lastHealthTime = now
             return self.health
         }
+#if DEBUG
+        if firstPCM { self.trace("runtime.firstPCM") }
+#endif
         if let snapshot { self.eventHandler(.trackHealth(trackID: self.trackID, health: snapshot)) }
     }
 
@@ -446,6 +519,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                           Notification.Name.AVAudioEngineConfigurationChange].map { name in
             center.addObserver(forName: name, object: name == .AVAudioEngineConfigurationChange ? self.engine : AVAudioSession.sharedInstance(), queue: nil) { [weak self] notification in
                 guard let self, !self.lock.withLock({ self.stopping }) else { return }
+#if DEBUG
+                self.trace("runtime.notification", notification: notification)
+#endif
                 if notification.name == AVAudioSession.interruptionNotification {
                     guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                           AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
@@ -459,6 +535,15 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
             }
         }
     }
+
+#if DEBUG
+    private func trace(_ phase: String, notification: Notification? = nil) {
+        let state = self.lock.withLock { (self.health.lastSampleAt != nil, self.traceInputFormat) }
+        IOSMeetingCaptureTrace.emit(phase, owner: String(describing: self.trackID),
+            selectedUID: self.microphone.captureDeviceID, engineRunning: self.engine.isRunning,
+            firstPCM: state.0, inputFormat: state.1, notification: notification)
+    }
+#endif
 
     private func fail(_ error: Error, kind: MeetingInterruptionKind) {
         let first = self.lock.withLock {
@@ -474,4 +559,55 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: self.trackID, detail: error.localizedDescription))
     }
 }
+
+#if DEBUG
+/// File-local diagnostics for the category ownership race. No session setters, engine nodes,
+/// audio buffers or transcript data are touched. The process-wide lock caps output at 32 lines.
+private nonisolated enum IOSMeetingCaptureTrace {
+    static let enabled = ProcessInfo.processInfo.environment["PICHI_IOS_CAPTURE_TRACE"] == "1"
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var emitted = 0
+
+    static func emit(_ phase: String, owner: String, selectedUID: String? = nil,
+                     engineRunning: Bool? = nil, firstPCM: Bool? = nil,
+                     inputFormat: (sampleRate: Double, channels: UInt32)? = nil,
+                     notification: Notification? = nil) {
+        guard self.enabled else { return }
+        self.lock.withLock {
+            guard self.emitted < 32 else { return }
+            self.emitted += 1
+            let session = AVAudioSession.sharedInstance()
+            var payload: [String: Any] = [
+                "event": self.emitted, "uptime": ProcessInfo.processInfo.systemUptime,
+                "phase": phase, "owner": owner,
+                "category": session.category.rawValue, "mode": session.mode.rawValue,
+                "categoryOptions": session.categoryOptions.rawValue,
+                "inputs": session.currentRoute.inputs.map(\.uid),
+                "outputs": session.currentRoute.outputs.map(\.portType.rawValue),
+                "availableInputs": (session.availableInputs ?? []).map(\.uid),
+                "preferredInput": session.preferredInput?.uid ?? "",
+                "sampleRate": session.sampleRate, "ioBufferDuration": session.ioBufferDuration,
+            ]
+            if let selectedUID { payload["selectedUID"] = selectedUID }
+            if let engineRunning { payload["engineRunning"] = engineRunning }
+            if let firstPCM { payload["firstPCM"] = firstPCM }
+            if let inputFormat {
+                payload["inputSampleRate"] = inputFormat.sampleRate
+                payload["inputChannels"] = inputFormat.channels
+            }
+            if let notification {
+                payload["notification"] = notification.name.rawValue
+                payload["routeChangeReason"] = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber
+                payload["interruptionType"] = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber
+                if let previous = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription {
+                    payload["previousInputs"] = previous.inputs.map(\.uid)
+                    payload["previousOutputs"] = previous.outputs.map(\.portType.rawValue)
+                }
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+               let text = String(data: data, encoding: .utf8) { print("[IOS_CAPTURE_TRACE] \(text)") }
+        }
+    }
+}
+#endif
 #endif
