@@ -350,7 +350,6 @@ struct PrototypeRoot: View {
                         Text(data.sessions[0].title).font(theme.font(.title))
                         divider
                         infoLine("mic", title: "microphone", value: "built_in_mic")
-                        infoLine("globe", title: "speech_languages", value: "ru_en")
                         infoLine("lock", title: "retention", value: saveAudio ? "audio_and_text" : "text_only")
                         Button { screen = .settings } label: { Label(Copy.text("change_settings"), systemImage: "slider.horizontal.3").font(theme.font(.body)) }
                             .buttonStyle(.plain).foregroundStyle(theme.accent).frame(minHeight: 44)
@@ -447,8 +446,11 @@ struct PrototypeRoot: View {
                 Text(Copy.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
                     .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
             } else {
-                Label(Copy.text("Microphone"), systemImage: "mic")
-                    .font(theme.font(.caption)).foregroundStyle(theme.accent)
+                HStack(spacing: 12) {
+                    Label(Copy.text("Microphone"), systemImage: "mic")
+                        .font(theme.font(.caption)).foregroundStyle(theme.accent)
+                    PrototypeMeetingWaveform(replay: replay, theme: theme)
+                }
             }
         }
     }

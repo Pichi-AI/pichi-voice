@@ -58,6 +58,7 @@ import AppKit
 @MainActor
 final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegate, NSWindowDelegate {
     @Published private(set) var canvasSize: CGSize
+    @Published private(set) var isKeyWindow = false
     private weak var window: NSWindow?
     private let landscapeSize: CGSize
     private static let rotateItem = NSToolbarItem.Identifier("prototype.rotate")
@@ -145,6 +146,8 @@ final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegat
         return item
     }
 
+    func windowDidBecomeKey(_ notification: Notification) { isKeyWindow = true }
+    func windowDidResignKey(_ notification: Notification) { isKeyWindow = false }
     func windowWillClose(_ notification: Notification) { NSApp.terminate(nil) }
 }
 
@@ -165,6 +168,7 @@ private struct PrototypeNativeCanvas: View {
         .background(PrototypeTheme(dark: options.dark).color("windowBackground"))
         .environment(\.locale, Locale(identifier: options.language))
         .environment(\.colorScheme, options.dark ? .dark : .light)
+        .environment(\.scenePhase, preview.isKeyWindow ? .active : .inactive)
     }
 }
 

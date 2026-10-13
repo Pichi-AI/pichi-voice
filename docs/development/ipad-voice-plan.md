@@ -7,6 +7,7 @@
 ## Подтверждённые требования
 
 - Русский и английский равноправны и могут смешиваться в одной встрече. Распознанный текст сохраняется на языке речи.
+- На стартовом экране встречи язык разговора не отображается и не выбирается.
 - После загрузки моделей распознавание работает локально без отправки аудио и текста на сервер.
 - По умолчанию сохраняются текст и аудио. Срок хранения аудио нужно выбрать отдельно; текущее macOS значение по умолчанию составляет 7 дней.
 - Когда сохранение аудио выключено, приложение не создаёт аудиофайлов, включая временные. Это отдельная семантика от существующего удаления после расшифровки.
@@ -119,7 +120,7 @@ Whisper Tiny уже имеет общий provider, но ещё требует �
 
 Порядок extraction: общие values/contracts -> model catalog/preferences и общий lifecycle owner -> существующий coordinator/pipeline/store -> общие SwiftUI компоненты -> iOS capture. Первый функциональный milestone должен завершить синтетическую встречу на Mac и iOS Simulator через **одни и те же классы** coordinator/store/pipeline. Аппаратные capture/inference/background milestones идут затем.
 
-Анимированный прототип уже проверяет небольшую часть этой схемы: шесть исходных production-файлов компилируются без изменений для macOS и iOS SDK, включая реальный renderer. Theme bridge и synthetic replay остаются только в `Prototypes/`; они не заменяют сервисы приложения. Общие contract tests должны защищать preparation ownership, residency restoration, provider options, canonical publication, recovery/retention и live-row identity.
+Анимированный прототип уже проверяет небольшую часть этой схемы: восемь production-файлов компилируются для macOS и iOS SDK, включая исходный renderer текста и общий renderer диктовки. Canvas/Timeline и неизменённая spring simulation выделены из `BottomWaveformView` в `AudioWaveformBars`; исходная панель использует тот же компонент. Desktop state, настройки и shimmer остаются в её wrapper. Theme bridge и synthetic replay остаются только в `Prototypes/`; они не заменяют сервисы приложения. Общие contract tests должны защищать preparation ownership, residency restoration, provider options, canonical publication, recovery/retention и live-row identity.
 
 ## Мобильный набор моделей
 

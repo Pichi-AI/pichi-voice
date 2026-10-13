@@ -13,6 +13,8 @@ shared_sources=(
     "$repo_dir/Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift"
     "$repo_dir/Sources/Fluid/Localization/PichiLocalization.swift"
     "$repo_dir/Sources/Fluid/UI/MeetingUILocalization.swift"
+    "$repo_dir/Sources/Fluid/UI/Visualization/AudioWaveformBars.swift"
+    "$repo_dir/Sources/Fluid/Services/AudioSpectrumMeter.swift"
 )
 
 write_info() {
