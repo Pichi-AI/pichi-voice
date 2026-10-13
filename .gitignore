@@ -264,6 +264,7 @@ builds/
 !/scripts/dev/check-localization.py
 !/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
+!/docs/development/upstream-sync-1.6.11.md
 !/scripts/dev/macos-regression.py
 !/scripts/dev/asr-baseline-inputs.py
 !/scripts/dev/standalone-regression.py

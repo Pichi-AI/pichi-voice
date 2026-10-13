@@ -65,6 +65,8 @@ bash scripts/dev/macos.sh test
 # Commit the pending merge, push the task branch to origin, and open a PR.
 ```
 
+If the primary checkout is inside a macOS protected folder and the test host cannot open its source-relative fixtures, choose a Codex-managed worktree or set `PICHI_VOICE_WORKTREE_ROOT="$HOME/.codex/worktrees/pichi-voice"` for the sync command. Build and runtime fixtures must both be accessible. Do not bypass signing or edit the permission database to make tests run.
+
 The helper fetches `origin/main`, `upstream/main` and upstream tags, then resolves the chosen target to an immutable commit SHA. It rejects a target outside the fetched upstream main history. Before creating a worktree, it prints the downstream baseline, upstream target, fetched upstream main and common ancestor SHAs. If our main already contains that target, it exits without creating a worktree.
 
 An update uses a unique task worktree at the reported downstream SHA and starts `git merge --no-ff --no-commit <upstream-SHA>`. Later changes to tracking refs cannot change either side of that attempt. The existing `new-worktree.sh` accepts an optional base ref for this purpose; its default still fetches and starts from the latest `origin/main`. The sync helper leaves every conflict unresolved and prints its path with the worktree location. It never commits, pushes or changes either repository's main branch.
@@ -84,11 +86,11 @@ For each batch, save a reviewable update report in `docs/development/` with:
 1. The upstream release/ref, all baseline SHAs, integrated revision and release scope.
 2. Every conflicted path, the reason both sides changed it, and the behavior preserved by the resolution. Review individual hunks rather than choosing an entire side automatically.
 3. Concrete extension-boundary decisions. Check provider and meeting registries, model/artifact snapshots, cancellation, resource ownership, shared service operations, branding and localization. Refactor only when the conflict or contract change identifies a specific limitation; follow [AGENTS.md](../../AGENTS.md#architecture-requirements-for-every-agent).
-4. Checks actually run against the combined result, with downstream and inherited upstream regressions listed separately. Recheck Codex files, private-data ignores, workflow guards and app/model update configuration.
+4. Checks actually run against the combined result, with downstream and inherited upstream regressions listed separately. Recheck Codex files, private-data ignores, workflow guards and app/model update configuration. Reject duplicate Xcode build settings and verify the emitted Debug/Release bundle identities after version bumps; the [1.6.11 rehearsal](upstream-sync-1.6.11.md) found a silent identity override in an otherwise successful build.
 5. Independent automated review of the integrated revision, corrected findings and remaining limitations. Portable checks include offline synthetic Git regressions for the sync helper; they do not compile the app or verify model inference.
 6. Interactive evidence from the exact frozen signed revision when permissions, capture, typing, UI or model behavior is tested. Follow the signing and screenshot rules in [AGENTS.md](../../AGENTS.md#verification). An earlier revision's permission or capture result cannot establish the new revision's result.
 
-A manual sync check is sufficient initially. A future scheduled update workflow should create a review branch or PR and run checks, without auto-merging or shipping. No recurring update automation is enabled by this setup.
+A local Codex thread automation now checks stable releases daily at 09:00 in the user's local time and prepares a separate review branch/draft PR when needed. It requires the local execution host and repository access. It does not auto-merge or ship. The repository helper also supports manual checks independently of that app-local schedule.
 
 ## Embedded dictation cleanup
 

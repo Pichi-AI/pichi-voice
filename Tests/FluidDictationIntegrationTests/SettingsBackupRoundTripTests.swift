@@ -7,6 +7,8 @@ final class SettingsBackupRoundTripTests: XCTestCase {
     func testHoldSpaceMuteRoundTripsAndLegacyBackupDefaultsOff() throws {
         try self.withSavedDefaults {
             let settings = SettingsStore.shared
+            let meeting = self.meetingDefaults()
+            settings.meetingRecordingDefaults = meeting
             settings.holdSpaceToMute = true
             let encoded = try JSONEncoder().encode(settings.makeBackupPayload())
             let decoded = try JSONDecoder().decode(SettingsBackupPayload.self, from: encoded)
@@ -14,11 +16,13 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             settings.holdSpaceToMute = false
             settings.restore(from: decoded)
             XCTAssertTrue(settings.holdSpaceToMute)
+            XCTAssertEqual(settings.meetingRecordingDefaults, meeting)
 
             let legacy = try self.payload(removing: ["holdSpaceToMute"])
             XCTAssertNil(legacy.holdSpaceToMute)
             settings.restore(from: legacy)
             XCTAssertFalse(settings.holdSpaceToMute)
+            XCTAssertEqual(settings.meetingRecordingDefaults, meeting)
         }
     }
 
