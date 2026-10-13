@@ -11,6 +11,16 @@ struct PrototypeOptions {
     var saveAudio = true
 
     init(arguments: [String] = CommandLine.arguments) {
+        // Frozen native preview bundles can carry a scenario without a shell launch.
+        // Explicit CLI arguments still take priority. This is design-only configuration.
+        let arguments: [String] = if arguments.count == 1,
+            let url = Bundle.main.url(forResource: "preview-arguments", withExtension: "json"),
+            let data = try? Data(contentsOf: url),
+            let scenario = try? JSONDecoder().decode([String].self, from: data) {
+            arguments + scenario
+        } else {
+            arguments
+        }
         var index = 1
         while index < arguments.count {
             let flag = arguments[index]
