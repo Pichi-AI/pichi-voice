@@ -167,7 +167,19 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
 
     @MainActor static func defaultMicrophone(preferredUID: String? = nil) async throws -> MeetingMicrophoneIdentity {
         let snapshot = await self.microphoneSnapshot()
-        if let uid = preferredUID ?? snapshot.defaultCoreAudioUID,
+        return try self.resolveDefaultMicrophone(in: snapshot, preferredUID: preferredUID)
+    }
+
+    /// A saved explicit input must not silently become the tablet microphone after disconnection.
+    @MainActor static func resolveDefaultMicrophone(in snapshot: MeetingMicrophoneCatalogSnapshot,
+                                                  preferredUID: String?) throws -> MeetingMicrophoneIdentity {
+        if let preferredUID {
+            guard let identity = snapshot.identities.first(where: { $0.captureDeviceID == preferredUID }) else {
+                throw MeetingCaptureError.microphoneUnavailable
+            }
+            return identity
+        }
+        if let uid = snapshot.defaultCoreAudioUID,
            let identity = snapshot.identities.first(where: { $0.captureDeviceID == uid }) { return identity }
         guard let identity = snapshot.identities.first else { throw MeetingCaptureError.microphoneUnavailable }
         return identity
