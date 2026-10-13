@@ -296,6 +296,26 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(report["runnerExitCode"], 143)
 
+    def test_term_during_initial_report_accounts_for_unstarted_probes(self):
+        original = Path.write_text
+        delivered = False
+
+        def interrupt_initial_save(path, data, *args, **options):
+            nonlocal delivered
+            if path.name == "summary.json.tmp" and not delivered:
+                delivered = True
+                os.kill(os.getpid(), signal.SIGTERM)
+            return original(path, data, *args, **options)
+
+        with patch.object(Path, "write_text", interrupt_initial_save):
+            status, report, _ = self.run_probes([self.probe("not_started", "touch wrongly-started")])
+        self.assertEqual(status, 143)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["counts"], {"total": 1, "passed": 0, "failed": 0, "skipped": 1})
+        self.assertIsNone(report["results"][0]["exitCode"])
+        self.assertIn("finishedAt", report)
+        self.assertFalse((self.root / "wrongly-started").exists())
+
     def test_term_during_handler_install_restores_original_handlers(self):
         originals = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
         original_set = signal.signal
@@ -340,6 +360,53 @@ class StandaloneRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "one link"):
             RUNNER.owned_file(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
         self.assertEqual(outside.read_text(), "must stay unchanged")
+
+    def test_term_during_handler_restoration_keeps_actual_report_and_exit(self):
+        self.probe("complete")
+        code = '''
+import importlib.util, os, signal, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("runner", sys.argv[1])
+runner = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = runner
+spec.loader.exec_module(runner)
+original = signal.signal
+sent = False
+def restore_with_term(number, handler):
+    global sent
+    value = original(number, handler)
+    if number == signal.SIGTERM and handler == signal.SIG_DFL and not sent:
+        sent = True
+        os.kill(os.getpid(), signal.SIGTERM)
+    return value
+signal.signal = restore_with_term
+status, report = runner.run_suite(Path(sys.argv[2]), [runner.Probe("Tests/run_complete_tests.sh", "sh")])
+assert signal.getsignal(signal.SIGTERM) == signal.SIG_DFL
+sys.exit(status)
+'''
+        completed = subprocess.run([sys.executable, "-S", "-c", code,
+                                    str(ROOT / "scripts/dev/standalone-regression.py"), str(self.root)],
+                                   capture_output=True, text=True, timeout=10)
+        self.assertEqual(completed.returncode, 143, completed.stderr)
+        report = json.loads(next(self.root.glob(".build/standalone-regression/*/summary.json")).read_text())
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["runnerExitCode"], 143)
+        self.assertTrue(report["interrupted"])
+
+    def test_caller_blocked_pending_term_and_child_mask_remain_owned_by_caller(self):
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+            probe = self.probe("caller_mask", 'import signal\nassert signal.SIGTERM in signal.pthread_sigmask(signal.SIG_BLOCK, set())', interpreter="python3")
+            status, report, _ = self.run_probes([probe])
+            self.assertEqual(status, 0)
+            self.assertEqual(report["status"], "PASS")
+            self.assertIn(signal.SIGTERM, signal.sigpending())
+            self.assertIn(signal.SIGTERM, signal.pthread_sigmask(signal.SIG_BLOCK, set()))
+        finally:
+            if signal.SIGTERM in signal.sigpending():
+                signal.sigwait({signal.SIGTERM})
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
     def test_background_descendant_is_not_a_success_or_left_running(self):
         probe = self.worker_probe(wait=False)

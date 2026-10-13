@@ -93,15 +93,30 @@ def suite_signal_handlers():
                 deliver(number)
 
     originals = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    failure = None
     try:
         with defer_interrupts():
             for number in originals:
                 signal.signal(number, handle)
         yield protect_creation
+    except BaseException as error:
+        failure = error
+        raise
     finally:
-        with defer_interrupts():
+        # Consume signals queued during restoration before reinstating the
+        # caller's mask, which could otherwise deliver TERM to SIG_DFL.
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, set(originals))
+        queued = set()
+        try:
             for number, original in originals.items():
                 signal.signal(number, original)
+            queued = signal.sigpending() & (set(originals) - previous)
+            for number in queued:
+                signal.sigwait({number})
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        if queued and failure is None:
+            deliver(signal.SIGTERM if signal.SIGTERM in queued else signal.SIGINT)
 
 
 def live_process_group(group):
@@ -283,10 +298,9 @@ def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False
         code = interruption_status(error)
         if state:
             report = state["report"]
-            report.update(status="FAIL", interrupted=True, runnerExitCode=code, reason="Run interrupted")
             with defer_interrupts():
-                state["save"]()
-                (state["directory"] / "summary.txt").write_text(f"Status: FAIL\nRunner exit: {code}\nRun interrupted\n")
+                state["record_interruption"](error)
+                state["finish"](True, code)
         else:
             report = {"status": "FAIL", "interrupted": True, "runnerExitCode": code,
                       "reason": "Interrupted before suite started", "results": [],
@@ -316,17 +330,47 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, s
             temporary.write_text(json.dumps(report, indent=2) + "\n")
             temporary.replace(directory / "summary.json")
 
-        state.update(report=report, directory=directory, save=save)
-        save()
-        interrupted = False
-        interrupt_code = 130
-        abort_reason = None
-
         def make_row(probe):
             return {"name": probe.name, "script": probe.script, "interpreter": probe.interpreter,
                     "command": probe.command, "requiresUI": probe.requires_ui, "status": "RUNNING",
                     "exitCode": None, "durationSeconds": 0.0, "log": f"{probe.name}.log"}
 
+        def record_interruption(error):
+            code = interruption_status(error)
+            for row in report["results"]:
+                if row["status"] == "RUNNING":
+                    row.update(status="FAIL", exitCode=getattr(error, "child_exit_code", None),
+                               runnerExitCode=code, reason="interrupted")
+                    (directory / row["log"]).touch()
+            for probe in probes[len(report["results"]):]:
+                row = make_row(probe)
+                row.update(status="SKIP", reason="not run after interruption")
+                (directory / row["log"]).write_text("SKIP: not run after interruption\n")
+                report["results"].append(row)
+            save()
+
+        def finish(interrupted, interrupt_code):
+            counts = report["counts"]
+            report["interrupted"] = interrupted
+            report["runnerExitCode"] = interrupt_code if interrupted else (0 if counts["passed"] and not counts["failed"] else 1)
+            report["status"] = "PASS" if counts["passed"] and not counts["failed"] and not interrupted else "FAIL"
+            if interrupted:
+                report["reason"] = "Run interrupted"
+            elif not counts["passed"] and not counts["failed"]:
+                report["reason"] = "No probes executed successfully"
+            report["finishedAt"] = timestamp()
+            save()
+            lines = [f"Revision: {revision} ({report['workingTree']})", f"Status: {report['status']}",
+                     f"Probes: {counts['total']} total, {counts['passed']} passed, {counts['failed']} failed, {counts['skipped']} skipped"]
+            lines += [f"{row['status']} {row['name']} exit={row['exitCode']} log={row['log']}" for row in report["results"]]
+            (directory / "summary.txt").write_text("\n".join(lines) + "\n")
+            print(lines[2], flush=True)
+
+        state.update(report=report, record_interruption=record_interruption, finish=finish)
+        save()
+        interrupted = False
+        interrupt_code = 130
+        abort_reason = None
         try:
             for probe in probes:
                 row = make_row(probe)
@@ -369,37 +413,11 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, s
         except (KeyboardInterrupt, RunTermination) as error:
             interrupted = True
             interrupt_code = interruption_status(error)
-            for row in report["results"]:
-                if row["status"] == "RUNNING":
-                    row.update(status="FAIL", exitCode=getattr(error, "child_exit_code", None),
-                               runnerExitCode=interrupt_code, reason="interrupted")
-                    (directory / row["log"]).touch()
-            for probe in probes[len(report["results"]):]:
-                row = make_row(probe)
-                row.update(status="SKIP", reason="not run after interruption")
-                (directory / row["log"]).write_text("SKIP: not run after interruption\n")
-                report["results"].append(row)
-            save()
-        def finish():
-            counts = report["counts"]
-            report["interrupted"] = interrupted
-            report["runnerExitCode"] = interrupt_code if interrupted else (0 if counts["passed"] and not counts["failed"] else 1)
-            report["status"] = "PASS" if counts["passed"] and not counts["failed"] and not interrupted else "FAIL"
-            if interrupted:
-                report["reason"] = "Run interrupted"
-            elif not counts["passed"] and not counts["failed"]:
-                report["reason"] = "No probes executed successfully"
-            report["finishedAt"] = timestamp()
-            save()
-            lines = [f"Revision: {revision} ({report['workingTree']})", f"Status: {report['status']}",
-                     f"Probes: {counts['total']} total, {counts['passed']} passed, {counts['failed']} failed, {counts['skipped']} skipped"]
-            lines += [f"{row['status']} {row['name']} exit={row['exitCode']} log={row['log']}" for row in report["results"]]
-            (directory / "summary.txt").write_text("\n".join(lines) + "\n")
-            print(lines[2], flush=True)
+            record_interruption(error)
         while True:
             try:
                 with defer_interrupts():
-                    finish()
+                    finish(interrupted, interrupt_code)
                 return report["runnerExitCode"], report
             except (KeyboardInterrupt, RunTermination) as error:
                 interrupted = True
