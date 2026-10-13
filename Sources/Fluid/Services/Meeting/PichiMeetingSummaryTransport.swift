@@ -211,44 +211,8 @@ nonisolated enum PichiMeetingSummaryTransport {
         request.timeoutInterval = config.timeoutSeconds ?? 180
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !config.apiKey.isEmpty { request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization") }
-        request.httpBody = try self.orderedRequestJSON(body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
-    }
-
-    /// Native structured-output grammars consume property order from the schema.
-    /// Describe the meeting/work before selecting its category and literal fields,
-    /// instead of alphabetically generating deadlines before the task itself.
-    /// The schema and its validation/resource limits remain identical.
-    private static func orderedRequestJSON(_ value: Any, key: String? = nil) throws -> Data {
-        if let fields = value as? [String: Any] {
-            var keys = fields.keys.sorted()
-            if key == "properties" {
-                let preferred = fields["summary"] != nil
-                    ? ["summary", "decisions", "openQuestions", "actions", "changes", "answers"]
-                    : fields["title"] != nil ? ["title", "text", "status", "urgency", "evidence", "owner", "deadline"] : []
-                keys = preferred.filter { fields[$0] != nil } + keys.filter { !preferred.contains($0) }
-            }
-            var data = Data("{".utf8)
-            for (index, name) in keys.enumerated() {
-                if index > 0 { data.append(Data(",".utf8)) }
-                data.append(try JSONSerialization.data(withJSONObject: name, options: [.fragmentsAllowed]))
-                data.append(Data(":".utf8))
-                guard let field = fields[name] else { throw LLMError.encodingError }
-                data.append(try self.orderedRequestJSON(field, key: name))
-            }
-            data.append(Data("}".utf8))
-            return data
-        }
-        if let values = value as? [Any] {
-            var data = Data("[".utf8)
-            for (index, item) in values.enumerated() {
-                if index > 0 { data.append(Data(",".utf8)) }
-                data.append(try self.orderedRequestJSON(item))
-            }
-            data.append(Data("]".utf8))
-            return data
-        }
-        return try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
     }
 
     // Protocol adaptation only: boolean thinking and effort levels are distinct

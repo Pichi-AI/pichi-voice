@@ -475,26 +475,21 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertTrue((schema["required"] as? [String] ?? []).contains("decisions"))
     }
 
-    func testNativeSchemaDescribesMeetingAndTaskBeforeChoosingTheirLiteralFields() throws {
-        let config = LLMClient.Config(messages: [["role": "system", "content": "Summarize a meeting"]], model: "fixture-model",
+    func testNativeCanonicalRequestPreservesMessagesSchemaAndBounds() throws {
+        let messages: [[String: Any]] = [["role": "system", "content": "Summarize a meeting"],
+                                       ["role": "user", "content": #"Ёж: \"quotes\", C:\reports, https://example.org/a?x=1&y=2"#]]
+        let config = LLMClient.Config(messages: messages, model: "fixture-model",
                                       baseURL: "http://127.0.0.1:11434/v1", apiKey: "", streaming: false)
         let request = try PichiMeetingSummaryTransport.ollamaRequest(config)
         let data = try XCTUnwrap(request.httpBody)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let schema = try XCTUnwrap(body["format"] as? [String: Any])
         XCTAssertEqual(schema as NSDictionary, PichiMeetingSummaryTransport.schema(ledger: false) as NSDictionary,
-                       "Ordering must preserve every schema field, required value and validation limit")
-        let raw = String(decoding: data, as: UTF8.self)
-        XCTAssertTrue(raw.contains("\"properties\":{\"summary\":"), "The grammar must describe the meeting before selecting separate ledgers")
-        let root = try XCTUnwrap(raw.range(of: "\"properties\":{\"summary\":"))
-        let questions = try XCTUnwrap(raw.range(of: "\"openQuestions\":", range: root.upperBound..<raw.endIndex))
-        let actions = try XCTUnwrap(raw.range(of: "\"actions\":", range: root.upperBound..<raw.endIndex))
-        XCTAssertLessThan(questions.lowerBound, actions.lowerBound, "Classify unresolved inquiries before selecting actionable work")
-        XCTAssertTrue(raw.contains("\"properties\":{\"title\":"), "The grammar must identify the task before choosing its owner or deadline")
-        let title = try XCTUnwrap(raw.range(of: "\"properties\":{\"title\":"))
-        let text = try XCTUnwrap(raw.range(of: "\"text\":", range: title.upperBound..<raw.endIndex))
-        let deadline = try XCTUnwrap(raw.range(of: "\"deadline\":", range: title.upperBound..<raw.endIndex))
-        XCTAssertLessThan(text.lowerBound, deadline.lowerBound)
+                       "Canonical encoding must preserve every schema field, required value and validation limit")
+        XCTAssertEqual(try XCTUnwrap(body["messages"] as? [[String: Any]]) as NSArray, messages as NSArray,
+                       "Quotes, backslashes, URLs and Cyrillic source data must remain literal")
+        XCTAssertEqual(data, try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]),
+                       "The same canonical payload must not depend on dictionary insertion order")
         let options = try XCTUnwrap(body["options"] as? [String: Any])
         XCTAssertEqual(options["num_ctx"] as? Int, 8192)
         XCTAssertEqual(options["num_predict"] as? Int, 3000)
@@ -2228,10 +2223,14 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let requests = await transport.requests
         XCTAssertEqual(requests.count, 2, "Coverage recovery shares the existing single review, with no extra inference pass")
         let input = try XCTUnwrap(requests[1].messages.last?["content"] as? String)
-        let sourceRange = try XCTUnwrap(input.range(of: "\"sources\":"))
-        let candidateRange = try XCTUnwrap(input.range(of: "\"candidate\":"))
-        XCTAssertLessThan(sourceRange.lowerBound, candidateRange.lowerBound,
-                          "Original speech must precede a fallible recap-only candidate in the source-first review")
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        let sources = try ModelSource.catalog(from: fields)
+        XCTAssertEqual(sources.map(\.text), session.transcriptSegments.map(\.text),
+                       "Omission recovery must retain every original excerpt regardless of JSON key order")
+        XCTAssertEqual(sources.map(\.sourceIndex), Array(sources.indices))
+        XCTAssertEqual(try Self.wireJSON(try XCTUnwrap(fields["candidate"] as? [String: Any])), try Self.wireJSON(candidate),
+                       "The reviewer must receive the entire fallible candidate, including its omitted tasks")
+        XCTAssertEqual(input, try Self.wireJSON(fields), "Review input must use the canonical complete JSON payload")
     }
 
     func testSupportReviewReplacesPendingChoiceWithUnresolvedQuestionAndKeepsUnknownAssignment() async throws {

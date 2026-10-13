@@ -392,18 +392,9 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             ["sourceIndex": source.sourceIndex, "seconds": source.seconds,
              "speaker": source.speaker, "text": source.text]
         }
-        // Original speech precedes the fallible candidate in a source-first review.
-        // Preserve deterministic ordering inside both blocks and the exact JSON values.
-        guard let sourceFields = fields.removeValue(forKey: "sources") else { throw PichiMeetingSummaryError.invalidOutput }
-        let sourceData = try JSONSerialization.data(withJSONObject: sourceFields, options: [.sortedKeys])
-        let contextData = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
-        var data = Data("{\"sources\":".utf8)
-        data.append(sourceData)
-        if contextData.count > 2 {
-            data.append(Data(",".utf8))
-            data.append(contextData.dropFirst().dropLast())
-        }
-        data.append(Data("}".utf8))
+        // Keep complete source catalogs and fallible candidates in one canonical
+        // payload. Source authority belongs to the review contract, not key order.
+        let data = try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
         guard data.count <= 64_000 else { throw PichiMeetingSummaryError.tooManyChunks }
         return String(decoding: data, as: UTF8.self)
     }
