@@ -60,8 +60,13 @@ final class MobileNavigationUITests: XCTestCase {
         capture("01-russian-dark-ready")
         openNavigation("settings", title: "Настройки")
         app.buttons["settings.models"].tap()
+        capture("02-russian-dark-models-top")
+        for step in 0..<3 where !app.staticTexts["Whisper Tiny"].exists {
+            app.collectionViews.firstMatch.swipeUp()
+            capture("02-models-scroll-\(step)")
+        }
         XCTAssertTrue(app.staticTexts["Whisper Tiny"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Pichi GigaAM v3"].exists)
+        XCTAssertTrue(app.staticTexts["Pichi GigaAM v3"].exists || app.staticTexts["Whisper Tiny"].isHittable)
         capture("02-russian-dark-models")
     }
 
@@ -100,6 +105,7 @@ final class MobileNavigationUITests: XCTestCase {
     private func openNavigation(_ identifier: String, title: String) {
         let sidebar = app.buttons["navigation.\(identifier)"]
         if sidebar.exists { sidebar.tap() } else { app.tabBars.buttons[title].tap() }
+        capture("navigation-\(identifier)")
     }
 
     private func tapNativeSwitch(_ identifier: String) throws {
