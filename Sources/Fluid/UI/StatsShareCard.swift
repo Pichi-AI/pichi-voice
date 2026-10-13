@@ -179,7 +179,7 @@ struct StatsShareCard: View {
                         .foregroundStyle(flame.color)
                 }
             }
-            Text(PichiLocalization.text(stat.label))
+            Text(stat == .streak ? PichiLocalization.formattedStreakUnit(days: self.content.currentStreak) : PichiLocalization.text(stat.label))
                 .font(.fluidSystem(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.55))
         }

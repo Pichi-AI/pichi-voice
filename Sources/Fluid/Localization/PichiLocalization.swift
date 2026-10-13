@@ -116,8 +116,13 @@ nonisolated enum PichiLocalization {
         self.format(source, language: self.language, bundle: .main, arguments: arguments)
     }
 
-    static func format(_ source: String, language: PichiInterfaceLanguage, bundle: Bundle, arguments: [CVarArg]) -> String {
-        let resource = self.resolvedText(source, language: language, bundle: bundle)
+    static func format(_ source: String, locale: Locale, bundle: Bundle = .main, arguments: [CVarArg]) -> String {
+        self.format(source, language: PichiInterfaceLanguage(rawValue: locale.identifier) ?? self.language,
+                    bundle: bundle, arguments: arguments)
+    }
+
+    static func format(_ source: String, language: PichiInterfaceLanguage, bundle: Bundle, arguments: [CVarArg], defaultValue: String? = nil) -> String {
+        let resource = self.resolvedText(source, language: language, bundle: bundle, defaultValue: defaultValue)
         return String(format: resource.value, locale: resource.locale, arguments: arguments)
     }
 
@@ -137,6 +142,13 @@ nonisolated enum PichiLocalization {
             return self.format("%lldh", language: language, bundle: bundle, arguments: [hours])
         }
         return self.format("%lldh %lldm", language: language, bundle: bundle, arguments: [hours, remainder])
+    }
+
+    /// Stats renders its prominent number separately. The catalog's named
+    /// quantity substitution selects grammar without repeating that number.
+    static func formattedStreakUnit(days: Int, language: PichiInterfaceLanguage = PichiLocalization.language,
+                                    bundle: Bundle = .main) -> String {
+        self.format("stats.streak.unit", language: language, bundle: bundle, arguments: [days], defaultValue: "day streak")
     }
 
     static func configureApplicationLanguage() {

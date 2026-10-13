@@ -159,6 +159,15 @@ final class PichiLocalizationTests: XCTestCase {
         XCTAssertEqual(PichiLocalization.format("%lld percent", language: .russian, bundle: .main, arguments: [21]), "21 процент")
     }
 
+    func testCompiledStatsStreakUnitUsesNativeQuantityWithoutRepeatingTheNumber() {
+        let russian = [0: "дней подряд", 1: "день подряд", 2: "дня подряд", 5: "дней подряд",
+                       11: "дней подряд", 21: "день подряд", 22: "дня подряд"]
+        for (count, expected) in russian {
+            XCTAssertEqual(PichiLocalization.formattedStreakUnit(days: count, language: .russian, bundle: .main), expected)
+            XCTAssertEqual(PichiLocalization.formattedStreakUnit(days: count, language: .english, bundle: .main), count == 1 ? "day streak" : "days in a row")
+        }
+    }
+
     func testCompiledSettingsCopyLocalizesDescriptionsAndSelectedOptionsWithoutChangingStoredIDs() {
         let activationLabels: [HotkeyActivationMode: String] = [
             .toggle: "Переключение", .hold: "Удержание", .automatic: "Автоматически (оба режима)",

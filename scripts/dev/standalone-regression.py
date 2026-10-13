@@ -213,7 +213,7 @@ SHELL_PROBES = (
     "local_text_model_catalog", "meeting_summary_evidence", "onboarding",
     "page_presentation", "paste_key_cache", "private_ai_idle_unloader",
     "release_highlights", "settings_owned_copy", "speech_model_provider_presentation", "ui_contrast",
-    "voice_edit_cancellation",
+    "stats_snapshot", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
     "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_backup_refresh",

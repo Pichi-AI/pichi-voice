@@ -3,9 +3,10 @@ import SwiftUI
 /// Owns its pointer state. Hover never invalidates the parent or any Swift Charts view.
 struct StatsHeatmapView: View {
     let period: StatsActivityPeriod
+    let weekdayLabels: [String]
     private let labels: [Date: DayLabels]
 
-    private struct DayLabels {
+    struct DayLabels {
         let shortDate: String
         let accessible: String
         let words: String
@@ -13,14 +14,25 @@ struct StatsHeatmapView: View {
 
     init(period: StatsActivityPeriod) {
         self.period = period
+        self.weekdayLabels = period.weekdays.map(\.label)
         // Format once when the data/range changes, never while moving between squares.
         self.labels = Dictionary(uniqueKeysWithValues: period.days.map { day in
-            (day.date, DayLabels(
-                shortDate: day.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()),
-                accessible: "\(day.date.formatted(date: .complete, time: .omitted)), \(day.words) words",
-                words: "\(day.words.formatted()) words"
-            ))
+            (day.date, Self.dayLabels(for: day, calendar: period.calendar))
         })
+    }
+
+    /// The cached tooltips and accessibility labels use the same calendar,
+    /// locale and time zone that placed their cells in the period's grid.
+    static func dayLabels(for day: StatsActivityPeriod.Day, calendar: Calendar, bundle: Bundle = .main) -> DayLabels {
+        let locale = calendar.locale ?? Locale.current
+        let shortDate = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone)
+            .weekday(.abbreviated).month(.abbreviated).day()
+        let fullDate = Date.FormatStyle(date: .complete, time: .omitted, locale: locale,
+                                       calendar: calendar, timeZone: calendar.timeZone)
+        return DayLabels(shortDate: day.date.formatted(shortDate),
+            accessible: PichiLocalization.format("%@, %lld words", locale: locale, bundle: bundle,
+                                                arguments: [day.date.formatted(fullDate), day.words]),
+            words: PichiLocalization.format("%lld words", locale: locale, bundle: bundle, arguments: [day.words]))
     }
 
     @Environment(\.theme) private var theme
@@ -32,13 +44,12 @@ struct StatsHeatmapView: View {
     }
 
     private func heatmap(_ period: StatsActivityPeriod) -> some View {
-        let calendar = Calendar.current
         let columns = period.weeks
         return HStack(alignment: .top, spacing: 6) {
             VStack(spacing: 4) {
                 Color.clear.frame(height: 16)
                 ForEach(0..<7) { row in
-                    Text(row.isMultiple(of: 2) ? calendar.shortWeekdaySymbols[(calendar.firstWeekday - 1 + row) % 7] : "")
+                    Text(row.isMultiple(of: 2) ? self.weekdayLabels[row] : "")
                         .font(self.theme.typography.captionSmall)
                         .foregroundStyle(.secondary)
                         .frame(width: 30, height: 16)

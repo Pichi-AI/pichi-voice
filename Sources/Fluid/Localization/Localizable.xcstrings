@@ -48160,6 +48160,80 @@
           }
         }
       }
+    },
+    "stats.streak.unit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@streakDays@"
+          },
+          "substitutions": {
+            "streakDays": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "day streak"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "days in a row"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@streakDays@"
+          },
+          "substitutions": {
+            "streakDays": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "день подряд"
+                    }
+                  },
+                  "few": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "дня подряд"
+                    }
+                  },
+                  "many": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "дней подряд"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "дней подряд"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "comment": "The quantity selects a native plural unit while Stats renders the prominent number separately. Keep argNum and lld quantity metadata across languages; unit text must not repeat the number."
     }
   },
   "version": "1.0"
