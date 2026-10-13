@@ -200,11 +200,11 @@ struct MobileMeetingRoot: View {
 
     private var start: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: compactHeight ? theme.metrics.spacing.md : theme.metrics.spacing.xl) {
+            VStack(alignment: .leading, spacing: compactHeight ? theme.metrics.spacing.sm : theme.metrics.spacing.xl) {
                 Text(PichiLocalization.text("Be in the conversation.")).font(compactHeight ? theme.typography.title : theme.typography.displayTitle)
                 Text(PichiLocalization.text("Record your meeting. Come back to every word."))
                     .font(compactHeight ? theme.typography.body : theme.typography.statement).foregroundStyle(theme.palette.secondaryText)
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: compactHeight ? 8 : 12) {
                     Text(PichiLocalization.text("No call open.")).font(theme.typography.sectionTitle)
                     Text(PichiLocalization.text("Your mic will record the room."))
                         .foregroundStyle(theme.palette.secondaryText)
@@ -221,11 +221,11 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("meeting.settings")
                     }
                     if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
-                }.padding(compactHeight ? 16 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
+                }.padding(compactHeight ? 12 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
                 Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                     .accessibilityIdentifier("meeting.storageNote")
-            }.padding(compactHeight ? 16 : 24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
+            }.padding(compactHeight ? 12 : 24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
         }.safeAreaPadding(.bottom, compactHeight ? 48 : 0)
             .accessibilityIdentifier("meeting.ready")
     }
