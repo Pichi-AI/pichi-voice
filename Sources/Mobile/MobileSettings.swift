@@ -214,6 +214,7 @@ private struct MobilePrivacySettings: View {
     @ObservedObject private var settings = SettingsStore.shared
     @State private var isPreparing = false
     @State private var progress: Double?
+    @State private var preparationTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -237,17 +238,20 @@ private struct MobilePrivacySettings: View {
                     get: { settings.meetingPIIRedactionEnabled }, set: { enable in
                         if !enable { settings.meetingPIIRedactionEnabled = false; return }
                         isPreparing = true; progress = nil
-                        Task { @MainActor in
-                            defer { isPreparing = false; progress = nil }
+                        preparationTask = Task { @MainActor in
+                            defer { isPreparing = false; progress = nil; preparationTask = nil }
                             do {
                                 try await privacy.prepare(progress: { value in Task { @MainActor in progress = value } })
+                                try Task.checkCancellation()
                                 settings.meetingPIIRedactionEnabled = true
-                            } catch { reportError(error) }
+                            } catch is CancellationError { }
+                            catch { reportError(error) }
                         }
                     }))
                     .disabled(isPreparing).accessibilityIdentifier("privacy.pii")
                 if isPreparing {
                     if let progress { ProgressView(value: progress) } else { ProgressView() }
+                    Button(PichiLocalization.text("Cancel")) { preparationTask?.cancel() }
                 }
                 Text(PichiLocalization.text("Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."))
                     .font(.footnote).foregroundStyle(.secondary)

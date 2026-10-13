@@ -1,687 +1,6 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель исчерпала лимит вывода до завершения структурированного резюме. Попробуйте отключить режим размышления или выбрать расширенный лимит обработки. Транскрипт и предыдущее резюме сохранены."
-          }
-        }
-      }
-    },
-    "Update Ollama to version 0.16 or later for bounded local processing.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Update Ollama to version 0.16 or later for bounded local processing."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Обновите Ollama до версии 0.16 или новее для локальной обработки с ограничением ресурсов."
-          }
-        }
-      }
-    },
-    "Invalid local model stop sequences.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid local model stop sequences."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректные последовательности остановки локальной модели."
-          }
-        }
-      }
-    },
-    "Local model metadata request failed.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local model metadata request failed."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось получить метаданные локальной модели."
-          }
-        }
-      }
-    },
-    "Invalid local model timeout.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid local model timeout."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректное ограничение времени для локальной модели."
-          }
-        }
-      }
-    },
-    "Invalid local model options.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid local model options."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректные параметры локальной модели."
-          }
-        }
-      }
-    },
-    "Local model context must be between 512 and 16384 tokens.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local model context must be between 512 and 16384 tokens."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Контекст локальной модели должен составлять от 512 до 16384 токенов."
-          }
-        }
-      }
-    },
-    "Set local context in options.num_ctx.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Set local context in options.num_ctx."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Укажите контекст локальной модели в options.num_ctx."
-          }
-        }
-      }
-    },
-    "Invalid local model token budget.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid local model token budget."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректное ограничение числа токенов для локальной модели."
-          }
-        }
-      }
-    },
-    "Invalid local model thinking setting.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid local model thinking setting."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректная настройка рассуждений локальной модели."
-          }
-        }
-      }
-    },
-    "Invalid local model tool message.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid local model tool message."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректное сообщение инструмента для локальной модели."
-          }
-        }
-      }
-    },
-    "Invalid local model tool arguments.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid local model tool arguments."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректные аргументы инструмента для локальной модели."
-          }
-        }
-      }
-    },
-    "The local model reached its output token limit.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The local model reached its output token limit."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Локальная модель достигла ограничения числа токенов ответа."
-          }
-        }
-      }
-    },
-    "Completed later": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed later"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выполнена позже"
-          }
-        }
-      }
-    },
-    "Updated later": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Updated later"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Изменена позже"
-          }
-        }
-      }
-    },
-    "[Completed later] ": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "[Completed later] "
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "[Выполнена позже] "
-          }
-        }
-      }
-    },
-    "task.status.completed": {
-      "extractionState": "manual",
-      "comment": "Completed action item status, separate from generic processing completion.",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Completed"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выполнена"
-          }
-        }
-      }
-    },
-    "Requested": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Requested"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запрошена"
-          }
-        }
-      }
-    },
-    "Proposed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Proposed"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Предложена"
-          }
-        }
-      }
-    },
-    "Agreed": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agreed"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Согласована"
-          }
-        }
-      }
-    },
-    "Cancelled": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cancelled"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Отменена"
-          }
-        }
-      }
-    },
-    "Urgent": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Urgent"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Срочная"
-          }
-        }
-      }
-    },
-    "Not urgent": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not urgent"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Несрочная"
-          }
-        }
-      }
-    },
-    "Urgency not specified": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Urgency not specified"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Срочность не указана"
-          }
-        }
-      }
-    },
-    "Task status not specified": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Task status not specified"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Статус задачи не указан"
-          }
-        }
-      }
-    },
-    "Status: %@": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Status: %@"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Статус: %@"
-          }
-        }
-      }
-    },
-    "Urgency: %@": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Urgency: %@"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Срочность: %@"
-          }
-        }
-      }
-    },
-    "Transcript language: %@": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Transcript language: %@"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Язык расшифровки: %@"
-          }
-        }
-      }
-    },
-    "Open speech recognition settings": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open speech recognition settings"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Открыть настройки распознавания речи"
-          }
-        }
-      }
-    },
-    "Auto Detect": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Auto Detect"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Автоопределение"
-          }
-        }
-      }
-    },
-    "Processing continues while you use other screens in this app. Dictation is temporarily unavailable. Return to this meeting to cancel. Keep the app open.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Processing continues while you use other screens in this app. Dictation is temporarily unavailable. Return to this meeting to cancel. Keep the app open."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Обработка продолжается при переходе на другие экраны приложения. Диктовка временно недоступна. Чтобы отменить обработку, вернитесь к этой встрече. Не закрывайте приложение."
-          }
-        }
-      }
-    },
-    "Local model thinking": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local model thinking"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Рассуждение локальной модели"
-          }
-        }
-      }
-    },
-    "Model default": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model default"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "По умолчанию для модели"
-          }
-        }
-      }
-    },
-    "Configured model reasoning": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Configured model reasoning"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настроенное рассуждение модели"
-          }
-        }
-      }
-    },
-    "Enable only if the installed model supports thinking. This updates the model's shared reasoning setting; unsupported models may reject the request.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enable only if the installed model supports thinking. This updates the model's shared reasoning setting; unsupported models may reject the request."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Включайте только для модели с поддержкой рассуждений. Это изменяет общую настройку рассуждения для выбранной модели. Модели без поддержки могут отклонить запрос."
-          }
-        }
-      }
-    },
-    "Extended: up to 60 minutes": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Extended: up to 60 minutes"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расширенный: до 60 минут"
-          }
-        }
-      }
-    },
-    "Standard: up to 10 minutes": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Standard: up to 10 minutes"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Стандартный: до 10 минут"
-          }
-        }
-      }
-    },
-    "Summary time budget": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Summary time budget"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Время на обработку саммари"
-          }
-        }
-      }
-    },
-    "The summary time limit was reached. The transcript and previous summary are safe.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The summary time limit was reached. The transcript and previous summary are safe."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Достигнут лимит времени на саммари. Расшифровка и предыдущее саммари сохранены."
-          }
-        }
-      }
-    },
-    "Extended processing allows more generation tokens and time. Reasoning follows this model's settings in AI Providers. Local Ollama context is limited to 16K; more time does not guarantee better quality. Speech recognition is paused until processing finishes or is cancelled.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Extended processing allows more generation tokens and time. Reasoning follows this model's settings in AI Providers. Local Ollama context is limited to 16K; more time does not guarantee better quality. Speech recognition is paused until processing finishes or is cancelled."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Расширенный режим даёт модели больше токенов и времени. Рассуждение использует настройки модели в разделе «Провайдеры ИИ». Контекст локальной Ollama ограничен 16K. Дополнительное время не гарантирует лучшее качество. Распознавание речи приостановлено до завершения или отмены обработки."
-          }
-        }
-      }
-    },
     "\n\nClick \"Always Allow\" when the Keychain prompt appears, or open Keychain Access > login > Passwords, locate the FluidVoice entry, and grant access.": {
       "extractionState": "manual",
       "localizations": {
@@ -832,6 +151,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ %@ результатов"
+          }
+        }
+      }
+    },
+    "%@ (%@%%)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@%%)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (%@%%)"
           }
         }
       }
@@ -990,6 +326,40 @@
         }
       }
     },
+    "%@ download": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ download"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка: %@"
+          }
+        }
+      }
+    },
+    "%@ downloaded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ downloaded"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загружено: %@"
+          }
+        }
+      }
+    },
     "%@ installed · automatic speaker separation unavailable": {
       "comment": "Generic registered-model status. Preserve model names, identifiers and paths passed as format arguments.",
       "extractionState": "manual",
@@ -1140,6 +510,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@: введите от 1 до 120 печатных символов."
+          }
+        }
+      }
+    },
+    "%@ of %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ of %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ из %@"
           }
         }
       }
@@ -3079,6 +2466,23 @@
         }
       }
     },
+    "4 GB+ RAM recommended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "4 GB+ RAM recommended"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуется от 4 GB RAM"
+          }
+        }
+      }
+    },
     "500K": {
       "extractionState": "manual",
       "localizations": {
@@ -3860,6 +3264,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "API-ключ · Необязательно"
+          }
+        }
+      }
+    },
+    "API scope": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "API scope"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Область доступа API"
           }
         }
       }
@@ -5072,6 +4493,23 @@
         }
       }
     },
+    "Agreed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agreed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Согласована"
+          }
+        }
+      }
+    },
     "Airy": {
       "extractionState": "manual",
       "localizations": {
@@ -5584,6 +5022,23 @@
         }
       }
     },
+    "Another PCM window still owns the meeting inference runtime.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another PCM window still owns the meeting inference runtime."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
+          }
+        }
+      }
+    },
     "Answered later": {
       "extractionState": "manual",
       "localizations": {
@@ -5772,6 +5227,23 @@
         }
       }
     },
+    "Apple Silicon / Intel CPU": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Silicon / Intel CPU"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU Apple Silicon / Intel"
+          }
+        }
+      }
+    },
     "Apple Speech - macOS 26+": {
       "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
       "extractionState": "manual",
@@ -5803,6 +5275,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Приложение"
+          }
+        }
+      }
+    },
+    "Application default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Application default"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию для приложения"
+          }
+        }
+      }
+    },
+    "Applies to past meetings too. Transcripts are always kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to past meetings too. Transcripts are always kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применяется и к прошлым встречам. Расшифровки сохраняются всегда."
           }
         }
       }
@@ -6334,6 +5840,40 @@
         }
       }
     },
+    "Audio recordings and transcripts are stored on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recordings and transcripts are stored on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозаписи и расшифровки хранятся на этом устройстве."
+          }
+        }
+      }
+    },
+    "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В аудиозаписи остаются исходные голоса и чувствительные данные. Удаление данных из текста не изменяет аудио."
+          }
+        }
+      }
+    },
     "Audio retention": {
       "extractionState": "manual",
       "localizations": {
@@ -6453,6 +5993,23 @@
         }
       }
     },
+    "Audio storage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio storage"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранение аудио"
+          }
+        }
+      }
+    },
     "Audio unavailable": {
       "extractionState": "manual",
       "localizations": {
@@ -6487,6 +6044,23 @@
         }
       }
     },
+    "Authorization key": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authorization key"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключ авторизации"
+          }
+        }
+      }
+    },
     "Auto": {
       "extractionState": "manual",
       "localizations": {
@@ -6500,6 +6074,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Авто"
+          }
+        }
+      }
+    },
+    "Auto Detect": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Auto Detect"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоопределение"
           }
         }
       }
@@ -8169,6 +7760,23 @@
         }
       }
     },
+    "Cancelled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelled"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отменена"
+          }
+        }
+      }
+    },
     "Cancelled or replaced later": {
       "extractionState": "manual",
       "localizations": {
@@ -8182,6 +7790,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отменено или заменено позднее"
+          }
+        }
+      }
+    },
+    "Cancelling model download...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelling model download..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отмена скачивания модели..."
+          }
+        }
+      }
+    },
+    "Cancelling model preparation...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancelling model preparation..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отмена подготовки модели..."
           }
         }
       }
@@ -8611,6 +8253,23 @@
         }
       }
     },
+    "Changes apply to new meetings. Audio retention also applies to existing recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes apply to new meetings. Audio retention also applies to existing recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменения применяются к новым встречам. Срок хранения аудио применяется и к существующим записям."
+          }
+        }
+      }
+    },
     "Changes sample selection only": {
       "extractionState": "manual",
       "localizations": {
@@ -8709,6 +8368,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверять активную вкладку на наличие поддерживаемых сайтов встреч. Адреса вкладок не сохраняются и не передаются."
+          }
+        }
+      }
+    },
+    "Check the provider's connection parameters and credentials.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the provider's connection parameters and credentials."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте параметры подключения и данные авторизации провайдера."
           }
         }
       }
@@ -9736,6 +9412,23 @@
         }
       }
     },
+    "Clean up dictation locally on your Mac.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean up dictation locally on your Mac."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Улучшение текста диктовки локально на вашем Mac."
+          }
+        }
+      }
+    },
     "Cleanup Styles": {
       "extractionState": "manual",
       "localizations": {
@@ -10004,6 +9697,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Очистить свой промпт, провайдера, модель и сочетание клавиш"
+          }
+        }
+      }
+    },
+    "Click Allow when macOS asks for microphone access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click Allow when macOS asks for microphone access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Когда macOS запросит доступ к микрофону, нажмите «Разрешить»."
           }
         }
       }
@@ -10417,6 +10127,40 @@
         }
       }
     },
+    "Cloud provider request failed (HTTP %lld). Check your credentials and connection settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud provider request failed (HTTP %lld). Check your credentials and connection settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка запроса к облачному провайдеру (HTTP %lld). Проверьте данные авторизации и настройки подключения."
+          }
+        }
+      }
+    },
+    "Cloud provider request failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cloud provider request failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка запроса к облачному провайдеру."
+          }
+        }
+      }
+    },
     "Cohere - High Accuracy": {
       "comment": "Trusted marketing/language-support copy for the model card. Technical display names, model identifiers and third-party attribution remain unchanged.",
       "extractionState": "manual",
@@ -10673,6 +10417,23 @@
         }
       }
     },
+    "Compact on-device cleanup": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compact on-device cleanup"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Компактная локальная модель"
+          }
+        }
+      }
+    },
     "Compare models": {
       "extractionState": "manual",
       "localizations": {
@@ -10737,6 +10498,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Завершено"
+          }
+        }
+      }
+    },
+    "Completed later": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed later"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выполнена позже"
           }
         }
       }
@@ -10856,6 +10634,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Настроенный провайдер ИИ"
+          }
+        }
+      }
+    },
+    "Configured model reasoning": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Configured model reasoning"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроенное рассуждение модели"
           }
         }
       }
@@ -11690,6 +11485,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось прочитать приложение. Выберите корректный файл .app."
+          }
+        }
+      }
+    },
+    "Could not release temporary summary resources: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not release temporary summary resources: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось освободить временные ресурсы саммари: %@"
           }
         }
       }
@@ -12801,6 +12613,23 @@
         }
       }
     },
+    "Delete Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить встречу"
+          }
+        }
+      }
+    },
     "Delete Meeting?": {
       "extractionState": "manual",
       "localizations": {
@@ -13001,6 +12830,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удалить сохранённые аудиозаписи?"
+          }
+        }
+      }
+    },
+    "Delete this meeting and its recordings?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this meeting and its recordings?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить эту встречу и её записи?"
           }
         }
       }
@@ -13997,6 +13843,23 @@
         }
       }
     },
+    "Download S1-mini before using AI enhancement.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download S1-mini before using AI enhancement."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачайте S1-mini, чтобы использовать ИИ-улучшение."
+          }
+        }
+      }
+    },
     "Download again": {
       "extractionState": "manual",
       "localizations": {
@@ -14065,6 +13928,57 @@
         }
       }
     },
+    "Downloading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка"
+          }
+        }
+      }
+    },
+    "Downloading %@%%": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading %@%%"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка %@%%"
+          }
+        }
+      }
+    },
+    "Downloading %@%%. This can take a few minutes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading %@%%. This can take a few minutes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка %@%%. Это может занять несколько минут."
+          }
+        }
+      }
+    },
     "Downloading model.": {
       "extractionState": "manual",
       "localizations": {
@@ -14078,6 +13992,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Скачивание модели."
+          }
+        }
+      }
+    },
+    "Downloading model...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading model..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачивание модели..."
           }
         }
       }
@@ -14130,6 +14061,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Загрузка · %lld%%"
+          }
+        }
+      }
+    },
+    "Downloading. This can take a few minutes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloading. This can take a few minutes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка. Это может занять несколько минут."
           }
         }
       }
@@ -14916,6 +14864,23 @@
         }
       }
     },
+    "Enable %@ in System Settings > Privacy & Security > Microphone. You may need to allow access again after an update.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable %@ in System Settings > Privacy & Security > Microphone. You may need to allow access again after an update."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешите доступ для %@ в разделе «Системные настройки > Конфиденциальность и безопасность > Микрофон». После обновления разрешение может потребоваться снова."
+          }
+        }
+      }
+    },
     "Enable Access": {
       "extractionState": "manual",
       "localizations": {
@@ -14963,6 +14928,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Разрешите универсальный доступ для вставки текста"
+          }
+        }
+      }
+    },
+    "Enable only if the installed model supports thinking. This updates the model's shared reasoning setting; unsupported models may reject the request.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable only if the installed model supports thinking. This updates the model's shared reasoning setting; unsupported models may reject the request."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включайте только для модели с поддержкой рассуждений. Это изменяет общую настройку рассуждения для выбранной модели. Модели без поддержки могут отклонить запрос."
           }
         }
       }
@@ -15287,6 +15269,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Введите API-ключ, затем загрузите список моделей кнопкой обновления."
+          }
+        }
+      }
+    },
+    "Error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка"
           }
         }
       }
@@ -15718,6 +15717,40 @@
         }
       }
     },
+    "Export as JSON": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export as JSON"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортировать как JSON"
+          }
+        }
+      }
+    },
+    "Export as Text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export as Text"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортировать как текст"
+          }
+        }
+      }
+    },
     "Export brand": {
       "extractionState": "manual",
       "localizations": {
@@ -15803,6 +15836,23 @@
         }
       }
     },
+    "Exported audio includes the original voices and sensitive information. It is outside app retention controls.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exported audio includes the original voices and sensitive information. It is outside app retention controls."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортированное аудио содержит исходные голоса и чувствительные данные. Приложение не управляет его сроком хранения."
+          }
+        }
+      }
+    },
     "Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps.": {
       "extractionState": "manual",
       "localizations": {
@@ -15834,6 +15884,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Экспорт…"
+          }
+        }
+      }
+    },
+    "Extended processing allows more generation tokens and time. Reasoning follows this model's settings in AI Providers. Local Ollama context is limited to 16K; more time does not guarantee better quality. Speech recognition is paused until processing finishes or is cancelled.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extended processing allows more generation tokens and time. Reasoning follows this model's settings in AI Providers. Local Ollama context is limited to 16K; more time does not guarantee better quality. Speech recognition is paused until processing finishes or is cancelled."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расширенный режим даёт модели больше токенов и времени. Рассуждение использует настройки модели в разделе «Провайдеры ИИ». Контекст локальной Ollama ограничен 16K. Дополнительное время не гарантирует лучшее качество. Распознавание речи приостановлено до завершения или отмены обработки."
+          }
+        }
+      }
+    },
+    "Extended: up to 60 minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extended: up to 60 minutes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расширенный: до 60 минут"
           }
         }
       }
@@ -17461,6 +17545,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "Folder ID": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder ID"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Идентификатор каталога"
+          }
+        }
+      }
+    },
     "Follow these steps to enable Accessibility:": {
       "extractionState": "manual",
       "localizations": {
@@ -17764,6 +17865,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подготовить итоги"
+          }
+        }
+      }
+    },
+    "Get API Key": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get API Key"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Получить API-ключ"
           }
         }
       }
@@ -18709,6 +18827,23 @@
         }
       }
     },
+    "How much raw dictation the selected model can clean at once. Higher values help long transcripts but use more RAM and can slow first response.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How much raw dictation the selected model can clean at once. Higher values help long transcripts but use more RAM and can slow first response."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Какой объём диктовки выбранная модель может обработать за один раз. Большие значения помогают при длинных записях, но требуют больше памяти и могут замедлить первый ответ."
+          }
+        }
+      }
+    },
     "How should I edit this?": {
       "extractionState": "manual",
       "localizations": {
@@ -19357,6 +19492,88 @@
         }
       }
     },
+    "In-memory transcription could not keep up with microphone capture.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up with microphone capture."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает обрабатывать аудио микрофона."
+          }
+        }
+      }
+    },
+    "In-memory transcription could not keep up. Recording stopped and completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up. Recording stopped and completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает за разговором. Запись остановлена, готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "In-memory transcription is not available for this attempt.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription is not available for this attempt."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой попытки недоступно распознавание только из памяти."
+          }
+        }
+      }
+    },
+    "In-memory transcription requires finite mono 16 kHz PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription requires finite mono 16 kHz PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для распознавания в памяти нужен корректный одноканальный сигнал 16 кГц."
+          }
+        }
+      }
+    },
+    "In-memory transcription stopped. Completed text was preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription stopped. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание из памяти остановлено. Готовый текст сохранён."
+          }
+        }
+      }
+    },
     "In-person meeting.": {
       "extractionState": "manual",
       "localizations": {
@@ -19596,6 +19813,23 @@
         }
       }
     },
+    "Install models separately, then refresh the model list.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Install models separately, then refresh the model list."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установите модели отдельно, затем обновите список."
+          }
+        }
+      }
+    },
     "Install the selected model to enable verification": {
       "extractionState": "manual",
       "localizations": {
@@ -19609,6 +19843,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Установите выбранную модель, чтобы включить проверку"
+          }
+        }
+      }
+    },
+    "Installation does not confirm output quality": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Installation does not confirm output quality"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установка не подтверждает качество результата"
           }
         }
       }
@@ -19763,6 +20014,125 @@
           "stringUnit": {
             "state": "translated",
             "value": "Некорректный лимит"
+          }
+        }
+      }
+    },
+    "Invalid local model options.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model options."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректные параметры локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model stop sequences.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model stop sequences."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректные последовательности остановки локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model thinking setting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model thinking setting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректная настройка рассуждений локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model timeout.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model timeout."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное ограничение времени для локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model token budget.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model token budget."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное ограничение числа токенов для локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model tool arguments.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model tool arguments."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректные аргументы инструмента для локальной модели."
+          }
+        }
+      }
+    },
+    "Invalid local model tool message.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid local model tool message."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректное сообщение инструмента для локальной модели."
           }
         }
       }
@@ -21116,6 +21486,23 @@
         }
       }
     },
+    "Loading voice engine...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading voice engine..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка речевой модели в память..."
+          }
+        }
+      }
+    },
     "Loading...": {
       "extractionState": "manual",
       "localizations": {
@@ -21184,6 +21571,23 @@
         }
       }
     },
+    "Local Russian recognition with GigaAM. Download the compact model or import a verified local export.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальное распознавание русской речи с GigaAM. Скачайте компактную модель или импортируйте проверенный локальный экспорт."
+          }
+        }
+      }
+    },
     "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection.": {
       "extractionState": "manual",
       "localizations": {
@@ -21197,6 +21601,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Локальное распознавание русского языка нашей оптимизированной моделью GigaAM с определением конца фразы."
+          }
+        }
+      }
+    },
+    "Local Russian speech recognition on Apple Silicon and Intel CPUs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Russian speech recognition on Apple Silicon and Intel CPUs."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальное распознавание русской речи на процессорах Apple Silicon и Intel."
           }
         }
       }
@@ -21252,6 +21673,57 @@
         }
       }
     },
+    "Local model context must be between 512 and 16384 tokens.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model context must be between 512 and 16384 tokens."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Контекст локальной модели должен составлять от 512 до 16384 токенов."
+          }
+        }
+      }
+    },
+    "Local model library": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model library"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Библиотека локальных моделей"
+          }
+        }
+      }
+    },
+    "Local model metadata request failed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model metadata request failed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось получить метаданные локальной модели."
+          }
+        }
+      }
+    },
     "Local model on this Mac": {
       "extractionState": "manual",
       "localizations": {
@@ -21265,6 +21737,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Локальная модель на этом Mac"
+          }
+        }
+      }
+    },
+    "Local model thinking": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local model thinking"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рассуждение локальной модели"
           }
         }
       }
@@ -21537,6 +22026,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подключения MCP появятся в одном из следующих обновлений. Заметки встреч не передаются в Claude или ChatGPT."
+          }
+        }
+      }
+    },
+    "MLX": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MLX"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MLX"
           }
         }
       }
@@ -22586,6 +23092,22 @@
         }
       }
     },
+    "Microphone PCM conversion failed. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone PCM conversion failed. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудио микрофона. %@"
+          }
+        }
+      }
+    },
     "Microphone Permission": {
       "extractionState": "manual",
       "localizations": {
@@ -22773,6 +23295,22 @@
         }
       }
     },
+    "Microphone sample-buffer construction failed (%d).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone sample-buffer construction failed (%d)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать аудиобуфер микрофона (%d)."
+          }
+        }
+      }
+    },
     "Microphone selected": {
       "extractionState": "manual",
       "localizations": {
@@ -22837,6 +23375,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Минимальное потребление ресурсов. Подходит для старых Mac и экономии заряда."
+          }
+        }
+      }
+    },
+    "Minimal resource usage. Best for older devices or battery life.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimal resource usage. Best for older devices or battery life."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Минимальное потребление ресурсов. Подходит для старых устройств и экономии заряда."
           }
         }
       }
@@ -22995,6 +23550,40 @@
         }
       }
     },
+    "Model cached, needs loading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model cached, needs loading"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель скачана, требуется загрузка в память"
+          }
+        }
+      }
+    },
+    "Model default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model default"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию для модели"
+          }
+        }
+      }
+    },
     "Model details": {
       "extractionState": "manual",
       "localizations": {
@@ -23080,6 +23669,23 @@
         }
       }
     },
+    "Model not downloaded": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model not downloaded"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель не скачана"
+          }
+        }
+      }
+    },
     "Model not ready": {
       "extractionState": "manual",
       "localizations": {
@@ -23093,6 +23699,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Модель не готова"
+          }
+        }
+      }
+    },
+    "Model ready": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель готова"
           }
         }
       }
@@ -25431,6 +26054,23 @@
         }
       }
     },
+    "Not listed by this server": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not listed by this server"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет в списке моделей этого сервера"
+          }
+        }
+      }
+    },
     "Not now": {
       "extractionState": "manual",
       "localizations": {
@@ -25478,6 +26118,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не сохранено"
+          }
+        }
+      }
+    },
+    "Not urgent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not urgent"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Несрочная"
           }
         }
       }
@@ -26061,6 +26718,22 @@
         }
       }
     },
+    "Only in-room microphone capture is available on this platform.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only in-room microphone capture is available on this platform."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом устройстве можно записывать только разговор в одной комнате через микрофон."
+          }
+        }
+      }
+    },
     "Open Accessibility Settings": {
       "extractionState": "manual",
       "localizations": {
@@ -26251,6 +26924,23 @@
         }
       }
     },
+    "Open Settings to check microphone access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Settings to check microphone access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откройте настройки и проверьте доступ к микрофону."
+          }
+        }
+      }
+    },
     "Open Settings, then use the floating guide to add %@.": {
       "extractionState": "manual",
       "localizations": {
@@ -26332,6 +27022,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Открытый вопрос"
+          }
+        }
+      }
+    },
+    "Open speech recognition settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open speech recognition settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть настройки распознавания речи"
           }
         }
       }
@@ -26506,6 +27213,23 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "Optimizing model...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Optimizing model..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оптимизация модели..."
+          }
+        }
+      }
     },
     "Optional and slower than MLX. Replaces MLX after verification.": {
       "extractionState": "manual",
@@ -27138,6 +27862,23 @@
         }
       }
     },
+    "Performance": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Performance"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Производительность"
+          }
+        }
+      }
+    },
     "Permissions need attention": {
       "extractionState": "manual",
       "localizations": {
@@ -27682,6 +28423,23 @@
         }
       }
     },
+    "Prepare the local privacy model before enabling sensitive data redaction.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prepare the local privacy model before enabling sensitive data redaction."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовьте локальную модель приватности перед включением удаления чувствительных данных."
+          }
+        }
+      }
+    },
     "Preparing %@": {
       "extractionState": "manual",
       "localizations": {
@@ -27733,6 +28491,40 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "Preparing download...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing download..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка к скачиванию..."
+          }
+        }
+      }
+    },
+    "Preparing model...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing model..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка модели..."
+          }
+        }
+      }
     },
     "Preparing model…": {
       "extractionState": "manual",
@@ -28142,6 +28934,23 @@
         }
       }
     },
+    "Privacy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приватность"
+          }
+        }
+      }
+    },
     "Private": {
       "extractionState": "manual",
       "localizations": {
@@ -28274,6 +29083,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Модель обработки"
+          }
+        }
+      }
+    },
+    "Processing continues while you use other screens in this app. Dictation is temporarily unavailable. Return to this meeting to cancel. Keep the app open.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Processing continues while you use other screens in this app. Dictation is temporarily unavailable. Return to this meeting to cancel. Keep the app open."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обработка продолжается при переходе на другие экраны приложения. Диктовка временно недоступна. Чтобы отменить обработку, вернитесь к этой встрече. Не закрывайте приложение."
           }
         }
       }
@@ -28533,6 +29359,23 @@
         }
       }
     },
+    "Proposed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proposed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предложена"
+          }
+        }
+      }
+    },
     "Provider": {
       "extractionState": "manual",
       "localizations": {
@@ -28635,6 +29478,23 @@
         }
       }
     },
+    "Publisher and installation instructions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Publisher and installation instructions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автор модели и инструкции по установке"
+          }
+        }
+      }
+    },
     "Punctuation": {
       "extractionState": "manual",
       "localizations": {
@@ -28648,6 +29508,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Пунктуация"
+          }
+        }
+      }
+    },
+    "Punctuation, capitalization and text normalization. Compact INT8 model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punctuation, capitalization and text normalization. Compact INT8 model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пунктуация, заглавные буквы и нормализация текста. Компактная модель INT8."
+          }
+        }
+      }
+    },
+    "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пунктуация, заглавные буквы и нормализация текста. Оптимизация FP16 и обученный модуль определения конца фразы."
           }
         }
       }
@@ -29335,6 +30229,23 @@
         }
       }
     },
+    "Recommended system RAM, not measured model memory usage. The size above is disk space.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommended system RAM, not measured model memory usage. The size above is disk space."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуемый объём оперативной памяти системы. Потребление памяти моделью не измерено. Размер выше относится к месту на диске."
+          }
+        }
+      }
+    },
     "Record": {
       "extractionState": "manual",
       "localizations": {
@@ -29641,6 +30552,23 @@
         }
       }
     },
+    "Recording settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки записи"
+          }
+        }
+      }
+    },
     "Recording setup": {
       "extractionState": "manual",
       "localizations": {
@@ -29722,6 +30650,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Запись…"
+          }
+        }
+      }
+    },
+    "Redact sensitive data": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redact sensitive data"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалять чувствительные данные"
           }
         }
       }
@@ -29943,6 +30888,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подготовить заново"
+          }
+        }
+      }
+    },
+    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Скорость на CPU для этого варианта не измерена. Разработчик сообщает среднюю долю ошибок в словах WER 9,1% для базовой GigaAM v3 CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
+          }
+        }
+      }
+    },
+    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Замер скорости: 8,48 секунды синтетической русской речи обработаны за 0,97 секунды на CPU Apple M4 Max, без учёта загрузки модели. Разработчик сообщает среднюю долю ошибок в словах WER 12,0% для базовой GigaAM v3 E2E CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
+          }
+        }
+      }
+    },
+    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. This compact INT8 export has not been evaluated for WER or benchmarked for CPU speed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. This compact INT8 export has not been evaluated for WER or benchmarked for CPU speed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки продукта, а не измеренная точность распознавания. Для этого компактного экспорта INT8 не проводилась оценка WER или тест скорости на процессоре."
           }
         }
       }
@@ -30677,6 +31673,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сообщить о проблеме…"
+          }
+        }
+      }
+    },
+    "Requested": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requested"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запрошена"
           }
         }
       }
@@ -31534,6 +32547,57 @@
         }
       }
     },
+    "Runs locally using MLX on Apple Silicon.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs locally using MLX on Apple Silicon."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Работает локально через MLX на Apple Silicon."
+          }
+        }
+      }
+    },
+    "Runs locally using Metal on Apple Silicon or the CPU on Intel.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs locally using Metal on Apple Silicon or the CPU on Intel."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Работает локально через Metal на Apple Silicon или процессор на Intel."
+          }
+        }
+      }
+    },
+    "Runs the selected model inside the app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs the selected model inside the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запускает выбранную модель внутри приложения."
+          }
+        }
+      }
+    },
     "Russian": {
       "extractionState": "manual",
       "localizations": {
@@ -31581,6 +32645,108 @@
           "stringUnit": {
             "state": "translated",
             "value": "Для русских субтитров на Intel выберите GigaAM. Аудиозапись сохраняется."
+          }
+        }
+      }
+    },
+    "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Русские имена и структурированные идентификаторы удаляются локально до сохранения текста. Распознавание может пропустить чувствительные данные. Проверьте результат перед отправкой."
+          }
+        }
+      }
+    },
+    "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание русского языка с оптимизацией FP16 и обученным модулем определения конца фразы. Этот посимвольный вариант не добавляет пунктуацию и заглавные буквы."
+          }
+        }
+      }
+    },
+    "S1-mini by Superwhisper": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini by Superwhisper"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini от Superwhisper"
+          }
+        }
+      }
+    },
+    "S1-mini could not verify its native runtime.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini could not verify its native runtime."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить встроенный движок S1-mini."
+          }
+        }
+      }
+    },
+    "S1-mini did not finish cleaning this dictation within its output limit.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini did not finish cleaning this dictation within its output limit."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini не успела завершить улучшение диктовки в пределах лимита вывода."
+          }
+        }
+      }
+    },
+    "S1-mini is available for dictation cleanup only.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini is available for dictation cleanup only."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S1-mini предназначена для улучшения текста диктовки."
           }
         }
       }
@@ -31734,6 +32900,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сохранить слово"
+          }
+        }
+      }
+    },
+    "Save audio recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save audio recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранять аудиозаписи"
           }
         }
       }
@@ -32027,6 +33210,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сохранено на этом Mac"
+          }
+        }
+      }
+    },
+    "Saved summary. The local server is unavailable, so the current model version could not be checked.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved summary. The local server is unavailable, so the current model version could not be checked."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранённое саммари. Локальный сервер недоступен, поэтому текущую версию модели проверить не удалось."
           }
         }
       }
@@ -32989,6 +34189,23 @@
         }
       }
     },
+    "Select installed model: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select installed model: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбрать установленную модель: %@"
+          }
+        }
+      }
+    },
     "Select text and speak how to edit, or generate new content": {
       "extractionState": "manual",
       "localizations": {
@@ -33312,6 +34529,57 @@
         }
       }
     },
+    "Sensitive data": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чувствительные данные"
+          }
+        }
+      }
+    },
+    "Sensitive data redaction requires a compatible meeting backend.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction requires a compatible meeting backend."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+          }
+        }
+      }
+    },
+    "Sensitive data redaction stopped. Recording was interrupted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction stopped. Recording was interrupted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление чувствительных данных остановлено. Запись прервана."
+          }
+        }
+      }
+    },
     "Sensitivity": {
       "extractionState": "manual",
       "localizations": {
@@ -33461,6 +34729,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сделать по умолчанию"
+          }
+        }
+      }
+    },
+    "Set local context in options.num_ctx.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set local context in options.num_ctx."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Укажите контекст локальной модели в options.num_ctx."
           }
         }
       }
@@ -33649,6 +34934,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Настройки…"
+          }
+        }
+      }
+    },
+    "Setup Guide": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setup Guide"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Инструкция по настройке"
           }
         }
       }
@@ -34433,6 +35735,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Показывает или скрывает подсказки рядом с областью обучения"
+          }
+        }
+      }
+    },
+    "Signed app updates are not configured for this distribution. Install a reviewed build manually.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed app updates are not configured for this distribution. Install a reviewed build manually."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой сборки не настроены подписанные обновления. Установите проверенную сборку вручную."
           }
         }
       }
@@ -35409,6 +36728,23 @@
         }
       }
     },
+    "Standard: up to 10 minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Standard: up to 10 minutes"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Стандартный: до 10 минут"
+          }
+        }
+      }
+    },
     "Star it on GitHub": {
       "extractionState": "manual",
       "localizations": {
@@ -35545,6 +36881,23 @@
         }
       }
     },
+    "Start an OpenAI-compatible local server in Ollama or LM Studio. Install models separately, refresh the list, and choose the model to use. Model availability does not confirm summary quality.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start an OpenAI-compatible local server in Ollama or LM Studio. Install models separately, refresh the list, and choose the model to use. Model availability does not confirm summary quality."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запустите локальный сервер с OpenAI-совместимым API в Ollama или LM Studio. Установите модели отдельно, обновите список и выберите нужную модель. Доступность модели не подтверждает качество итогов встречи."
+          }
+        }
+      }
+    },
     "Start an OpenAI-compatible local server in Ollama or LM Studio. Recommended compact model: qwen3.5:4b; qwen3.5:2b uses less memory. Models must be installed separately.": {
       "extractionState": "manual",
       "localizations": {
@@ -35630,6 +36983,40 @@
         }
       }
     },
+    "Starting download. This can take a few minutes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting download. This can take a few minutes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начало загрузки. Это может занять несколько минут."
+          }
+        }
+      }
+    },
+    "Starting download...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starting download..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начало загрузки..."
+          }
+        }
+      }
+    },
     "Starting meeting recording…": {
       "extractionState": "manual",
       "localizations": {
@@ -35711,6 +37098,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Статистика"
+          }
+        }
+      }
+    },
+    "Status: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Статус: %@"
           }
         }
       }
@@ -36191,6 +37595,23 @@
         }
       }
     },
+    "Stored on this device. Place the microphone where everyone can be heard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stored on this device. Place the microphone where everyone can be heard."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранится на этом устройстве. Расположите микрофон так, чтобы было слышно всех."
+          }
+        }
+      }
+    },
     "Streak": {
       "extractionState": "manual",
       "localizations": {
@@ -36276,6 +37697,23 @@
         }
       }
     },
+    "Summary and text cleanup candidate": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary and text cleanup candidate"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Кандидат для итогов встреч и обработки текста"
+          }
+        }
+      }
+    },
     "Summary language": {
       "extractionState": "manual",
       "localizations": {
@@ -36323,6 +37761,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Провайдер итогов"
+          }
+        }
+      }
+    },
+    "Summary time budget": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary time budget"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Время на обработку саммари"
           }
         }
       }
@@ -36409,6 +37864,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Системная"
+          }
+        }
+      }
+    },
+    "System Default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System Default"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию в системе"
           }
         }
       }
@@ -36597,6 +38069,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Нажмите, чтобы включить или выключить запись, либо удерживайте клавиши во время диктовки."
+          }
+        }
+      }
+    },
+    "Task status not specified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Task status not specified"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Статус задачи не указан"
           }
         }
       }
@@ -37046,6 +38535,40 @@
         }
       }
     },
+    "The S1-mini file failed its integrity check. Download it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The S1-mini file failed its integrity check. Download it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Файл S1-mini не прошёл проверку целостности. Скачайте его заново."
+          }
+        }
+      }
+    },
+    "The S1-mini model folder is not safe to modify.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The S1-mini model folder is not safe to modify."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Невозможно безопасно изменить папку модели S1-mini."
+          }
+        }
+      }
+    },
     "The active meeting could not be loaded.": {
       "extractionState": "manual",
       "localizations": {
@@ -37063,6 +38586,87 @@
         }
       }
     },
+    "The app is shutting down.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app is shutting down."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приложение завершает работу."
+          }
+        }
+      }
+    },
+    "The audio contains invalid PCM samples.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio contains invalid PCM samples."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио содержит некорректные отсчёты PCM."
+          }
+        }
+      }
+    },
+    "The audio session was interrupted by the operating system.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio session was interrupted by the operating system."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Операционная система прервала запись аудио."
+          }
+        }
+      }
+    },
+    "The bounded audio writer rejected microphone PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded audio writer rejected microphone PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось принять аудио микрофона для сохранения."
+          }
+        }
+      }
+    },
+    "The bounded microphone queue is full.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded microphone queue is full."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очередь аудио микрофона заполнена."
+          }
+        }
+      }
+    },
     "The classic. Solid black, quietly out of the way.": {
       "extractionState": "manual",
       "localizations": {
@@ -37076,6 +38680,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Классика. Сплошной чёрный фон без лишнего внимания."
+          }
+        }
+      }
+    },
+    "The cloud provider returned an invalid response.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The cloud provider returned an invalid response."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Облачный провайдер вернул некорректный ответ."
           }
         }
       }
@@ -37131,6 +38752,55 @@
         }
       }
     },
+    "The in-memory audio budget is invalid.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio budget is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный лимит памяти для обработки аудио."
+          }
+        }
+      }
+    },
+    "The in-memory microphone timeline changed. Completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory microphone timeline changed. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона изменились. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+          }
+        }
+      }
+    },
     "The installed app changed. Restart FluidVoice before trying the update again.": {
       "extractionState": "manual",
       "localizations": {
@@ -37149,6 +38819,23 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "The installed meeting model changed after this attempt was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+          }
+        }
+      }
+    },
     "The last 3 recordings are covered by this correction.": {
       "extractionState": "manual",
       "localizations": {
@@ -37162,6 +38849,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Это исправление охватывает последние 3 записи."
+          }
+        }
+      }
+    },
+    "The local model reached its output token limit.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The local model reached its output token limit."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальная модель достигла ограничения числа токенов ответа."
+          }
+        }
+      }
+    },
+    "The meeting PCM window is outside the bounded inference contract.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting PCM window is outside the bounded inference contract."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
           }
         }
       }
@@ -37251,6 +38972,38 @@
         }
       }
     },
+    "The microphone PCM timeline changed unexpectedly.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone PCM timeline changed unexpectedly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона неожиданно изменились."
+          }
+        }
+      }
+    },
+    "The microphone audio configuration changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone audio configuration changed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки аудиосигнала микрофона изменились."
+          }
+        }
+      }
+    },
     "The microphone could not be reset safely. Quit and reopen FluidVoice before recording again.": {
       "extractionState": "manual",
       "localizations": {
@@ -37287,6 +39040,54 @@
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
     },
+    "The microphone supplied a non-finite PCM sample.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied a non-finite PCM sample."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректное значение аудиосигнала."
+          }
+        }
+      }
+    },
+    "The microphone supplied an invalid PCM buffer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid PCM buffer."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректный аудиобуфер."
+          }
+        }
+      }
+    },
+    "The microphone supplied an invalid presentation timestamp.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid presentation timestamp."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректную временную метку."
+          }
+        }
+      }
+    },
     "The model did not return a valid structured summary. Try a different model. The transcript is safe.": {
       "extractionState": "manual",
       "localizations": {
@@ -37304,6 +39105,23 @@
         }
       }
     },
+    "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель исчерпала лимит вывода до завершения структурированного резюме. Попробуйте отключить режим размышления или выбрать расширенный лимит обработки. Транскрипт и предыдущее резюме сохранены."
+          }
+        }
+      }
+    },
     "The model returned an unsupported source, owner or date. The result was rejected. The transcript is safe.": {
       "extractionState": "manual",
       "localizations": {
@@ -37317,6 +39135,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Модель указала источник, ответственного или дату, которых нет в расшифровке. Результат отклонён. Расшифровка сохранена."
+          }
+        }
+      }
+    },
+    "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The provider returned an invalid or expired access token.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider returned an invalid or expired access token."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Провайдер вернул некорректный или просроченный токен доступа."
           }
         }
       }
@@ -37368,6 +39220,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Тот же наклонный вид панели, что и в видео, с выбранным режимом Smart."
+          }
+        }
+      }
+    },
+    "The selected S1-mini model is not available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected S1-mini model is not available."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранная модель S1-mini недоступна."
           }
         }
       }
@@ -37438,6 +39307,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Для выбранной модели встреч нужен Apple Silicon."
+          }
+        }
+      }
+    },
+    "The selected meeting runtime does not support in-memory audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting runtime does not support in-memory audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
           }
         }
       }
@@ -37524,6 +39410,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Итоги готовы, но у этой встречи ещё нет папки для сохранения."
+          }
+        }
+      }
+    },
+    "The summary time limit was reached. The transcript and previous summary are safe.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The summary time limit was reached. The transcript and previous summary are safe."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Достигнут лимит времени на саммари. Расшифровка и предыдущее саммари сохранены."
           }
         }
       }
@@ -37869,6 +39772,23 @@
         }
       }
     },
+    "This Whisper artifact does not support automatic Russian and English recognition.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Whisper artifact does not support automatic Russian and English recognition."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель Whisper не поддерживает автоматическое распознавание русского и английского языков."
+          }
+        }
+      }
+    },
     "This app does not send daily activity, detailed metrics or beta timing summaries to an analytics service.": {
       "extractionState": "manual",
       "localizations": {
@@ -38122,6 +40042,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Этот абзац изменился во время редактирования. Откройте его снова и повторите попытку."
+          }
+        }
+      }
+    },
+    "This provider supports text enhancement and summaries. Use a provider with tool support for command mode.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This provider supports text enhancement and summaries. Use a provider with tool support for command mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот провайдер поддерживает обработку текста и саммари. Для режима команд выберите провайдера с поддержкой инструментов."
           }
         }
       }
@@ -38909,6 +40846,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Язык расшифровки"
+          }
+        }
+      }
+    },
+    "Transcript language: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcript language: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Язык расшифровки: %@"
           }
         }
       }
@@ -39801,6 +41755,22 @@
         }
       }
     },
+    "Unknown converter error.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown converter error."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неизвестная ошибка преобразования аудио."
+          }
+        }
+      }
+    },
     "Unknown speaker": {
       "extractionState": "manual",
       "localizations": {
@@ -39903,6 +41873,22 @@
         }
       }
     },
+    "Unsupported source format.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported source format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат аудиосигнала не поддерживается."
+          }
+        }
+      }
+    },
     "Untitled": {
       "extractionState": "manual",
       "localizations": {
@@ -39984,6 +41970,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Обновить и проверить"
+          }
+        }
+      }
+    },
+    "Update Ollama to version 0.16 or later for bounded local processing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update Ollama to version 0.16 or later for bounded local processing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновите Ollama до версии 0.16 или новее для локальной обработки с ограничением ресурсов."
           }
         }
       }
@@ -40073,6 +42076,74 @@
         }
       }
     },
+    "Updated later": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updated later"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменена позже"
+          }
+        }
+      }
+    },
+    "Urgency not specified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Urgency not specified"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Срочность не указана"
+          }
+        }
+      }
+    },
+    "Urgency: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Urgency: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Срочность: %@"
+          }
+        }
+      }
+    },
+    "Urgent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Urgent"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Срочная"
+          }
+        }
+      }
+    },
     "Use": {
       "extractionState": "manual",
       "localizations": {
@@ -40120,6 +42191,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Используйте %@ и произнесите фразу со словом «%@»."
+          }
+        }
+      }
+    },
+    "Use Model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать модель"
           }
         }
       }
@@ -40256,6 +42344,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "С помощью всплывающей подсказки перетащите %@ в список приложений универсального доступа."
+          }
+        }
+      }
+    },
+    "Use the full model URI returned by the provider, with the same folder ID.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the full model URI returned by the provider, with the same folder ID."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Используйте полный URI модели, полученный от провайдера, с тем же идентификатором каталога."
           }
         }
       }
@@ -40596,6 +42701,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "Проверьте подключение"
+          }
+        }
+      }
+    },
+    "Verifying": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка"
+          }
+        }
+      }
+    },
+    "Verifying download. This can take a moment.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying download. This can take a moment."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка загруженного файла. Это может занять некоторое время."
+          }
+        }
+      }
+    },
+    "Verifying download...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying download..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка загрузки..."
           }
         }
       }
@@ -41659,6 +43815,23 @@
         }
       }
     },
+    "When disabled, audio is never written to files, including temporary files. Only the transcript is saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When disabled, audio is never written to files, including temporary files. Only the transcript is saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если выключено, аудио не записывается в файлы, даже временные. Сохраняется только расшифровка."
+          }
+        }
+      }
+    },
     "When off, FluidVoice starts silently in the menu bar at login. Opening the app yourself always shows the window.": {
       "extractionState": "manual",
       "localizations": {
@@ -41813,6 +43986,23 @@
         }
       },
       "comment": "Product name markers are substituted after localization. Keep the literal FluidVoice, FluidMeet and Fluid Intelligence markers unchanged."
+    },
+    "Whisper CPU backend is unavailable on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper CPU backend is unavailable on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU-бэкенд Whisper недоступен на этом устройстве."
+          }
+        }
+      }
     },
     "Window titles, app names, file names/paths, clipboard contents, or anything you type.": {
       "extractionState": "manual",
@@ -43317,6 +45507,23 @@
         }
       }
     },
+    "[Completed later] ": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Completed later] "
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "[Выполнена позже] "
+          }
+        }
+      }
+    },
     "[Superseded] ": {
       "comment": "Summary export status marker; retain trailing space.",
       "extractionState": "manual",
@@ -44310,6 +46517,23 @@
         }
       }
     },
+    "llama.cpp": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "llama.cpp"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "llama.cpp"
+          }
+        }
+      }
+    },
     "llama.cpp (Compatibility)": {
       "extractionState": "manual",
       "localizations": {
@@ -45254,6 +47478,24 @@
         }
       }
     },
+    "task.status.completed": {
+      "extractionState": "manual",
+      "comment": "Completed action item status, separate from generic processing completion.",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Completed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выполнена"
+          }
+        }
+      }
+    },
     "text wasn't inserted not inserted card clipboard verify delivery failure alert": {
       "extractionState": "manual",
       "localizations": {
@@ -45751,6 +47993,40 @@
         }
       }
     },
+    "~428.8 MiB": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~428.8 MiB"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~428,8 MiB"
+          }
+        }
+      }
+    },
+    "~435.2 MiB": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~435.2 MiB"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~435,2 MiB"
+          }
+        }
+      }
+    },
     "·": {
       "extractionState": "manual",
       "localizations": {
@@ -45900,2247 +48176,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "⚠️ Требуется от 8 ГБ оперативной памяти. На некоторых компьютерах возможна нестабильная работа."
-          }
-        }
-      }
-    },
-    "Install models separately, then refresh the model list.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Install models separately, then refresh the model list."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установите модели отдельно, затем обновите список."
-          }
-        }
-      }
-    },
-    "Installation does not confirm output quality": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Installation does not confirm output quality"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установка не подтверждает качество результата"
-          }
-        }
-      }
-    },
-    "Local model library": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local model library"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Библиотека локальных моделей"
-          }
-        }
-      }
-    },
-    "Not listed by this server": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not listed by this server"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Нет в списке моделей этого сервера"
-          }
-        }
-      }
-    },
-    "Publisher and installation instructions": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Publisher and installation instructions"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Автор модели и инструкции по установке"
-          }
-        }
-      }
-    },
-    "Select installed model: %@": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Select installed model: %@"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбрать установленную модель: %@"
-          }
-        }
-      }
-    },
-    "Start an OpenAI-compatible local server in Ollama or LM Studio. Install models separately, refresh the list, and choose the model to use. Model availability does not confirm summary quality.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Start an OpenAI-compatible local server in Ollama or LM Studio. Install models separately, refresh the list, and choose the model to use. Model availability does not confirm summary quality."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запустите локальный сервер с OpenAI-совместимым API в Ollama или LM Studio. Установите модели отдельно, обновите список и выберите нужную модель. Доступность модели не подтверждает качество итогов встречи."
-          }
-        }
-      }
-    },
-    "Summary and text cleanup candidate": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Summary and text cleanup candidate"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Кандидат для итогов встреч и обработки текста"
-          }
-        }
-      }
-    },
-    "Authorization key": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Authorization key"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ключ авторизации"
-          }
-        }
-      }
-    },
-    "API scope": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "API scope"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Область доступа API"
-          }
-        }
-      }
-    },
-    "Folder ID": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Folder ID"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Идентификатор каталога"
-          }
-        }
-      }
-    },
-    "Check the provider's connection parameters and credentials.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check the provider's connection parameters and credentials."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверьте параметры подключения и данные авторизации провайдера."
-          }
-        }
-      }
-    },
-    "Use the full model URI returned by the provider, with the same folder ID.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Use the full model URI returned by the provider, with the same folder ID."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Используйте полный URI модели, полученный от провайдера, с тем же идентификатором каталога."
-          }
-        }
-      }
-    },
-    "The provider returned an invalid or expired access token.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The provider returned an invalid or expired access token."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Провайдер вернул некорректный или просроченный токен доступа."
-          }
-        }
-      }
-    },
-    "Cloud provider request failed (HTTP %lld). Check your credentials and connection settings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cloud provider request failed (HTTP %lld). Check your credentials and connection settings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ошибка запроса к облачному провайдеру (HTTP %lld). Проверьте данные авторизации и настройки подключения."
-          }
-        }
-      }
-    },
-    "This provider supports text enhancement and summaries. Use a provider with tool support for command mode.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This provider supports text enhancement and summaries. Use a provider with tool support for command mode."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Этот провайдер поддерживает обработку текста и саммари. Для режима команд выберите провайдера с поддержкой инструментов."
-          }
-        }
-      }
-    },
-    "The cloud provider returned an invalid response.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The cloud provider returned an invalid response."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Облачный провайдер вернул некорректный ответ."
-          }
-        }
-      }
-    },
-    "Cloud provider request failed.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cloud provider request failed."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ошибка запроса к облачному провайдеру."
-          }
-        }
-      }
-    },
-    "Setup Guide": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Setup Guide"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Инструкция по настройке"
-          }
-        }
-      }
-    },
-    "Get API Key": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Get API Key"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Получить API-ключ"
-          }
-        }
-      }
-    },
-    "Saved summary. The local server is unavailable, so the current model version could not be checked.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Saved summary. The local server is unavailable, so the current model version could not be checked."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сохранённое саммари. Локальный сервер недоступен, поэтому текущую версию модели проверить не удалось."
-          }
-        }
-      }
-    },
-    "Could not release temporary summary resources: %@": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Could not release temporary summary resources: %@"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось освободить временные ресурсы саммари: %@"
-          }
-        }
-      }
-    },
-    "Application default": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Application default"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "По умолчанию для приложения"
-          }
-        }
-      }
-    },
-    "Signed app updates are not configured for this distribution. Install a reviewed build manually.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Signed app updates are not configured for this distribution. Install a reviewed build manually."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для этой сборки не настроены подписанные обновления. Установите проверенную сборку вручную."
-          }
-        }
-      }
-    },
-    "Click Allow when macOS asks for microphone access.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Click Allow when macOS asks for microphone access."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Когда macOS запросит доступ к микрофону, нажмите «Разрешить»."
-          }
-        }
-      }
-    },
-    "Enable %@ in System Settings > Privacy & Security > Microphone. You may need to allow access again after an update.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enable %@ in System Settings > Privacy & Security > Microphone. You may need to allow access again after an update."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Разрешите доступ для %@ в разделе «Системные настройки > Конфиденциальность и безопасность > Микрофон». После обновления разрешение может потребоваться снова."
-          }
-        }
-      }
-    },
-    "Open Settings to check microphone access.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open Settings to check microphone access."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Откройте настройки и проверьте доступ к микрофону."
-          }
-        }
-      }
-    },
-    "S1-mini by Superwhisper": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S1-mini by Superwhisper"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S1-mini от Superwhisper"
-          }
-        }
-      }
-    },
-    "Clean up dictation locally on your Mac.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Clean up dictation locally on your Mac."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Улучшение текста диктовки локально на вашем Mac."
-          }
-        }
-      }
-    },
-    "Runs the selected model inside the app.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Runs the selected model inside the app."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запускает выбранную модель внутри приложения."
-          }
-        }
-      }
-    },
-    "Runs locally using Metal on Apple Silicon or the CPU on Intel.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Runs locally using Metal on Apple Silicon or the CPU on Intel."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Работает локально через Metal на Apple Silicon или процессор на Intel."
-          }
-        }
-      }
-    },
-    "Runs locally using MLX on Apple Silicon.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Runs locally using MLX on Apple Silicon."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Работает локально через MLX на Apple Silicon."
-          }
-        }
-      }
-    },
-    "llama.cpp": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "llama.cpp"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "llama.cpp"
-          }
-        }
-      }
-    },
-    "MLX": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "MLX"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "MLX"
-          }
-        }
-      }
-    },
-    "The selected S1-mini model is not available.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected S1-mini model is not available."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбранная модель S1-mini недоступна."
-          }
-        }
-      }
-    },
-    "Download S1-mini before using AI enhancement.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Download S1-mini before using AI enhancement."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скачайте S1-mini, чтобы использовать ИИ-улучшение."
-          }
-        }
-      }
-    },
-    "The S1-mini file failed its integrity check. Download it again.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The S1-mini file failed its integrity check. Download it again."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Файл S1-mini не прошёл проверку целостности. Скачайте его заново."
-          }
-        }
-      }
-    },
-    "S1-mini could not verify its native runtime.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S1-mini could not verify its native runtime."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось проверить встроенный движок S1-mini."
-          }
-        }
-      }
-    },
-    "S1-mini is available for dictation cleanup only.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S1-mini is available for dictation cleanup only."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S1-mini предназначена для улучшения текста диктовки."
-          }
-        }
-      }
-    },
-    "The S1-mini model folder is not safe to modify.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The S1-mini model folder is not safe to modify."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Невозможно безопасно изменить папку модели S1-mini."
-          }
-        }
-      }
-    },
-    "S1-mini did not finish cleaning this dictation within its output limit.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S1-mini did not finish cleaning this dictation within its output limit."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "S1-mini не успела завершить улучшение диктовки в пределах лимита вывода."
-          }
-        }
-      }
-    },
-    "Compact on-device cleanup": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Compact on-device cleanup"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Компактная локальная модель"
-          }
-        }
-      }
-    },
-    "Verifying": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifying"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверка"
-          }
-        }
-      }
-    },
-    "Downloading": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Downloading"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загрузка"
-          }
-        }
-      }
-    },
-    "Downloading %@%%": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Downloading %@%%"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загрузка %@%%"
-          }
-        }
-      }
-    },
-    "Starting download. This can take a few minutes.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Starting download. This can take a few minutes."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Начало загрузки. Это может занять несколько минут."
-          }
-        }
-      }
-    },
-    "Verifying download. This can take a moment.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifying download. This can take a moment."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверка загруженного файла. Это может занять некоторое время."
-          }
-        }
-      }
-    },
-    "Downloading. This can take a few minutes.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Downloading. This can take a few minutes."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загрузка. Это может занять несколько минут."
-          }
-        }
-      }
-    },
-    "Downloading %@%%. This can take a few minutes.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Downloading %@%%. This can take a few minutes."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загрузка %@%%. Это может занять несколько минут."
-          }
-        }
-      }
-    },
-    "%@ downloaded": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ downloaded"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загружено: %@"
-          }
-        }
-      }
-    },
-    "%@ download": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ download"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загрузка: %@"
-          }
-        }
-      }
-    },
-    "%@ of %@": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ of %@"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ из %@"
-          }
-        }
-      }
-    },
-    "Starting download...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Starting download..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Начало загрузки..."
-          }
-        }
-      }
-    },
-    "Verifying download...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifying download..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Проверка загрузки..."
-          }
-        }
-      }
-    },
-    "%@ (%@%%)": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ (%@%%)"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%@ (%@%%)"
-          }
-        }
-      }
-    },
-    "Performance": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Performance"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Производительность"
-          }
-        }
-      }
-    },
-    "How much raw dictation the selected model can clean at once. Higher values help long transcripts but use more RAM and can slow first response.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "How much raw dictation the selected model can clean at once. Higher values help long transcripts but use more RAM and can slow first response."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Какой объём диктовки выбранная модель может обработать за один раз. Большие значения помогают при длинных записях, но требуют больше памяти и могут замедлить первый ответ."
-          }
-        }
-      }
-    },
-    "Local Russian recognition with GigaAM. Download the compact model or import a verified local export.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Локальное распознавание русской речи с GigaAM. Скачайте компактную модель или импортируйте проверенный локальный экспорт."
-          }
-        }
-      }
-    },
-    "Model ready": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model ready"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель готова"
-          }
-        }
-      }
-    },
-    "Cancelling model preparation...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cancelling model preparation..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Отмена подготовки модели..."
-          }
-        }
-      }
-    },
-    "Cancelling model download...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cancelling model download..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Отмена скачивания модели..."
-          }
-        }
-      }
-    },
-    "Model cached, needs loading": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model cached, needs loading"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель скачана, требуется загрузка в память"
-          }
-        }
-      }
-    },
-    "Model not downloaded": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Model not downloaded"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Модель не скачана"
-          }
-        }
-      }
-    },
-    "Preparing download...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Preparing download..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Подготовка к скачиванию..."
-          }
-        }
-      }
-    },
-    "Downloading model...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Downloading model..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скачивание модели..."
-          }
-        }
-      }
-    },
-    "Optimizing model...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Optimizing model..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Оптимизация модели..."
-          }
-        }
-      }
-    },
-    "Loading voice engine...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Loading voice engine..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Загрузка речевой модели в память..."
-          }
-        }
-      }
-    },
-    "Preparing model...": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Preparing model..."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Подготовка модели..."
-          }
-        }
-      }
-    },
-    "4 GB+ RAM recommended": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "4 GB+ RAM recommended"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Рекомендуется от 4 GB RAM"
-          }
-        }
-      }
-    },
-    "Apple Silicon / Intel CPU": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apple Silicon / Intel CPU"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CPU Apple Silicon / Intel"
-          }
-        }
-      }
-    },
-    "Local Russian speech recognition on Apple Silicon and Intel CPUs.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local Russian speech recognition on Apple Silicon and Intel CPUs."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Локальное распознавание русской речи на процессорах Apple Silicon и Intel."
-          }
-        }
-      }
-    },
-    "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пунктуация, заглавные буквы и нормализация текста. Оптимизация FP16 и обученный модуль определения конца фразы."
-          }
-        }
-      }
-    },
-    "Recommended system RAM, not measured model memory usage. The size above is disk space.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recommended system RAM, not measured model memory usage. The size above is disk space."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Рекомендуемый объём оперативной памяти системы. Потребление памяти моделью не измерено. Размер выше относится к месту на диске."
-          }
-        }
-      }
-    },
-    "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание русского языка с оптимизацией FP16 и обученным модулем определения конца фразы. Этот посимвольный вариант не добавляет пунктуацию и заглавные буквы."
-          }
-        }
-      }
-    },
-    "~428.8 MiB": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "~428.8 MiB"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "~428,8 MiB"
-          }
-        }
-      }
-    },
-    "~435.2 MiB": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "~435.2 MiB"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "~435,2 MiB"
-          }
-        }
-      }
-    },
-    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Замер скорости: 8,48 секунды синтетической русской речи обработаны за 0,97 секунды на CPU Apple M4 Max, без учёта загрузки модели. Разработчик сообщает среднюю долю ошибок в словах WER 12,0% для базовой GigaAM v3 E2E CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
-          }
-        }
-      }
-    },
-    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Скорость на CPU для этого варианта не измерена. Разработчик сообщает среднюю долю ошибок в словах WER 9,1% для базовой GigaAM v3 CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
-          }
-        }
-      }
-    },
-    "Punctuation, capitalization and text normalization. Compact INT8 model.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Punctuation, capitalization and text normalization. Compact INT8 model."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Пунктуация, заглавные буквы и нормализация текста. Компактная модель INT8."
-          }
-        }
-      }
-    },
-    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. This compact INT8 export has not been evaluated for WER or benchmarked for CPU speed.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. This compact INT8 export has not been evaluated for WER or benchmarked for CPU speed."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки продукта, а не измеренная точность распознавания. Для этого компактного экспорта INT8 не проводилась оценка WER или тест скорости на процессоре."
-          }
-        }
-      }
-    },
-    "The microphone supplied an invalid PCM buffer.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The microphone supplied an invalid PCM buffer."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Микрофон передал некорректный аудиобуфер."
-          }
-        }
-      }
-    },
-    "The microphone supplied a non-finite PCM sample.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The microphone supplied a non-finite PCM sample."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Микрофон передал некорректное значение аудиосигнала."
-          }
-        }
-      }
-    },
-    "The microphone supplied an invalid presentation timestamp.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The microphone supplied an invalid presentation timestamp."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Микрофон передал некорректную временную метку."
-          }
-        }
-      }
-    },
-    "The microphone PCM timeline changed unexpectedly.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The microphone PCM timeline changed unexpectedly."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Временные метки аудио микрофона неожиданно изменились."
-          }
-        }
-      }
-    },
-    "Microphone PCM conversion failed. %@": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Microphone PCM conversion failed. %@"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось преобразовать аудио микрофона. %@"
-          }
-        }
-      }
-    },
-    "Microphone sample-buffer construction failed (%d).": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Microphone sample-buffer construction failed (%d)."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось создать аудиобуфер микрофона (%d)."
-          }
-        }
-      }
-    },
-    "The in-memory audio budget is invalid.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The in-memory audio budget is invalid."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Некорректный лимит памяти для обработки аудио."
-          }
-        }
-      }
-    },
-    "In-memory transcription requires finite mono 16 kHz PCM.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-memory transcription requires finite mono 16 kHz PCM."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для распознавания в памяти нужен корректный одноканальный сигнал 16 кГц."
-          }
-        }
-      }
-    },
-    "In-memory transcription could not keep up. Recording stopped and completed text was preserved.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-memory transcription could not keep up. Recording stopped and completed text was preserved."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание в памяти не успевает за разговором. Запись остановлена, готовый текст сохранён."
-          }
-        }
-      }
-    },
-    "The in-memory microphone timeline changed. Completed text was preserved.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The in-memory microphone timeline changed. Completed text was preserved."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Временные метки аудио микрофона изменились. Готовый текст сохранён."
-          }
-        }
-      }
-    },
-    "The app is shutting down.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The app is shutting down."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Приложение завершает работу."
-          }
-        }
-      }
-    },
-    "Only in-room microphone capture is available on this platform.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Only in-room microphone capture is available on this platform."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "На этом устройстве можно записывать только разговор в одной комнате через микрофон."
-          }
-        }
-      }
-    },
-    "In-memory transcription is not available for this attempt.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-memory transcription is not available for this attempt."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для этой встречи распознавание в памяти недоступно."
-          }
-        }
-      }
-    },
-    "The bounded microphone queue is full.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The bounded microphone queue is full."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Очередь аудио микрофона заполнена."
-          }
-        }
-      }
-    },
-    "The bounded audio writer rejected microphone PCM.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The bounded audio writer rejected microphone PCM."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Не удалось принять аудио микрофона для сохранения."
-          }
-        }
-      }
-    },
-    "In-memory transcription could not keep up with microphone capture.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-memory transcription could not keep up with microphone capture."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание в памяти не успевает обрабатывать аудио микрофона."
-          }
-        }
-      }
-    },
-    "The audio session was interrupted by the operating system.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The audio session was interrupted by the operating system."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Операционная система прервала запись аудио."
-          }
-        }
-      }
-    },
-    "The microphone audio configuration changed.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The microphone audio configuration changed."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настройки аудиосигнала микрофона изменились."
-          }
-        }
-      }
-    },
-    "Unsupported source format.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unsupported source format."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Формат аудиосигнала не поддерживается."
-          }
-        }
-      }
-    },
-    "Unknown converter error.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unknown converter error."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Неизвестная ошибка преобразования аудио."
-          }
-        }
-      }
-    },
-    "Applies to past meetings too. Transcripts are always kept.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Applies to past meetings too. Transcripts are always kept."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Применяется и к прошлым встречам. Расшифровки сохраняются всегда."
-          }
-        }
-      }
-    },
-    "Audio recordings and transcripts are stored on this device.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Audio recordings and transcripts are stored on this device."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Аудиозаписи и расшифровки хранятся на этом устройстве."
-          }
-        }
-      }
-    },
-    "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "В аудиозаписи остаются исходные голоса и чувствительные данные. Удаление данных из текста не изменяет аудио."
-          }
-        }
-      }
-    },
-    "Audio storage": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Audio storage"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Хранение аудио"
-          }
-        }
-      }
-    },
-    "Changes apply to new meetings. Audio retention also applies to existing recordings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Changes apply to new meetings. Audio retention also applies to existing recordings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Изменения применяются к новым встречам. Срок хранения аудио применяется и к существующим записям."
-          }
-        }
-      }
-    },
-    "Delete Meeting": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete Meeting"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалить встречу"
-          }
-        }
-      }
-    },
-    "Delete this meeting and its recordings?": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Delete this meeting and its recordings?"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалить эту встречу и её записи?"
-          }
-        }
-      }
-    },
-    "Error": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ошибка"
-          }
-        }
-      }
-    },
-    "Export as JSON": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Export as JSON"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Экспортировать как JSON"
-          }
-        }
-      }
-    },
-    "Export as Text": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Export as Text"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Экспортировать как текст"
-          }
-        }
-      }
-    },
-    "Minimal resource usage. Best for older devices or battery life.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Minimal resource usage. Best for older devices or battery life."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Минимальное потребление ресурсов. Подходит для старых устройств и экономии заряда."
-          }
-        }
-      }
-    },
-    "Privacy": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Privacy"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Приватность"
-          }
-        }
-      }
-    },
-    "Recording settings": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recording settings"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Настройки записи"
-          }
-        }
-      }
-    },
-    "Redact sensitive data": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Redact sensitive data"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удалять чувствительные данные"
-          }
-        }
-      }
-    },
-    "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Русские имена и структурированные идентификаторы удаляются локально до сохранения текста. Распознавание может пропустить чувствительные данные. Проверьте результат перед отправкой."
-          }
-        }
-      }
-    },
-    "Save audio recordings": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Save audio recordings"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Сохранять аудиозаписи"
-          }
-        }
-      }
-    },
-    "Sensitive data": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sensitive data"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Чувствительные данные"
-          }
-        }
-      }
-    },
-    "Stored on this device. Place the microphone where everyone can be heard.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stored on this device. Place the microphone where everyone can be heard."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Хранится на этом устройстве. Расположите микрофон так, чтобы было слышно всех."
-          }
-        }
-      }
-    },
-    "System Default": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "System Default"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "По умолчанию в системе"
-          }
-        }
-      }
-    },
-    "Use Model": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Use Model"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Использовать модель"
-          }
-        }
-      }
-    },
-    "When disabled, audio is never written to files, including temporary files. Only the transcript is saved.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "When disabled, audio is never written to files, including temporary files. Only the transcript is saved."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Если выключено, аудио не записывается в файлы, даже временные. Сохраняется только расшифровка."
-          }
-        }
-      }
-    },
-    "The selected meeting runtime does not support in-memory audio.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The selected meeting runtime does not support in-memory audio."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
-          }
-        }
-      }
-    },
-    "Prepare the local privacy model before enabling sensitive data redaction.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Prepare the local privacy model before enabling sensitive data redaction."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Подготовьте локальную модель приватности перед включением удаления чувствительных данных."
-          }
-        }
-      }
-    },
-    "Sensitive data redaction requires a compatible meeting backend.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sensitive data redaction requires a compatible meeting backend."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
-          }
-        }
-      }
-    },
-    "In-memory transcription stopped. Completed text was preserved.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In-memory transcription stopped. Completed text was preserved."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание из памяти остановлено. Готовый текст сохранён."
-          }
-        }
-      }
-    },
-    "Sensitive data redaction stopped. Recording was interrupted.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sensitive data redaction stopped. Recording was interrupted."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Удаление чувствительных данных остановлено. Запись прервана."
-          }
-        }
-      }
-    },
-    "Whisper CPU backend is unavailable on this device.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Whisper CPU backend is unavailable on this device."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CPU-бэкенд Whisper недоступен на этом устройстве."
-          }
-        }
-      }
-    },
-    "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
-          }
-        }
-      }
-    },
-    "This Whisper artifact does not support automatic Russian and English recognition.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "This Whisper artifact does not support automatic Russian and English recognition."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Эта модель Whisper не поддерживает автоматическое распознавание русского и английского языков."
-          }
-        }
-      }
-    },
-    "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
-          }
-        }
-      }
-    },
-    "The installed meeting model changed after this attempt was scheduled. Start a new processing run.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
-          }
-        }
-      }
-    },
-    "The meeting PCM window is outside the bounded inference contract.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The meeting PCM window is outside the bounded inference contract."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
-          }
-        }
-      }
-    },
-    "Another PCM window still owns the meeting inference runtime.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Another PCM window still owns the meeting inference runtime."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
           }
         }
       }

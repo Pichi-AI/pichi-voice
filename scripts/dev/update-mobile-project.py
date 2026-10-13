@@ -109,6 +109,7 @@ text = re.sub(r"\n/\* Begin Pichi mobile target \*/.*?/\* End Pichi mobile targe
 for identifier in (app_target,test_target,product_ref,test_product,mobile_group):
     text = re.sub(r"\n\s*" + identifier + r" /\* Pichi mobile membership \*/,", "", text)
 block = "\n/* Begin Pichi mobile target */\n" + "".join(objects) + "/* End Pichi mobile target */\n"
+text = re.sub(r"(\tobjects = \{\n)\n*", lambda match: match.group(1), text, count=1)
 text = text.replace("\tobjects = {\n", "\tobjects = {\n" + block, 1)
 # This edits only the original main/product groups and project targets lists.
 for original_id, additions, marker in [("7C078D862E3B339200FB7CAC", [mobile_group], "children"),

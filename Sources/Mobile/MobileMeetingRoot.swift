@@ -50,7 +50,7 @@ struct MobileMeetingRoot: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if geometry.size.width >= 700 {
+            if UIDevice.current.userInterfaceIdiom == .pad && geometry.size.width >= 700 {
                 HStack(spacing: 0) {
                     sidebar.frame(width: 220)
                     Divider()
@@ -100,7 +100,9 @@ struct MobileMeetingRoot: View {
         }
         .sheet(item: $share) { payload in
             VStack(spacing: 0) {
-                Text(AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
+                Text(payload.includesAudio
+                    ? PichiLocalization.text("Exported audio includes the original voices and sensitive information. It is outside app retention controls.")
+                    : AppBrand.text("Exported transcripts are outside FluidVoice's retention controls and may be indexed or synced by other apps."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText).padding()
                 MobileActivitySheet(items: payload.items) { share = nil }
             }.onDisappear { payload.cleanup() }

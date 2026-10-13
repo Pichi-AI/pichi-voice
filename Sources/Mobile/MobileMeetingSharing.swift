@@ -7,13 +7,14 @@ struct MeetingSharePayload: Identifiable {
     let id = UUID()
     let items: [Any]
     let directory: URL
+    let includesAudio: Bool
 
     static func transcript(data: Data, title: String, fileExtension: String) throws -> Self {
         let directory = try makePrivateDirectory()
         let url = directory.appendingPathComponent(MeetingAudioExporter.sanitizedExportName(title)).appendingPathExtension(fileExtension)
         do {
             try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            return Self(items: [url], directory: directory)
+            return Self(items: [url], directory: directory, includesAudio: false)
         } catch { try? FileManager.default.removeItem(at: directory); throw error }
     }
 
@@ -23,7 +24,7 @@ struct MeetingSharePayload: Identifiable {
             let exported = try await MeetingAudioExporter.export(of: session, from: source, into: directory)
             let urls = try FileManager.default.contentsOfDirectory(at: exported, includingPropertiesForKeys: nil)
             guard !urls.isEmpty else { throw CocoaError(.fileNoSuchFile) }
-            return Self(items: urls, directory: directory)
+            return Self(items: urls, directory: directory, includesAudio: true)
         } catch { try? FileManager.default.removeItem(at: directory); throw error }
     }
 
