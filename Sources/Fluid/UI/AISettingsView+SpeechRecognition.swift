@@ -262,7 +262,7 @@ extension VoiceEngineSettingsView {
                             label: "Accuracy"
                         )
                     }
-                    .frame(width: 140, alignment: .center)
+                    .fixedSize(horizontal: true, vertical: false)
                     .help(metadata.map { PichiLocalization.text($0.performanceExplanation) } ?? PichiLocalization.text("Relative ratings for comparing models, not measured transcription accuracy."))
                     .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
                 } else {
