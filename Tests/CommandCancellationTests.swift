@@ -51,6 +51,16 @@ final class UserDefaults {
     let savedProviders = [Provider(id: "fake", baseURL: "https://fake.invalid")]
     let providerConnectionOptions: [String: [String: String]] = [:]
     let enableAIStreaming = true
+    struct VerifiedChatModelConfiguration {
+        struct Option { let providerID: String; let modelID: String }
+        let option: Option
+        let baseURL: String
+        let apiKey: String
+        let connectionOptions: [String: String]
+    }
+    func verifiedChatModelConfiguration(providerID: String, modelID: String) -> VerifiedChatModelConfiguration? {
+        .init(option: .init(providerID: providerID, modelID: modelID), baseURL: "https://fake.invalid", apiKey: "", connectionOptions: [:])
+    }
     func analyticsAIModelDescriptor(for mode: Mode) -> String { "fake" }
     func getAPIKey(for provider: String) -> String? { nil }
     func isReasoningModel(_ model: String) -> Bool { false }

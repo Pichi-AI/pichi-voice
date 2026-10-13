@@ -1605,6 +1605,9 @@ final class SettingsStore: ObservableObject {
         self.keychain.cachedKeys ?? [:]
     }
 
+    /// Cache-only admission snapshot. Display values may outlive a failed refresh.
+    var loadedProviderAPIKeys: [String: String]? { self.keychain.loadedKeys }
+
     var providerAPIKeyReadiness: KeychainService.Readiness { self.keychain.readiness }
 
     @MainActor

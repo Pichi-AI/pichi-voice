@@ -116,28 +116,23 @@ nonisolated struct MeetingSummaryRoute {
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw LLMError.invalidRequest(PichiLocalization.text("Choose a summary model."))
         }
-        // Reuse the verified chat-model catalog; summaries do not require tool support.
-        guard settings.commandModeModelCatalog().contains(where: {
-            repository.providerKey(for: $0.providerID) == key && $0.modelID == model
-        }) else {
+        guard let verified = settings.verifiedChatModelConfiguration(providerID: providerID, modelID: model) else {
             throw LLMError.invalidRequest(PichiLocalization.text("This model is unavailable or its provider needs verification. Update it in AI Providers."))
         }
-        let saved = settings.savedProviders.first { repository.providerKey(for: $0.id) == key }
-        let baseURL = (saved?.baseURL ?? repository.defaultBaseURL(for: providerID)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL = verified.baseURL
         guard let url = URL(string: baseURL), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
             throw LLMError.invalidURL
         }
         return Self(
-            providerID: saved?.id ?? providerID,
-            providerName: saved?.name ?? repository.displayName(for: providerID),
-            modelID: model,
+            providerID: verified.option.providerID,
+            providerName: verified.option.providerName,
+            modelID: verified.option.modelID,
             baseURL: baseURL,
-            apiKey: settings.getAPIKey(for: saved?.id ?? providerID) ?? "",
+            apiKey: verified.apiKey,
             reasoning: settings.getReasoningConfig(forModel: model, provider: key),
             supportsTemperature: !settings.isTemperatureUnsupported(model, baseURL: baseURL),
             isReasoningModel: settings.isReasoningModel(model),
-            connectionOptions: repository.providerKeys(for: saved?.id ?? providerID)
-                .compactMap { settings.providerConnectionOptions[$0] }.first ?? [:],
+            connectionOptions: verified.connectionOptions,
             selectedProviderID: providerID
         )
     }

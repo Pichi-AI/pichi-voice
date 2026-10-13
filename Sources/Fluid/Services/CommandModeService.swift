@@ -12,6 +12,7 @@ final class CommandModeService: ObservableObject {
     @Published private(set) var currentChatID: String?
 
     private let terminalService = TerminalService()
+    private let llmClient: LLMClient
     private let chatStore = ChatHistoryStore.shared
     private var pendingVoiceCommandCancellation: (commandID: String, requestStartIndex: Int, isOutputValid: @MainActor () -> Bool)?
     private var currentTurnCount = 0
@@ -28,7 +29,8 @@ final class CommandModeService: ObservableObject {
 
     // MARK: - Initialization
 
-    init() {
+    init(llmClient: LLMClient = .shared) {
+        self.llmClient = llmClient
         // Load current chat from store
         self.loadCurrentChatFromStore()
     }
@@ -839,22 +841,16 @@ final class CommandModeService: ObservableObject {
     private func callLLM(isOutputValid: @escaping @MainActor () -> Bool) async throws -> LLMResponse {
         guard isOutputValid() else { throw CancellationError() }
         let settings = SettingsStore.shared
-        if let issue = settings.commandModeReadinessIssue {
-            throw LLMError.invalidRequest(issue)
+        guard let verified = settings.verifiedChatModelConfiguration(
+            providerID: settings.effectiveCommandModeProviderID,
+            modelID: settings.effectiveCommandModeSelectedModel
+        ) else {
+            throw LLMError.invalidRequest(settings.commandModeReadinessIssue ?? "Command Mode needs a verified chat provider.")
         }
-
-        let providerID = settings.effectiveCommandModeProviderID
-        let model = settings.effectiveCommandModeSelectedModel
-        let apiKey = settings.getAPIKey(for: providerID) ?? ""
-
-        let baseURL: String
-        if let provider = settings.savedProviders.first(where: { $0.id == providerID }) {
-            baseURL = provider.baseURL
-        } else if ModelRepository.shared.isBuiltIn(providerID) {
-            baseURL = ModelRepository.shared.defaultBaseURL(for: providerID)
-        } else {
-            baseURL = ""
-        }
+        let providerID = verified.option.providerID
+        let model = verified.option.modelID
+        let apiKey = verified.apiKey
+        let baseURL = verified.baseURL
 
         // Build conversation with agentic system prompt
         let systemPrompt = """
@@ -1027,7 +1023,7 @@ final class CommandModeService: ObservableObject {
             extraParameters: extraParams
         )
 
-        config.providerOptions = settings.providerConnectionOptions[providerID] ?? [:]
+        config.providerOptions = verified.connectionOptions
 
         // Keep retry logic (exponential backoff)
         config.maxRetries = 3
@@ -1076,7 +1072,7 @@ final class CommandModeService: ObservableObject {
 
         DebugLogger.shared.info("Using LLMClient for Command Mode (streaming=\(enableStreaming), messages=\(messages.count), history=\(self.conversationHistory.count))", source: "CommandModeService")
 
-        let response = try await LLMClient.shared.call(config)
+        let response = try await self.llmClient.call(config)
         guard isOutputValid() else { throw CancellationError() }
 
         // Final UI update - ensure all content is displayed

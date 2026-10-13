@@ -58,6 +58,7 @@ final class SettingsStore: ObservableObject {
     var availableModelsByProvider: [String: [String]] = [:] { didSet { self.writes.append("modelLists") } }
     var savedProviders: [SavedProvider] = [] { didSet { self.writes.append("savedProviders") } }
     var credentials: [String: String] = [:]
+    var loadedProviderAPIKeys: [String: String]? { self.credentials }
     var credentialSnapshots = 0
     var providerAPIKeys: [String: String] {
         self.credentialSnapshots += 1
