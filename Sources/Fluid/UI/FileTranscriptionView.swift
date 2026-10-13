@@ -39,7 +39,6 @@ struct FileTranscriptionView: View {
 
     private struct RowMetadata {
         let preview: String
-        let relativeDate: String
         let fullDate: String
     }
 
@@ -591,7 +590,7 @@ struct FileTranscriptionView: View {
                         .font(self.theme.typography.bodySmallStrong)
                         .lineLimit(2)
                         .truncationMode(.middle)
-                    Text(self.rowMetadata[entry.id]?.relativeDate ?? "")
+                    FileTranscriptRelativeDateLabel(entry: entry, locale: self.interfaceLocale)
                         .font(self.theme.typography.captionSmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
                     Text(self.rowMetadata[entry.id]?.preview ?? "")
@@ -745,7 +744,6 @@ struct FileTranscriptionView: View {
     private func metadata(for entry: FileTranscriptionEntry) -> RowMetadata {
         return RowMetadata(
             preview: entry.previewText,
-            relativeDate: entry.relativeTimeString(locale: self.interfaceLocale),
             fullDate: entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))
         )
     }
