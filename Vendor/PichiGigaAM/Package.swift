@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PichiGigaAM",
-    platforms: [.macOS(.v14), .iOS("18.0")],
+    platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .library(name: "PichiGigaAM", targets: ["PichiGigaAM"]),
         .library(name: "PichiTextPrivacy", targets: ["PichiTextPrivacy"]),

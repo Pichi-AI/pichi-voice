@@ -29,6 +29,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
             "whisper-base",
             "fluid-parakeet-mini",
             "fluid-parakeet-pico",
+            "cohere-transcribe-6bit",
             "",
         ]
         for asrModel in unsupportedModels {
@@ -39,6 +40,20 @@ final class MeetingProviderOptionsTests: XCTestCase {
                     .unsupportedASRModel(asrModel)
                 )
             }
+        }
+    }
+
+    @MainActor
+    func testExternalCoreMLModelCannotBypassRegisteredMeetingFactory() {
+        let model = SettingsStore.SpeechModel.cohereTranscribeSixBit
+        XCTAssertTrue(model.requiresIOS18)
+        for registered in [SettingsStore.SpeechModel.gigaam, .whisperTiny, .parakeetTDT] {
+            XCTAssertFalse(registered.requiresIOS18)
+            XCTAssertNotNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: registered.rawValue))
+        }
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+        XCTAssertThrowsError(try PichiMeetingProviderFactory.make(MeetingFinalProcessingConfiguration(asrModel: model.rawValue))) { error in
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel(model.rawValue))
         }
     }
 

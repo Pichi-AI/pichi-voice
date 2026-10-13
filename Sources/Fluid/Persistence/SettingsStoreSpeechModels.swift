@@ -231,7 +231,10 @@ extension SettingsStore {
             }
         }
 
-        /// Returns models available for the current Mac's architecture and OS
+        /// Cohere's owning runtime requires iOS 18; its persisted ID remains unchanged.
+        var requiresIOS18: Bool { self == .cohereTranscribeSixBit }
+
+        /// Returns models available for the current platform's architecture and OS
         static var availableModels: [SpeechModel] {
             allCases.filter { model in
                 if model == .whisperLargeTurbo, !CPUArchitecture.isAppleSilicon {
@@ -254,6 +257,11 @@ extension SettingsStore {
                 if model.requiresMacOS15, #unavailable(macOS 15.0) {
                     return false
                 }
+                #if os(iOS)
+                if model.requiresIOS18, #unavailable(iOS 18.0) {
+                    return false
+                }
+                #endif
                 // Filter by macOS 26 requirement
                 if model.requiresMacOS26 {
                     if #available(macOS 26.0, *) {
@@ -837,6 +845,11 @@ extension SettingsStore {
                 if model.requiresMacOS26, #unavailable(macOS 26.0) {
                     return .whisperBase
                 }
+                #if os(iOS)
+                if model.requiresIOS18, #unavailable(iOS 18.0) {
+                    return SpeechModel.defaultModel
+                }
+                #endif
                 return model
             }
 

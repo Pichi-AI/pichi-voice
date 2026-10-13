@@ -67,7 +67,7 @@ def configs(label, test=False, hosted=False):
     config_ids = []
     for name in ("Debug", "Release"):
         settings = {
-            "SDKROOT":"iphoneos", "SUPPORTED_PLATFORMS":"iphoneos iphonesimulator", "IPHONEOS_DEPLOYMENT_TARGET":"18.0",
+            "SDKROOT":"iphoneos", "SUPPORTED_PLATFORMS":"iphoneos iphonesimulator", "IPHONEOS_DEPLOYMENT_TARGET":"17.0",
             "TARGETED_DEVICE_FAMILY":"1,2", "SUPPORTS_MACCATALYST":"NO", "SWIFT_VERSION":"5.0",
             "SWIFT_STRICT_CONCURRENCY":"targeted", "SWIFT_DEFAULT_ACTOR_ISOLATION":"MainActor",
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS":"$(inherited) MOBILE" + (" DEBUG" if name=="Debug" else ""),
