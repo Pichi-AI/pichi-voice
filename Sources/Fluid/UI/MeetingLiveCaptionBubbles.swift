@@ -231,6 +231,12 @@ struct MeetingCaptionScrollTracking: ViewModifier {
             contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
         }
 
+        func fallbackFollowPreference(after previous: Self, currentlyFollowing: Bool,
+                                      upwardDrag: Bool) -> Bool {
+            followPreference(after: previous, currentlyFollowing: currentlyFollowing,
+                userIsScrolling: upwardDrag || !layoutChanged(from: previous), upwardDrag: upwardDrag)
+        }
+
         func followPreference(after previous: Self, currentlyFollowing: Bool,
                               userIsScrolling: Bool, upwardDrag: Bool = false) -> Bool {
             guard userIsScrolling, offsetChanged(from: previous),
@@ -298,8 +304,8 @@ struct MeetingCaptionScrollTracking: ViewModifier {
                     if let previous = self.previousGeometry {
                         // Content growth and rotation change layout, not the user's follow choice.
                         // Offset-only changes also cover deceleration and non-touch scrolling.
-                        self.isPinnedToBottom = geometry.followPreference(after: previous,
-                            currentlyFollowing: self.isPinnedToBottom, userIsScrolling: true,
+                        self.isPinnedToBottom = geometry.fallbackFollowPreference(after: previous,
+                            currentlyFollowing: self.isPinnedToBottom,
                             upwardDrag: self.isDraggingUp)
                         if geometry.layoutChanged(from: previous) { self.onLayoutChange() }
                     }

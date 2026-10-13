@@ -85,6 +85,10 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertTrue(grown.layoutChanged(from: before))
         XCTAssertFalse(grown.offsetChanged(from: before))
         XCTAssertTrue(grown.followPreference(after: before, currentlyFollowing: true, userIsScrolling: true))
+        let bottomBeforeShrink = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 900, contentOffset: 600)
+        let shrink = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 600, contentOffset: 300)
+        XCTAssertTrue(shrink.fallbackFollowPreference(after: bottomBeforeShrink,
+            currentlyFollowing: true, upwardDrag: false), "iOS 17 layout shrink must not look like an upward drag")
         let userScrolled = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 600, contentOffset: 150)
         XCTAssertFalse(userScrolled.layoutChanged(from: before))
         XCTAssertTrue(userScrolled.offsetChanged(from: before))
@@ -107,6 +111,8 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertFalse(growingWhileUp.followPreference(after: bottom, currentlyFollowing: true, userIsScrolling: true),
                        "New captions must not override simultaneous reading of older text")
         XCTAssertFalse(growingWhileUp.followPreference(after: bottom, currentlyFollowing: true, userIsScrolling: true, upwardDrag: true))
+        XCTAssertFalse(growingWhileUp.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: true), "iOS 17 must respect an upward drag during content growth")
         XCTAssertTrue(growingWhileUp.followPreference(after: bottom, currentlyFollowing: true, userIsScrolling: false),
                       "Layout growth without a user gesture must keep following")
         let momentumUp = Geometry(contentBottom: 330, viewportHeight: 300, contentHeight: 900, contentOffset: 570)
