@@ -328,7 +328,7 @@ nonisolated struct MeetingTranscriptAssembler {
             : MeetingSpeakerVoiceMatcher.links(profiles: evidence.voiceProfiles, allowedTokens: visibleTokens)
         let speakers = self.makeSpeakers(
             attemptID: manifest.attemptID,
-            manifest: manifest,
+            trackKinds: Dictionary(uniqueKeysWithValues: manifest.tracks.map { ($0.id, $0.kind) }),
             emitted: visibleUnits,
             identityLinks: identityLinks
         )
@@ -623,9 +623,10 @@ nonisolated struct MeetingTranscriptAssembler {
     /// identified here.
     private func makeSpeakers(
         attemptID: UUID,
-        manifest: MeetingAnalysisManifest,
+        trackKinds: [MeetingAudioTrackID: MeetingAudioTrackKind],
         emitted: [(unit: MeetingFinalTextUnit, presentation: MeetingAnalysisInterval)],
-        identityLinks: [MeetingSpeakerIdentityLink]
+        identityLinks: [MeetingSpeakerIdentityLink],
+        priorSpeakers: [MeetingSessionSpeaker] = []
     ) -> [(token: MeetingBackendSpeakerToken, speaker: MeetingSessionSpeaker)] {
         var tokens: [MeetingBackendSpeakerToken] = []
         var seen = Set<MeetingBackendSpeakerToken>()
@@ -659,25 +660,72 @@ nonisolated struct MeetingTranscriptAssembler {
             return isSubstantial(identity) || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
         let ordinals = Dictionary(uniqueKeysWithValues: speakingTokens.filter { canonicalByToken[$0] == nil }
-            .enumerated().map { ($0.element, $0.offset + 1) })
+            .enumerated().map { ($0.element, $0.offset + priorSpeakers.count + 1) })
         return speakingTokens.map { token in
             let canonical = canonicalByToken[token] ?? token
             let normalizedLabel = canonical.label.precomposedStringWithCanonicalMapping
             let scopedClusterID = "\(canonical.analysisEpochID):\(normalizedLabel)"
+            let speakerID = Self.stableUUID("speaker:\(attemptID.uuidString):\(scopedClusterID)")
+            if let prior = priorSpeakers.first(where: { $0.id == speakerID }) {
+                return (token, prior)
+            }
             return (
                 token,
                 MeetingSessionSpeaker(
-                    id: Self.stableUUID(
-                        "speaker:\(attemptID.uuidString):\(scopedClusterID)"
-                    ),
+                    id: speakerID,
                     displayName: String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
                     diarizationClusterID: scopedClusterID,
-                    trackKind: manifest.track(token.analysisEpochID.trackID)?.kind ?? .microphone,
+                    trackKind: trackKinds[token.analysisEpochID.trackID] ?? .microphone,
                     isLocalUser: false,
                     identityCandidates: []
                 )
             )
         }
+    }
+
+    /// PCM-only input has one contiguous, admitted physical window and no audio-file
+    /// spans to materialize. Reuse the same product identity/attribution rules after the
+    /// runtime validates its bounded window; never fabricate an audio chunk manifest.
+    func assemblePCMWindow(
+        attemptID: UUID,
+        epoch: MeetingAnalysisEpochID,
+        offset: TimeInterval,
+        duration: TimeInterval,
+        units: [MeetingFinalTextUnit],
+        identityLinks: [MeetingSpeakerIdentityLink] = [],
+        priorSpeakers: [MeetingSessionSpeaker] = []
+    ) throws -> MeetingPCMTranscriptBatch {
+        guard offset.isFinite, offset >= 0, duration.isFinite, duration > 0,
+              units.allSatisfy({ $0.trackID == epoch.trackID && $0.analysisEpochID == epoch
+                  && $0.analysisStart.isFinite && $0.analysisEnd.isFinite
+                  && $0.analysisStart >= 0 && $0.analysisEnd > $0.analysisStart
+                  && $0.analysisEnd <= duration + 1e-6 && $0.analysisSpanIDs.isEmpty }) else {
+            throw MeetingAssemblyError.invalidCoverageReceiptInterval(receiptID: "pcm-window")
+        }
+        let emitted = units.map { ($0, MeetingAnalysisInterval(start: offset + $0.analysisStart, end: offset + $0.analysisEnd)) }
+        let visible = emitted.filter { if case .ambiguous = $0.0.speaker { return false }; return true }
+        let speakers = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
+                                         emitted: visible, identityLinks: identityLinks, priorSpeakers: priorSpeakers)
+        let speakerIDs = Dictionary(speakers.map { ($0.token, $0.speaker.id) }, uniquingKeysWith: { first, _ in first })
+        let segments = emitted.map { unit, interval in
+            let speakerID: SessionSpeakerID?
+            let overlap: MeetingTranscriptOverlap
+            switch unit.speaker {
+            case let .assigned(token): speakerID = speakerIDs[token]; overlap = .none
+            case .ambiguous: speakerID = nil; overlap = .ambiguous
+            case .unassigned: speakerID = nil; overlap = .none
+            }
+            return MeetingTranscriptSegment(
+                id: Self.stableUUID("segment:\(attemptID.uuidString):\(unit.id)"),
+                start: Self.mediaTime(interval.start), end: Self.mediaTime(interval.end),
+                sourceTrackID: epoch.trackID, speakerID: speakerID, text: unit.text,
+                revision: 0, status: .final, overlap: overlap, completeness: .complete,
+                attributionState: overlap == .ambiguous ? .overlappingSpeakers : (speakerID == nil ? .unassigned : .assigned)
+            )
+        }
+        return MeetingPCMTranscriptBatch(segments: segments,
+                                         speakers: Array(Dictionary(speakers.map { ($0.speaker.id, $0.speaker) },
+                                                                    uniquingKeysWith: { first, _ in first }).values))
     }
 
     private static func mediaTime(_ seconds: TimeInterval) -> MeetingMediaTime {

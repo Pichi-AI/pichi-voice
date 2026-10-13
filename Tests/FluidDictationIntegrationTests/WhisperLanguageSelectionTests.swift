@@ -159,6 +159,24 @@ final class WhisperLanguageSelectionTests: XCTestCase {
 
     func testWhisperRunOptionsAllowAutomaticDetection() {
         XCTAssertNil(WhisperProvider.runOptions(languageCode: nil).language)
+        XCTAssertNil(WhisperProvider.runOptions(languageCode: "auto").language)
+    }
+
+    @MainActor
+    func testPinnedAutomaticWhisperMeetingDoesNotReadDictationLanguage() throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedWhisperLanguageCode
+        defer { settings.selectedWhisperLanguageCode = previous }
+        settings.selectedWhisperLanguageCode = "de"
+        let provider = try WhisperProvider(meetingConfiguration: MeetingFinalProcessingConfiguration(
+            asrModel: SettingsStore.SpeechModel.whisperTiny.rawValue, languageCode: "auto"
+        ))
+        XCTAssertNil(provider.resolvedLanguageCode())
+        settings.selectedWhisperLanguageCode = "ru"
+        XCTAssertNil(provider.resolvedLanguageCode())
+        XCTAssertEqual(provider.resolvedLanguageCode(explicit: "en"), "en")
+        XCTAssertNil(provider.resolvedLanguageCode(explicit: "auto"))
+        XCTAssertEqual(provider.modelOverride, .whisperTiny)
     }
 
     func testStoredWhisperLanguageSelectionResolution() {

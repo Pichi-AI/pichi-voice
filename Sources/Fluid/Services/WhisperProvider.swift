@@ -1,5 +1,9 @@
 import Foundation
+import CryptoKit
 import TranscribeCpp
+#if os(iOS)
+import Darwin
+#endif
 
 /// TranscriptionProvider implementation using transcribe.cpp for Whisper GGUF models.
 final class WhisperProvider: TranscriptionProvider {
@@ -7,10 +11,7 @@ final class WhisperProvider: TranscriptionProvider {
 
     var isAvailable: Bool {
         guard case .success = Self.backendInitialization else { return false }
-        if CPUArchitecture.isAppleSilicon {
-            return Transcribe.backendAvailable(.metal)
-        }
-        return Transcribe.backendAvailable(.cpu)
+        return Transcribe.backendAvailable(Self.platformBackend)
     }
 
     private static let backendInitialization: Result<Void, Error> = Result {
@@ -26,19 +27,41 @@ final class WhisperProvider: TranscriptionProvider {
     private let overriddenModelDirectory: URL?
     private let urlSession: URLSession
     private let languageCodeOverride: String?
+    private let useAutomaticLanguageDetection: Bool
+    private let expectedArtifactFingerprint: String?
 
-    var modelOverride: SettingsStore.SpeechModel?
+    let modelOverride: SettingsStore.SpeechModel?
 
     init(
         modelDirectory: URL? = nil,
         urlSession: URLSession = .shared,
         modelOverride: SettingsStore.SpeechModel? = nil,
-        languageCodeOverride: String? = nil
+        languageCodeOverride: String? = nil,
+        useAutomaticLanguageDetection: Bool = false,
+        expectedArtifactFingerprint: String? = nil
     ) {
         self.overriddenModelDirectory = modelDirectory
         self.urlSession = urlSession
         self.modelOverride = modelOverride
         self.languageCodeOverride = languageCodeOverride
+        self.useAutomaticLanguageDetection = useAutomaticLanguageDetection
+        self.expectedArtifactFingerprint = expectedArtifactFingerprint
+    }
+
+    /// Meeting policy is immutable, including automatic detection. An automatic meeting
+    /// never follows the dictation language preference after the attempt has started.
+    convenience init(meetingConfiguration configuration: MeetingFinalProcessingConfiguration) throws {
+        let options = try MeetingProviderOptions.resolve(configuration)
+        guard options.model.isWhisperModel else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
+        }
+        self.init(
+            modelDirectory: configuration.asrArtifactDirectory,
+            modelOverride: options.model,
+            languageCodeOverride: configuration.languageCode,
+            useAutomaticLanguageDetection: configuration.languageCode == "auto",
+            expectedArtifactFingerprint: configuration.asrArtifactFingerprint
+        )
     }
 
     deinit {
@@ -86,9 +109,17 @@ final class WhisperProvider: TranscriptionProvider {
         return URL(string: "https://huggingface.co/handy-computer/\(repoName)-gguf/resolve/main/\(modelName)")
     }
 
-    private var backend: Backend {
+    static var platformBackend: Backend {
+        #if os(iOS)
+        // The same resident model remains usable when recording continues in the background.
+        // An audio background mode does not authorize Metal command-buffer execution.
+        .cpu
+        #else
         CPUArchitecture.isAppleSilicon ? .metal : .cpu
+        #endif
     }
+
+    private var backend: Backend { Self.platformBackend }
 
     private func unloadModel() {
         self.stateLock.lock()
@@ -199,6 +230,12 @@ final class WhisperProvider: TranscriptionProvider {
                 userInfo: [NSLocalizedDescriptionKey: "Whisper model file is missing or corrupted. Please re-download the model."]
             )
         }
+        if let expected = self.expectedArtifactFingerprint,
+           try Self.installedArtifactFingerprint(for: targetModel, directory: self.modelDirectory) != expected {
+            throw NSError(domain: "WhisperProvider", code: -8, userInfo: [
+                NSLocalizedDescriptionKey: "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.",
+            ])
+        }
         self.removeLegacyModelIfNeeded()
 
         let requiredMemoryGB = targetModel.requiredMemoryGB
@@ -232,7 +269,7 @@ final class WhisperProvider: TranscriptionProvider {
             options: ModelOptions(backend: self.backend)
         )
         let runtimeBackend = loadedModel.backend.lowercased()
-        if CPUArchitecture.isAppleSilicon,
+        if self.backend == .metal,
            !runtimeBackend.contains("metal"),
            !runtimeBackend.contains("mtl")
         {
@@ -244,6 +281,14 @@ final class WhisperProvider: TranscriptionProvider {
         }
         let loadedSession = try loadedModel.session()
 
+        if self.useAutomaticLanguageDetection,
+           (!loadedModel.capabilities.supportsLanguageDetect
+                || !Set(loadedModel.capabilities.languages).isSuperset(of: ["ru", "en"])) {
+            throw NSError(domain: "WhisperProvider", code: -9, userInfo: [
+                NSLocalizedDescriptionKey: "This Whisper artifact does not support automatic Russian and English recognition.",
+            ])
+        }
+
         try Task.checkCancellation()
         self.installModel(loadedModel, session: loadedSession, modelName: currentModelName)
         DebugLogger.shared.info(
@@ -253,7 +298,7 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     private func validateBackendAvailability(for model: SettingsStore.SpeechModel) throws {
-        if CPUArchitecture.isAppleSilicon, !Transcribe.backendAvailable(.metal) {
+        if self.backend == .metal, !Transcribe.backendAvailable(.metal) {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -5,
@@ -261,16 +306,22 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        if !CPUArchitecture.isAppleSilicon, !Transcribe.backendAvailable(.cpu) {
+        if self.backend == .cpu, !Transcribe.backendAvailable(.cpu) {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -6,
-                userInfo: [NSLocalizedDescriptionKey: "Whisper CPU backend is unavailable on this Mac."]
+                userInfo: [NSLocalizedDescriptionKey: "Whisper CPU backend is unavailable on this device."]
             )
         }
     }
 
     private static func availableMemoryGB() -> Double {
+        #if os(iOS)
+        // This admission is the existing model's minimum recommended device RAM, not a
+        // prediction of free allocation space. iOS owns per-process memory limits, so a
+        // desktop count of free/inactive VM pages is not a useful mobile measurement.
+        return Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+        #else
         var pageSize: vm_size_t = 0
         host_page_size(mach_host_self(), &pageSize)
 
@@ -293,6 +344,7 @@ final class WhisperProvider: TranscriptionProvider {
         let purgablePages = UInt64(vmStats.purgeable_count)
         let availableBytes = (freePages + inactivePages + purgablePages) * UInt64(pageSize)
         return Double(availableBytes) / (1024 * 1024 * 1024)
+        #endif
     }
 
     func transcribe(_ samples: [Float]) async throws -> ASRTranscriptionResult {
@@ -317,9 +369,7 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        let resolvedLanguageCode = languageCode
-            ?? self.languageCodeOverride
-            ?? SettingsStore.shared.selectedWhisperLanguageCode
+        let resolvedLanguageCode = self.resolvedLanguageCode(explicit: languageCode)
         let transcript = try await session.run(
             samples,
             options: Self.runOptions(languageCode: resolvedLanguageCode)
@@ -329,7 +379,36 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     static func runOptions(languageCode: String?) -> RunOptions {
-        RunOptions(timestamps: .segment, language: languageCode)
+        RunOptions(timestamps: .segment, language: languageCode == "auto" ? nil : languageCode)
+    }
+
+    func resolvedLanguageCode(explicit: String? = nil) -> String? {
+        if let explicit { return explicit == "auto" ? nil : explicit }
+        if self.useAutomaticLanguageDetection { return nil }
+        let selected = self.languageCodeOverride ?? SettingsStore.shared.selectedWhisperLanguageCode
+        return selected == "auto" ? nil : selected
+    }
+
+    func releaseResidency() async { self.unloadModel() }
+
+    /// The loader consumes GGUF, not legacy whisper.cpp GGML `.bin` exports. Inspect the
+    /// installed selected artifact once at attempt snapshot/preparation, never on UI render.
+    static func installedArtifactFingerprint(for model: SettingsStore.SpeechModel, directory: URL? = nil) throws -> String? {
+        guard let file = model.whisperModelFile else { return nil }
+        let root = directory ?? AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
+        let url = root.appendingPathComponent(file)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              (attributes[.size] as? NSNumber)?.int64Value == model.expectedDownloadBytes,
+              attributes[.type] as? FileAttributeType == .typeRegular
+        else { return nil }
+        let input = try FileHandle(forReadingFrom: url)
+        defer { try? input.close() }
+        var digest = SHA256()
+        while let bytes = try input.read(upToCount: 1_048_576), !bytes.isEmpty {
+            try Task.checkCancellation()
+            digest.update(data: bytes)
+        }
+        return "sha256:" + digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     func modelsExistOnDisk() -> Bool {

@@ -176,7 +176,11 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     }
 
     private func startBuffered(mode: MeetingCaptureMode, languageCode: String, modelID: String, artifactFingerprint: String? = nil) {
-        guard Self.isMemorySufficient(physicalMemory: ProcessInfo.processInfo.physicalMemory) else {
+        let admission = PichiMeetingProviderFactory.registeredLiveAdmission(for: modelID)
+        let requiredMemory = admission?.minimumPhysicalMemoryBytes ?? Self.minimumPhysicalMemoryBytes
+        let trackCount = mode == .onlineCall ? 2 : 1
+        guard trackCount <= (admission?.maximumTrackCount ?? 2),
+              ProcessInfo.processInfo.physicalMemory >= requiredMemory else {
             self.publish { $0.settingAvailability(.unavailable(reason: "Not enough memory available for live captions.")) }
             return
         }
