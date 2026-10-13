@@ -51,6 +51,20 @@ final class MobileNavigationUITests: XCTestCase {
         capture("02-current-meeting")
     }
 
+    func testRussianSettingsAndModelsInDarkAppearance() throws {
+        app.terminate()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"]
+        app.launch()
+        waitForOrientation(portrait: true)
+        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
+        capture("01-russian-dark-ready")
+        openNavigation("settings", title: "Настройки")
+        app.buttons["settings.models"].tap()
+        XCTAssertTrue(app.staticTexts["Whisper Tiny"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Pichi GigaAM v3"].exists)
+        capture("02-russian-dark-models")
+    }
+
 
     func testNativeRussianGlyphCoverage() throws {
         let letters = Array("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя".utf16)
@@ -101,7 +115,7 @@ final class MobileNavigationUITests: XCTestCase {
     }
 
     private func capture(_ step: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIDevice.shared.screenshot())
         let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "working-tree"
         attachment.name = "\(name)-\(step)-\(revision)"
         attachment.lifetime = .keepAlways
