@@ -495,7 +495,9 @@ final class KeychainServiceCacheTests: XCTestCase {
         let cleanupEntered = self.expectation(description: "main cleanup entered before user intent")
         let finished = self.expectation(description: "user action joined cleanup")
         let expected = deleting ? ["other": "synthetic-keep"] : ["target": "synthetic-new", "other": "synthetic-keep"]
-        Task {
+        // Native test hosts isolate this helper to MainActor. Admission must
+        // begin off that actor before the synchronous read-start barrier below.
+        Task.detached {
             do {
                 let result = try await service.saveForUserAction(expected, replacing: baseline,
                     removing: deleting ? ["target"] : [], migrating: state.snapshot(), didMigrate: { verified in
@@ -508,7 +510,7 @@ final class KeychainServiceCacheTests: XCTestCase {
                         return state.completeCleanup(verified)
                     })
                 XCTAssertEqual(result.keys, expected)
-            } catch { XCTFail("Unexpected error: (error)") }
+            } catch { XCTFail("Unexpected error: \(error)") }
             finished.fulfill()
         }
         XCTAssertEqual(state.readStarted.wait(timeout: .now() + 1), .success)

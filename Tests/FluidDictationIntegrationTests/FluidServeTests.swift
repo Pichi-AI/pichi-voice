@@ -647,15 +647,25 @@ final class FluidServeTests: XCTestCase {
     func testReaderTimeoutJoinsItsOwnedProcessEvenWhenTerminationIsIgnored() async throws {
         let tool = self.home.appendingPathComponent("synthetic-reader")
         let pidFile = self.home.appendingPathComponent("reader.pid")
-        let fixture = "#!/bin/sh\ntrap '' TERM\necho $$ > " + FluidServeSkill.shellQuoted(pidFile.path) + "\nwhile :; do :; done\n"
+        let terminatedFile = self.home.appendingPathComponent("reader.ignored-term")
+        let ignoredTerm = "echo ignored > " + FluidServeSkill.shellQuoted(terminatedFile.path)
+        let fixture = "#!/bin/sh\ntrap " + FluidServeSkill.shellQuoted(ignoredTerm) + " TERM\necho $$ > " + FluidServeSkill.shellQuoted(pidFile.path) + "\nwhile :; do :; done\n"
         try Data(fixture.utf8).write(to: tool)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tool.path)
+        // Leave room for native-host process startup; the production default
+        // remains unchanged. The fixture records TERM and keeps running.
+        let timeout: TimeInterval = 1
+        let started = ProcessInfo.processInfo.systemUptime
         let outcome: FluidServeSelfCheck.Outcome = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: FluidServeSelfCheck.run(tool: tool, timeout: 0.1))
+                continuation.resume(returning: FluidServeSelfCheck.run(tool: tool, timeout: timeout))
             }
         }
         XCTAssertEqual(outcome, .failed(PichiLocalization.text("The meeting reader did not answer in time.")))
+        XCTAssertEqual(try String(contentsOf: terminatedFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), "ignored",
+                       "The helper must install and handle TERM without exiting before the kill fallback")
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - started, timeout + 1.9,
+                                    "A TERM-resistant helper must consume the two-second grace before joined SIGKILL")
         let pid = try XCTUnwrap(Int32(try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
         XCTAssertEqual(kill(pid, 0), -1, "The owned helper must be reaped before timeout is returned")
         XCTAssertEqual(errno, ESRCH)
