@@ -96,6 +96,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var updates = 0
         var previousIDs: Set<UUID> = []
         var previousPartial: MeetingLivePartial?
+        let requiresBackground = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_BACKGROUND"] == "1"
+        var backgroundSeconds = 0
+        var backgroundUpdates = 0
+        var wasBackground = false
         do {
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic strict speech")
             let recording = try await coordinator.startRecording(configuration: configuration)
@@ -112,20 +116,30 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     throw MeetingMemoryAudioError.overload
                 }
                 let snapshot = coordinator.liveTranscript
+                let isBackground = UIApplication.shared.applicationState == .background
+                if isBackground { backgroundSeconds += 1 }
                 let ids = Set(snapshot.utterances.filter { !$0.text.isEmpty }.map(\.id))
                 if !ids.isEmpty || snapshot.partials.values.contains(where: { !$0.text.isEmpty }) {
                     firstTextSecond = firstTextSecond ?? second
                 }
                 let partial = snapshot.partials[.you]
-                if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) { updates += 1 }
+                if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
+                    updates += 1
+                    if isBackground && wasBackground { backgroundUpdates += 1 }
+                }
                 previousIDs = ids
                 previousPartial = partial
-                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates)")
+                wasBackground = isBackground
+                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) background=\(isBackground)")
             }
             player.stop()
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
             XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
+            if requiresBackground {
+                XCTAssertGreaterThanOrEqual(backgroundSeconds, 20, "The host must actually leave the foreground during paced recording")
+                XCTAssertGreaterThan(backgroundUpdates, 0, "Safe text must advance between actual background observations")
+            }
             let completed = try await coordinator.stopAndTranscribe()
             XCTAssertEqual(completed.state, .completed)
             XCTAssertFalse(completed.transcriptSegments.isEmpty)
@@ -140,7 +154,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let payload = try MeetingSharePayload.transcript(data: MeetingTranscriptExporter.json(for: completed), title: completed.title, fileExtension: "json")
             XCTAssertFalse(payload.includesAudio)
             payload.cleanup()
-            print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates)")
+            print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates) backgroundSeconds=\(backgroundSeconds) backgroundUpdates=\(backgroundUpdates)")
             // This is one service composition, not application termination. Stopping the
             // coordinator already joins capture/model work; terminating the shared model
             // residency here would invalidate later tests in this same hosted process.
