@@ -17,8 +17,8 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
     func testNativeLivePIIRetagsCompletedRowsAcrossPartialUpdates() async throws {
-        guard let path = ProcessInfo.processInfo.environment["PICHI_MOBILE_INFERENCE_ASSETS"] else { throw XCTSkip("Requires explicitly staged public privacy artifacts") }
-        let models = URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("models/privacy", isDirectory: true)
+        let assets = try MobileInferenceTestAssets.resolve()
+        let models = assets.appendingPathComponent("models/privacy", isDirectory: true)
         guard FileManager.default.fileExists(atPath: models.appendingPathComponent(PichiTranscriptPrivacyModelStore.descriptor.id).appendingPathComponent("model_int8.onnx").path) else { throw XCTSkip("Stage public privacy model under models/privacy/rubert-tiny-news-int8") }
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: models))
         try await privacy.prepare()
