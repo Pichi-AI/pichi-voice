@@ -429,6 +429,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         try await self.validateRecordingModels()
+        try Task.checkCancellation()
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
         let dependencyDescriptor = initialPCMDescriptor
             ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
         if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
@@ -436,8 +438,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             try await self.prepareRecordingDependencies(dependencyDescriptor.diarizationDependencies)
         }
         try Task.checkCancellation()
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
         try await self.capture.preflightPermissions()
         try Task.checkCancellation()
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
         guard self.startReservation == reservation,
               self.activeSession?.id == passiveOffer?.id,
               !self.hasBlockingActivityTaskExceptStart,
@@ -469,9 +473,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             else {
                 throw CancellationError()
             }
-            // Permission prompts deliberately run without an ASR lease. Resolve and validate
-            // the actual recording snapshot only once admission closes model/artifact changes.
-            recordingModelID = self.settings.selectedSpeechModel.rawValue
+            // Model installation and permission prompts run before the capture lease. Keep
+            // their chosen model pinned; only freeze its installed artifact after preparation.
+            guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
+            recordingModelID = selectedModelID
             recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(
                 languageCode: configuration.languageCode,
                 selectedModelID: recordingModelID

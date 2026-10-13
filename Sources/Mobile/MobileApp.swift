@@ -57,13 +57,15 @@ final class AppServices: ObservableObject {
                     ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
                 if piiRedactionEnabled, !(await privacy.isReady) { try await privacy.prepare() }
                 let microphone = try await resolveMicrophone(preferences.microphoneCoreAudioUID)
+                try Task.checkCancellation()
+                guard settings.selectedSpeechModel.rawValue == modelID else { throw CancellationError() }
                 return MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
                     microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
                     speakerLabelsEnabled: speakerLabelsEnabled, piiRedactionEnabled: piiRedactionEnabled)
             },
             redactorProvider: { privacy },
             validateRecordingModels: {
-                guard settings.selectedSpeechModel.isInstalled else { throw MeetingProcessingError.modelUnavailable }
+                try await asr.prepareSelectedModelForRecording()
             },
             prepareRecordingDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) },
             validateFrozenRecordingConfiguration: {

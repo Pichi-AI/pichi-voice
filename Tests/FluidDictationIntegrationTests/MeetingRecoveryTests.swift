@@ -4519,12 +4519,10 @@ final class MeetingRecoveryTests: XCTestCase {
         await gate.open()
         do {
             _ = try await start.value
-            XCTFail("The model selected under the lease must reject incompatible meeting language")
-        } catch {
-            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode("en"))
-        }
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1, "Invalid frozen configuration must roll back the acquired lease")
+            XCTFail("The prepared model cannot be replaced while its permission prompt is open")
+        } catch is CancellationError { }
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0, "Changed preparation must stop before acquiring capture")
         XCTAssertEqual(capture.startCount, 0, "Capture and captions cannot start with the stale preflight model")
         XCTAssertEqual(coordinator.liveTranscript, .empty)
         XCTAssertEqual(coordinator.state, .idle)
@@ -4571,18 +4569,37 @@ final class MeetingRecoveryTests: XCTestCase {
         await gate.open()
         do {
             _ = try await start.value
-            XCTFail("The actual post-admission model must satisfy the frozen host capabilities")
-        } catch {
-            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedArchitecture)
-        }
-        XCTAssertEqual(frozenConfigurations.count, 1)
-        XCTAssertEqual(frozenConfigurations.first?.asrModel, "parakeet-tdt")
-        XCTAssertEqual(frozenConfigurations.first?.languageCode, "ru")
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1)
+            XCTFail("The chosen model cannot change between preparation and capture")
+        } catch is CancellationError { }
+        XCTAssertTrue(frozenConfigurations.isEmpty)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
         XCTAssertEqual(capture.startCount, 0)
         XCTAssertEqual(coordinator.liveTranscript, .empty)
         XCTAssertTrue(coordinator.isQuiescent)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
+    func testFrozenHostCapabilitiesStillRejectPreparedModelBeforeCapture() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .parakeetTDT
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            validateFrozenRecordingConfiguration: { try PichiMeetingProviderFactory.validateRecordingConfiguration($0, isAppleSilicon: false) })
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "ru"
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unsupported frozen hardware must reject capture") }
+        catch { XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedArchitecture) }
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
         let sessions = try await store.loadAll()
         XCTAssertTrue(sessions.isEmpty)
     }
