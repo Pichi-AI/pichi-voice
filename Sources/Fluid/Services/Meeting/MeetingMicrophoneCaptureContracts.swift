@@ -1,9 +1,9 @@
-import CoreAudio
 import Foundation
 
 /// Verified outcome of binding the AUHAL input unit to a specific CoreAudio device (plan §6).
+/// Persist the UInt32 scalar behind macOS AudioObjectID so the unchanged schema decodes on iOS.
 nonisolated enum MeetingMicrophoneBindingOutcome: Equatable, Sendable {
-    case boundVerified(AudioObjectID)
+    case boundVerified(UInt32)
     /// Bind failed but the default input already IS the requested device (Bluetooth/aggregate).
     case defaultMatchesRequested
     case unavailable(reason: String)
@@ -17,7 +17,7 @@ extension MeetingMicrophoneBindingOutcome: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
         case .boundVerified:
-            self = try .boundVerified(container.decode(AudioObjectID.self, forKey: .deviceID))
+            self = try .boundVerified(container.decode(UInt32.self, forKey: .deviceID))
         case .defaultMatchesRequested:
             self = .defaultMatchesRequested
         case .unavailable:
