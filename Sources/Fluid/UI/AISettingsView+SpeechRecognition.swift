@@ -262,7 +262,7 @@ extension VoiceEngineSettingsView {
                             label: "Accuracy"
                         )
                     }
-                    .frame(width: 140, alignment: .center)
+                    .fixedSize(horizontal: true, vertical: false)
                     .help(metadata.map { PichiLocalization.text($0.performanceExplanation) } ?? PichiLocalization.text("Relative ratings for comparing models, not measured transcription accuracy."))
                     .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
                 } else {
@@ -489,7 +489,7 @@ extension VoiceEngineSettingsView {
                 }
             } else {
                 ZStack(alignment: .trailing) {
-                    if model.supportsFolderImport {
+                    if model.requiresFolderImport {
                         Button("Import model folder") {
                             self.viewModel.importSpeechModel(model)
                         }
@@ -537,6 +537,18 @@ extension VoiceEngineSettingsView {
                     }
                 }
                 .frame(width: model.requiresExternalArtifacts ? 150 : 120, alignment: .trailing)
+            }
+            if model.supportsFolderImport && model.supportsAutomaticDownload {
+                Button {
+                    self.viewModel.importSpeechModel(model)
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                        .font(self.theme.typography.body)
+                }
+                .buttonStyle(.plain)
+                .help(PichiLocalization.text("Import model folder"))
+                .accessibilityLabel(PichiLocalization.text("Import model folder"))
+                .disabled(self.viewModel.areSpeechModelActionsBlocked)
             }
         }
         .padding(.horizontal, 12)

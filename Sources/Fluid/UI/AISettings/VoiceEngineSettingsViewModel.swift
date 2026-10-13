@@ -169,7 +169,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
 
     func downloadSpeechModel(_ model: SettingsStore.SpeechModel, updateWeights: Bool = false) {
         guard !self.areSpeechModelActionsBlocked else { return }
-        if model.supportsFolderImport {
+        if model.requiresFolderImport {
             self.importSpeechModel(model)
             return
         }

@@ -121,6 +121,24 @@ nonisolated enum PichiLocalization {
         return String(format: resource.value, locale: resource.locale, arguments: arguments)
     }
 
+    /// Shared stats presentation. Keep the estimate numeric until rendering so
+    /// compact share cards never have to interpret translated unit labels.
+    static func formattedTimeSaved(minutes: Double, hoursOnly: Bool = false,
+                                   language: PichiInterfaceLanguage = PichiLocalization.language,
+                                   bundle: Bundle = .main) -> String {
+        guard minutes >= 1 else { return self.text("< 1 min", language: language, bundle: bundle) }
+        let wholeMinutes = Int(minutes)
+        if wholeMinutes < 60 {
+            return self.format("%lld min", language: language, bundle: bundle, arguments: [wholeMinutes])
+        }
+        let hours = wholeMinutes / 60
+        let remainder = wholeMinutes % 60
+        if hoursOnly || remainder == 0 {
+            return self.format("%lldh", language: language, bundle: bundle, arguments: [hours])
+        }
+        return self.format("%lldh %lldm", language: language, bundle: bundle, arguments: [hours, remainder])
+    }
+
     static func configureApplicationLanguage() {
         // Scope Apple's standard AppKit menu localization to this app's own defaults domain.
         // Updating native system menus takes effect on the next app launch.

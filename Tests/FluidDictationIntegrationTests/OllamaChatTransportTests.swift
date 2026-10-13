@@ -52,6 +52,33 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertTrue(context.fixture.requests.isEmpty)
     }
 
+    func testPinnedEnhancementSurvivesCommandRequestsAndReleasesToFiniteRetention() throws {
+        let context = OllamaTransportContext()
+        defer { context.cleanup() }
+        let policy = LocalAIModelResidencyPolicy.shared
+        let selected = self.config()
+        policy.pin(baseURL: selected.baseURL, model: selected.model)
+        defer { policy.unpin(baseURL: selected.baseURL, model: selected.model) }
+
+        // A command uses the ordinary short lease; the selected enhancement
+        // artifact stays pinned regardless of which UI entry point sent it.
+        let command = try OllamaTransportFixture.body(context.client.buildRequest(selected))
+        XCTAssertEqual(command["keep_alive"] as? Int, -1)
+        let builtInCommand = self.config(baseURL: "http://localhost:11434/v1")
+        XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(builtInCommand))["keep_alive"] as? Int, -1)
+        var dictation = selected
+        DictationPostProcessingService.configureInteractiveLocalRequest(&dictation)
+        let enhanced = try OllamaTransportFixture.body(context.client.buildRequest(dictation))
+        XCTAssertEqual(enhanced["keep_alive"] as? Int, -1)
+        XCTAssertEqual(enhanced["think"] as? Bool, false)
+
+        let other = LLMClient.Config(messages: selected.messages, model: "synthetic-other:latest",
+                                     baseURL: selected.baseURL, apiKey: selected.apiKey)
+        XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(other))["keep_alive"] as? String, "60s")
+        policy.unpin(baseURL: selected.baseURL, model: selected.model)
+        XCTAssertEqual(try OllamaTransportFixture.body(context.client.buildRequest(selected))["keep_alive"] as? String, "60s")
+    }
+
     func testInteractiveNativeSessionBoundsTotalResponseLifetimeAndPreservesFixtureIsolation() async throws {
         let context = OllamaTransportContext()
         defer { context.cleanup() }
@@ -87,22 +114,17 @@ final class OllamaChatTransportTests: XCTestCase {
         }
     }
 
-    func testOwnedNativeSessionCancellationStopsHeldRequestAndJoinsInvalidation() async throws {
+    func testOwnedNativeSessionCancellationJoinsRequestAndInvalidation() async throws {
         let context = OllamaTransportContext(body: "", held: true)
         defer { context.cleanup() }
         let owned = try context.client.makeBoundedLocalSession(self.config())
         let request = try context.client.buildRequest(self.config())
-        let stopped = context.fixture.expectStop(for: "/api/chat")
         let pending = Task { try await owned.session.data(for: request) }
         for _ in 0..<100 where context.fixture.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(context.fixture.requests.count, 1)
+        let stopped = context.fixture.stopExpectation(for: "/api/chat")
         await owned.lifetime.invalidateAndWait(for: owned.session)
         XCTAssertTrue(owned.lifetime.hasInvalidated)
-        // Invalidation's delegate notification and URLProtocol.stopLoading run
-        // on separate queues. Observe the real stop event explicitly instead
-        // of assuming it precedes didBecomeInvalid.
-        await self.fulfillment(of: [stopped], timeout: 1)
-        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
         do {
             _ = try await pending.value
             XCTFail("Cancelled request cannot complete successfully")
@@ -110,6 +132,10 @@ final class OllamaChatTransportTests: XCTestCase {
             XCTAssertEqual((error as? URLError)?.code, .cancelled,
                            "Session invalidation must cancel the held task, not fail for an unrelated reason")
         }
+        // invalidateAndCancel may notify the session delegate before request cancellation
+        // finishes. Production joins the request as well as the session's invalidation.
+        await self.fulfillment(of: [stopped], timeout: 2)
+        XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
     }
 
     func testNativeMetadataHasItsOwnResourceBoundAndJoinedCancellation() async throws {
@@ -123,25 +149,31 @@ final class OllamaChatTransportTests: XCTestCase {
         let pending = Task { try await context.client.call(config) }
         for _ in 0..<100 where context.fixture.metadataRequests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(context.fixture.metadataRequests.count, 1)
+        let stopped = context.fixture.stopExpectation(for: "/api/version")
         pending.cancel()
         do { _ = try await pending.value; XCTFail("Cancelled metadata cannot admit inference") } catch {}
+        await self.fulfillment(of: [stopped], timeout: 2)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/version"), 1)
         XCTAssertTrue(context.fixture.requests.isEmpty)
     }
 
-    func testSelectedNativePreloadUsesEmptyContentAndTheDictationContext() async throws {
-        let context = OllamaTransportContext(body: #"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"load"}"#)
+    func testSelectedNativeWarmupRunsSyntheticInferenceWithTheDictationContext() async throws {
+        let context = OllamaTransportContext(body: #"{"message":{"role":"assistant","content":"OK"},"done":true,"done_reason":"stop"}"#)
         defer { context.cleanup() }
         let route = DictationProviderRoute(providerID: "synthetic-provider", providerKey: "synthetic-provider",
                                            baseURL: "http://127.0.0.1:11434/v1", model: "synthetic-selected:latest", apiKey: "")
+        LocalAIModelResidencyPolicy.shared.pin(baseURL: route.baseURL, model: route.model)
+        defer { LocalAIModelResidencyPolicy.shared.unpin(baseURL: route.baseURL, model: route.model) }
         try await DictationPostProcessingService.shared.prewarmLocalModel(route, client: context.client)
         let request = try XCTUnwrap(context.fixture.requests.first)
         let body = try OllamaTransportFixture.body(request)
         XCTAssertEqual(body["model"] as? String, route.model)
-        XCTAssertEqual((body["messages"] as? [[String: Any]])?.count, 0)
+        XCTAssertEqual((body["messages"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual((body["messages"] as? [[String: Any]])?.first?["content"] as? String, "Reply with OK only.")
+        XCTAssertEqual((body["options"] as? [String: Any])?["num_predict"] as? Int, 16)
         XCTAssertEqual(body["stream"] as? Bool, false)
         XCTAssertEqual(body["think"] as? Bool, false)
-        XCTAssertEqual(body["keep_alive"] as? Int, 1800)
+        XCTAssertEqual(body["keep_alive"] as? Int, -1)
         XCTAssertEqual((body["options"] as? [String: Any])?["num_ctx"] as? Int, 8192)
         XCTAssertEqual(request.timeoutInterval, 30)
         XCTAssertEqual(context.fixture.requests.count, 1)
@@ -172,6 +204,7 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertTrue(MeetingSummaryActivityCoordinator.shared.isProcessing)
         task.cancel()
         do { try await task.value; XCTFail("Cancelled warmup cannot succeed") } catch {}
+        await self.fulfillment(of: [context.fixture.stopExpectation(for: "/api/chat")], timeout: 2)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
         XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
         try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) {}
@@ -199,8 +232,9 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(context.fixture.requests.count, 1)
         let activity = OllamaWarmupActivity()
         let result = try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: activity) {
+            await self.fulfillment(of: [context.fixture.stopExpectation(for: "/api/chat")], timeout: 2)
             XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1,
-                                        "Explicit summary must join optional transport cancellation before taking model ownership")
+                                        "Cancelling optional warmup must stop its held transport fixture")
             XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
             return try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) { 42 }
         }
@@ -535,6 +569,7 @@ final class OllamaChatTransportTests: XCTestCase {
                 } else { false }
                 XCTAssertTrue(error is CancellationError || cancelledNetwork, "Unexpected cancellation error: \(error)")
             }
+            await self.fulfillment(of: [context.fixture.stopExpectation(for: "/api/chat")], timeout: 2)
             XCTAssertGreaterThanOrEqual(context.fixture.stops, 1, "The caller must cancel its owned URLSession task")
             XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
             XCTAssertEqual(context.fixture.requests.count, 1)
@@ -623,6 +658,7 @@ final class OllamaChatTransportTests: XCTestCase {
                 } else { false }
                 XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled || networkCancelled)
             }
+            await self.fulfillment(of: [context.fixture.stopExpectation(for: path)], timeout: 2)
             XCTAssertGreaterThanOrEqual(context.fixture.stops, 1)
             XCTAssertGreaterThanOrEqual(context.fixture.stops(for: path), 1, "Cancellation must stop the held metadata request itself")
             XCTAssertTrue(context.fixture.requests.isEmpty)
@@ -690,10 +726,12 @@ final class OllamaChatTransportTests: XCTestCase {
         }
         for _ in 0..<100 where context.fixture.metadataRequests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(context.fixture.metadataRequests.count, 1)
+        let stopped = context.fixture.stopExpectation(for: "/api/version")
         pending.cancel()
         do { _ = try await pending.value; XCTFail("Cancelled admission cannot publish a summary") }
         catch { XCTAssertTrue(error is CancellationError, "Unexpected cancellation: \(error)") }
         XCTAssertTrue(context.fixture.requests.isEmpty)
+        await self.fulfillment(of: [stopped], timeout: 2)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/version"), 1)
     }
 
@@ -818,23 +856,23 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
     private var recordedMetadataRequests: [URLRequest] = []
     private var stopCount = 0
     private var stoppedPaths: [String: Int] = [:]
-    private var stopExpectations: [String: XCTestExpectation] = [:]
-
-    func expectStop(for path: String) -> XCTestExpectation {
-        let expectation = XCTestExpectation(description: "URLProtocol stopped \(path)")
-        let alreadyStopped = self.lock.withLock {
-            if (self.stoppedPaths[path] ?? 0) > 0 { return true }
-            self.stopExpectations[path] = expectation
-            return false
-        }
-        if alreadyStopped { expectation.fulfill() }
-        return expectation
-    }
+    private var stopExpectations: [String: [XCTestExpectation]] = [:]
 
     var requests: [URLRequest] { self.lock.withLock { self.recordedRequests } }
     var metadataRequests: [URLRequest] { self.lock.withLock { self.recordedMetadataRequests } }
     var stops: Int { self.lock.withLock { self.stopCount } }
     func stops(for path: String) -> Int { self.lock.withLock { self.stoppedPaths[path] ?? 0 } }
+
+    func stopExpectation(for path: String) -> XCTestExpectation {
+        let expectation = XCTestExpectation(description: "URLProtocol stopped \(path)")
+        let stopped = self.lock.withLock {
+            if self.stoppedPaths[path, default: 0] > 0 { return true }
+            self.stopExpectations[path, default: []].append(expectation)
+            return false
+        }
+        if stopped { expectation.fulfill() }
+        return expectation
+    }
 
     init(status: Int, body: String, chunkSize: Int?, held: Bool, version: String, showBody: String, heldMetadataPath: String?) {
         self.status = status
@@ -874,12 +912,12 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
     }
 
     func stopped(path: String) {
-        let expectation = self.lock.withLock {
+        let expectations = self.lock.withLock {
             self.stopCount += 1
             self.stoppedPaths[path, default: 0] += 1
-            return self.stopExpectations.removeValue(forKey: path)
+            return self.stopExpectations.removeValue(forKey: path) ?? []
         }
-        expectation?.fulfill()
+        for expectation in expectations { expectation.fulfill() }
     }
 
     static func body(_ request: URLRequest) throws -> [String: Any] {

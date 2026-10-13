@@ -229,15 +229,16 @@ final class DictationPostProcessingService {
         config.maxRetries = 1
     }
 
-    /// Empty native chat loads only the selected artifact, without sending user
-    /// content or generating a synthetic answer. The caller owns and joins this
-    /// work; the existing admission token remains held until transport drains.
+    /// A tiny synthetic inference loads the selected artifact and exercises its
+    /// kernels before the first dictation. No user content is used. The caller
+    /// owns and joins this work until transport and admission have drained.
     func prewarmLocalModel(_ route: DictationProviderRoute, client: LLMClient = .shared) async throws {
         guard OllamaChatAdapter.supports(route.baseURL), !route.model.isEmpty else { throw LLMError.invalidURL }
         try Task.checkCancellation()
-        var config = LLMClient.Config(messages: [], model: route.model, baseURL: route.baseURL,
+        var config = LLMClient.Config(messages: [["role": "user", "content": "Reply with OK only."]], model: route.model, baseURL: route.baseURL,
                                       apiKey: route.apiKey, streaming: false,
                                       benchmarkID: "warm-\(UUID().uuidString)")
+        config.maxTokens = 16
         config.providerOptions = route.connectionOptions
         Self.configureInteractiveLocalRequest(&config)
         let request = config

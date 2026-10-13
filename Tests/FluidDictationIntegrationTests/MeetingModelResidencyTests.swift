@@ -3,6 +3,308 @@ import Foundation
 import XCTest
 
 @MainActor
+final class LocalAIModelResidencyTests: XCTestCase {
+    private func route(_ model: String) -> DictationProviderRoute {
+        .init(providerID: "fixture", providerKey: "fixture", baseURL: "http://localhost:11434/v1", model: model, apiKey: "")
+    }
+
+    private func eventually(_ condition: () -> Bool) async throws {
+        for _ in 0..<100 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTFail("The controller did not finish its deterministic fixture operation")
+    }
+
+    func testPinPolicyNormalizesEndpointAndDefaultModelTagWithoutPinningOtherArtifacts() {
+        let policy = LocalAIModelResidencyPolicy()
+        policy.pin(baseURL: " http://LOCALHOST:11434/v1/ ", model: " fixture ")
+        XCTAssertTrue(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture:latest"))
+        XCTAssertTrue(policy.isPinned(baseURL: "http://127.0.0.1:11434/v1", model: "fixture:latest"))
+        XCTAssertTrue(policy.isPinned(baseURL: "http://[::1]:11434/v1", model: "fixture:latest"))
+        XCTAssertFalse(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture:other"))
+        policy.unpin(baseURL: "http://localhost:11434/v1", model: "fixture:latest")
+        XCTAssertFalse(policy.isPinned(baseURL: "http://localhost:11434/v1", model: "fixture"))
+        policy.pin(baseURL: "https://remote.example/v1", model: "fixture")
+        XCTAssertFalse(policy.isPinned(baseURL: "https://remote.example/v1", model: "fixture"))
+        XCTAssertNil(LocalAIModelResidencyPolicy.identity(baseURL: "http://secret@localhost:11434/v1", model: "fixture"))
+    }
+
+    func testReadinessRequiresMatchingArtifactContextAndIndefiniteExpiry() {
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        func ready(context: Int? = 8192, expiry: String? = "2318-10-12T12:00:00.000000000Z", model: String = "fixture:latest") -> Bool {
+            LocalAIModelResidencyTransport.isReady([
+                .init(name: model, model: model, context_length: context, expires_at: expiry)
+            ], model: "fixture", now: now)
+        }
+        XCTAssertTrue(ready())
+        XCTAssertFalse(ready(context: 262_144))
+        XCTAssertFalse(ready(context: nil))
+        XCTAssertFalse(ready(expiry: "2026-10-12T12:00:00Z"))
+        XCTAssertFalse(ready(expiry: nil))
+        XCTAssertFalse(ready(expiry: "invalid"))
+        XCTAssertFalse(ready(model: "other:latest"))
+    }
+
+    func testAppLifetimeStartCoalescesWarmupAndRecoversEvictionAfterIdleAdmission() async throws {
+        let selected = self.route("fixture")
+        let policy = LocalAIModelResidencyPolicy()
+        var warms = 0
+        var probes = 0
+        var releases = 0
+        var now: TimeInterval = 0
+        var allowed = true
+        var resident = true
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { allowed },
+            warm: { _ in warms += 1 },
+            isReady: { _ in probes += 1; return resident },
+            release: { route in
+                XCTAssertFalse(policy.isPinned(baseURL: route.baseURL, model: route.model))
+                releases += 1
+                return true
+            }, now: { now }
+        ), policy: policy)
+        controller.start()
+        controller.start()
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
+        for _ in 0..<5 { controller.refresh(); await Task.yield() }
+        XCTAssertEqual(warms, 1)
+        XCTAssertEqual(probes, 0)
+        XCTAssertTrue(policy.isPinned(baseURL: selected.baseURL, model: selected.model))
+        // No view or window owns this controller. The same app-wide task remains
+        // alive across idle time and only inspects a healthy resident runner.
+        now = 60
+        controller.refresh()
+        try await self.eventually { probes == 1 && !controller.hasPendingOperation }
+        XCTAssertEqual(warms, 1)
+        allowed = false
+        resident = false
+        now = 120
+        controller.refresh()
+        await Task.yield()
+        XCTAssertEqual(probes, 1)
+        allowed = true
+        controller.refresh()
+        try await self.eventually { warms == 2 && !controller.hasPendingOperation }
+        XCTAssertEqual(probes, 2)
+        await controller.shutdown()
+        XCTAssertEqual(releases, 1)
+    }
+
+    func testRouteChangeUnpinsAndJoinsOldWarmupBeforeReleasingOrWarmingNextArtifact() async throws {
+        let first = self.route("first")
+        let second = self.route("second")
+        let policy = LocalAIModelResidencyPolicy()
+        let entered = ResidencyLatch()
+        let complete = ResidencyLatch()
+        var selected: DictationProviderRoute? = first
+        var events: [String] = []
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true },
+            warm: { route in
+                events.append("warm:\(route.model)")
+                if route.model == first.model { entered.release(); await complete.wait() }
+            }, isReady: { _ in true },
+            release: { route in events.append("release:\(route.model)"); return true }
+        ), policy: policy)
+        controller.start()
+        await entered.wait()
+        selected = second
+        controller.refresh()
+        XCTAssertFalse(policy.isPinned(baseURL: first.baseURL, model: first.model))
+        await Task.yield()
+        XCTAssertEqual(events, ["warm:first"])
+        complete.release()
+        try await self.eventually { events.count == 3 }
+        XCTAssertEqual(events, ["warm:first", "release:first", "warm:second"])
+        XCTAssertTrue(policy.isPinned(baseURL: second.baseURL, model: second.model))
+        await controller.shutdown()
+    }
+
+    func testDisablingWhileBusyDefersHandbackUntilIdleWithoutLoadingAnythingElse() async throws {
+        var selected: DictationProviderRoute? = self.route("fixture")
+        var allowed = true
+        var warms = 0
+        var releases = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { allowed },
+            warm: { _ in warms += 1 }, isReady: { _ in true }, release: { _ in releases += 1; return true }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
+        allowed = false
+        selected = nil
+        controller.refresh()
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(releases, 0)
+        allowed = true
+        controller.refresh()
+        try await self.eventually { releases == 1 }
+        XCTAssertEqual(warms, 1)
+        await controller.shutdown()
+        XCTAssertEqual(releases, 1)
+    }
+
+    func testTerminationJoinsNoncooperativeWarmupBeforeHandbackAndCannotRestart() async throws {
+        let selected = self.route("fixture")
+        let entered = ResidencyLatch()
+        let complete = ResidencyLatch()
+        let policy = LocalAIModelResidencyPolicy()
+        var warms = 0
+        var releases = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true },
+            warm: { _ in warms += 1; entered.release(); await complete.wait() },
+            isReady: { _ in true }, release: { _ in releases += 1; return true }
+        ), policy: policy)
+        controller.start()
+        await entered.wait()
+        let stopping = Task { await controller.shutdown() }
+        try await self.eventually { !policy.isPinned(baseURL: selected.baseURL, model: selected.model) }
+        XCTAssertEqual(releases, 0)
+        complete.release()
+        await stopping.value
+        XCTAssertEqual(releases, 1)
+        controller.start()
+        controller.refresh()
+        await Task.yield()
+        XCTAssertEqual(warms, 1)
+    }
+
+    func testFailedWarmupUsesBackoffDespiteRepeatedSettingsRefreshes() async throws {
+        let selected = self.route("fixture")
+        var now: TimeInterval = 0
+        var warms = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true },
+            warm: { _ in warms += 1; throw CocoaError(.fileReadUnknown) },
+            isReady: { _ in true }, release: { _ in true }, now: { now }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
+        now = 30
+        for _ in 0..<5 { controller.refresh(); await Task.yield() }
+        XCTAssertEqual(warms, 1)
+        now = 60
+        controller.refresh()
+        try await self.eventually { warms == 2 && !controller.hasPendingOperation }
+        now = 120
+        for _ in 0..<5 { controller.refresh(); await Task.yield() }
+        XCTAssertEqual(warms, 2)
+        now = 180
+        controller.refresh()
+        try await self.eventually { warms == 3 && !controller.hasPendingOperation }
+        await controller.shutdown()
+    }
+
+    func testTerminationUsesHandbackWithoutOrdinaryAdmissionAfterGlobalTermination() async throws {
+        let selected = self.route("fixture")
+        let warmed = ResidencyLatch()
+        var ordinary = 0
+        var termination = 0
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true }, warm: { _ in warmed.release() },
+            isReady: { _ in true }, release: { _ in ordinary += 1; return true },
+            releaseForTermination: { _ in termination += 1; return true }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        await warmed.wait()
+        await controller.shutdown()
+        XCTAssertEqual(ordinary, 0)
+        XCTAssertEqual(termination, 1)
+    }
+
+    func testOrdinaryHandbackProbeHoldsAdmissionUntilSummaryTakeoverCancellationDrains() async throws {
+        let owner = MeetingModelResidencyCoordinator()
+        let activity = MeetingSummaryActivityCoordinator()
+        let audio = LocalAIHandbackActivity()
+        let probeEntered = ResidencyLatch()
+        let probeComplete = ResidencyLatch()
+        var chatStarted = false
+        var summaryStarted = false
+        let handback = Task {
+            await LocalAIModelResidencyTransport.releaseWhileIdle(self.route("fixture"), residency: owner, activity: activity) { _ in
+                probeEntered.release()
+                await probeComplete.wait() // Simulate ps waiting while takeover requests cancellation.
+                if !Task.isCancelled { chatStarted = true }
+                return !Task.isCancelled
+            }
+        }
+        await probeEntered.wait()
+        XCTAssertTrue(activity.isProcessing)
+        do {
+            try await owner.withExclusive(attemptID: UUID(), participants: []) { XCTFail("Probe still owns local model admission") }
+            XCTFail("Expected busy")
+        } catch { XCTAssertTrue(error is MeetingModelResidencyError) }
+        let summary = Task {
+            try await activity.withSummary(activity: audio) {
+                try await owner.withExclusive(attemptID: UUID(), participants: []) {
+                    summaryStarted = true
+                }
+            }
+        }
+        // Ordinary work cannot slip into the closed summary admission while its
+        // cancel-and-join waits for the held probe to return.
+        try await self.eventually {
+            if let token = activity.beginProcessing() { activity.endProcessing(token); return false }
+            return true
+        }
+        XCTAssertFalse(summaryStarted)
+        XCTAssertFalse(chatStarted)
+        probeComplete.release()
+        let released = await handback.value
+        XCTAssertFalse(released)
+        try await summary.value
+        XCTAssertTrue(summaryStarted)
+        XCTAssertFalse(chatStarted)
+        XCTAssertFalse(activity.isProcessing)
+    }
+
+    func testCancelledHandbackRemainsPendingAndRetriesAfterIdleRefresh() async throws {
+        let first = self.route("first")
+        let second = self.route("second")
+        var selected: DictationProviderRoute? = first
+        var warms = 0
+        var releases = 0
+        var handbackCompleted = false
+        let controller = LocalAIModelResidencyController(dependencies: .init(
+            selectedRoute: { selected }, canWarm: { true }, warm: { _ in warms += 1 },
+            isReady: { _ in true }, release: { route in
+                if route.model == first.model {
+                    releases += 1
+                    if releases == 1 { return false } // Joined summary cancellation or failed transport.
+                    handbackCompleted = true
+                }
+                return true
+            }
+        ), policy: LocalAIModelResidencyPolicy())
+        controller.start()
+        try await self.eventually { warms == 1 && !controller.hasPendingOperation }
+        selected = second
+        controller.refresh()
+        try await self.eventually { warms == 2 && !controller.hasPendingOperation }
+        XCTAssertEqual(releases, 1)
+        XCTAssertFalse(handbackCompleted)
+        controller.refresh()
+        try await self.eventually { handbackCompleted }
+        XCTAssertEqual(releases, 2)
+        controller.refresh()
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(releases, 2, "Only a verified handback removes the old route from pending cleanup")
+        await controller.shutdown()
+    }
+}
+
+@MainActor
+private final class LocalAIHandbackActivity: ASRActivityLeasing {
+    func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease { .init(id: UUID(), activity: activity) }
+    func releaseExclusiveActivity(_ lease: ASRActivityLease) {}
+    func prepareMeetingAudioHandoff(_ lease: ASRActivityLease) async throws {}
+    func completeMeetingAudioHandback(_ lease: ASRActivityLease) async {}
+}
+
+@MainActor
 private final class ResidencyTrace {
     var events: [String] = []
     func participant(_ owner: String, loaded: Bool) -> MeetingModelParticipant {

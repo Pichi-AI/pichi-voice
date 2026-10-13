@@ -139,7 +139,7 @@ final class ParakeetSpeechModelCatalogTests: XCTestCase {
             "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
             "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
         ]))
-        XCTAssertEqual(SettingsStore.SpeechModel.defaultModel, CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase)
+        XCTAssertEqual(SettingsStore.SpeechModel.defaultModel, .gigaam)
     }
 
     func testHostedSmallVariantsUseExactArchivesAndNoInventedPerformanceRatings() throws {

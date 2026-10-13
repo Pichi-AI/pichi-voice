@@ -70,7 +70,7 @@ struct StatsView: View {
     private var shareContent: StatsShareContent {
         StatsShareContent(
             totalWords: self.stats.totalWords,
-            timeSaved: self.stats.formattedTimeSaved(typingWPM: self.settings.userTypingWPM),
+            timeSavedMinutes: self.stats.timeSavedMinutes(typingWPM: self.settings.userTypingWPM),
             currentStreak: self.stats.currentStreak,
             totalTranscriptions: self.stats.totalTranscriptions,
             keystrokesSaved: self.stats.totalCharacters,

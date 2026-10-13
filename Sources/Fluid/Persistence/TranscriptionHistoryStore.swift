@@ -783,20 +783,7 @@ extension TranscriptionHistoryStore {
         }
 
         func formattedTimeSaved(typingWPM: Int = 40) -> String {
-            let minutes = self.timeSavedMinutes(typingWPM: typingWPM)
-
-            if minutes < 1 {
-                return "< 1m"
-            } else if minutes < 60 {
-                return "\(Int(minutes))m"
-            } else {
-                let hours = Int(minutes) / 60
-                let mins = Int(minutes) % 60
-                if mins == 0 {
-                    return "\(hours)h"
-                }
-                return "\(hours)h \(mins)m"
-            }
+            PichiLocalization.formattedTimeSaved(minutes: self.timeSavedMinutes(typingWPM: typingWPM))
         }
     }
 
@@ -853,22 +840,9 @@ extension TranscriptionHistoryStore {
         return max(0, typingTime - speakingTime)
     }
 
-    /// Formatted time saved string (e.g., "2h 45m" or "45m")
+    /// Time saved in the selected interface language.
     func formattedTimeSaved(typingWPM: Int = 40) -> String {
-        let minutes = self.timeSavedMinutes(typingWPM: typingWPM)
-
-        if minutes < 1 {
-            return "< 1m"
-        } else if minutes < 60 {
-            return "\(Int(minutes))m"
-        } else {
-            let hours = Int(minutes) / 60
-            let mins = Int(minutes) % 60
-            if mins == 0 {
-                return "\(hours)h"
-            }
-            return "\(hours)h \(mins)m"
-        }
+        PichiLocalization.formattedTimeSaved(minutes: self.timeSavedMinutes(typingWPM: typingWPM))
     }
 
     // MARK: - Today Time Saved
@@ -881,7 +855,7 @@ extension TranscriptionHistoryStore {
         self.todaySummary.timeSavedMinutes(typingWPM: typingWPM, speakingWPM: speakingWPM)
     }
 
-    /// Formatted time saved today string (e.g., "2h 45m" or "45m")
+    /// Today's time saved in the selected interface language.
     func formattedTimeSavedToday(typingWPM: Int = 40) -> String {
         self.todaySummary.formattedTimeSaved(typingWPM: typingWPM)
     }

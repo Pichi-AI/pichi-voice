@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 /// app names or times of day ever leave the Mac through this card.
 struct StatsShareContent {
     let totalWords: Int
-    let timeSaved: String
+    let timeSavedMinutes: Double
     let currentStreak: Int
     let totalTranscriptions: Int
     let keystrokesSaved: Int
@@ -63,7 +63,7 @@ enum StatsShareStat: String, CaseIterable, Identifiable {
         case .keystrokes: return Self.compact(content.keystrokesSaved)
         case .timeSaved:
             // Once it is hours, the minutes are noise on a share card.
-            return content.timeSaved.split(separator: " ").first { $0.hasSuffix("h") }.map(String.init) ?? content.timeSaved
+            return PichiLocalization.formattedTimeSaved(minutes: content.timeSavedMinutes, hoursOnly: true)
         case .streak: return "\(content.currentStreak)"
         case .dictations: return content.totalTranscriptions.formatted()
         case .aiPolish: return "\(content.aiPolishRate)%"

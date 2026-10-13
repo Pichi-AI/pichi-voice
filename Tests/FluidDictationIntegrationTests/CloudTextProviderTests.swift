@@ -5,8 +5,29 @@ import XCTest
 private nonisolated final class CloudFixtureCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    private var expectations: [XCTestExpectation] = []
     var value: Int { self.lock.withLock { self.count } }
-    func next() -> Int { self.lock.withLock { self.count += 1; return self.count } }
+    func next() -> Int {
+        let (count, expectations) = self.lock.withLock {
+            self.count += 1
+            let expectations = self.expectations
+            self.expectations.removeAll()
+            return (self.count, expectations)
+        }
+        for expectation in expectations { expectation.fulfill() }
+        return count
+    }
+
+    func expectation(description: String) -> XCTestExpectation {
+        let expectation = XCTestExpectation(description: description)
+        let reached = self.lock.withLock {
+            if self.count > 0 { return true }
+            self.expectations.append(expectation)
+            return false
+        }
+        if reached { expectation.fulfill() }
+        return expectation
+    }
 }
 
 private nonisolated final class CloudFixturePaths: @unchecked Sendable {
@@ -27,6 +48,9 @@ private nonisolated final class CloudFixtureClock: @unchecked Sendable {
 private nonisolated final class CloudProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data)?)?
     nonisolated(unsafe) static var stops = CloudFixtureCounter()
+    // Bind callback evidence before URLSession can start or stop this instance.
+    // A late stop from an older exchange must not count toward the next fixture.
+    private let requestStops = CloudProviderFixtureProtocol.stops
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -37,7 +61,7 @@ private nonisolated final class CloudProviderFixtureProtocol: URLProtocol, @unch
             self.client?.urlProtocolDidFinishLoading(self)
         } catch { self.client?.urlProtocol(self, didFailWithError: error) }
     }
-    override func stopLoading() { _ = Self.stops.next() }
+    override func stopLoading() { _ = self.requestStops.next() }
 }
 
 @MainActor
@@ -163,14 +187,18 @@ final class CloudTextProviderTests: XCTestCase {
         _ = try await authorization.headers(for: provider, credential: "synthetic", options: [:])
         XCTAssertEqual(exchanges.value, 2, "Refresh before the token expires instead of waiting for an API failure")
         let started = CloudFixtureCounter()
-        CloudProviderFixtureProtocol.stops = CloudFixtureCounter()
+        let stops = CloudFixtureCounter()
+        CloudProviderFixtureProtocol.stops = stops
+        let stopped = stops.expectation(description: "Canceled OAuth URLProtocol stopped")
         CloudProviderFixtureProtocol.handler = { _ in _ = started.next(); return nil }
         let pending = Task { try await authorization.headers(for: provider, credential: "different", options: [:]) }
         for _ in 0..<100 where started.value == 0 { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(started.value, 1)
         pending.cancel()
         do { _ = try await pending.value; XCTFail("Canceled exchange must not return a token") } catch { XCTAssertTrue(error is CancellationError) }
-        XCTAssertEqual(CloudProviderFixtureProtocol.stops.value, 1, "Cancellation joins the owned URLSession request")
+        // URLSession can resume the canceled await before delivering stopLoading.
+        await self.fulfillment(of: [stopped], timeout: 2)
+        XCTAssertEqual(stops.value, 1, "Cancellation stops the owned URLSession request")
     }
 
     func testExpiredTokenAndCredentialInjectionFailClosed() async throws {

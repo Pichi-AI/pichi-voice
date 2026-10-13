@@ -65,56 +65,56 @@ struct PrivateAIModelDownloadProgress: Sendable, Equatable {
 
 enum PrivateAIModelDownloadProgressText {
     static func buttonTitle(for progress: PrivateAIModelDownloadProgress?) -> String {
-        if progress?.isComplete == true { return "Verifying" }
-        guard let fraction = progress?.fractionCompleted else { return "Downloading" }
-        return "Downloading \(Int(fraction * 100))%"
+        if progress?.isComplete == true { return PichiLocalization.text("Verifying") }
+        guard let fraction = progress?.fractionCompleted else { return PichiLocalization.text("Downloading") }
+        return PichiLocalization.format("Downloading %@%%", String(Int(fraction * 100)))
     }
 
     static func statusText(for progress: PrivateAIModelDownloadProgress?) -> String {
         guard let progress else {
-            return "Starting download. This can take a few minutes."
+            return PichiLocalization.text("Starting download. This can take a few minutes.")
         }
         if progress.isComplete {
-            return "Verifying download. This can take a moment."
+            return PichiLocalization.text("Verifying download. This can take a moment.")
         }
         guard progress.hasWrittenBytes else {
-            return "Downloading. This can take a few minutes."
+            return PichiLocalization.text("Downloading. This can take a few minutes.")
         }
         guard let fraction = progress.fractionCompleted else {
-            return "Downloading. This can take a few minutes."
+            return PichiLocalization.text("Downloading. This can take a few minutes.")
         }
-        return "Downloading \(Int(fraction * 100))%. This can take a few minutes."
+        return PichiLocalization.format("Downloading %@%%. This can take a few minutes.", String(Int(fraction * 100)))
     }
 
     static func byteText(for progress: PrivateAIModelDownloadProgress?) -> String? {
         guard let progress else { return nil }
 
         if progress.isComplete {
-            return "\(Self.byteCountText(progress.totalBytesWritten)) downloaded"
+            return PichiLocalization.format("%@ downloaded", Self.byteCountText(progress.totalBytesWritten))
         }
 
         guard progress.hasWrittenBytes else {
             guard let expected = progress.totalBytesExpected, expected > 0 else { return nil }
-            return "\(Self.byteCountText(expected)) download"
+            return PichiLocalization.format("%@ download", Self.byteCountText(expected))
         }
 
         let written = Self.byteCountText(progress.totalBytesWritten)
         guard let expected = progress.totalBytesExpected, expected > 0 else {
-            return "\(written) downloaded"
+            return PichiLocalization.format("%@ downloaded", written)
         }
 
-        return "\(written) of \(Self.byteCountText(expected))"
+        return PichiLocalization.format("%@ of %@", written, Self.byteCountText(expected))
     }
 
     static func detailText(for progress: PrivateAIModelDownloadProgress?) -> String {
-        guard let progress else { return "Starting download..." }
+        guard let progress else { return PichiLocalization.text("Starting download...") }
         if progress.isComplete {
-            return "Verifying download..."
+            return PichiLocalization.text("Verifying download...")
         }
-        guard let byteText = Self.byteText(for: progress) else { return "Downloading..." }
+        guard let byteText = Self.byteText(for: progress) else { return PichiLocalization.text("Downloading...") }
         guard progress.hasWrittenBytes else { return byteText }
         guard let fraction = progress.fractionCompleted else { return byteText }
-        return "\(byteText) (\(Int(fraction * 100))%)"
+        return PichiLocalization.format("%@ (%@%%)", byteText, String(Int(fraction * 100)))
     }
 
     private static func byteCountText(_ bytes: Int64) -> String {
@@ -149,6 +149,7 @@ struct PrivateAIRegisteredModel: Sendable, Codable, Hashable, Identifiable {
     var parameterCount: String
     var recommendedMemoryGB: Int?
     var artifact: PrivateAIModelArtifact
+    var presentation: PrivateAIModelPresentation? = nil
 
     var canDownload: Bool {
         self.artifact.downloadURL != nil && self.artifact.sha256?.isEmpty == false
@@ -193,6 +194,13 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
     var prefixCacheDefaultsKey: String { get }
     var boostDefaultsKey: String { get }
     var modelDirectoryName: String { get }
+    var supportedBackends: [SettingsStore.PrivateAIBackendPreference] { get }
+    var defaultBackend: SettingsStore.PrivateAIBackendPreference { get }
+    var supportsBoost: Bool { get }
+    var supportsPrefixCache: Bool { get }
+    var includesUpcomingModels: Bool { get }
+
+    func recommendedModelID() async -> String
 
     func selectedModelDefaultsKey(for task: PrivateAIModelTask) -> String
     func modelIDs() -> [String]
@@ -205,6 +213,23 @@ protocol PrivateAIProviderFeatureProviding: Sendable {
 }
 
 extension PrivateAIProviderFeatureProviding {
+    var supportedBackends: [SettingsStore.PrivateAIBackendPreference] {
+        CPUArchitecture.isIntel ? [.llama] : [.mlx, .llama]
+    }
+
+    var defaultBackend: SettingsStore.PrivateAIBackendPreference {
+        CPUArchitecture.isAppleSilicon ? .mlx : .llama
+    }
+
+    var supportsBoost: Bool { true }
+    var supportsPrefixCache: Bool { true }
+    var includesUpcomingModels: Bool { true }
+
+    func recommendedModelID() async -> String {
+        let recommendation = await PrivateAIHardwareRecommendation.current()
+        return self.model(id: recommendation.model.rawValue)?.id ?? self.defaultModelID
+    }
+
     func selectedModelDefaultsKey(for _: PrivateAIModelTask) -> String {
         self.selectedModelDefaultsKey
     }
@@ -262,6 +287,7 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func verifyModel(_ model: PrivateAIRegisteredModel) async throws -> PrivateAIStatus
     func prewarmDictation() async
     func unloadCachedRuntime(reason: String) async
+    func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws
     func shutdownForTermination() async
     nonisolated func enhanceDictation(
         _ inputText: String,
@@ -286,6 +312,12 @@ protocol PrivateAIIntegrationProviding: Sendable {
 }
 
 extension PrivateAIIntegrationProviding {
+    /// Providers with concurrent inference must hold their ownership gate through file mutation.
+    func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws {
+        await self.unloadCachedRuntime(reason: reason)
+        try operation()
+    }
+
     func summarizeMeeting(_: String, style _: String) async throws -> String {
         throw PrivateAIUnavailableError()
     }
@@ -372,6 +404,9 @@ private enum PrivateAIProviderBootstrap {
     static let installOnce: Void = {
         #if PRIVATE_AI_PROVIDER
         PrivateAIProviderBridge.install()
+        #else
+        PrivateAIProviderRegistry.feature = S1MiniProviderFeature.shared
+        PrivateAIProviderRegistry.integration = S1MiniIntegrationProvider.shared
         #endif
     }()
 
@@ -407,7 +442,14 @@ enum PrivateAIProviderFeature {
             // Keep fingerprint in sync with SettingsStore.privateAIBackendPreference default.
             normalizedBackendPreference = SettingsStore.PrivateAIBackendPreference.systemDefault.rawValue
         }
-        return "private-ai-provider|\(modelID)|backend:\(normalizedBackendPreference)"
+        let feature = self.shared
+        let preference = SettingsStore.PrivateAIBackendPreference(rawValue: normalizedBackendPreference)
+        let effectiveBackend = preference.flatMap { feature.supportedBackends.contains($0) ? $0 : nil } ?? feature.defaultBackend
+        var fingerprint = "private-ai-provider|\(modelID)|backend:\(effectiveBackend.rawValue)"
+        if let artifact = feature.model(id: modelID)?.artifact, let digest = artifact.sha256 {
+            fingerprint += "|sha256:\(digest)|version:\(artifact.version ?? "")"
+        }
+        return fingerprint
     }
 }
 

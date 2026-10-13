@@ -13,9 +13,7 @@ struct StatsTodayHero: View {
     private var nextTarget: Int? { self.milestone.nextTarget }
     private var progress: Double { self.milestone.progress }
     private var savedTime: String {
-        if self.savedMinutes < 1 { return PichiLocalization.text("< 1 min") }
-        if self.savedMinutes < 60 { return PichiLocalization.format("%lld min", Int(self.savedMinutes)) }
-        return PichiLocalization.format("%lldh %lldm", Int(self.savedMinutes) / 60, Int(self.savedMinutes) % 60)
+        PichiLocalization.formattedTimeSaved(minutes: self.savedMinutes)
     }
 
     var body: some View {

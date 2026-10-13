@@ -21,7 +21,7 @@ struct FluidModelShowcaseCard: View {
     }
 
     var body: some View {
-        let presentation = PrivateAIModelPresentation.forModel(id: self.model.id)
+        let presentation = self.model.presentation ?? PrivateAIModelPresentation.forModel(id: self.model.id)
         Button(action: self.browse) {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                 Color.clear.frame(height: 20)
@@ -29,7 +29,7 @@ struct FluidModelShowcaseCard: View {
                         if self.isRecommended {
                             Text(PichiLocalization.text(self.compact ? "Recommended" : "Recommended for your Mac"))
                                 .font(self.theme.typography.captionStrong)
-                                .foregroundStyle(FluidBrandColors.blue)
+                                .foregroundStyle(self.theme.palette.primaryText)
                                 .lineLimit(1).minimumScaleFactor(0.8)
                                 .padding(.trailing, 24)
                                 .help(PichiLocalization.text("Based on your Mac’s RAM. You can choose either model."))
@@ -49,11 +49,11 @@ struct FluidModelShowcaseCard: View {
                 }
                 ZStack(alignment: .topLeading) {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                        Text(presentation.summary)
+                        Text(PichiLocalization.text(presentation.summary))
                             .font(self.theme.typography.bodyStrong)
                             .foregroundStyle(self.theme.palette.primaryText)
                             .fixedSize(horizontal: false, vertical: true)
-                        Text(presentation.useCase)
+                        Text(PichiLocalization.text(presentation.useCase))
                             .font(self.theme.typography.body)
                             .foregroundStyle(self.theme.palette.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
@@ -62,7 +62,7 @@ struct FluidModelShowcaseCard: View {
                     .opacity(self.showsInfo ? 0 : 1)
                     .accessibilityHidden(self.showsInfo)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
-                        self.infoRow("Languages", value: presentation.language)
+                        if let language = presentation.language { self.infoRow("Languages", value: language) }
                         if let bytes = self.model.artifact.byteCount, bytes > 0 {
                             self.infoRow("Download size", value: "≈\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
                         }
@@ -133,9 +133,13 @@ struct FluidModelShowcaseCard: View {
     }
 
     private var infoAccessibilityDescription: String {
-        let language = PrivateAIModelPresentation.forModel(id: self.model.id).language
-        guard let bytes = self.model.artifact.byteCount, bytes > 0 else { return PichiLocalization.format("Languages: %@", PichiLocalization.text(language)) }
-        return PichiLocalization.format("Languages: %@. Download size: approximately %@.", PichiLocalization.text(language), ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+        let presentation = self.model.presentation ?? PrivateAIModelPresentation.forModel(id: self.model.id)
+        var details: [String] = []
+        if let language = presentation.language { details.append(PichiLocalization.format("Languages: %@", PichiLocalization.text(language))) }
+        if let bytes = self.model.artifact.byteCount, bytes > 0 {
+            details.append(PichiLocalization.format("Download size: %@", ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)))
+        }
+        return details.joined(separator: ". ")
     }
 }
 
