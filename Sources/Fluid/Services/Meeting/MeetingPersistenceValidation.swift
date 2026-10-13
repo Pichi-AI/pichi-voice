@@ -95,27 +95,7 @@ nonisolated extension MeetingSession {
             try Self.validateMediaTime(firstPresentationTime)
         }
 
-        let speakerIDs = Set(self.speakers.map(\.id))
-        guard speakerIDs.count == self.speakers.count else {
-            throw MeetingModelValidationError.duplicateSpeakerID
-        }
-        let segmentIDs = Set(self.transcriptSegments.map(\.id))
-        guard segmentIDs.count == self.transcriptSegments.count else {
-            throw MeetingModelValidationError.duplicateSegmentID
-        }
-        for segment in self.transcriptSegments {
-            try Self.validateMediaTime(segment.start)
-            try Self.validateMediaTime(segment.end)
-            guard segment.end >= segment.start else {
-                throw MeetingModelValidationError.invalidTimeRange
-            }
-            guard trackIDs.contains(segment.sourceTrackID) else {
-                throw MeetingModelValidationError.missingSegmentTrack
-            }
-            if let speakerID = segment.speakerID, !speakerIDs.contains(speakerID) {
-                throw MeetingModelValidationError.missingSegmentSpeaker
-            }
-        }
+        try self.validateTranscriptStructure()
         for attempt in self.processingAttempts {
             if let languageCode = attempt.languageCode,
                languageCode != self.languageCode

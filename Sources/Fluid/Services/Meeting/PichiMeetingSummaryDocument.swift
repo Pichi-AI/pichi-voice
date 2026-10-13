@@ -351,6 +351,7 @@ nonisolated struct PichiMeetingSummaryArtifact: Codable, Sendable {
     /// Shared read boundary for the UI and read-only helper. Credentials and
     /// live model discovery are not needed to check source/currentness validity.
     func validated(for session: MeetingSession) throws -> Self {
+        try session.validateTranscriptStructure()
         guard self.version == 6, self.transcriptHash == PichiMeetingSummaryInput.fingerprint(session) else {
             throw PichiMeetingSummaryError.invalidOutput
         }

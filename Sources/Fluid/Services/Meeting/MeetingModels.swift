@@ -1278,3 +1278,44 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
             && self.trackFingerprints == expectedFingerprints
     }
 }
+
+nonisolated extension MeetingSession {
+    /// Pure source admission shared by persistence and the grounded read-only helper.
+    /// It does not resolve speech languages, models, credentials or audio resources.
+    func validateTranscriptStructure() throws {
+        guard self.schemaVersion > 0, self.schemaVersion <= Self.currentSchemaVersion else {
+            throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
+        }
+        guard self.startedAt.timeIntervalSinceReferenceDate.isFinite,
+              self.endedAt?.timeIntervalSinceReferenceDate.isFinite != false else { throw MeetingModelValidationError.invalidTimeRange }
+        if let endedAt, endedAt < self.startedAt { throw MeetingModelValidationError.invalidTimeRange }
+        let trackIDs = Set(self.audioTracks.map(\.id))
+        guard trackIDs.count == self.audioTracks.count else { throw MeetingModelValidationError.duplicateTrackID }
+        let speakerIDs = Set(self.speakers.map(\.id))
+        guard speakerIDs.count == self.speakers.count else {
+            throw MeetingModelValidationError.duplicateSpeakerID
+        }
+        let segmentIDs = Set(self.transcriptSegments.map(\.id))
+        guard segmentIDs.count == self.transcriptSegments.count else {
+            throw MeetingModelValidationError.duplicateSegmentID
+        }
+        for segment in self.transcriptSegments {
+            try Self.validateTranscriptMediaTime(segment.start)
+            try Self.validateTranscriptMediaTime(segment.end)
+            guard segment.end >= segment.start else {
+                throw MeetingModelValidationError.invalidTimeRange
+            }
+            guard trackIDs.contains(segment.sourceTrackID) else {
+                throw MeetingModelValidationError.missingSegmentTrack
+            }
+            if let speakerID = segment.speakerID, !speakerIDs.contains(speakerID) {
+                throw MeetingModelValidationError.missingSegmentSpeaker
+            }
+        }
+    }
+
+    private static func validateTranscriptMediaTime(_ time: MeetingMediaTime) throws {
+        guard time.timescale > 0 else { throw MeetingModelValidationError.invalidMediaTimescale }
+        guard time.seconds.isFinite, abs(time.seconds) < Double(Int.max) / 2 else { throw MeetingModelValidationError.invalidTimeRange }
+    }
+}

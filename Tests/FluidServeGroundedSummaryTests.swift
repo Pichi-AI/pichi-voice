@@ -1,10 +1,13 @@
+import Darwin
 import Foundation
 
 @main
 struct FluidServeGroundedSummaryTests {
     static func main() throws {
         let manager = FileManager.default
-        let base = manager.temporaryDirectory.appendingPathComponent("pichi-serve-regression-" + UUID().uuidString)
+        guard let physical = realpath(manager.temporaryDirectory.path, nil) else { fatalError("Missing fixture parent") }
+        defer { free(physical) }
+        let base = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("pichi-serve-regression-" + UUID().uuidString)
         let root = base.appendingPathComponent("Meetings")
         try manager.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: base) }
@@ -21,7 +24,10 @@ struct FluidServeGroundedSummaryTests {
         session.endedAt = session.startedAt.addingTimeInterval(60)
         let speakerID = UUID()
         session.speakers = [.init(id: speakerID, displayName: "Fixture speaker", diarizationClusterID: nil, trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
-        let segment = MeetingTranscriptSegment(id: UUID(), start: time(1), end: time(5), sourceTrackID: UUID(), speakerID: speakerID,
+        let trackID = UUID()
+        session.audioTracks = [.init(id: trackID, kind: .microphone, sourceIdentifier: "fixture", sourceDisplayName: "Fixture microphone",
+                                     format: nil, timebase: session.timebase, health: .waiting, chunks: [])]
+        let segment = MeetingTranscriptSegment(id: UUID(), start: time(1), end: time(5), sourceTrackID: trackID, speakerID: speakerID,
             text: "Synthetic source quote.", revision: 0, status: .final, overlap: .none, completeness: .complete)
         session.transcriptSegments = [segment]
         let directory = root.appendingPathComponent(session.id.uuidString)
@@ -38,9 +44,9 @@ struct FluidServeGroundedSummaryTests {
         try saveSession(); try saveArtifact()
         let sourceBytes = try Data(contentsOf: directory.appendingPathComponent("session.json"))
         let artifactBytes = try Data(contentsOf: directory.appendingPathComponent("pichi-meeting-summary.json"))
-        let entries = FluidServeMeetings.entries(root: root)
+        let entries = try FluidServeMeetings.checkedEntries(root: root)
         check(entries.count == 1, "Saved session must be readable")
-        let summaries = FluidServeMeetings.savedSummaries(for: entries[0])
+        let summaries = try FluidServeMeetings.checkedSavedSummaries(for: entries[0])
         check(summaries.count == 1 && summaries[0].style == "sources", "Actual Pichi artifact must be discovered")
         check(summaries[0].text == document.copyMarkdown(language: .english, sources: PichiMeetingSummaryInput.turns(for: session)), "CLI must reuse canonical Markdown rendering")
         check(summaries[0].text.contains("Synthetic source quote"), "Literal source citation is preserved")

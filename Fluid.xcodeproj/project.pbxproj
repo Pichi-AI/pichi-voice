@@ -364,6 +364,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Services/FluidServe/FluidServeCommand.swift,
+				Services/FluidServe/FluidServeFileBoundary.swift,
 				Services/FluidServe/FluidServeMeetings.swift,
 				Services/FluidServe/FluidServeSkill.swift,
 				Services/Meeting/PichiMeetingSummaryDocument.swift,

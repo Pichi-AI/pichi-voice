@@ -11,7 +11,9 @@ final class FluidServeTests: XCTestCase {
     private let sharing = SharingBox()
 
     override func setUpWithError() throws {
-        let base = FileManager.default.temporaryDirectory.appendingPathComponent("FluidServeTests-\(UUID().uuidString)", isDirectory: true)
+        let physical = try XCTUnwrap(realpath(FileManager.default.temporaryDirectory.path, nil))
+        defer { free(physical) }
+        let base = URL(fileURLWithPath: String(cString: physical)).appendingPathComponent("FluidServeTests-\(UUID().uuidString)", isDirectory: true)
         self.root = base.appendingPathComponent("Meetings", isDirectory: true)
         self.home = base.appendingPathComponent("home", isDirectory: true)
         try FileManager.default.createDirectory(at: self.root, withIntermediateDirectories: true)
@@ -852,6 +854,8 @@ final class FluidServeTests: XCTestCase {
             )
         )
         let trackID = UUID()
+        session.audioTracks = [.init(id: trackID, kind: .microphone, sourceIdentifier: "fixture", sourceDisplayName: "Fixture microphone",
+                                     format: nil, timebase: session.timebase, health: .waiting, chunks: [])]
         let priya = UUID()
         let marcus = UUID()
         let mergedAway = UUID()

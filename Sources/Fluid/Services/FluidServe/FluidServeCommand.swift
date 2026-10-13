@@ -47,7 +47,9 @@ nonisolated enum FluidServeCommand {
             // Instructions only, no meeting data, so it answers whatever the switch says.
             return Result(output: FluidServeSkill.document(toolPath: toolPath, ownerBundleIdentifier: ownerBundleIdentifier, appName: appName).trimmingCharacters(in: .newlines), exitCode: 0)
         case "status":
-            let count = accessEnabled ? FluidServeMeetings.entries(root: root, fileManager: fileManager).count : 0
+            let count: Int
+            do { count = accessEnabled ? try FluidServeMeetings.checkedEntries(root: root).count : 0 }
+            catch { return .failure(error.localizedDescription) }
             if arguments == ["--json"] {
                 let object: [String: Any] = ["access": accessEnabled, "meetings": count]
                 return Result(output: (try? self.json(object)) ?? "{}", exitCode: 0)
@@ -148,24 +150,24 @@ nonisolated enum FluidServeCommand {
         switch action {
         case "list":
             let options = try self.parse(rest, valued: ["--since", "--limit"], flags: ["--json"])
-            let entries = try Array(FluidServeMeetings.entries(root: root, since: since(options), fileManager: fileManager)
+            let entries = try Array(FluidServeMeetings.checkedEntries(root: root, since: since(options))
                 .prefix(limit(options, default: 20)))
             if options.flags.contains("--json") {
-                return try Result(output: self.json(entries.map { self.summaryObject($0, customPrompt: customPrompt, fileManager: fileManager) }), exitCode: 0)
+                return try Result(output: self.json(try entries.map { try self.summaryObject($0, customPrompt: customPrompt, fileManager: fileManager) }), exitCode: 0)
             }
-            return Result(output: FluidServeMeetings.listing(entries, customPrompt: customPrompt, timeZone: timeZone, fileManager: fileManager), exitCode: 0)
+            return Result(output: try FluidServeMeetings.listing(entries, customPrompt: customPrompt, timeZone: timeZone, fileManager: fileManager), exitCode: 0)
 
         case "show":
             let options = try self.parse(rest, valued: ["--from", "--to"], flags: ["--json"])
             let entry = try FluidServeMeetings.resolve(
                 options.positional.first ?? "latest",
-                in: FluidServeMeetings.entries(root: root, fileManager: fileManager)
+                in: FluidServeMeetings.checkedEntries(root: root)
             )
             let from = try clock(options, "--from")
             let to = try clock(options, "--to")
             if let from, let to, from > to { throw UsageError(message: "--from must be earlier than --to.") }
             if options.flags.contains("--json") {
-                var object = self.summaryObject(entry, customPrompt: customPrompt, fileManager: fileManager)
+                var object = try self.summaryObject(entry, customPrompt: customPrompt, fileManager: fileManager)
                 object["turns"] = entry.meeting.turns
                     .filter { $0.start.seconds >= (from ?? 0) && $0.start.seconds <= (to ?? .infinity) }
                     .map { [
@@ -187,9 +189,9 @@ nonisolated enum FluidServeCommand {
             let options = try self.parse(rest, valued: ["--style"], flags: [])
             let entry = try FluidServeMeetings.resolve(
                 options.positional.first ?? "latest",
-                in: FluidServeMeetings.entries(root: root, fileManager: fileManager)
+                in: FluidServeMeetings.checkedEntries(root: root)
             )
-            var summaries = FluidServeMeetings.savedSummaries(for: entry, customPrompt: customPrompt, fileManager: fileManager)
+            var summaries = try FluidServeMeetings.checkedSavedSummaries(for: entry, customPrompt: customPrompt)
             if let style = options.values["--style"] {
                 summaries = summaries.filter { $0.style == style.lowercased() }
             }
@@ -216,7 +218,7 @@ nonisolated enum FluidServeCommand {
             guard !query.isEmpty else { throw UsageError(message: "Say what to search for.") }
             let hits = try FluidServeMeetings.search(
                 query,
-                in: FluidServeMeetings.entries(root: root, since: since(options), fileManager: fileManager),
+                in: FluidServeMeetings.checkedEntries(root: root, since: since(options)),
                 limit: limit(options, default: 30)
             )
             guard !hits.isEmpty else { return Result(output: "No transcript mentions \"\(query)\".", exitCode: 0) }
@@ -240,7 +242,7 @@ nonisolated enum FluidServeCommand {
         }
     }
 
-    private static func summaryObject(_ entry: FluidServeMeetings.Entry, customPrompt: String, fileManager: FileManager) -> [String: Any] {
+    private static func summaryObject(_ entry: FluidServeMeetings.Entry, customPrompt: String, fileManager: FileManager) throws -> [String: Any] {
         let meeting = entry.meeting
         let formatter = ISO8601DateFormatter()
         return [
@@ -250,7 +252,7 @@ nonisolated enum FluidServeCommand {
             "durationSeconds": meeting.durationSeconds.rounded(),
             "languageCode": meeting.languageCode,
             "speakers": meeting.activeSpeakers.map(\.displayName),
-            "summaries": FluidServeMeetings.savedSummaries(for: entry, customPrompt: customPrompt, fileManager: fileManager).map(\.style),
+            "summaries": try FluidServeMeetings.checkedSavedSummaries(for: entry, customPrompt: customPrompt).map(\.style),
         ]
     }
 

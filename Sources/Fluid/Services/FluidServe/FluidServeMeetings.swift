@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// Read-only view of saved meetings for the `fv-serve` command.
@@ -74,9 +75,24 @@ nonisolated enum FluidServeMeetings {
         var generatedAt: Date?
     }
 
+    static let maximumManifestBytes = 4 * 1024 * 1024
+    static let maximumSummaryBytes = 2 * 1024 * 1024
+    static let maximumDirectoryEntries = 1024
+    static let maximumSessions = 256
+    static let maximumTotalReadBytes = 64 * 1024 * 1024
+
     struct Entry: Equatable {
         var meeting: Meeting
         var directory: URL
+        fileprivate let source: MeetingSession
+        fileprivate let ownedRoot: URL
+        fileprivate let rootIdentity: FluidServeFileBoundary.Identity
+        fileprivate let directoryIdentity: FluidServeFileBoundary.Identity
+        fileprivate let budget: FluidServeFileBoundary.Budget
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.meeting == rhs.meeting && lhs.directory == rhs.directory
+                && lhs.rootIdentity == rhs.rootIdentity && lhs.directoryIdentity == rhs.directoryIdentity
+        }
     }
 
     struct SearchHit: Equatable {
@@ -143,25 +159,35 @@ nonisolated enum FluidServeMeetings {
 
     // MARK: - Reading
 
-    /// Finished meetings that have a transcript, newest first. Reads one small file per meeting and
-    /// skips any it cannot decode instead of failing the whole listing.
+    /// Compatibility convenience for presentation/tests. The actual command uses
+    /// checkedEntries so unsafe paths and exceeded bounds produce a failure status.
     static func entries(root: URL, since: Date? = nil, fileManager: FileManager = .default) -> [Entry] {
-        let directories = (try? fileManager.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        )) ?? []
+        (try? self.checkedEntries(root: root, since: since)) ?? []
+    }
+
+    static func checkedEntries(root: URL, since: Date? = nil) throws -> [Entry] {
+        let owned: FluidServeFileBoundary.Directory
+        do { owned = try .open(root) }
+        catch FluidServeFileBoundary.Rejection.missing { return [] }
+        let budget = FluidServeFileBoundary.Budget(maximumBytes: self.maximumTotalReadBytes)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         var entries: [Entry] = []
-        for directory in directories {
-            let manifest = directory.appendingPathComponent("session.json", isDirectory: false)
-            guard let data = try? Data(contentsOf: manifest, options: .mappedIfSafe),
-                  let meeting = try? decoder.decode(Meeting.self, from: data),
-                  meeting.isFinished, !meeting.turns.isEmpty
-            else { continue }
+        var inspected = 0
+        for name in try owned.names(maximumEntries: self.maximumDirectoryEntries) {
+            guard let id = UUID(uuidString: name) else { continue }
+            inspected += 1
+            guard inspected <= self.maximumSessions else { throw FluidServeFileBoundary.Rejection.limitExceeded }
+            let directory = try owned.child(name)
+            guard let file = try directory.read("session.json", maximumBytes: self.maximumManifestBytes, budget: budget),
+                  let session = try? decoder.decode(MeetingSession.self, from: file.data),
+                  session.id == id,
+                  (try? session.validateTranscriptStructure()) != nil,
+                  let meeting = try? decoder.decode(Meeting.self, from: file.data),
+                  meeting.isFinished, !meeting.turns.isEmpty else { continue }
             if let since, meeting.startedAt < since { continue }
-            entries.append(Entry(meeting: meeting, directory: directory))
+            entries.append(Entry(meeting: meeting, directory: root.appendingPathComponent(name), source: session,
+                ownedRoot: root, rootIdentity: owned.identity, directoryIdentity: directory.identity, budget: budget))
         }
         return entries.sorted { $0.meeting.startedAt > $1.meeting.startedAt }
     }
@@ -183,6 +209,16 @@ nonisolated enum FluidServeMeetings {
     /// for the transcript as it is now, and (for a custom summary) with the prompt as it is now.
     /// A summary from before an edit, a speaker rename or a prompt change is left out.
     static func savedSummaries(for entry: Entry, customPrompt: String = "", fileManager: FileManager = .default) -> [SavedSummary] {
+        (try? self.checkedSavedSummaries(for: entry, customPrompt: customPrompt)) ?? []
+    }
+
+    static func checkedSavedSummaries(for entry: Entry, customPrompt: String = "") throws -> [SavedSummary] {
+        guard entry.directory.deletingLastPathComponent().pathComponents == entry.ownedRoot.pathComponents,
+              UUID(uuidString: entry.directory.lastPathComponent) == entry.meeting.id else { throw FluidServeFileBoundary.Rejection.unsafe }
+        let root = try FluidServeFileBoundary.Directory.open(entry.ownedRoot)
+        guard root.identity == entry.rootIdentity else { throw FluidServeFileBoundary.Rejection.changed }
+        let directory = try root.child(entry.directory.lastPathComponent)
+        guard directory.identity == entry.directoryIdentity else { throw FluidServeFileBoundary.Rejection.changed }
         struct Stored: Decodable {
             var transcriptHash: String
             var text: String
@@ -193,15 +229,14 @@ nonisolated enum FluidServeMeetings {
             var generatedAt: Date?
         }
         let prefix = "manual-summary-"
-        let names = ((try? fileManager.contentsOfDirectory(atPath: entry.directory.path)) ?? [])
+        let names = try directory.names(maximumEntries: self.maximumDirectoryEntries)
             .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".json") }
-            .sorted()
         let currentHash = self.fingerprint(self.summaryInput(for: entry.meeting))
         let customPromptHash = self.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
-        var summaries = names.compactMap { name -> SavedSummary? in
+        var summaries = try names.compactMap { name -> SavedSummary? in
             let style = String(name.dropFirst(prefix.count).dropLast(".json".count))
-            guard let data = try? Data(contentsOf: entry.directory.appendingPathComponent(name, isDirectory: false)),
-                  let stored = try? JSONDecoder().decode(Stored.self, from: data),
+            guard let file = try directory.read(name, maximumBytes: self.maximumSummaryBytes, budget: entry.budget),
+                  let stored = try? JSONDecoder().decode(Stored.self, from: file.data),
                   stored.providerID != nil, stored.transcriptHash == currentHash,
                   stored.promptHash == (style == "custom" ? customPromptHash : nil),
                   !stored.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -213,15 +248,11 @@ nonisolated enum FluidServeMeetings {
                 generatedAt: stored.generatedAt
             )
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        if let sessionData = fileManager.contents(atPath: entry.directory.appendingPathComponent("session.json").path),
-           let session = try? decoder.decode(MeetingSession.self, from: sessionData),
-           let artifactData = fileManager.contents(atPath: entry.directory.appendingPathComponent("pichi-meeting-summary.json").path),
-           let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: artifactData),
-           let current = try? artifact.validated(for: session) {
+        if let file = try directory.read("pichi-meeting-summary.json", maximumBytes: self.maximumSummaryBytes, budget: entry.budget),
+           let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: file.data),
+           let current = try? artifact.validated(for: entry.source) {
             summaries.append(SavedSummary(style: "sources",
-                text: current.document.copyMarkdown(language: .english, sources: PichiMeetingSummaryInput.turns(for: session)),
+                text: current.document.copyMarkdown(language: .english, sources: PichiMeetingSummaryInput.turns(for: entry.source)),
                 modelName: nil, generatedAt: current.generatedAt))
         }
         return summaries
@@ -312,12 +343,12 @@ nonisolated enum FluidServeMeetings {
         customPrompt: String = "",
         timeZone: TimeZone = .current,
         fileManager: FileManager = .default
-    ) -> String {
+    ) throws -> String {
         guard !entries.isEmpty else { return "No finished meetings with a transcript were found." }
         var rows = [["ID", "DATE", "LENGTH", "SPEAKERS", "TITLE", "SUMMARIES"]]
         for entry in entries {
             let meeting = entry.meeting
-            let summaries = self.savedSummaries(for: entry, customPrompt: customPrompt, fileManager: fileManager).map(\.style)
+            let summaries = try self.checkedSavedSummaries(for: entry, customPrompt: customPrompt).map(\.style)
             rows.append([
                 String(meeting.id.uuidString.prefix(8)),
                 self.dateText(meeting.startedAt, timeZone: timeZone),

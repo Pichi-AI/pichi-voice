@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Adds or removes the `fluidmeet` skill that tells Claude Code and Codex how to call `fv-serve`.
@@ -82,47 +83,72 @@ nonisolated enum FluidServeSkillInstaller {
             .appendingPathComponent("SKILL.md", isDirectory: false)
     }
 
+    private static let maximumSkillBytes = 64 * 1024
+
+    private static func directory(for agent: Agent, home: URL, create: Bool = false) throws -> FluidServeFileBoundary.Directory {
+        let root = try FluidServeFileBoundary.Directory.open(home)
+        let agentHome = try root.child(agent.homeFolderName, create: create)
+        let skills = try agentHome.child("skills", create: create)
+        return try skills.child(self.skillName, create: create)
+    }
+
     static func status(for agent: Agent, toolPath: String, home: URL, fileManager: FileManager = .default) -> Status {
-        var isDirectory: ObjCBool = false
-        let agentHome = home.appendingPathComponent(agent.homeFolderName, isDirectory: true)
-        guard fileManager.fileExists(atPath: agentHome.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return .agentNotFound
-        }
-        guard let existing = self.text(at: self.skillFile(for: agent, home: home), fileManager: fileManager) else {
-            return .notInstalled
-        }
-        guard FluidServeSkill.isOurs(existing, ownerBundleIdentifier: AppBrand.bundleIdentifier) else { return .foreign }
-        return existing == self.skillDocument(toolPath: toolPath) ? .installed : .needsUpdate
+        do {
+            let root = try FluidServeFileBoundary.Directory.open(home)
+            do { _ = try root.child(agent.homeFolderName) }
+            catch FluidServeFileBoundary.Rejection.missing { return .agentNotFound }
+            let directory: FluidServeFileBoundary.Directory
+            do { directory = try self.directory(for: agent, home: home) }
+            catch FluidServeFileBoundary.Rejection.missing { return .notInstalled }
+            guard let file = try directory.read("SKILL.md", maximumBytes: self.maximumSkillBytes) else { return .notInstalled }
+            let existing = String(data: file.data, encoding: .utf8) ?? ""
+            guard FluidServeSkill.isOurs(existing, ownerBundleIdentifier: AppBrand.bundleIdentifier) else { return .foreign }
+            return existing == self.skillDocument(toolPath: toolPath) ? .installed : .needsUpdate
+        } catch FluidServeFileBoundary.Rejection.missing { return .agentNotFound }
+        catch { return .foreign }
     }
 
     static func install(for agent: Agent, toolPath: String, home: URL, fileManager: FileManager = .default) throws {
         let file = self.skillFile(for: agent, home: home)
-        if let existing = self.text(at: file, fileManager: fileManager), !FluidServeSkill.isOurs(existing, ownerBundleIdentifier: AppBrand.bundleIdentifier) {
-            throw InstallError.foreignSkill(file.path)
-        }
-        try fileManager.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(self.skillDocument(toolPath: toolPath).utf8).write(to: file, options: .atomic)
+        do {
+            let directory = try self.directory(for: agent, home: home, create: true)
+            let opened = try directory.read("SKILL.md", maximumBytes: self.maximumSkillBytes)
+            if let opened, !FluidServeSkill.isOurs(String(data: opened.data, encoding: .utf8) ?? "", ownerBundleIdentifier: AppBrand.bundleIdentifier) {
+                throw InstallError.foreignSkill(file.path)
+            }
+            let bytes = Data(self.skillDocument(toolPath: toolPath).utf8)
+            guard bytes.count <= self.maximumSkillBytes else { throw InstallError.foreignSkill(file.path) }
+            try directory.publish(bytes, name: "SKILL.md", replacing: opened)
+        } catch { throw InstallError.foreignSkill(file.path) }
     }
 
     static func remove(for agent: Agent, home: URL, fileManager: FileManager = .default) throws {
         let file = self.skillFile(for: agent, home: home)
-        guard let existing = self.text(at: file, fileManager: fileManager) else { return }
-        guard FluidServeSkill.isOurs(existing, ownerBundleIdentifier: AppBrand.bundleIdentifier) else {
-            throw InstallError.foreignSkill(file.path)
-        }
-        try fileManager.removeItem(at: file)
-        let folder = file.deletingLastPathComponent()
-        if (try? fileManager.contentsOfDirectory(atPath: folder.path))?.isEmpty == true {
-            try? fileManager.removeItem(at: folder)
-        }
-    }
-
-    /// The file's text, nil when it is missing. Bytes that are not UTF-8 read as empty, which is not ours.
-    /// A file that exists but cannot be read counts the same way, so it is never replaced.
-    private static func text(at file: URL, fileManager: FileManager) -> String? {
-        guard fileManager.fileExists(atPath: file.path) else { return nil }
-        guard let data = fileManager.contents(atPath: file.path) else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
+        do {
+            let directory: FluidServeFileBoundary.Directory
+            do { directory = try self.directory(for: agent, home: home) }
+            catch FluidServeFileBoundary.Rejection.missing { return }
+            guard let opened = try directory.read("SKILL.md", maximumBytes: self.maximumSkillBytes) else { return }
+            guard FluidServeSkill.isOurs(String(data: opened.data, encoding: .utf8) ?? "", ownerBundleIdentifier: AppBrand.bundleIdentifier),
+                  directory.matches("SKILL.md", identity: opened.identity) else { throw InstallError.foreignSkill(file.path) }
+            let parked = ".fluidserve-remove-" + UUID().uuidString
+            guard renameatx_np(directory.descriptor, "SKILL.md", directory.descriptor, parked, UInt32(RENAME_EXCL)) == 0 else { throw InstallError.foreignSkill(file.path) }
+            let retained = directory.matches(parked, identity: opened.identity)
+                ? try? directory.read(parked, maximumBytes: self.maximumSkillBytes) : nil
+            guard let retained, retained.identity == opened.identity, retained.data == opened.data else {
+                // A raced foreign entry is preserved, never deleted. Restore it
+                // only if the original name is still free.
+                _ = renameatx_np(directory.descriptor, parked, directory.descriptor, "SKILL.md", UInt32(RENAME_EXCL))
+                throw InstallError.foreignSkill(file.path)
+            }
+            guard unlinkat(directory.descriptor, parked, 0) == 0 else { throw InstallError.foreignSkill(file.path) }
+            if (try? directory.names(maximumEntries: 1).isEmpty) == true {
+                let root = try FluidServeFileBoundary.Directory.open(home)
+                let skills = try root.child(agent.homeFolderName).child("skills")
+                let current = try skills.child(self.skillName)
+                if current.identity == directory.identity { _ = unlinkat(skills.descriptor, self.skillName, AT_REMOVEDIR) }
+            }
+        } catch { throw InstallError.foreignSkill(file.path) }
     }
 
     static func skillDocument(toolPath: String, ownerBundleIdentifier: String = AppBrand.bundleIdentifier, appName: String = AppBrand.appName) -> String {
