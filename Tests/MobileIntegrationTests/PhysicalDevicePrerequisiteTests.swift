@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
+import UIKit
 @testable import PichiVoiceMobile
 import XCTest
 
@@ -54,6 +55,11 @@ final class PhysicalDevicePrerequisiteTests: XCTestCase {
         let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
             machTimebaseDenominator: 1, firstPresentationTime: nil)
         let session = MeetingSession(configuration: configuration, timebase: timebase)
+        let duration = Double(ProcessInfo.processInfo.environment["PICHI_PHYSICAL_MIC_SECONDS"] ?? "3") ?? 3
+        guard duration >= 3, duration <= 90 else { throw NSError(domain: "PhysicalMicrophoneProbe", code: 1) }
+        let requiresBackground = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_MIC_BACKGROUND"] == "1"
+        var backgroundSamples = 0
+        var stateObservations: [[String: Any]] = []
         let evidence = try FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("MobileDeviceEvidence", isDirectory: true)
@@ -71,6 +77,8 @@ final class PhysicalDevicePrerequisiteTests: XCTestCase {
                 "inputs": audioSession.currentRoute.inputs.map(\.uid),
                 "availableInputs": (audioSession.availableInputs ?? []).map(\.uid),
                 "events": probe.recordedEvents(), "error": error?.localizedDescription ?? "",
+                "backgroundSamples": backgroundSamples, "durationSeconds": duration,
+                "applicationStates": stateObservations,
             ]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
                 .write(to: evidence.appendingPathComponent("microphone.json"), options: .atomic)
@@ -80,12 +88,21 @@ final class PhysicalDevicePrerequisiteTests: XCTestCase {
             try await capture.preflightPermissions()
             _ = try await capture.start(session: session, configuration: configuration,
                 sessionDirectory: root, eventHandler: { probe.event($0) })
-            try await Task.sleep(nanoseconds: 3_000_000_000)
+            var previousCount = probe.count()
+            for second in 0..<Int(duration.rounded(.up)) {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                let count = probe.count()
+                let state = UIApplication.shared.applicationState
+                if state == .background { backgroundSamples += count - previousCount }
+                stateObservations.append(["second": second + 1, "state": state.rawValue, "samples": count])
+                previousCount = count
+            }
             try saveEvidence()
             let result = try await capture.stop(sessionID: session.id)
             XCTAssertGreaterThan(probe.count(), 16_000)
             XCTAssertTrue(result.tracks.allSatisfy { $0.chunks.isEmpty })
             XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
+            if requiresBackground { XCTAssertGreaterThan(backgroundSamples, 80_000, "Real background capture must deliver over five seconds of PCM") }
             await capture.shutdownForTermination()
         } catch {
             try? saveEvidence(error: error)
