@@ -256,7 +256,11 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     }
 
     func speechModelDownloadSize(_ model: SettingsStore.SpeechModel) -> String {
-        self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize
+        self.speechModelLibraryMetadata(model)?.size ?? self.installations.latestDescriptors[model.id]?.downloadSize ?? model.downloadSize
+    }
+
+    func speechModelLibraryMetadata(_ model: SettingsStore.SpeechModel) -> SpeechModelLibraryMetadata? {
+        self.installations.libraryMetadata[model.id] ?? model.libraryMetadata
     }
 
     var modelDescriptionText: String {

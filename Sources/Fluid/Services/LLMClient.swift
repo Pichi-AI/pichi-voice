@@ -56,9 +56,11 @@ nonisolated enum LLMError: Error, LocalizedError, @unchecked Sendable {
 
 // MARK: - LLMClient
 
-/// Foundation invalidation returns before cancelled tasks and delegate callbacks
-/// drain. Each owned session therefore needs its own completion, rather than the
-/// redirect singleton shared by unrelated transports.
+/// Joins the owned session's invalidation notification. Callers separately join
+/// their request tasks before cleanup: invalidateAndCancel can notify the delegate
+/// immediately and does not guarantee URLProtocol.stopLoading has already run.
+/// Each owned session needs its own completion rather than the redirect singleton
+/// shared by unrelated transports.
 final nonisolated class LLMClientSessionLifetime: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
     private var invalidationRequested = false

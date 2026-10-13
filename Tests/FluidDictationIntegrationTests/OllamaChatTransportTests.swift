@@ -98,7 +98,13 @@ final class OllamaChatTransportTests: XCTestCase {
         let stopped = context.fixture.stopExpectation(for: "/api/chat")
         await owned.lifetime.invalidateAndWait(for: owned.session)
         XCTAssertTrue(owned.lifetime.hasInvalidated)
-        do { _ = try await pending.value; XCTFail("Cancelled request cannot complete successfully") } catch {}
+        do {
+            _ = try await pending.value
+            XCTFail("Cancelled request cannot complete successfully")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .cancelled,
+                           "Session invalidation must cancel the held task, not fail for an unrelated reason")
+        }
         // invalidateAndCancel may notify the session delegate before request cancellation
         // finishes. Production joins the request as well as the session's invalidation.
         await self.fulfillment(of: [stopped], timeout: 2)
