@@ -153,6 +153,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let modelLocator: any MeetingNemotronModelLocating
     private let pcmIdentityState = MeetingPCMIdentityState()
+    private let pcmSpeakerNameFormat = PichiLocalization.text("Speaker %lld")
 
     init(
         asrServiceProvider: @escaping @MainActor () -> any MeetingASRServicing,
@@ -244,7 +245,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let units = MeetingParakeetNemotronBackend.pcmUnits(result: ASRTranscriptionResult(text: output.text),
                                                            words: output.words, epoch: epoch, duration: duration,
                                                            activity: activity, identityTokens: identityTokens)
-        let batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attemptID, epoch: epoch,
+        let batch = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat).assemblePCMWindow(attemptID: attemptID, epoch: epoch,
                                                                       offset: offset, duration: duration, units: units,
                                                                       identityLinks: links, priorSpeakers: priorSpeakers)
         try Task.checkCancellation()

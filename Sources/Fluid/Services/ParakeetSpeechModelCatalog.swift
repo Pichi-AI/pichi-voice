@@ -88,10 +88,15 @@ nonisolated enum ParakeetSpeechModelCatalog {
         func installedArtifactFingerprint(at directory: URL) throws -> String? {
             guard self.artifactsAreComplete(at: directory) else { return nil }
             var files: [URL] = [directory.appendingPathComponent(self.vocabularyFile)]
+            var count = 0
             for name in self.requiredModelNames {
                 let root = directory.appendingPathComponent(name, isDirectory: true)
-                guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
-                var count = 0
+                var enumerationFailed = false
+                guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil,
+                                                                      errorHandler: { _, _ in
+                    enumerationFailed = true
+                    return false
+                }) else { return nil }
                 for case let file as URL in enumerator {
                     try Task.checkCancellation()
                     count += 1
@@ -103,13 +108,19 @@ nonisolated enum ParakeetSpeechModelCatalog {
                     default: return nil
                     }
                 }
+                guard !enumerationFailed else { return nil }
             }
             var digest = SHA256()
+            var totalBytes: Int64 = 0
             let prefix = directory.standardizedFileURL.path + "/"
             for file in files.sorted(by: { $0.path < $1.path }) {
                 try Task.checkCancellation()
                 guard file.standardizedFileURL.path.hasPrefix(prefix),
                       file.resolvingSymlinksInPath().standardizedFileURL.path == file.standardizedFileURL.path else { return nil }
+                let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                guard let byteCount = (attributes[.size] as? NSNumber)?.int64Value,
+                      byteCount >= 0, byteCount <= max(1_073_741_824, self.expectedDownloadBytes * 4) - totalBytes else { return nil }
+                totalBytes += byteCount
                 let relative = String(file.standardizedFileURL.path.dropFirst(prefix.count))
                 digest.update(data: Data("\(relative.utf8.count):\(relative)\n".utf8))
                 let input = try FileHandle(forReadingFrom: file)
