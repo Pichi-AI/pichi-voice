@@ -56,6 +56,100 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
 
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
+    func testPhysicalStrictGigaAMWithSpeakersAndPrivacyKeepsUp() async throws {
+        try await verifyPhysicalStrictMeeting(model: .gigaam)
+    }
+
+    func testPhysicalStrictWhisperTinyWithSpeakersAndPrivacyKeepsUp() async throws {
+        try await verifyPhysicalStrictMeeting(model: .whisperTiny)
+    }
+
+    /// The exact user configuration that serial, unpaced ASR fixtures did not cover.
+    /// Speech comes from the device speaker through the real selected microphone.
+    private func verifyPhysicalStrictMeeting(model: SettingsStore.SpeechModel) async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires explicitly enabled physical strict meeting recording")
+        #else
+        guard ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_E2E"] == "1" else {
+            throw XCTSkip("Enable physical strict ASR, diarization and PII replay explicitly")
+        }
+        guard AVAudioSession.sharedInstance().outputVolume > 0.05 else {
+            throw XCTSkip("Physical speech replay requires audible device output")
+        }
+        let assets = try MobileInferenceTestAssets.resolve()
+        let name = "PhysicalStrictMeeting.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { defaults.removePersistentDomain(forName: name); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = model
+        settings.meetingSaveAudio = false
+        settings.meetingSpeakerLabelsEnabled = true
+        settings.meetingPIIRedactionEnabled = true
+        let store = MeetingSessionStore(rootDirectory: root)
+        let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: assets.appendingPathComponent("models/privacy")))
+        let services = AppServices(store: store, settings: settings, privacy: privacy)
+        let coordinator = services.meetingSessionCoordinator
+        let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent("audio/ru.wav"))
+        player.numberOfLoops = -1
+        var firstTextSecond: Int?
+        var updates = 0
+        var previousIDs: Set<UUID> = []
+        do {
+            let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic strict speech")
+            let recording = try await coordinator.startRecording(configuration: configuration)
+            XCTAssertEqual(recording.audioStorageMode, .memoryOnly)
+            XCTAssertEqual(recording.speakerLabelsEnabled, true)
+            XCTAssertEqual(recording.piiRedactionEnabled, true)
+            try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+            XCTAssertTrue(player.play())
+            print("[PHYSICAL_STRICT_E2E] speech_started model=\(model.rawValue)")
+            for second in 1...60 {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                guard coordinator.isRecording else {
+                    XCTFail("Strict \(model.rawValue) stopped at second \(second), before completing paced input")
+                    throw MeetingMemoryAudioError.overload
+                }
+                let snapshot = coordinator.liveTranscript
+                let ids = Set(snapshot.utterances.filter { !$0.text.isEmpty }.map(\.id))
+                if !ids.isEmpty || snapshot.partials.values.contains(where: { !$0.text.isEmpty }) {
+                    firstTextSecond = firstTextSecond ?? second
+                }
+                if !ids.subtracting(previousIDs).isEmpty { updates += 1 }
+                previousIDs = ids
+                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates)")
+            }
+            player.stop()
+            XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
+            XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 24, "A warm strict pipeline must publish during the meeting")
+            XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
+            let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertEqual(completed.state, .completed)
+            XCTAssertFalse(completed.transcriptSegments.isEmpty)
+            XCTAssertFalse(completed.hasFinalizedAudio)
+            XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
+            let saved = try await store.load(id: completed.id)
+            XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
+            let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
+            for case let file as URL in files where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                XCTAssertEqual(file.pathExtension, "json", "Strict capture must not create any audio file")
+            }
+            let payload = try MeetingSharePayload.transcript(data: MeetingTranscriptExporter.json(for: completed), title: completed.title, fileExtension: "json")
+            XCTAssertFalse(payload.includesAudio)
+            payload.cleanup()
+            print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates)")
+            await services.asr.shutdownForTermination()
+            try await privacy.unload()
+        } catch {
+            player.stop()
+            await coordinator.shutdownForTermination()
+            await services.asr.shutdownForTermination()
+            try? await privacy.unload()
+            throw error
+        }
+        #endif
+    }
+
     func testPhysicalMicrophoneThroughLiveGigaAMPrivacyAndExport() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Requires an explicitly enabled physical microphone and speaker test")
