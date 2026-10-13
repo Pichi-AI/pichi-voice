@@ -50,7 +50,8 @@ extension MeetingProcessingPipeline {
         let consumer = try Self.makeMemoryAudioConsumer(
             recognize: { samples, offset in
                 try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
-                    let batch = try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration)
+                    var batch = try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration)
+                    batch.sourceTrack = track
                     if let redactor { return try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor) }
                     return batch
                 }

@@ -138,6 +138,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private var liveTranscriptionCoordinator: MeetingLiveTranscriptionCoordinator?
+    private var livePrivacyTask: Task<Void, Never>?
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
     private var captureGeneration: UUID?
@@ -429,8 +430,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
 
         var publicationConfiguration = configuration
+        let recordingRedactor = configuration.piiRedactionEnabled == true ? try self.redactorProvider() : nil
         if configuration.piiRedactionEnabled == true {
-            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            guard let redactor = recordingRedactor else { throw MeetingPrivacyPublicationError.redactorUnavailable }
             publicationConfiguration.title = try await redactor.redact(configuration.title)
             publicationConfiguration.microphone.displayName = try await redactor.redact(configuration.microphone.displayName)
         }
@@ -499,14 +501,14 @@ final class MeetingSessionCoordinator: ObservableObject {
                           self.liveTranscriptionCoordinator != nil,
                           self.liveTranscript.accepts(snapshot, generation: generation, activeGeneration: self.captureGeneration)
                     else { return }
-                    self.liveTranscript = snapshot
+                    self.publishLiveTranscript(snapshot, generation: generation, redactor: recordingRedactor)
                 }
             }
             CFRunLoopWakeUp(CFRunLoopGetMain())
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
-        if configuration.audioStorageMode != .memoryOnly && configuration.piiRedactionEnabled != true {
+        if configuration.audioStorageMode != .memoryOnly {
         liveTranscriptionCoordinator.start(
             mode: configuration.mode,
             languageCode: configuration.languageCode,
@@ -534,7 +536,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             captureStartAttempted = true
             let startResult = try await self.capture.start(
                 session: session,
-                configuration: configuration,
+                configuration: publicationConfiguration,
                 sessionDirectory: sessionDirectory,
                 eventHandler: { [weak self] event in
                     // Preserve failure/recovery emission order across the capture-to-main hop.
@@ -925,6 +927,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         let before = target
         let inverse = try mutate(&target)
         guard target != before else { return target }
+        if target.piiRedactionEnabled == true {
+            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
+        }
         try await self.store.save(target)
 
         var stack = self.correctionUndoStacks[sessionID] ?? []
@@ -1083,7 +1089,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         target.updatedAt = Date()
 
         do {
-            try await self.store.save(target)
+            if target.piiRedactionEnabled == true {
+            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
+        }
+        try await self.store.save(target)
         } catch {
             stack.append(correction)
             self.correctionUndoStacks[sessionID] = stack
@@ -1120,6 +1130,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         target.title = trimmed
         target.defaultTitleBase = nil
         target.updatedAt = Date()
+        if target.piiRedactionEnabled == true {
+            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
+        }
         try await self.store.save(target)
 
         self.refreshSlots(with: target)
@@ -1159,6 +1173,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         target.retention.audioDeletedAt = Date()
         target.updatedAt = Date()
+        if target.piiRedactionEnabled == true {
+            guard let redactor = try self.redactorProvider() else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            target = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: target, using: redactor, preservingPublicationArtifacts: true)
+        }
         try await self.store.save(target)
         do {
             try await self.store.deleteAudioFiles(for: target.id)
@@ -1629,8 +1647,36 @@ final class MeetingSessionCoordinator: ObservableObject {
         return processed
     }
 
+    private func publishLiveTranscript(_ snapshot: MeetingLiveTranscriptSnapshot, generation: UUID, redactor: (any TranscriptTextRedacting)?) {
+        guard let redactor else { self.liveTranscript = snapshot; return }
+        self.livePrivacyTask?.cancel()
+        self.livePrivacyTask = Task { @MainActor [weak self] in
+            do {
+                var safe = snapshot
+                safe.utterances = Array(snapshot.utterances.suffix(100))
+                for i in safe.utterances.indices { safe.utterances[i].text = try await redactor.redact(safe.utterances[i].text) }
+                for (source, partial) in snapshot.partials {
+                    var value = partial
+                    value.text = try await redactor.redact(partial.text)
+                    safe.partials[source] = value
+                }
+                try Task.checkCancellation()
+                guard let self, self.liveTranscriptionCoordinator != nil,
+                      self.liveTranscript.accepts(safe, generation: generation, activeGeneration: self.captureGeneration) else { return }
+                self.liveTranscript = safe
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, self.captureGeneration == generation, !Task.isCancelled else { return }
+                self.handleCaptureEvent(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil,
+                                                    detail: "Sensitive data redaction stopped. Recording was interrupted."), generation: generation)
+            }
+        }
+    }
+
     private func checkpointMemoryTranscript(_ batch: MeetingPCMTranscriptBatch, sessionID: UUID, generation: UUID) async throws {
         guard self.captureGeneration == generation, var session = self.activeSession, session.id == sessionID else { throw CancellationError() }
+        if let track = batch.sourceTrack, !session.audioTracks.contains(where: { $0.id == track.id }) { session.audioTracks.append(track) }
         let existing = Set(session.transcriptSegments.map(\.id))
         session.transcriptSegments.append(contentsOf: batch.segments.filter { !existing.contains($0.id) })
         let speakers = Set(session.speakers.map(\.id))
@@ -2115,6 +2161,10 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Must complete before any code path that calls into `processing.process`, so both live
     /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads.
     private func tearDownLiveTranscription() async {
+        let privacyTask = self.livePrivacyTask
+        self.livePrivacyTask = nil
+        privacyTask?.cancel()
+        await privacyTask?.value
         guard let coordinator = self.liveTranscriptionCoordinator else { return }
         self.liveTranscriptionCoordinator = nil
         await coordinator.stop()

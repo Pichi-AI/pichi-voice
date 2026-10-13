@@ -1,6 +1,6 @@
 import Foundation
 
-enum ASRExclusiveActivity: String, Equatable {
+nonisolated enum ASRExclusiveActivity: String, Equatable, Sendable {
     case dictation
     case fileTranscription
     case localAPI
@@ -26,12 +26,12 @@ enum ASRExclusiveActivity: String, Equatable {
     }
 }
 
-struct ASRActivityLease: Equatable {
+nonisolated struct ASRActivityLease: Equatable, Sendable {
     let id: UUID
     let activity: ASRExclusiveActivity
 }
 
-enum ASRActivityError: LocalizedError {
+nonisolated enum ASRActivityError: LocalizedError {
     case activityInProgress(ASRExclusiveActivity)
     case settingsRestoreUnavailable
 

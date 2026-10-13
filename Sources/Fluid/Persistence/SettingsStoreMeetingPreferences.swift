@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SwiftUI
 #if os(macOS)
 import AppKit
@@ -6,6 +7,72 @@ import AppKit
 
 // The same defaults keys and Codable records are used by desktop and mobile targets.
 extension SettingsStore {
+    var vocabularyBoostingEnabled: Bool {
+        get {
+            let value = self.defaults.object(forKey: Keys.vocabularyBoostingEnabled)
+            return value as? Bool ?? false
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.vocabularyBoostingEnabled)
+            NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
+        }
+    }
+
+    enum AutomaticDictionarySuggestionFrequency: Int, Codable, CaseIterable, Identifiable {
+        case first = 1
+        case second = 2
+        case third = 3
+
+        var id: Int { self.rawValue }
+
+        var displayName: String {
+            switch self {
+            case .first: "1 correction"
+            case .second: "2 corrections"
+            case .third: "3 corrections"
+            }
+        }
+    }
+
+    var automaticDictionaryLearningEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.automaticDictionaryLearningEnabled)
+        }
+    }
+
+    var automaticDictionarySuggestionFrequency: AutomaticDictionarySuggestionFrequency {
+        get {
+            let stored = self.defaults.integer(forKey: Keys.automaticDictionarySuggestionFrequency)
+            return AutomaticDictionarySuggestionFrequency(rawValue: stored) ?? .first
+        }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue.rawValue, forKey: Keys.automaticDictionarySuggestionFrequency)
+        }
+    }
+
+    var pronunciationMatchingEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.pronunciationMatchingEnabled) as? Bool ?? false }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.pronunciationMatchingEnabled)
+        }
+    }
+
+    /// Custom dictionary entries for word replacement
+    var experimentalParakeetUnifiedFinalEnabled: Bool {
+        get { self.defaults.object(forKey: Keys.experimentalParakeetUnifiedFinalEnabled) as? Bool ?? true }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: Keys.experimentalParakeetUnifiedFinalEnabled)
+        }
+    }
+
+    /// Opt in to restoring the field captured at recording start.
+
     enum AccentColorOption: String, CaseIterable, Identifiable, Codable {
         case brand = "Brand"
         case cyan = "Cyan"

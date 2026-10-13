@@ -5,6 +5,7 @@ import Foundation
 nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     var segments: [MeetingTranscriptSegment]
     var speakers: [MeetingSessionSpeaker]
+    var sourceTrack: MeetingAudioTrack? = nil
     var isComplete: Bool
     init(segments: [MeetingTranscriptSegment], speakers: [MeetingSessionSpeaker] = [], isComplete: Bool = true) {
         self.segments = segments

@@ -15,7 +15,7 @@ enum SpeechModelPreparationOperation {
         } catch {
             if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
             let cancelled = Task.isCancelled || error is CancellationError
-                || (error as NSError).code == NSURLErrorCancelled
+                || ((error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled)
             if cancelled, !updateWeights, provider.shouldClearCacheAfterCancellation,
                provider.modelsExistOnDisk() == false {
                 try? await provider.clearCache()

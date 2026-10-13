@@ -1955,15 +1955,7 @@ final class SettingsStore: ObservableObject {
 
     /// Reuses finalized Parakeet windows so long recordings only process their remaining tail at stop.
     /// Experimental and enabled by default; users can fall back to full-buffer finalization.
-    var experimentalParakeetUnifiedFinalEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.experimentalParakeetUnifiedFinalEnabled) as? Bool ?? true }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.experimentalParakeetUnifiedFinalEnabled)
-        }
-    }
 
-    /// Opt in to restoring the field captured at recording start.
     var returnDictationToStartingField: Bool {
         get { self.defaults.bool(forKey: Keys.returnDictationToStartingField) }
         set {
@@ -4790,62 +4782,6 @@ final class SettingsStore: ObservableObject {
 
     /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
     /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
-    var vocabularyBoostingEnabled: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.vocabularyBoostingEnabled)
-            return value as? Bool ?? false
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.vocabularyBoostingEnabled)
-            NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
-        }
-    }
-
-    enum AutomaticDictionarySuggestionFrequency: Int, Codable, CaseIterable, Identifiable {
-        case first = 1
-        case second = 2
-        case third = 3
-
-        var id: Int { self.rawValue }
-
-        var displayName: String {
-            switch self {
-            case .first: "1 correction"
-            case .second: "2 corrections"
-            case .third: "3 corrections"
-            }
-        }
-    }
-
-    var automaticDictionaryLearningEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.automaticDictionaryLearningEnabled)
-        }
-    }
-
-    var automaticDictionarySuggestionFrequency: AutomaticDictionarySuggestionFrequency {
-        get {
-            let stored = self.defaults.integer(forKey: Keys.automaticDictionarySuggestionFrequency)
-            return AutomaticDictionarySuggestionFrequency(rawValue: stored) ?? .first
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.automaticDictionarySuggestionFrequency)
-        }
-    }
-
-    var pronunciationMatchingEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.pronunciationMatchingEnabled) as? Bool ?? false }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.pronunciationMatchingEnabled)
-        }
-    }
-
-    /// Custom dictionary entries for word replacement
     // MARK: - Speech Model (Unified ASR Model Selection)
 
     /// Unified speech recognition model selection.

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import SwiftUI
 #if canImport(FluidAudio)
 import FluidAudio
