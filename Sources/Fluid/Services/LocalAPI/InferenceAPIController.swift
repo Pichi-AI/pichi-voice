@@ -26,7 +26,9 @@ final class InferenceAPIController: LocalAPIRouteHandler {
     }
 
     typealias FileTranscriber = @MainActor (URL) async throws -> TranscribeResponse
+    typealias TextPostprocessor = @MainActor (String) async throws -> DictationPostProcessingService.Result
     private let fileTranscriber: FileTranscriber
+    private let textPostprocessor: TextPostprocessor
 
     init(fileTranscriber: @escaping FileTranscriber = { fileURL in
         let providerName = SettingsStore.shared.selectedSpeechModel.displayName
@@ -37,8 +39,9 @@ final class InferenceAPIController: LocalAPIRouteHandler {
             sampleCount: apiResult.sampleCount,
             provider: providerName
         )
-    }) {
+    }, textPostprocessor: @escaping TextPostprocessor = { try await DictationPostProcessingService.shared.process($0) }) {
         self.fileTranscriber = fileTranscriber
+        self.textPostprocessor = textPostprocessor
     }
 
     func handle(_ request: LocalAPI.Request) async -> LocalAPI.Response {
@@ -96,7 +99,7 @@ final class InferenceAPIController: LocalAPIRouteHandler {
     private func postprocess(_ request: LocalAPI.Request) async -> LocalAPI.Response {
         do {
             let text = try self.decodeText(from: request)
-            let result = try await DictationPostProcessingService.shared.process(text)
+            let result = try await self.textPostprocessor(text)
             return LocalAPI.json(
                 PostprocessResponse(
                     text: result.text,

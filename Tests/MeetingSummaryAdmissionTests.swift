@@ -128,6 +128,7 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
     private static let allowedURLs: Set<String> = [
         "https://api.openai.com/v1/chat/completions", "https://keyless.example/v1/chat/completions",
         "https://192.168.1.40/v1/chat/completions", "https://alias.example/v1/chat/completions",
+        "http://127.0.0.1:1234/v1/chat/completions",
     ]
     static var requestCount: Int { self.lock.withLock { self.authorizationHeaders.count } }
     static var lastAuthorization: String? { self.lock.withLock { self.authorizationHeaders.last ?? nil } }
@@ -281,21 +282,22 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         try await self.refreshAdmission(remote)
         try await self.keylessAdmission(remote)
         try await self.aliasAndStaleConfiguration(remote)
-        self.check(AdmissionURLProtocol.requestCount == 16 && AdmissionURLProtocol.unexpectedURLCount == 0,
-            "All 16 expected positive requests are intercepted; unknown URLs fail closed")
+        try await self.localAPIAdmission()
+        self.check(AdmissionURLProtocol.requestCount == 20 && AdmissionURLProtocol.unexpectedURLCount == 0,
+            "All 20 expected positive requests are intercepted; unknown URLs fail closed")
         if let path = ProcessInfo.processInfo.environment["PICHI_ADMISSION_REPORT_PATH"] {
             let report: [String: Any] = [
                 "status": "PASS", "admission_assertions": self.checks,
                 "intercepted_requests": AdmissionURLProtocol.requestCount,
                 "unexpected_urls": AdmissionURLProtocol.unexpectedURLCount,
                 "credential_backend": "injected_only", "transport": "explicit_session_protocol_classes",
-                "tested_callers": ["MeetingSummaryRoute.resolve + RemoteService + LLMClient", "CommandModeService.callLLM + LLMClient"],
+                "tested_callers": ["MeetingSummaryRoute.resolve + RemoteService + LLMClient", "CommandModeService.callLLM + LLMClient", "InferenceAPIController.handle + DictationPostProcessingService.process + LLMClient"],
                 "revision": ProcessInfo.processInfo.environment["PICHI_ADMISSION_SOURCE_REVISION"] ?? "unknown",
                 "source_dirty": ProcessInfo.processInfo.environment["PICHI_ADMISSION_SOURCE_DIRTY"] != "0",
             ]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
         }
-        print("PASS: \(self.checks) summary and command credential admission checks; production storage/resolver/callLLM/HTTP, injected backend and intercepted requests only")
+        print("PASS: \(self.checks) summary, command and Local API credential admission checks; production storage/operations/HTTP, injected backend and intercepted requests only")
     }
 
     private static func refreshAdmission(_ remote: MeetingSummaryRemoteService) async throws {
@@ -398,5 +400,101 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         settings.availableModelsByProvider["custom:alias"] = ["text-embedding-fixture"]
         await self.rejects(selection, settings: settings, remote: remote, reason: "Provider has no currently eligible chat model")
         self.check(backend.readCount == reads && backend.interactiveAccessCount == 0, "All stale-configuration rejections remain cache-only")
+    }
+
+    private static func localAPIRequest(settings: SettingsStore) async throws -> LocalAPI.Response {
+        SettingsStore.shared = settings
+        let controller = InferenceAPIController(fileTranscriber: { _ in fatalError("No audio fixture may run") },
+            textPostprocessor: { try await DictationPostProcessingService.shared.process($0, client: self.commandClient) })
+        let request = LocalAPI.Request(method: "POST", path: "/v1/postprocess", query: [:],
+            headers: ["content-type": "application/json"],
+            body: try JSONSerialization.data(withJSONObject: ["text": "Synthetic local API text."]))
+        return await controller.handle(request)
+    }
+    private static func localAPIRejects(settings: SettingsStore, reason: String) async throws {
+        let requests = AdmissionURLProtocol.requestCount
+        let privateCalls = PrivateAIIntegrationService.shared.calls
+        let response = try await self.localAPIRequest(settings: settings)
+        self.check(response.status == 400, "\(reason): Local API rejects before request admission; new intercepted requests=\(AdmissionURLProtocol.requestCount - requests), authorization present=\(AdmissionURLProtocol.lastAuthorization != nil)")
+        self.check(AdmissionURLProtocol.requestCount == requests, "\(reason): no intercepted HTTP request")
+        self.check(PrivateAIIntegrationService.shared.calls == privateCalls && MeetingSummaryActivityCoordinator.shared.activeCount == 0,
+            "Rejected API admission has no adapter effect or retained processing ownership")
+    }
+    private static func localAPIAdmission() async throws {
+        let endpoint = "http://127.0.0.1:1234/v1"
+        let backend = AdmissionBackend(["custom:api-local": "synthetic-local-key"])
+        let (settings, service, _) = self.fixture(backend, provider: "api-local", endpoint: endpoint, key: "synthetic-local-key")
+        settings.privateCapabilityReady = false
+        settings.selectsPrivateCapability = false
+        try await self.localAPIRejects(settings: settings, reason: "Cold pending keyed local provider")
+        self.check(backend.readCount == 0 && service.loadedKeys == nil, "Cold API rejection does not load unknown credentials")
+        await self.load(service)
+        let loaded = try await self.localAPIRequest(settings: settings)
+        self.check(loaded.status == 200 && AdmissionURLProtocol.lastAuthorization == "Bearer synthetic-local-key",
+            "Actual Local API operation sends the authoritative local credential")
+        self.check(AdmissionURLProtocol.lastURL == "\(endpoint)/chat/completions", "API request uses its fingerprint-bound local endpoint")
+        backend.failNextReadWhileBlocked()
+        var refreshFinished = false
+        self.check(service.loadInBackground { _ in refreshFinished = true }, "API refresh admitted")
+        await self.waitUntil { backend.isBlocked }
+        let reads = backend.readCount
+        try await self.localAPIRejects(settings: settings, reason: "Blocked local refresh with cached key")
+        self.check(service.cachedKeys != nil && service.loadedKeys == nil && backend.readCount == reads,
+            "Pending API admission ignores display cache without credential I/O")
+        backend.unblockFailure()
+        await self.waitUntil { refreshFinished && service.readiness == .unavailable }
+        try await self.localAPIRejects(settings: settings, reason: "Failed local refresh with cached key")
+        self.check(settings.providerAPIKeys["custom:api-local"] == "synthetic-local-key" && backend.readCount == reads,
+            "Failed API refresh retains UI data but rejects admission without rereading")
+        await self.load(service)
+        let recovered = try await self.localAPIRequest(settings: settings)
+        self.check(recovered.status == 200 && AdmissionURLProtocol.lastAuthorization == "Bearer synthetic-local-key",
+            "Authoritative API recovery restores the verified key")
+        AdmissionURLProtocol.holdNextResponse()
+        let admittedTask = Task { try await self.localAPIRequest(settings: settings) }
+        await self.waitUntil { AdmissionURLProtocol.hasDeferredResponse }
+        let admittedRequests = AdmissionURLProtocol.requestCount
+        self.check(AdmissionURLProtocol.lastAuthorization == "Bearer synthetic-local-key"
+            && AdmissionURLProtocol.lastURL == "\(endpoint)/chat/completions"
+            && AdmissionURLProtocol.lastModel == "synthetic-model",
+            "Admitted API freezes the verified credential, endpoint and model before HTTP awaits")
+        backend.replace(["custom:api-local": "replacement-local-key"])
+        await self.load(service)
+        self.check(settings.loadedProviderAPIKeys == ["custom:api-local": "replacement-local-key"]
+            && AdmissionURLProtocol.requestCount == admittedRequests
+            && MeetingSummaryActivityCoordinator.shared.activeCount == 1,
+            "Credential refresh changes only future API admissions while the current operation owns processing")
+        AdmissionURLProtocol.releaseResponse()
+        let admittedResult = try await admittedTask.value
+        let admittedBody = try JSONSerialization.jsonObject(with: admittedResult.body) as? [String: String]
+        self.check(admittedResult.status == 200 && admittedBody?["text"] == "Synthetic summary"
+            && admittedBody?["provider"] == "api-local" && admittedBody?["model"] == "synthetic-model"
+            && MeetingSummaryActivityCoordinator.shared.activeCount == 0,
+            "The already admitted API completes with its frozen result and releases processing ownership")
+        try await self.localAPIRejects(settings: settings, reason: "Changed loaded local credential cannot reuse old verification")
+        backend.replace([:])
+        await self.load(service)
+        try await self.localAPIRejects(settings: settings, reason: "Loaded empty cannot reuse old keyed verification")
+        settings.verifiedProviderFingerprints["custom:api-local"] = CloudTextProvider.connectionFingerprint(baseURL: endpoint, apiKey: "")
+        let keyless = try await self.localAPIRequest(settings: settings)
+        self.check(service.loadedKeys == [:] && keyless.status == 200 && AdmissionURLProtocol.lastAuthorization == nil,
+            "Explicitly verified loaded-empty local route remains legitimately keyless")
+        settings.verifiedProviderFingerprints = [:]
+        try await self.localAPIRejects(settings: settings, reason: "Unverified empty local route")
+        self.check(backend.interactiveAccessCount == 0, "API never prompts for credentials")
+
+        let privateBackend = AdmissionBackend([:])
+        let (privateSettings, privateService, _) = self.fixture(privateBackend)
+        privateSettings.selectsPrivateCapability = true
+        privateSettings.privateCapabilityReady = true
+        let requests = AdmissionURLProtocol.requestCount
+        let privateResult = try await self.localAPIRequest(settings: privateSettings)
+        self.check(privateResult.status == 200 && privateBackend.readCount == 0 && privateService.loadedKeys == nil,
+            "Verified private dictation capability stays credential independent")
+        self.check(AdmissionURLProtocol.requestCount == requests && PrivateAIIntegrationService.shared.calls == 1,
+            "Private capability uses the existing adapter boundary without HTTP")
+        privateSettings.privateCapabilityReady = false
+        try await self.localAPIRejects(settings: privateSettings, reason: "Unverified private capability")
+        privateSettings.selectsPrivateCapability = false
     }
 }

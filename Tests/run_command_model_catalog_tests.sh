@@ -84,11 +84,32 @@ command = command[command.index('    private struct LLMResponse {'):command.rind
 # configuration, transport and result handling can be exercised together.
 command = command.replace('private struct LLMResponse', 'struct LLMResponse', 1).replace('private func callLLM', 'func callLLM', 1)
 (out / 'AdmissionCommand.swift').write_text('import Foundation\n@MainActor extension CommandAdmissionOwner {\n' + command + '\n}\n')
+dictation = Path('Sources/Fluid/Services/DictationPostProcessingService.swift').read_text()
+dictation_baseline = os.environ.get('PICHI_DICTATION_ADMISSION_BASELINE_REF')
+if dictation_baseline:
+    dictation = subprocess.check_output(['git', 'show', dictation_baseline + ':Sources/Fluid/Services/DictationPostProcessingService.swift'], text=True)
+    # Baseline admission/route/gates remain verbatim; only its HTTP test seam is
+    # backported, so the negative control cannot use a default network client.
+    signature = 'func process(_ inputText: String, dictationSlot: SettingsStore.DictationShortcutSlot = .primary)'
+    assert dictation.count(signature) == 1 and dictation.count('LLMClient.shared.call(config)') == 1
+    dictation = dictation.replace(signature, signature[:-1] + ', client: LLMClient = .shared)')
+    dictation = dictation.replace('LLMClient.shared.call(config)', 'client.call(config)')
+route = dictation[:dictation.index('@MainActor\nfinal class DictationPostProcessingService')]
+interactive = dictation[dictation.index('    nonisolated static func configureInteractiveLocalRequest('):dictation.index('    /// A tiny synthetic inference')]
+process = dictation[dictation.index('    struct Result {'):dictation.rindex('\n}')]
+(out / 'AdmissionDictation.swift').write_text(route + '\n@MainActor final class DictationPostProcessingService {\n    static let shared = DictationPostProcessingService()\n' + interactive + process + '\n}\n')
+errors = Path('Sources/Fluid/ContentView.swift').read_text()
+errors = errors[errors.index('nonisolated enum AIProcessingError:'):errors.index('nonisolated enum DictationAIFailurePresentationPolicy {')]
+(out / 'AdmissionErrors.swift').write_text('import Foundation\n' + errors)
 PY
 xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND_ONLY \
     -module-cache-path "$task_test_dir/AdmissionModuleCache" \
     "$task_test_dir/ModelRepository.swift" "$task_test_dir/AdmissionMetadata.swift" \
     "$task_test_dir/AdmissionCredentials.swift" "$task_test_dir/AdmissionRoute.swift" "$task_test_dir/AdmissionCommand.swift" \
+    "$task_test_dir/AdmissionDictation.swift" "$task_test_dir/AdmissionErrors.swift" \
+    Sources/Fluid/Services/DictationPromptRequest.swift Sources/Fluid/Services/DictationAIPostProcessingGate.swift \
+    Sources/Fluid/Services/LocalAPI/LocalAPIModels.swift Sources/Fluid/Services/LocalAPI/InferenceAPIController.swift \
+    Tests/LocalAPICredentialAdmissionSupport.swift \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Persistence/KeychainService.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \
