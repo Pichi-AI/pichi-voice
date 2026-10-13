@@ -47,6 +47,13 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertTrue(joinedWords.contains("метформин 500 мг"))
         XCTAssertEqual(safeWords.segments.map(\.id), words.map(\.id))
         XCTAssertEqual(safeWords.segments.map(\.start), words.map(\.start))
+        let wordAddress = "домашний адрес улица Примерная дом 12 квартира 7 метотрексат 15 мг"
+        let addressWords = wordAddress.split(separator: " ").enumerated().map { segment(String($0.element), Int64($0.offset)) }
+        let safeAddress = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: addressWords), using: privacy)
+        XCTAssertFalse(safeAddress.segments.map(\.text).joined(separator: " ").contains("Примерная"))
+        XCTAssertEqual(safeAddress.segments.suffix(3).map(\.text), ["метотрексат", "15", "мг"])
+        XCTAssertEqual(safeAddress.segments.map(\.id), addressWords.map(\.id))
+        XCTAssertEqual(safeAddress.segments.map(\.start), addressWords.map(\.start))
         original.transcriptSegments = [segment("телефон", 0), segment("273 55 11", 1),
             segment("дата рождения", 2), segment("12 мая 1980", 3), segment("домашний адрес", 4),
             segment("улица Примерная дом 12", 5), segment("метформин 500 мг", 6)]

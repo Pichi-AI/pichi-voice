@@ -14,6 +14,7 @@ def section(path, start, end):
     text = Path(path).read_text()
     return text[text.index(start):text.index(end, text.index(start))]
 source = 'import Foundation\n'
+source += section('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift', 'nonisolated enum MeetingLiveSpeaker:', 'nonisolated enum MeetingLiveTimeConversion')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift', 'nonisolated struct MeetingBackendID:', 'nonisolated enum MeetingBackendExecutionLocality:')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift', 'nonisolated enum MeetingBackendEvidenceSchema', 'nonisolated extension MeetingFinalTextUnit: Codable')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift', 'nonisolated struct MeetingSpeakerVoiceProfile:', '/// Explicit identity evidence across resets.')
@@ -34,7 +35,6 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingMicrophoneCaptureContracts.swift \
     Sources/Fluid/Services/Meeting/MeetingPCMTranscriptBatch.swift \
-    Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift \
     Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptPrivacyPolicy.swift \
     "$task_test_dir/EvidenceTypes.swift" Tests/MeetingPrivacyContextTests.swift \

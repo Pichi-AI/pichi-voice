@@ -61,6 +61,22 @@ final class PichiTextPrivacyTests: XCTestCase {
         XCTAssertEqual(result.counts[.card], 1)
     }
 
+    func testStructuredRussianAddressesStopBeforeUnpunctuatedDrugAndDose() throws {
+        for address in ["улица Примерная дом 12", "г. Москва ул. Примерная д.12А корп.2 кв.17",
+                        "улица 8 Марта дом12/1", "улица Примерная д12к2 строение1 офис3", "улица 1905 года дом7"] {
+            for medication in ["метформин 500 мг", "метотрексат 15 мг", "инсулин 10 единиц", "оземпик 1 мг"] {
+                let input = "домашний адрес " + address + " " + medication
+                let result = try PIIRedactor.redact(input, ner: [])
+                XCTAssertEqual(result.text, "домашний адрес [АДРЕС] " + medication, input)
+                XCTAssertEqual(result.spans.first?.range, (input as NSString).range(of: address), input)
+            }
+        }
+        for text in ["домашний адрес уточним позже метформин 500 мг", "домашний адрес улица Примерная метформин 500 мг",
+                     "домашний адрес улица Примерная дом500мг", "home address needs confirmation metformin 500 mg"] {
+            XCTAssertEqual(try PIIRedactor.redact(text, ner: []).text, text)
+        }
+    }
+
     func testNoBlindLongNumberDateLocationOrganizationOrMedicationRedaction() throws {
         let text = "Аспирин 500 мг и инсулин 10 единиц. В исследовании 123456 участников, дата 12.05.2026. Example Pharma в Москве."
         let source = text as NSString

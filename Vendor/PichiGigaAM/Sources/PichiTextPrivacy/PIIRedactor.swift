@@ -138,7 +138,20 @@ public enum PIIRedactor {
         try matches(#"(?:номер договора|номер полиса|номер документа|идентификатор|policy number|document id)\D{0,15}?([A-Z0-9][A-Z0-9 -]{5,30})"#, .identifier, capture: 1, contextual: true)
         try matches(#"(?:пароль|секретный ключ|password|api key)\s*[:=]?\s*([^\s,;.!?]{4,128})"#, .secret, capture: 1, contextual: true)
         try matches(#"(?:логин|username|login)\s*[:=]?\s*([\p{L}\p{N}_.@-]{3,128})"#, .login, capture: 1, contextual: true)
-        try matches(#"(?:адрес проживания|домашний адрес|жив[уёе]т? по адресу|home address)\s*[:=]?\s*([^\n;!?]{5,160})"#, .address, capture: 1, contextual: true)
+        // ASR word units have no reliable sentence boundary. A free-form tail
+        // after an address cue would absorb the next drug/dose phrase. Match
+        // explicitly marked address fields and stop at the last numbered field.
+        // Unmarked/free-form and English addresses require separate detection.
+        let addressCue = #"(?:адрес проживания|домашний адрес|жив[уёе]т? по адресу)\s*[:=]?\s*"#
+        let addressWord = #"[\p{L}\p{N}][\p{L}\p{N}.'-]*"#
+        let city = #"(?:(?:город|г\.)\s+"# + addressWord + #"(?:\s+"# + addressWord + #"){0,2}?\s*,?\s+)?"#
+        let street = #"(?:улица|ул\.?|проспект|пр-кт|переулок|пер\.?|проезд|шоссе|бульвар|б-р|набережная|наб\.?|площадь|пл\.?)\s+"#
+        let number = #"\d{1,4}(?:[а-яa-z])?(?:[/\-]\d{1,4}[а-яa-z]?)?(?:[кс]\d{1,4}[а-яa-z]?)?(?![\p{L}\p{N}])"#
+        let house = #"\s*,?\s*(?:дом|д\.?)\s*№?\s*"# + number
+        let building = #"(?:\s*,?\s*(?:корпус|корп\.?|к\.|строение|стр\.?)\s*№?\s*"# + number + #"){0,2}"#
+        let unit = #"(?:\s*,?\s*(?:квартира|кв\.?|офис|оф\.?)\s*№?\s*"# + number + #")?"#
+        try matches(addressCue + "(" + city + street + addressWord + #"(?:\s+"# + addressWord + #"){0,5}?"# + house + building + unit + ")",
+                    .address, capture: 1, contextual: true)
         return entities
     }
 
