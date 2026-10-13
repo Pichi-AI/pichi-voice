@@ -54,6 +54,16 @@ view = read('Sources/Fluid/UI/FileTranscriptionView.swift')
 drop_expression = re.findall(r'self\.dropErrorMessage = (.+)\n', view)
 drop_expression = [expression for expression in drop_expression if 'Self.dropErrorCopy' in expression]
 assert len(drop_expression) == 1, 'Expected one production drop error assignment'
+picker_calls = re.findall(r'FluidDropdownPicker\(\s*("[^"\n]+"),\s*selectedTitle: (.+),\n\s*selection: self\.\$settings\.fileTranscriptionExpectedSpeakerCount\n\s*\)', view)
+assert len(picker_calls) == 1, 'Expected one production speaker-count picker'
+title, selected = picker_calls[0]
+dropdown = read('Sources/Fluid/Theme/Components/FluidDropdown.swift')
+headings = re.findall(r'Picker\((.+), selection: self\.\$selection, content: self\.options\)', dropdown)
+labels = re.findall(r'            Text\((.+)\)\n', dropdown)
+assert len(headings) == 1 and labels == ['self.selectedTitle'], 'Shared native picker presentation changed'
+auto_tags = re.findall(r'Text\("Auto"\)\.tag\((\d+)\)', view)
+count_ranges = re.findall(r'ForEach\((\d+\.\.\.\d+), id: \\\.self\) \{ count in\n\s*Text\("\\\(count\)"\)\.tag\(count\)', view)
+assert len(auto_tags) == len(count_ranges) == 1, 'Expected one actual Auto/count option set'
 fixture = ('import Foundation\nenum FileTranscriptionService {\n' + error_enum + '\n'
            + '    static let supportedFormatsDescription = ' + constant.group(1) + '\n'
            + '    static let dropErrorCopy = ' + drop_constant.group(1) + '\n'
@@ -61,6 +71,16 @@ fixture = ('import Foundation\nenum FileTranscriptionService {\n' + error_enum +
            + '    static func productionErrors(diagnostic: String, fileExtension: String) -> [(kind: String, key: String?, error: TranscriptionError)] {\n'
            + '        let error = NSError(domain: "synthetic.audio", code: 7, userInfo: [NSLocalizedDescriptionKey: diagnostic])\n'
            + '        return [\n' + ',\n'.join(rows) + '\n        ]\n    }\n}\n')
+fixture += ('struct FileSpeakerCountPickerCopy {\n'
+            + '    struct Settings { var fileTranscriptionExpectedSpeakerCount: Int }\n'
+            + '    var settings: Settings\n'
+            + '    var title: String { ' + title + ' }\n'
+            + '    var selectedTitle: String { ' + selected + ' }\n'
+            + '    var menuTitle: String { ' + headings[0] + ' }\n'
+            + '    static var optionTags: [Int] { [' + auto_tags[0] + '] + Array(' + count_ranges[0] + ') }\n}\n'
+            + 'struct SharedPickerSelectionCopy {\n'
+            + '    var selectedTitle: String\n'
+            + '    var label: String { ' + labels[0] + ' }\n}\n')
 (output / 'ProductionFileErrors.swift').write_text(fixture)
 (output / 'FileErrorFixture.app/Contents/Info.plist').write_bytes(plistlib.dumps({
     'CFBundleIdentifier': 'ai.pichi.file-error.fixture', 'CFBundleExecutable': 'tests',

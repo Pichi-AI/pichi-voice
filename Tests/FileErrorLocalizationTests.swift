@@ -40,6 +40,19 @@ nonisolated final class UserDefaults: @unchecked Sendable {
         ]
         for language in ["en", "ru"] {
             UserDefaults.standard.set(language, forKey: PichiInterfaceLanguage.defaultsKey)
+            for count in [0] + Array(2...8) {
+                let picker = FileSpeakerCountPickerCopy(settings: .init(fileTranscriptionExpectedSpeakerCount: count))
+                self.checkBytes(picker.menuTitle, language == "ru" ? "Количество говорящих" : "Number of speakers",
+                                "The actual Files title must localize inside the shared native picker menu")
+                self.checkBytes(picker.selectedTitle, count == 0 ? (language == "ru" ? "Авто" : "Auto") : String(count),
+                                "Owned Auto text localizes while selected numeric speaker counts stay unchanged")
+            }
+            precondition(FileSpeakerCountPickerCopy.optionTags == [0] + Array(2...8),
+                         "Localizing the native menu heading must not change persisted speaker counts")
+            for value in ["Number of speakers", "Output device", "100%@ Ё Voice", "Импортированный профиль"] {
+                self.checkBytes(SharedPickerSelectionCopy(selectedTitle: value).label, value,
+                                "Native picker selected labels remain verbatim data, including values matching owned keys")
+            }
             let prefixes = language == "ru" ? russianPrefixes : englishPrefixes
             for diagnostic in opaqueDiagnostics {
                 let cases: [(String, FileTranscriptionService.TranscriptionError)] = [
@@ -88,6 +101,6 @@ nonisolated final class UserDefaults: @unchecked Sendable {
                 ? "Допустимые типы файлов: WAV, MP3, M4A, OGG, OPUS, MP4, MOV и другие."
                 : accepted, "Dropped-file owned error uses the same catalog boundary")
         }
-        print("File error localization: \(self.checks) checks passed; production enum/throw expressions, compiled RU/EN catalog and byte-identical opaque diagnostics; no UI, models or real preferences")
+        print("File copy localization: \(self.checks) checks passed; production errors and speaker-count picker expressions, compiled RU/EN catalog and verbatim opaque data; no UI, models or real preferences")
     }
 }
