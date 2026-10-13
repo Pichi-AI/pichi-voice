@@ -90,7 +90,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: assets.appendingPathComponent("models/privacy")))
         let services = AppServices(store: store, settings: settings, privacy: privacy)
         let coordinator = services.meetingSessionCoordinator
-        let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent("audio/ru.wav"))
+        let twoVoiceFixture = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_TWO_VOICES"] == "1"
+        let fixture = twoVoiceFixture ? "audio/mixed-two-voices.wav" : "audio/ru.wav"
+        let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent(fixture))
         player.numberOfLoops = -1
         var firstTextSecond: Int?
         var updates = 0
@@ -143,6 +145,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let completed = try await coordinator.stopAndTranscribe()
             XCTAssertEqual(completed.state, .completed)
             XCTAssertFalse(completed.transcriptSegments.isEmpty)
+            if twoVoiceFixture {
+                XCTAssertGreaterThanOrEqual(completed.speakers.count, 2, "Two-voice stress input must actually exercise speaker identification")
+            }
             XCTAssertFalse(completed.hasFinalizedAudio)
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             let saved = try await store.load(id: completed.id)
