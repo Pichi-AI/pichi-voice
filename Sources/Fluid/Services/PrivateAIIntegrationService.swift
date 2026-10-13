@@ -355,9 +355,12 @@ actor PrivateAIIntegrationService {
         return String(describing: error)
     }
 
-    func prewarmDictation() async {
-        guard !Task.isCancelled else { return }
-        _ = try? await Self.modelActivity { await Self.provider.prewarmDictation() }
+    func prewarmDictation(localOnly: Bool = false) async {
+        let provider = self.dictationProvider
+        guard !Task.isCancelled, !localOnly || provider.isLocalRuntimeConfigured else { return }
+        _ = try? await Self.modelActivity(modelID: provider.configuredModelID) {
+            await provider.prewarmDictation()
+        }
     }
 
     func unloadCachedRuntime(reason: String = "manual") async {

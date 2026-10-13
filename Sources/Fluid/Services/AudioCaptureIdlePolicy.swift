@@ -1,6 +1,10 @@
 import CoreAudio
 
 enum AudioCaptureIdlePolicy {
+    // Core Audio can keep an interrupted native start alive for tens of seconds.
+    // Only a retry waits this long; ordinary healthy starts keep their existing policy.
+    static let interruptedStartupRetirementTimeout: TimeInterval = 45
+
     struct CaptureAttemptIdentity: Equatable {
         let uid: String
         let name: String?

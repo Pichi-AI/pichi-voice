@@ -43,13 +43,28 @@ final class AppServices: ObservableObject {
         }
         _ = self.meetingAutoDetector
         self.refreshLocalAIResidency()
+        self.prewarmLocalPrivateAIForStartup()
     }
 
     // MARK: - Lazy Services
 
     private var _localAIModelResidency: LocalAIModelResidencyController?
+    private var privateAIStartupWarmup: Task<Void, Never>?
     private var localAIResidencySlot: SettingsStore.DictationShortcutSlot = .primary
     private var isTerminating = false
+
+    /// Startup warming belongs to the app so closing its window cannot cancel a native load.
+    /// The existing service owns artifact selection, cancellation and meeting admission.
+    private func prewarmLocalPrivateAIForStartup() {
+        guard self.isUIReady, !self.isTerminating, self.privateAIStartupWarmup == nil else { return }
+        let appID = DictationAppSession.shared.appID
+        guard DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appID) else { return }
+        let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: .primary, appBundleID: appID)
+        guard route.usesPrivateAI, PrivateAIIntegrationService.isLocalRuntimeConfigured else { return }
+        self.privateAIStartupWarmup = Task {
+            await PrivateAIIntegrationService.shared.prewarmDictation(localOnly: true)
+        }
+    }
 
     /// Window visibility does not own native model lifetime. Requests before the
     /// startup gate are fulfilled by signalUIReady's initial reconciliation.
@@ -402,6 +417,9 @@ final class AppServices: ObservableObject {
 
     func shutdownForTermination() async {
         self.isTerminating = true
+        self.privateAIStartupWarmup?.cancel()
+        await self.privateAIStartupWarmup?.value
+        self.privateAIStartupWarmup = nil
         await self._localAIModelResidency?.shutdown()
         self._localAIModelResidency = nil
         self._meetingAutoDetector?.stop()

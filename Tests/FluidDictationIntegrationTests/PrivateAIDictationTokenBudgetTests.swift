@@ -10,6 +10,9 @@ private actor PrivateAIEnhancementProbe {
     private var activeCallCount = 0
     private var calls: [Call] = []
     private var maximumActiveCallCount = 0
+    private(set) var warmupCalls = 0
+
+    func recordWarmup() { self.warmupCalls += 1 }
 
     func begin(inputText: String, maxOutputTokens: Int) {
         self.activeCallCount += 1
@@ -37,7 +40,7 @@ private struct PrivateAITestIntegrationProvider: PrivateAIIntegrationProviding {
     var selectedModel: PrivateAIRegisteredModel { .unavailable }
     var configuredLocalModelPath: String? { nil }
     var modelDirectoryURL: URL { FileManager.default.temporaryDirectory }
-    var isLocalRuntimeConfigured: Bool { true }
+    var isLocalRuntimeConfigured = true
 
     func expectedLocalModelURL(for _: PrivateAIRegisteredModel) -> URL {
         self.modelDirectoryURL.appendingPathComponent("test-private-model")
@@ -67,6 +70,8 @@ private struct PrivateAITestIntegrationProvider: PrivateAIIntegrationProviding {
 
     func unloadCachedRuntime(reason _: String) async {}
 
+    func prewarmDictation() async { await self.probe.recordWarmup() }
+
     nonisolated func enhanceDictation(
         _ inputText: String,
         runtime _: PrivateAIIntegrationService.RuntimeConfiguration,
@@ -94,6 +99,32 @@ private struct PrivateAITestIntegrationProvider: PrivateAIIntegrationProviding {
 
 @MainActor
 final class PrivateAIDictationTokenBudgetTests: XCTestCase {
+    func testLocalOnlyPrewarmDoesNotContactRemoteProvider() async {
+        let probe = PrivateAIEnhancementProbe()
+        let service = PrivateAIIntegrationService(testingProvider: PrivateAITestIntegrationProvider(
+            probe: probe, delayNanoseconds: 0, shouldFail: false, isLocalRuntimeConfigured: false
+        ))
+        await service.prewarmDictation(localOnly: true)
+        let startupCalls = await probe.warmupCalls
+        XCTAssertEqual(startupCalls, 0)
+        await service.prewarmDictation()
+        let ordinaryCalls = await probe.warmupCalls
+        XCTAssertEqual(ordinaryCalls, 1, "Ordinary dictation prewarming preserves the provider's existing behavior")
+    }
+
+    func testCancelledLocalPrewarmDoesNotStartProvider() async {
+        let probe = PrivateAIEnhancementProbe()
+        let service = PrivateAIIntegrationService(testingProvider: PrivateAITestIntegrationProvider(
+            probe: probe, delayNanoseconds: 0, shouldFail: false
+        ))
+        await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await service.prewarmDictation(localOnly: true)
+        }.value
+        let calls = await probe.warmupCalls
+        XCTAssertEqual(calls, 0)
+    }
+
     func testPrivateAIDictationTokenBudgetFallsBackBeforeLongInputCanTruncate() {
         let shortTranscript = Array(repeating: "word", count: 600).joined(separator: " ")
         let longTranscript = Array(repeating: "word", count: 3385).joined(separator: " ")
