@@ -262,6 +262,38 @@ final class MeetingSummaryProviderTests: XCTestCase {
         XCTAssertFalse(MeetingSummaryRemoteService.prompt(for: .executive).contains("User instructions"))
     }
 
+    func testLanguageMetadataAndCustomLanguageOverrideReachRemoteRequestUnchanged() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MeetingSummaryURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let service = MeetingSummaryRemoteService(session: session)
+        let route = self.route(baseURL: "https://language-request.example/v1")
+        for (code, source) in [
+            ("ru", "Ёжик проверит OAuth API сегодня."),
+            ("fr", "Zoë vérifiera OAuth API vendredi."),
+            ("auto", "Keep OAuth API v2 unchanged."),
+            ("invalid", "Ёжик / Zoë: OAuth API v2."),
+        ] {
+            let transcript = "Transcript language: \(MeetingSummaryInput.transcriptLanguageDescription(code))\n----------\n**Zoë / Ёжик**: \(source)"
+            for kind in [MeetingSummaryKind.executive, .detailed, .custom] {
+                let instructions = kind == .custom ? "Write the summary in English." : ""
+                let echo = try await service.generate(transcript: transcript, kind: kind, route: route, customInstructions: instructions)
+                let request = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(echo.utf8)) as? [String: Any])
+                let messages = try XCTUnwrap(request["messages"] as? [[String: Any]])
+                XCTAssertEqual(messages.last?["content"] as? String, transcript)
+                let system = try XCTUnwrap(messages.first?["content"] as? String)
+                if kind == .custom {
+                    XCTAssertTrue(system.contains("Unless the instructions say otherwise"))
+                    XCTAssertTrue(system.hasSuffix(instructions), "Explicit custom output language retains precedence over source metadata")
+                } else {
+                    XCTAssertTrue(system.contains("Write in the transcript's language."))
+                    XCTAssertFalse(system.contains("Write the summary in English."))
+                }
+            }
+        }
+    }
+
     func testEmptyCustomPromptFailsBeforeNetworkRequest() async {
         do {
             _ = try await MeetingSummaryRemoteService().generate(transcript: "Meeting", kind: .custom, route: self.route(), customInstructions: " \n")
@@ -322,7 +354,30 @@ private class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         guard let url = self.request.url,
               let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"]) else { return }
-        let text = url.host == "empty.example" ? "" : "Release agreed"
+        let text: String
+        if url.host == "language-request.example" {
+            // Echo the intercepted production wire request, never send it to a network endpoint.
+            let body: Data
+            if let data = self.request.httpBody {
+                body = data
+            } else if let stream = self.request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    guard count > 0 else { break }
+                    data.append(buffer, count: count)
+                }
+                body = data
+            } else {
+                body = Data()
+            }
+            text = String(data: body, encoding: .utf8) ?? ""
+        } else {
+            text = url.host == "empty.example" ? "" : "Release agreed"
+        }
         let json: [String: Any]
         if url.path.contains("/responses") {
             json = [

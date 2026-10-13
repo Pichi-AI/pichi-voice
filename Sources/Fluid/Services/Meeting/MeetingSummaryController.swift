@@ -22,6 +22,17 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
 }
 
 nonisolated enum MeetingSummaryInput {
+    /// The capture language is source metadata, independent of the app's interface language.
+    /// Unknown/automatic codes must not turn Locale's default language into an output request.
+    static func transcriptLanguageDescription(_ languageCode: String) -> String {
+        let code = Locale.LanguageCode(languageCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        guard Locale.LanguageCode.isoLanguageCodes.contains(code),
+              ![Locale.LanguageCode.unidentified, .uncoded, .multiple, .unavailable].contains(code),
+              let name = Locale(identifier: "en_US_POSIX").localizedString(forLanguageCode: code.identifier)
+        else { return "Infer from the spoken transcript text" }
+        return "\(name) (\(code.identifier))"
+    }
+
     static func transcript(for session: MeetingSession) -> String {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let formatter = DateFormatter()
@@ -43,6 +54,7 @@ nonisolated enum MeetingSummaryInput {
         Date: \(date)
         Time: \(time)
         Duration: \(Int(duration)) minutes
+        Transcript language: \(Self.transcriptLanguageDescription(session.languageCode))
         Participants: \(session.activeSpeakers.map(\.displayName).joined(separator: ", "))
         ----------
         """ + "\n" + turns.map {
