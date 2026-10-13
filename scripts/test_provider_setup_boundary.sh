@@ -12,6 +12,9 @@ task_test_dir=$(mktemp -d /tmp/fluidvoice-provider-setup.XXXXXX)
 { echo 'extension AIEnhancementSettingsViewModel {'
   sed -n '/^    func deleteCurrentProvider() async -> Bool {/,/^    func saveEditedProvider() {/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d'
   sed -n '/^    func saveManagedProviderBeforeClosing(/,/^    private func selectProviderForUse(/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d'
+  sed -n '/^    func configureProvider(/,/^    func finishConfiguringProvider(/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d'
+  sed -n '/^    private func mergeLoadedProviderAPIKeys(/,/^    private func keychainPermissionExplanation(/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d' | sed 's/private func mergeLoadedProviderAPIKeys/func mergeLoadedProviderAPIKeys/'
+  sed -n '/^    func refreshProviderItems()/,/^    func updateConnectionStatus(/p' Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift | sed '$d'
   echo '}'
 } > "$task_test_dir/Removal.swift"
 xcrun swiftc -parse-as-library \

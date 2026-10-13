@@ -21,6 +21,7 @@ struct ModelRepository {
     static let shared = ModelRepository()
     func isBuiltIn(_ id: String) -> Bool { ["openai", "ollama", "fluid"].contains(id) }
     func defaultModels(for id: String) -> [String] { ["default-model"] }
+    func builtInProvidersList() -> [(id: String, name: String)] { [("openai", "OpenAI"), ("ollama", "Ollama"), ("fluid", "Fluid")] }
 }
 
 final class SettingsStore {
@@ -38,6 +39,7 @@ final class SettingsStore {
     }
 
     var providerAPIKeyReadiness = KeychainService.Readiness.loaded
+    var providerAPIKeys: [String: String] = [:]
     var providerConnectionOptions: [String: [String: String]] = [:]
     var selectedProviderID = "fluid"
     var selectedModel: String? = "mini"
@@ -64,6 +66,9 @@ final class AIEnhancementSettingsViewModel {
     var isFetchingModels = false
     var selectedProviderID = "openai"
     var managedOriginalKey: String?
+    var managedProviderID: String?
+    var knownProviderAPIKeys: [String: String] = [:]
+    var persistsSelectedProvider = true
     var unconfiguredProviderDraftIDs = Set<String>()
     var credentialReads = 0
     var fetchedModelsProviders: Set<String> = []
@@ -71,6 +76,13 @@ final class AIEnhancementSettingsViewModel {
     var savedProviders: [SettingsStore.SavedProvider] = []
     var availableModelsByProvider: [String: [String]] = [:]
     var selectedModelByProvider: [String: String] = ["fluid": "mini"]
+    enum Status { case unknown, success }
+    var statuses: [String: Status] = [:]
+    var verifiedRefreshes = 0
+    func connectionStatus(for id: String) -> Status { self.statuses[id] ?? .unknown }
+    var cachedProviderItems: [ProviderItemData] = []
+    var cachedVerifiedProviderItems: [ProviderItemData] = []
+    var cachedUnverifiedProviderItems: [ProviderItemData] = []
     var cachedAddedProviderItems: [ProviderItemData] = []
     var failKeychain = false
     var saves = 0
@@ -83,26 +95,24 @@ final class AIEnhancementSettingsViewModel {
         self.keySaves += 1
         guard !self.failKeychain else { return false }
         self.persistedKeys = self.providerAPIKeys
+        self.knownProviderAPIKeys = self.persistedKeys
         return true
     }
 
-    func ensureKeychainAccessForAPIKeyEdit() async -> Bool { self.credentialReads += 1; return true }
+    func ensureKeychainAccessForAPIKeyEdit() async -> Bool {
+        self.credentialReads += 1
+        self.settings.providerAPIKeyReadiness = .loaded
+        self.mergeLoadedProviderAPIKeys(self.settings.providerAPIKeys)
+        return true
+    }
+    func selectProviderForUse(_ id: String) { self.selectedProviderID = id }
+    func setEditingAPIKey(_ editing: Bool, for id: String) {}
 
     func hasProviderAPIKeyDraft(for id: String) -> Bool { self.providerAPIKeys[id] != nil }
-    func refreshProviderItems() {
-        let items = [
-            ProviderItemData(id: "openai", name: "OpenAI", isBuiltIn: true),
-            ProviderItemData(id: "ollama", name: "Ollama", isBuiltIn: true),
-            ProviderItemData(id: "fluid", name: "Fluid", isBuiltIn: true),
-        ]
-            + self.savedProviders.map { ProviderItemData(id: $0.id, name: $0.name, isBuiltIn: false) }
-        self.cachedAddedProviderItems = addedProviderItems(from: items)
-    }
-
     func saveSavedProviders() { self.saves += 1; self.refreshProviderItems() }
     func clearEditProviderDraft() {}
     func finishConfiguringProvider() { self.selectedProviderID = self.settings.selectedProviderID }
-    func refreshVerifiedProviders() {}
+    func refreshVerifiedProviders() { self.verifiedRefreshes += 1 }
     func selectSoleVerifiedProviderIfNeeded() {}
 }
 
@@ -227,6 +237,7 @@ final class AIEnhancementSettingsViewModel {
         )
         let removal = AIEnhancementSettingsViewModel()
         removal.providerAPIKeys = ["openai": "remove-key", "other": "keep-key"]
+        removal.knownProviderAPIKeys = removal.providerAPIKeys
         removal.settings.dictationPromptConfigurations = [
             "affected": .init(providerID: "openai"),
             "unrelated": .init(providerID: "other"),
@@ -274,12 +285,51 @@ final class AIEnhancementSettingsViewModel {
         newDraft.settings.providerAPIKeyReadiness = .unavailable
         check(await newDraft.deleteCurrentProvider(), "A keyless draft created in this session can be removed without loading credentials")
         check(newDraft.credentialReads == 0 && newDraft.keySaves == 0, "Removing a new keyless draft never invokes the credential backend")
+        let cold = AIEnhancementSettingsViewModel()
+        cold.settings.providerAPIKeyReadiness = .pending
+        cold.configureProvider("openai")
+        check(cold.managedOriginalKey == nil, "Cold manager baseline is unknown, never verified empty")
+        cold.settings.providerAPIKeys = ["openai": "synthetic-loaded-key"]
+        check(await cold.deleteCurrentProvider(), "Cold manager removes the credential found by authoritative load")
+        check(cold.credentialReads == 1 && cold.keySaves == 1 && cold.persistedKeys["openai"] == nil,
+              "Cold removal performs the real production credential-delete boundary")
+        let arriving = AIEnhancementSettingsViewModel()
+        arriving.settings.providerAPIKeyReadiness = .pending
+        arriving.refreshProviderItems()
+        check(arriving.cachedAddedProviderItems.isEmpty, "Credential-only provider is absent while cold keys are unknown")
+        arriving.configureProvider("openai")
+        arriving.statuses["openai"] = .success
+        arriving.mergeLoadedProviderAPIKeys(["openai": "synthetic-arrived-key"])
+        arriving.settings.providerAPIKeyReadiness = .loaded
+        check(arriving.cachedAddedProviderItems.contains { $0.id == "openai" }, "Successful key arrival refreshes the displayed provider membership without reopening")
+        check(arriving.cachedVerifiedProviderItems.contains { $0.id == "openai" } && arriving.verifiedRefreshes == 1,
+              "Key arrival refreshes the verified and added descriptor lists through the production list builder")
+        check(arriving.managedOriginalKey == "synthetic-arrived-key", "Stored key arrival establishes the manager baseline")
+        check(await arriving.saveManagedProviderBeforeClosing("openai"), "Unedited cold manager may close after load")
+        check(arriving.keySaves == 0 && arriving.selectedProviderID == "openai", "Key arrival is not misclassified as an edit and keeps selection")
+        let dirty = AIEnhancementSettingsViewModel()
+        dirty.settings.providerAPIKeyReadiness = .pending
+        dirty.configureProvider("openai")
+        dirty.updateProviderAPIKey("synthetic-user-edit", for: "openai")
+        dirty.mergeLoadedProviderAPIKeys(["openai": "synthetic-arrived-key"])
+        check(dirty.providerAPIKey(for: "openai") == "synthetic-user-edit" && dirty.managedOriginalKey == "synthetic-arrived-key",
+              "Cold arrival preserves the draft while recording its persisted baseline")
+        let external = AIEnhancementSettingsViewModel()
+        external.settings.providerAPIKeyReadiness = .loaded
+        external.configureProvider("openai")
+        check(external.managedOriginalKey == "", "Loaded empty is a verified empty baseline")
+        external.mergeLoadedProviderAPIKeys(["openai": "synthetic-external-key"])
+        check(await external.saveManagedProviderBeforeClosing("openai"), "An untouched external key arrival may close")
+        check(external.keySaves == 0, "An untouched external key arrival is never an implicit write")
         let closing = AIEnhancementSettingsViewModel()
+        closing.managedProviderID = "openai"
         closing.providerAPIKeys["openai"] = "edited-key"
         closing.managedOriginalKey = "edited-key"
+        closing.knownProviderAPIKeys["openai"] = "edited-key"
         closing.failKeychain = true
         check((await closing.saveManagedProviderBeforeClosing("openai")) && closing.keySaves == 0, "Unchanged key closes without any Keychain write, even if writes would fail")
         closing.managedOriginalKey = "old-key"
+        closing.knownProviderAPIKeys["openai"] = "old-key"
         closing.failKeychain = true
         check(!(await closing.saveManagedProviderBeforeClosing("openai")), "Keychain failure keeps Manage open")
         check(closing.providerAPIKeys["openai"] == "edited-key" && closing.settings.selectedProviderID == "fluid", "Failed close preserves the draft and default")

@@ -12,8 +12,8 @@ source = Path('Tests/FluidDictationIntegrationTests/KeychainServiceCacheTests.sw
 assert source.count('@testable import FluidVoice_Debug') == 1
 (out / 'CacheTests.swift').write_text(source.replace('@testable import FluidVoice_Debug', 'import Foundation'))
 names = re.findall(r'^    func (test\w+)\(\)(?: throws)? \{', source, re.M)
-assert len(names) == 20, names
-(out / 'main.swift').write_text('import XCTest\nimport Foundation\nlet suite = KeychainServiceCacheTests.defaultTestSuite\nprecondition(suite.testCaseCount == 20, "Native XCTest discovery must include every synthetic regression")\nsuite.run()\nguard let run = suite.testRun, run.executionCount == 20, run.failureCount == 0 else { exit(1) }\nprint("PASS: 20 exact native Keychain cache/startup tests; injected backend only")\n')
+assert len(names) == 26, names
+(out / 'main.swift').write_text('import XCTest\nimport Foundation\nlet suite = KeychainServiceCacheTests.defaultTestSuite\nprecondition(suite.testCaseCount == 26, "Native XCTest discovery must include every synthetic regression")\nsuite.run()\nguard let run = suite.testRun, run.executionCount == 26, run.failureCount == 0 else { exit(1) }\nprint("PASS: 26 exact native Keychain cache/startup tests; injected backend only")\n')
 # Values are inert and the real singleton initializer is guarded at compile time.
 (out / 'Brand.swift').write_text('enum PichiLocalization { static func text(_ key: String) -> String { key } }; enum AppBrand { static let keychainService = "synthetic-unused-service"; static let keychainAccount = "synthetic-unused-account" }\n')
 settings = Path('Sources/Fluid/Persistence/SettingsStore.swift').read_text()
@@ -21,7 +21,8 @@ initializer = settings.split('    private init() {', 1)[1].split('\n    static f
 assert 'SecItem' not in initializer and 'fetchAllKeys' not in initializer
 assert 'DispatchQueue.main.async { self.refreshProviderAPIKeys() }' in initializer
 assert 'self.keychain.cachedKeys ?? [:]' in settings
-assert 'verifiedKeys: result.migratedKeys' in settings
+assert 'verifiedKeys: migratedKeys' in settings
+assert 'self.pendingUserActions == 0' in Path('Sources/Fluid/Persistence/KeychainService.swift').read_text()
 assert 'guard let keys = self.keychain.loadedKeys else { return nil }' in settings
 assert '(try? self.keychain.fetchAllKeys()) ?? [:]' not in settings
 viewmodel = Path('Sources/Fluid/UI/AISettings/AIEnhancementSettingsViewModel.swift').read_text()

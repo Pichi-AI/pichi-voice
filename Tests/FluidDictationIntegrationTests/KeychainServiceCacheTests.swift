@@ -9,6 +9,41 @@ private final class KeychainServiceBox: @unchecked Sendable {
     }
 }
 
+private final class SyntheticCredentialTransaction: @unchecked Sendable {
+    let lock = NSLock()
+    var keys = ["target": "synthetic-old", "other": "synthetic-keep"]
+    var plaintext = ["target": "synthetic-old"]
+    var reads = 0
+    var blockNextRead = false
+    let readStarted = DispatchSemaphore(value: 0)
+    let releaseRead = DispatchSemaphore(value: 0)
+    var cleanupResume: CheckedContinuation<Void, Never>?
+
+    func load() -> [String: String] {
+        let blocked = self.lock.withLock { () -> Bool in
+            self.reads += 1
+            let value = self.blockNextRead
+            self.blockNextRead = false
+            return value
+        }
+        if blocked { self.readStarted.signal(); self.releaseRead.wait() }
+        return self.lock.withLock { self.keys }
+    }
+    func save(_ keys: [String: String]) { self.lock.withLock { self.keys = keys } }
+    func snapshot() -> [String: String] { self.lock.withLock { self.plaintext } }
+    func completeCleanup(_ verified: [String: String]) -> Bool {
+        self.lock.withLock {
+            guard self.plaintext.allSatisfy({ verified[$0.key] == $0.value }) else { return false }
+            self.plaintext.removeAll()
+            return true
+        }
+    }
+    func resumeCleanup() {
+        let continuation = self.lock.withLock { self.cleanupResume }
+        continuation?.resume()
+    }
+}
+
 final class KeychainServiceCacheTests: XCTestCase {
     func testConcurrentStoresDoNotLoseUpdates() throws {
         let storageLock = NSLock()
@@ -230,9 +265,13 @@ final class KeychainServiceCacheTests: XCTestCase {
             return [:]
         }, testingSave: { _ in XCTFail("Unexpected write") })
         XCTAssertTrue(service.loadInBackground { _ in
-            // The callback must run after releasing both worker state/cache locks.
+            // Cache locks are released, but migration admission remains owned
+            // until the main cleanup callback returns.
+            XCTAssertTrue(Thread.isMainThread)
             XCTAssertEqual(service.cachedKeys, [:])
-            XCTAssertEqual(service.readiness, .loaded)
+            XCTAssertNil(service.loadedKeys)
+            XCTAssertEqual(service.readiness, .pending)
+            XCTAssertFalse(service.loadInBackground { _ in XCTFail("Cleanup callback must still own migration admission") })
             finished.fulfill()
         })
         XCTAssertEqual(started.wait(timeout: .now() + 1), .success)
@@ -354,7 +393,7 @@ final class KeychainServiceCacheTests: XCTestCase {
         }
         self.wait(for: [finished], timeout: 2)
         XCTAssertTrue(policies.allSatisfy { $0 })
-        XCTAssertEqual(policies.count, 4)
+        XCTAssertEqual(policies.count, 6)
     }
 
     func testExplicitReadAndDeleteAreJoinedAndKeepOtherCredentials() {
@@ -423,13 +462,175 @@ final class KeychainServiceCacheTests: XCTestCase {
             do {
                 let result = try await service.saveForUserAction(
                     ["target": "synthetic-edited"], replacing: ["target": "synthetic-legacy"],
-                    migrating: ["target": "synthetic-legacy"]
+                    migrating: ["target": "synthetic-legacy"],
+                    didMigrate: { verified in
+                        XCTAssertEqual(verified["target"], "synthetic-legacy")
+                        return true
+                    }
                 )
                 XCTAssertEqual(result.migratedKeys["target"], "synthetic-legacy")
                 XCTAssertEqual(result.keys["target"], "synthetic-edited")
                 XCTAssertEqual(result.keys["existing"], "synthetic-keep")
                 XCTAssertEqual(storage, result.keys)
             } catch { XCTFail("Unexpected error: \(error)") }
+            finished.fulfill()
+        }
+        self.wait(for: [finished], timeout: 2)
+    }
+
+
+    func testBlockedExplicitEditOwnsMigrationThroughAcknowledgedCleanupAndRestart() throws {
+        try self.exerciseBlockedMutation(deleting: false)
+    }
+
+    func testBlockedExplicitDeletionOwnsMigrationThroughAcknowledgedCleanupAndRestart() throws {
+        try self.exerciseBlockedMutation(deleting: true)
+    }
+
+    private func exerciseBlockedMutation(deleting: Bool) throws {
+        let state = SyntheticCredentialTransaction()
+        let service = KeychainService(testingLoad: { state.load() }, testingSave: { state.save($0) })
+        let baseline = try service.fetchAllKeys()
+        state.lock.withLock { state.blockNextRead = true }
+        let cleanupEntered = self.expectation(description: "main cleanup entered before user intent")
+        let finished = self.expectation(description: "user action joined cleanup")
+        let expected = deleting ? ["other": "synthetic-keep"] : ["target": "synthetic-new", "other": "synthetic-keep"]
+        Task {
+            do {
+                let result = try await service.saveForUserAction(expected, replacing: baseline,
+                    removing: deleting ? ["target"] : [], migrating: state.snapshot(), didMigrate: { verified in
+                        XCTAssertTrue(Thread.isMainThread)
+                        XCTAssertEqual(service.readiness, .pending)
+                        await withCheckedContinuation { continuation in
+                            state.lock.withLock { state.cleanupResume = continuation }
+                            cleanupEntered.fulfill()
+                        }
+                        return state.completeCleanup(verified)
+                    })
+                XCTAssertEqual(result.keys, expected)
+            } catch { XCTFail("Unexpected error: (error)") }
+            finished.fulfill()
+        }
+        XCTAssertEqual(state.readStarted.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(service.cachedKeys, baseline)
+        XCTAssertFalse(service.loadInBackground(migrating: state.snapshot()) { _ in XCTFail("Stale activation must not be admitted behind explicit IO") })
+        state.releaseRead.signal()
+        self.wait(for: [cleanupEntered], timeout: 2)
+        // Even after secure pre-migration, intent is not committed before main
+        // confirms old plaintext removal. This is the process-restart boundary.
+        XCTAssertEqual(state.lock.withLock { state.keys }, baseline)
+        XCTAssertEqual(state.snapshot(), ["target": "synthetic-old"])
+        XCTAssertEqual(service.readiness, .pending)
+        XCTAssertFalse(service.loadInBackground(migrating: state.snapshot()) { _ in XCTFail("Stale activation must not be admitted before main cleanup") })
+        state.resumeCleanup()
+        self.wait(for: [finished], timeout: 2)
+        XCTAssertEqual(state.snapshot(), [:])
+        XCTAssertEqual(state.lock.withLock { state.keys }, expected)
+        XCTAssertEqual(service.loadedKeys, expected)
+        let restarted = KeychainService(testingLoad: { state.load() }, testingSave: { state.save($0) })
+        let restartedLoaded = self.expectation(description: "fresh service after committed intent")
+        restarted.loadInBackground(migrating: state.snapshot()) { result in
+            XCTAssertEqual(try? result.get(), expected)
+            restartedLoaded.fulfill()
+        }
+        self.wait(for: [restartedLoaded], timeout: 2)
+        XCTAssertEqual(restarted.loadedKeys, expected)
+        XCTAssertEqual(state.lock.withLock { state.keys }, expected)
+    }
+
+    func testUnacknowledgedCleanupCannotCommitEditOrDeletionBeforeRestart() {
+        for deleting in [false, true] {
+            let state = SyntheticCredentialTransaction()
+            let baseline = state.lock.withLock { state.keys }
+            let service = KeychainService(testingLoad: { state.load() }, testingSave: { state.save($0) })
+            let finished = self.expectation(description: "unacknowledged intent rejected")
+            Task {
+                do {
+                    _ = try await service.saveForUserAction(deleting ? ["other": "synthetic-keep"] : ["target": "synthetic-new", "other": "synthetic-keep"],
+                        replacing: baseline, removing: deleting ? ["target"] : [], migrating: state.snapshot(), didMigrate: { _ in false })
+                    XCTFail("Unacknowledged plaintext cleanup must reject user intent")
+                } catch KeychainServiceError.cleanupUnconfirmed { }
+                catch { XCTFail("Unexpected error: (error)") }
+                finished.fulfill()
+            }
+            self.wait(for: [finished], timeout: 2)
+            XCTAssertEqual(state.lock.withLock { state.keys }, baseline)
+            XCTAssertEqual(state.snapshot(), ["target": "synthetic-old"])
+            let restarted = KeychainService(testingLoad: { state.load() }, testingSave: { state.save($0) })
+            let loaded = self.expectation(description: "restart retains last committed credentials")
+            restarted.loadInBackground(migrating: state.snapshot()) { result in
+                XCTAssertEqual(try? result.get(), baseline)
+                loaded.fulfill()
+            }
+            self.wait(for: [loaded], timeout: 2)
+            XCTAssertEqual(restarted.loadedKeys, baseline)
+        }
+    }
+
+    func testCurrentAggregateWinsConflictingLegacyAndPlaintextWithoutDiscardingThem() {
+        let state = SyntheticCredentialTransaction()
+        state.lock.withLock { state.keys["target"] = "synthetic-current" }
+        var deletedLegacy = false
+        let service = KeychainService(testingLoad: { state.load() }, testingSave: { state.save($0) },
+            testingLegacyLoad: { ["target": "synthetic-old"] }, testingLegacyRemove: { _ in deletedLegacy = true })
+        let loaded = self.expectation(description: "current credential preserved")
+        service.loadInBackground(migrating: state.snapshot()) { result in
+            XCTAssertEqual((try? result.get())?["target"], "synthetic-current")
+            loaded.fulfill()
+        }
+        self.wait(for: [loaded], timeout: 2)
+        XCTAssertFalse(deletedLegacy)
+        XCTAssertEqual(state.snapshot(), ["target": "synthetic-old"])
+        XCTAssertEqual(service.loadedKeys?["target"], "synthetic-current")
+        let edited = self.expectation(description: "conflicting plaintext is not silently discarded")
+        Task {
+            do {
+                _ = try await service.saveForUserAction(["target": "synthetic-new"], replacing: ["target": "synthetic-current"],
+                    migrating: state.snapshot(), didMigrate: { state.completeCleanup($0) })
+                XCTFail("Unverified conflicting source must remain preserved")
+            } catch KeychainServiceError.cleanupUnconfirmed { }
+            catch { XCTFail("Unexpected error: (error)") }
+            edited.fulfill()
+        }
+        self.wait(for: [edited], timeout: 2)
+        XCTAssertEqual(state.lock.withLock { state.keys["target"] }, "synthetic-current")
+        XCTAssertEqual(state.snapshot(), ["target": "synthetic-old"])
+    }
+
+    func testCapturedCanonicalMappingMigratesBareAndCanonicalCustomIDsAndBuiltins() {
+        let state = SyntheticCredentialTransaction()
+        state.lock.withLock { state.keys = ["bare-uuid": "synthetic-current", "custom:already": "synthetic-prefixed", "builtin-fixture": "synthetic-built-in"] }
+        let mapping = ["bare-uuid": "custom:bare-uuid", "new-uuid": "custom:new-uuid", "builtin-fixture": "builtin-fixture"]
+        var removed: [String] = []
+        let service = KeychainService(testingLoad: { state.load() }, testingSave: { state.save($0) },
+            testingLegacyLoad: { ["bare-uuid": "synthetic-old", "new-uuid": "synthetic-legacy"] }, testingLegacyRemove: { removed = $0 })
+        let loaded = self.expectation(description: "captured metadata canonicalization")
+        service.loadInBackground(canonicalProviderIDs: mapping) { result in
+            XCTAssertEqual(try? result.get(), ["custom:bare-uuid": "synthetic-current", "custom:new-uuid": "synthetic-legacy", "custom:already": "synthetic-prefixed", "builtin-fixture": "synthetic-built-in"])
+            loaded.fulfill()
+        }
+        self.wait(for: [loaded], timeout: 2)
+        XCTAssertEqual(removed, ["new-uuid"])
+        XCTAssertNil(service.loadedKeys?["bare-uuid"])
+        XCTAssertEqual(service.loadedKeys?["custom:bare-uuid"], "synthetic-current")
+    }
+
+    func testFinalFreshReadDoesNotReapplyAcknowledgedOldPlaintext() {
+        let state = SyntheticCredentialTransaction()
+        let service = KeychainService(testingLoad: { state.load() }, testingSave: { state.save($0) })
+        let finished = self.expectation(description: "fresh aggregate wins untouched external edit")
+        Task {
+            do {
+                let result = try await service.saveForUserAction(["other": "synthetic-keep", "new": "synthetic-added"],
+                    replacing: ["other": "synthetic-keep"], migrating: state.snapshot(), didMigrate: { verified in
+                        let cleaned = state.completeCleanup(verified)
+                        state.lock.withLock { state.keys["target"] = "synthetic-external" }
+                        return cleaned
+                    })
+                XCTAssertEqual(result.keys["target"], "synthetic-external")
+                XCTAssertEqual(result.keys["new"], "synthetic-added")
+                XCTAssertEqual(state.snapshot(), [:])
+            } catch { XCTFail("Unexpected error: (error)") }
             finished.fulfill()
         }
         self.wait(for: [finished], timeout: 2)

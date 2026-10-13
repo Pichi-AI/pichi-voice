@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Legacy credentials could not be safely cleared. No credential edit was applied.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legacy credentials could not be safely cleared. No credential edit was applied."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось безопасно очистить старые ключи. Изменение ключей не выполнено."
+          }
+        }
+      }
+    },
     "Provider credentials are loading.": {
       "extractionState": "manual",
       "localizations": {

@@ -59,22 +59,45 @@ struct SettingsBackupPayload: Codable, Equatable {
 }
 // Only persistence dependencies and unrelated nested value types are replaced.
 // SavedProvider, document, redaction and encode/decode bodies are actual source.
-final class MemoryPreferences {
+final class MemoryPreferences: @unchecked Sendable {
     private var values: [String: Any]
     private(set) var writes = 0
+    private var persisted: [String: Any]
+    var synchronizationSucceeds = true
+    var reintroduceSourceAfterSynchronization = false
+    private let originalProviderBytes: Data
     init(providerBytes: Data, legacy: [String: String]? = nil) {
+        originalProviderBytes = providerBytes
         values = ["SavedProviders": providerBytes]
         if let legacy { values["ProviderAPIKeys"] = legacy }
+        persisted = values
     }
+    func synchronize() -> Bool {
+        precondition(!Thread.isMainThread, "Migration persistence must never wait on main")
+        guard synchronizationSucceeds else { return false }
+        persisted = values
+        if reintroduceSourceAfterSynchronization { values["SavedProviders"] = originalProviderBytes }
+        return true
+    }
+    var persistedProviderBytes: Data { persisted["SavedProviders"] as! Data }
     func data(forKey key: String) -> Data? { values[key] as? Data }
     func dictionary(forKey key: String) -> [String: Any]? { values[key] as? [String: Any] }
     func set(_ value: Data, forKey key: String) { writes += 1; values[key] = value }
     func removeObject(forKey key: String) { writes += 1; values.removeValue(forKey: key) }
 }
+final class MigrationWorkerFixture: @unchecked Sendable {
+    let worker = DispatchQueue(label: "synthetic-migration-worker")
+    CONFIRM_LEGACY_CLEANUP
+}
 final class ChangeCounter { func send() {} }
 final class DebugLogger {
     static let shared = DebugLogger()
     func error(_ message: String, source: String) {}
+}
+struct ModelRepository {
+    static let shared = ModelRepository()
+    static let builtInProviderIDs = ["builtin-fixture"]
+    func isBuiltIn(_ id: String) -> Bool { Self.builtInProviderIDs.contains(id) }
 }
 final class SettingsStore {
     SAVED_PROVIDER
@@ -82,6 +105,8 @@ final class SettingsStore {
     typealias AppPromptBinding = String
     enum Keys { static let savedProviders = "SavedProviders"; static let providerAPIKeys = "ProviderAPIKeys"; static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers" }
     private let defaults: MemoryPreferences
+    private let keychain = MigrationWorkerFixture()
+    private var providerCredentialCleanupNeedsPersistence = false
     private let objectWillChange = ChangeCounter()
     init(savedProviders: [SavedProvider], legacy: [String: String]? = nil) {
         defaults = MemoryPreferences(providerBytes: try! JSONEncoder().encode(savedProviders), legacy: legacy)
@@ -90,11 +115,14 @@ final class SettingsStore {
     MIGRATION_SNAPSHOT_TYPE
     MIGRATION_SNAPSHOT
     MIGRATION_COMPLETION
+    @MainActor
+    ACKNOWLEDGE_MIGRATION
+    CREDENTIAL_SOURCES_CLEAR
     SANITIZE_KEYS
-    private func canonicalProviderKey(for providerID: String) -> String { providerID }
+    CANONICAL_PROVIDER_KEY
     func exerciseMigration(verifiedKeys: [String: String]) {
         let snapshot = self.providerCredentialMigrationSnapshot()
-        self.completeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys)
+        _ = self.completeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys)
     }
     func exerciseChangedSourceMigration() {
         let snapshot = self.providerCredentialMigrationSnapshot()
@@ -102,9 +130,16 @@ final class SettingsStore {
         let old = changed[0]
         changed[0] = SavedProvider(id: old.id, name: old.name, baseURL: old.baseURL, apiKey: "synthetic-newer-edit", models: old.models)
         self.defaults.set(try! JSONEncoder().encode(changed), forKey: Keys.savedProviders)
-        self.completeProviderCredentialMigration(snapshot, verifiedKeys: snapshot.keys)
+        _ = self.completeProviderCredentialMigration(snapshot, verifiedKeys: snapshot.keys)
     }
     var legacyDefaults: [String: String]? { defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] }
+    func exerciseAcknowledgedMigration(verifiedKeys: [String: String], persistenceSucceeds: Bool, reintroduceSource: Bool = false) async -> Bool {
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        self.defaults.synchronizationSucceeds = persistenceSucceeds
+        self.defaults.reintroduceSourceAfterSynchronization = reintroduceSource
+        return await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys)
+    }
+    var persistedProviders: [SavedProvider] { try! JSONDecoder().decode([SavedProvider].self, from: self.defaults.persistedProviderBytes) }
     var sourceBytes: Data { defaults.data(forKey: Keys.savedProviders)! }
     var preferenceWrites: Int { defaults.writes }
     func makeBackupPayload() -> SettingsBackupPayload {
@@ -139,7 +174,7 @@ MEMBERS
     }
 }
 @main struct Run {
-    @MainActor static func main() throws {
+    @MainActor static func main() async throws {
         let providers = [
             SettingsStore.SavedProvider(id: "custom:fixture", name: "Ёж и café", baseURL: "https://fixture.invalid/v1", apiKey: "synthetic-key-leak-marker", models: ["модель-ёж", "model-42"]),
             SettingsStore.SavedProvider(id: "empty-key", name: "Empty", baseURL: "http://127.0.0.1:11434/v1", models: []),
@@ -179,7 +214,7 @@ MEMBERS
         defaultStore.exerciseMigration(verifiedKeys: [:])
         expect(defaultStore.legacyDefaults == ["legacy": "synthetic-legacy-default"], "unverified legacy defaults are retained")
         expect(defaultStore.preferenceWrites == 0, "failed aggregate migration never deletes defaults")
-        defaultStore.exerciseMigration(verifiedKeys: ["legacy": "synthetic-legacy-default", providers[0].id: providers[0].apiKey, providers[2].id: providers[2].apiKey])
+        defaultStore.exerciseMigration(verifiedKeys: ["custom:legacy": "synthetic-legacy-default", providers[0].id: providers[0].apiKey, providers[2].id: providers[2].apiKey])
         expect(defaultStore.legacyDefaults == nil, "verified legacy defaults are removed")
         expect(defaultStore.savedProviders.allSatisfy { $0.apiKey.isEmpty }, "successful verified migration scrubs all migrated provider secrets")
         let changedStore = SettingsStore(savedProviders: providers)
@@ -187,6 +222,21 @@ MEMBERS
         expect(changedStore.savedProviders[0].apiKey == "synthetic-newer-edit", "stale completion preserves a newer source edit")
         expect(changedStore.savedProviders[2].apiKey == providers[2].apiKey && changedStore.preferenceWrites == 1,
             "stale completion performs no additional write or mixed partial scrub")
+        let persistenceFailure = SettingsStore(savedProviders: providers)
+        let verified = [providers[0].id: providers[0].apiKey, providers[2].id: providers[2].apiKey]
+        let failedAck = await persistenceFailure.exerciseAcknowledgedMigration(verifiedKeys: verified, persistenceSucceeds: false)
+        expect(!failedAck, "a failed preference persistence acknowledgment must reject subsequent credential intent")
+        expect(persistenceFailure.persistedProviders == providers, "failed persistence retains original secrets across synthetic restart")
+        let retryAck = await persistenceFailure.exerciseAcknowledgedMigration(verifiedKeys: verified, persistenceSucceeds: true)
+        expect(retryAck && persistenceFailure.persistedProviders.allSatisfy { $0.apiKey.isEmpty },
+               "an empty next snapshot must retry failed pending persistence before acknowledging cleanup")
+        let persisted = SettingsStore(savedProviders: providers)
+        let successfulAck = await persisted.exerciseAcknowledgedMigration(verifiedKeys: verified, persistenceSucceeds: true)
+        expect(successfulAck && persisted.persistedProviders.allSatisfy { $0.apiKey.isEmpty }, "acknowledgment joins durable legacy removal before an explicit edit may commit")
+        let reintroduced = SettingsStore(savedProviders: providers)
+        let reintroducedAck = await reintroduced.exerciseAcknowledgedMigration(verifiedKeys: verified, persistenceSucceeds: true, reintroduceSource: true)
+        expect(!reintroducedAck && reintroduced.savedProviders == providers, "a source reintroduced during persistence remains intact and rejects the credential edit")
+        expect(reintroduced.preferenceWrites == 1, "final acknowledgment validation never scrubs a new source without another joined persistence step")
         let settingsSnapshot = legacyStore.makeBackupPayload()
         expect(settingsSnapshot.savedProviders == snapshot.settings.savedProviders, "actual settings-export argument redacts saved providers before document construction")
         expect(legacyStore.sourceBytes == preferenceBytes && legacyStore.savedProviders == providers,
@@ -249,7 +299,11 @@ MEMBERS
         "MIGRATION_SNAPSHOT_TYPE": declaration(settings_source, "    private struct ProviderCredentialMigrationSnapshot:"),
         "MIGRATION_SNAPSHOT": declaration(settings_source, "    private func providerCredentialMigrationSnapshot()"),
         "MIGRATION_COMPLETION": declaration(settings_source, "    private func completeProviderCredentialMigration("),
+        "ACKNOWLEDGE_MIGRATION": declaration(settings_source, "    private func acknowledgeProviderCredentialMigration("),
+        "CREDENTIAL_SOURCES_CLEAR": declaration(settings_source, "    private func providerCredentialSourcesAreClear("),
+        "CONFIRM_LEGACY_CLEANUP": declaration(Path("Sources/Fluid/Persistence/KeychainService.swift").read_text(), "    func confirmLegacyCleanup("),
         "SANITIZE_KEYS": declaration(settings_source, "    private func sanitizeAPIKeys("),
+        "CANONICAL_PROVIDER_KEY": declaration(settings_source, "    private func canonicalProviderKey("),
         "SETTINGS_EXPORT_ARGUMENT": export_argument,
         "DOCUMENT": declaration(source, "struct AppBackupDocument:"),
         "MEMBERS": members,

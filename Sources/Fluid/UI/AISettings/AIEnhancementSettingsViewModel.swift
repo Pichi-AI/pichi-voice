@@ -62,6 +62,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     @Published var savedProviders: [SettingsStore.SavedProvider] = []
     private var persistsSelectedProvider = true
     private var managedOriginalKey: String?
+    private var managedProviderID: String?
     @Published var selectedProviderID: String {
         didSet {
             guard self.persistsSelectedProvider else { return }
@@ -497,7 +498,10 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     func configureProvider(_ providerID: String) {
-        self.managedOriginalKey = self.providerAPIKey(for: providerID)
+        if self.settings.providerAPIKeyReadiness == .loaded { self.mergeLoadedProviderAPIKeys(self.settings.providerAPIKeys) }
+        self.managedProviderID = providerID
+        self.managedOriginalKey = self.settings.providerAPIKeyReadiness == .loaded
+            ? (self.knownProviderAPIKeys[self.providerKey(for: providerID)] ?? self.knownProviderAPIKeys[providerID] ?? "") : nil
         self.persistsSelectedProvider = false
         self.selectProviderForUse(providerID)
         self.persistsSelectedProvider = true
@@ -509,6 +513,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         self.selectProviderForUse(self.settings.selectedProviderID)
         self.persistsSelectedProvider = true
         self.managedOriginalKey = nil
+        self.managedProviderID = nil
     }
 
     /// Commit a managed provider's key before dismissing, but never save a removed provider
@@ -521,9 +526,16 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     /// Persist only an API-key edit made in the active provider manager. Selecting an
     /// already-configured or keyless provider must not depend on Keychain write access.
     func saveManagedProviderAPIKeyIfNeeded(_ providerID: String) async -> Bool {
-        guard self.selectedProviderID == providerID,
-              let original = self.managedOriginalKey
-        else { return true }
+        guard self.selectedProviderID == providerID, self.managedProviderID == providerID else { return true }
+        if self.managedOriginalKey == nil {
+            if self.unconfiguredProviderDraftIDs.contains(providerID) {
+                self.managedOriginalKey = ""
+            } else {
+                guard await self.ensureKeychainAccessForAPIKeyEdit(), self.selectedProviderID == providerID else { return false }
+            }
+        }
+        guard self.managedOriginalKey != nil else { return false }
+        let original = self.knownProviderAPIKeys[self.providerKey(for: providerID)] ?? self.knownProviderAPIKeys[providerID] ?? ""
         let current = self.providerAPIKey(for: providerID)
         guard original.trimmingCharacters(in: .whitespacesAndNewlines)
             != current.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -738,11 +750,21 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
     }
 
     private func mergeLoadedProviderAPIKeys(_ keys: [String: String]) {
+        if let id = self.managedProviderID {
+            let key = self.providerKey(for: id)
+            let draft = self.providerAPIKeys[key] ?? self.providerAPIKeys[id]
+            let known = self.knownProviderAPIKeys[key] ?? self.knownProviderAPIKeys[id]
+            if self.managedOriginalKey == nil || draft == known {
+                self.managedOriginalKey = keys[key] ?? keys[id] ?? ""
+            }
+        }
         var merged = keys
         for id in self.knownProviderAPIKeys.keys where self.providerAPIKeys[id] == nil { merged.removeValue(forKey: id) }
         for (id, value) in self.providerAPIKeys where self.knownProviderAPIKeys[id] != value { merged[id] = value }
         self.knownProviderAPIKeys = keys
         self.providerAPIKeys = merged
+        self.refreshVerifiedProviders()
+        self.refreshProviderItems()
     }
 
     private func keychainPermissionExplanation(for status: OSStatus) -> String {
@@ -760,7 +782,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
             switch keychainError {
             case .invalidData:
                 message += "\n\nmacOS returned unreadable Keychain data."
-            case .unavailable, .readbackMismatch:
+            case .unavailable, .readbackMismatch, .cleanupUnconfirmed:
                 message += "\n\n\(keychainError.localizedDescription)"
             case let .unhandled(status):
                 if let detail = SecCopyErrorMessageString(status, nil) as String? {
@@ -1221,7 +1243,7 @@ final class AIEnhancementSettingsViewModel: ObservableObject {
         let deletedDefaultProvider = self.settings.selectedProviderID == deletedProviderID
         let key = self.providerKey(for: deletedProviderID)
         let previousKeys = self.providerAPIKeys
-        let persistedKey = self.managedOriginalKey ?? self.providerAPIKey(for: deletedProviderID)
+        let persistedKey = self.knownProviderAPIKeys[key] ?? self.knownProviderAPIKeys[deletedProviderID] ?? ""
         let hadPersistedKey = !persistedKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         self.providerAPIKeys.removeValue(forKey: key)
         if key != deletedProviderID {

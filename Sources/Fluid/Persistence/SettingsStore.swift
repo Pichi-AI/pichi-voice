@@ -41,6 +41,7 @@ final class SettingsStore: ObservableObject {
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
     private let defaults = UserDefaults.standard
     private let keychain = KeychainService.shared
+    private var providerCredentialCleanupNeedsPersistence = false
     private(set) var launchAtStartupEnabled = false
     private(set) var launchAtStartupErrorMessage: String?
     private(set) var launchAtStartupStatusMessage =
@@ -1610,8 +1611,9 @@ final class SettingsStore: ObservableObject {
     func loadProviderAPIKeysForUserAction() async throws -> [String: String] {
         defer { self.objectWillChange.send() }
         let snapshot = self.providerCredentialMigrationSnapshot()
-        let keys = try await self.keychain.loadForUserAction(migrating: snapshot.keys)
-        self.completeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+        let keys = try await self.keychain.loadForUserAction(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { keys in
+            await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+        }
         return keys
     }
 
@@ -1624,9 +1626,10 @@ final class SettingsStore: ObservableObject {
         let snapshot = self.providerCredentialMigrationSnapshot()
         let result = try await self.keychain.saveForUserAction(
             self.sanitizeAPIKeys(values), replacing: self.sanitizeAPIKeys(knownValues),
-            removing: providerIDs, migrating: snapshot.keys
-        )
-        self.completeProviderCredentialMigration(snapshot, verifiedKeys: result.migratedKeys)
+            removing: providerIDs, migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs
+        ) { migratedKeys in
+            await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: migratedKeys)
+        }
         return result.keys
     }
 
@@ -1634,13 +1637,11 @@ final class SettingsStore: ObservableObject {
     /// worker. Authentication prompts are reserved for explicit credential actions.
     func refreshProviderAPIKeys() {
         let snapshot = self.providerCredentialMigrationSnapshot()
-        self.keychain.loadInBackground(migrating: snapshot.keys) { result in
-            DispatchQueue.main.async {
-                if case let .success(keys) = result {
-                    self.completeProviderCredentialMigration(snapshot, verifiedKeys: keys)
-                }
-                self.objectWillChange.send()
+        self.keychain.loadInBackground(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { result in
+            if case let .success(keys) = result {
+                _ = await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
             }
+            self.objectWillChange.send()
         }
     }
 
@@ -4060,6 +4061,7 @@ final class SettingsStore: ObservableObject {
         let legacyDefaults: [String: String]?
         let savedProviderBytes: Data?
         let keys: [String: String]
+        let canonicalProviderIDs: [String: String]
     }
 
     /// Called on main after init, before dispatch; workers never consult mutable
@@ -4067,42 +4069,86 @@ final class SettingsStore: ObservableObject {
     private func providerCredentialMigrationSnapshot() -> ProviderCredentialMigrationSnapshot {
         let legacy = self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]
         let savedBytes = self.defaults.data(forKey: Keys.savedProviders)
-        var keys = self.sanitizeAPIKeys(legacy ?? [:])
+        var mapping = Dictionary(uniqueKeysWithValues: ModelRepository.builtInProviderIDs.map { ($0, self.canonicalProviderKey(for: $0)) })
+        var keys: [String: String] = [:]
+        for (id, key) in self.sanitizeAPIKeys(legacy ?? [:]) {
+            let canonical = self.canonicalProviderKey(for: id)
+            mapping[id] = canonical
+            mapping[canonical] = canonical
+            keys[canonical] = key
+        }
         if let savedBytes, let providers = try? JSONDecoder().decode([SavedProvider].self, from: savedBytes) {
             for provider in providers {
                 let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !key.isEmpty { keys[self.canonicalProviderKey(for: provider.id)] = key }
+                let canonical = self.canonicalProviderKey(for: provider.id)
+                mapping[provider.id] = canonical
+                mapping[canonical] = canonical
+                if !key.isEmpty { keys[canonical] = key }
             }
         }
-        return ProviderCredentialMigrationSnapshot(legacyDefaults: legacy, savedProviderBytes: savedBytes, keys: keys)
+        return ProviderCredentialMigrationSnapshot(legacyDefaults: legacy, savedProviderBytes: savedBytes, keys: keys, canonicalProviderIDs: mapping)
+    }
+
+    @MainActor
+    private func acknowledgeProviderCredentialMigration(
+        _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
+    ) async -> Bool {
+        guard self.completeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys) else { return false }
+        guard self.providerCredentialCleanupNeedsPersistence else { return true }
+        let preferences = self.defaults
+        // Unlike ordinary preference edits, this one-time credential cleanup
+        // must join pending persistence before a later Keychain mutation commits.
+        guard await self.keychain.confirmLegacyCleanup({ preferences.synchronize() }) else { return false }
+        self.providerCredentialCleanupNeedsPersistence = false
+        // Recheck without mutating: a source reintroduced during the wait must
+        // remain intact and require a fresh acknowledged migration.
+        return self.providerCredentialSourcesAreClear()
     }
 
     private func completeProviderCredentialMigration(
         _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
-    ) {
+    ) -> Bool {
         // Compare original values so an in-flight migration cannot clear a newer
         // edit. Each source is removed only after its own secret was verified.
         if let legacy = snapshot.legacyDefaults,
            self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] == legacy,
-           self.sanitizeAPIKeys(legacy).allSatisfy({ verifiedKeys[$0.key] == $0.value })
+           self.sanitizeAPIKeys(legacy).allSatisfy({ verifiedKeys[self.canonicalProviderKey(for: $0.key)] == $0.value })
         {
+            if !self.sanitizeAPIKeys(legacy).isEmpty { self.providerCredentialCleanupNeedsPersistence = true }
             self.defaults.removeObject(forKey: Keys.providerAPIKeys)
             self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
         }
-        guard let bytes = snapshot.savedProviderBytes,
-              self.defaults.data(forKey: Keys.savedProviders) == bytes,
-              var providers = try? JSONDecoder().decode([SavedProvider].self, from: bytes) else { return }
-        var changed = false
-        for index in providers.indices {
-            let provider = providers[index]
-            let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty, verifiedKeys[self.canonicalProviderKey(for: provider.id)] == key else { continue }
-            providers[index] = provider.redactingAPIKey()
-            changed = true
+        if let bytes = snapshot.savedProviderBytes,
+           self.defaults.data(forKey: Keys.savedProviders) == bytes,
+           var providers = try? JSONDecoder().decode([SavedProvider].self, from: bytes)
+        {
+            var changed = false
+            for index in providers.indices {
+                let provider = providers[index]
+                let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty, verifiedKeys[self.canonicalProviderKey(for: provider.id)] == key else { continue }
+                providers[index] = provider.redactingAPIKey()
+                changed = true
+            }
+            if changed, let sanitized = try? JSONEncoder().encode(providers) {
+                self.providerCredentialCleanupNeedsPersistence = true
+                self.defaults.set(sanitized, forKey: Keys.savedProviders)
+            }
         }
-        if changed, let sanitized = try? JSONEncoder().encode(providers) {
-            self.defaults.set(sanitized, forKey: Keys.savedProviders)
+        return self.providerCredentialSourcesAreClear()
+    }
+
+    private func providerCredentialSourcesAreClear() -> Bool {
+        // A changed/new plaintext source is not an acknowledgment. Keep the
+        // user edit unapplied so a restart cannot resurrect the previous secret.
+        let remainingDefaults = self.sanitizeAPIKeys(self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] ?? [:])
+        guard remainingDefaults.isEmpty else { return false }
+        if let data = self.defaults.data(forKey: Keys.savedProviders),
+           let providers = try? JSONDecoder().decode([SavedProvider].self, from: data)
+        {
+            return providers.allSatisfy { $0.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         }
+        return self.defaults.data(forKey: Keys.savedProviders) == nil
     }
 
     static func customPromptBody(_ text: String, mode: PromptMode) -> String {

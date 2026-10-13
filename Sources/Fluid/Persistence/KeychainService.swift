@@ -6,6 +6,7 @@ enum KeychainServiceError: Error, LocalizedError {
     case invalidData
     case unavailable
     case readbackMismatch
+    case cleanupUnconfirmed
     case unhandled(OSStatus)
 
     var errorDescription: String? {
@@ -16,6 +17,8 @@ enum KeychainServiceError: Error, LocalizedError {
             return PichiLocalization.text("Provider credentials are unavailable. Open API key settings to retry.")
         case .readbackMismatch:
             return PichiLocalization.text("Saved API keys could not be verified in Keychain.")
+        case .cleanupUnconfirmed:
+            return PichiLocalization.text("Legacy credentials could not be safely cleared. No credential edit was applied.")
         case let .unhandled(status):
             if let message = SecCopyErrorMessageString(status, nil) as String? {
                 return "\(message) (OSStatus: \(status))"
@@ -55,6 +58,7 @@ final class KeychainService: @unchecked Sendable {
     private let ioLock = NSRecursiveLock()
     private var keyCache = KeyCache.unloaded
     private var readinessState = Readiness.pending
+    private var lastIOReadiness = Readiness.pending
     private var backgroundLoadPending = false
     private var pendingUserActions = 0
     // All admitted Security operations are owned by this serial worker. Cache
@@ -112,85 +116,152 @@ final class KeychainService: @unchecked Sendable {
     /// The immutable additions are collected after SettingsStore initialization.
     @discardableResult
     func loadInBackground(
-        migrating additions: [String: String] = [:],
-        completion: @escaping @Sendable (Result<[String: String], Error>) -> Void
+        migrating additions: [String: String] = [:], canonicalProviderIDs: [String: String]? = nil,
+        completion: @escaping @MainActor @Sendable (Result<[String: String], Error>) async -> Void
     ) -> Bool {
         let admitted = self.cacheLock.withLock {
-            guard !self.backgroundLoadPending else { return false }
+            guard !self.backgroundLoadPending, self.pendingUserActions == 0 else { return false }
             self.backgroundLoadPending = true
             self.readinessState = .pending
             return true
         }
         guard admitted else { return false }
         self.worker.async {
-            let result = Result { try self.loadAndMigrate(additions, interactive: false) }
-            self.cacheLock.withLock {
-                self.backgroundLoadPending = false
-                self.readinessState = self.pendingUserActions > 0 ? .pending
-                    : ((try? result.get()) == nil ? .unavailable : .loaded)
+            let result = Result { try self.loadAndMigrate(additions, canonicalProviderIDs: canonicalProviderIDs, interactive: false) }
+            self.cacheLock.withLock { self.lastIOReadiness = (try? result.get()) == nil ? .unavailable : .loaded }
+            // Keep ownership until main has checked/cleaned the captured legacy
+            // sources. Activation must not enqueue an old snapshot in that gap.
+            Task { @MainActor in
+                await completion(result)
+                self.cacheLock.withLock {
+                    self.backgroundLoadPending = false
+                    self.readinessState = self.pendingUserActions > 0 ? .pending : self.lastIOReadiness
+                }
             }
-            completion(result)
         }
         return true
     }
 
     /// Only an explicit credential action permits normal OS authentication.
-    func loadForUserAction(migrating additions: [String: String] = [:]) async throws -> [String: String] {
-        try await self.onWorker { try self.loadAndMigrate(additions, interactive: true) }
+    func loadForUserAction(
+        migrating additions: [String: String] = [:], canonicalProviderIDs: [String: String]? = nil,
+        didMigrate: @escaping @MainActor @Sendable ([String: String]) async -> Bool = { _ in false }
+    ) async throws -> [String: String] {
+        try await self.withUserAction {
+            let keys = try await self.performIO {
+                try self.loadAndMigrate(additions, canonicalProviderIDs: canonicalProviderIDs, interactive: true)
+            }
+            _ = await didMigrate(keys)
+            return keys
+        }
     }
 
-    /// Apply edits to a fresh aggregate. An empty cold UI cache cannot replace
-    /// credentials it has never observed; unrelated external edits are retained.
+    /// Secure migration and acknowledged plaintext cleanup precede user intent.
+    /// The final fresh read never reapplies a captured legacy/default snapshot.
     func saveForUserAction(
         _ values: [String: String], replacing knownValues: [String: String],
-        removing providerIDs: [String] = [], migrating additions: [String: String] = [:]
+        removing providerIDs: [String] = [], migrating additions: [String: String] = [:],
+        canonicalProviderIDs: [String: String]? = nil,
+        didMigrate: (@MainActor @Sendable ([String: String]) async -> Bool)? = nil
     ) async throws -> (keys: [String: String], migratedKeys: [String: String]) {
-        try await self.onWorker {
-            self.ioLock.lock()
-            defer { self.ioLock.unlock() }
-            let migrated = try self.loadAndMigrate(additions, interactive: true)
-            var current = migrated
-            for id in knownValues.keys where values[id] == nil { current.removeValue(forKey: id) }
-            for (id, value) in values where knownValues[id] != value { current[id] = value }
-            for id in providerIDs { current.removeValue(forKey: id) }
-            try self.saveAndVerify(current, interactive: true)
-            return (current, migrated)
+        try await self.withUserAction {
+            let migrated = try await self.performIO {
+                try self.loadAndMigrate(additions, canonicalProviderIDs: canonicalProviderIDs, interactive: true)
+            }
+            let cleaned = await didMigrate?(migrated) ?? additions.isEmpty
+            guard cleaned else { throw KeychainServiceError.cleanupUnconfirmed }
+            return try await self.performIO {
+                self.ioLock.lock()
+                defer { self.ioLock.unlock() }
+                var current = self.canonicalizedKeys(try self.readStoredKeys(), mapping: canonicalProviderIDs)
+                let proposed = self.canonicalizedKeys(values, mapping: canonicalProviderIDs)
+                let known = self.canonicalizedKeys(knownValues, mapping: canonicalProviderIDs)
+                var affected = Set(providerIDs.map { self.canonicalProviderID($0, mapping: canonicalProviderIDs) })
+                for id in known.keys where proposed[id] == nil { affected.insert(id); current.removeValue(forKey: id) }
+                for (id, value) in proposed where known[id] != value { affected.insert(id); current[id] = value }
+                for id in providerIDs { current.removeValue(forKey: self.canonicalProviderID(id, mapping: canonicalProviderIDs)) }
+                // Explicit edit/removal retires all older secure entries for its
+                // affected providers before committing intent to the aggregate.
+                let legacy = try self.legacyProviderEntries()
+                let retired = legacy.keys.filter { affected.contains(self.canonicalProviderID($0, mapping: canonicalProviderIDs)) }
+                try self.removeLegacyEntries(providerIDs: retired)
+                try self.saveAndVerify(current, interactive: true)
+                return (current, migrated)
+            }
         }
     }
 
-    private func onWorker<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
-        self.cacheLock.withLock {
+    /// A rare legacy cleanup must be persisted before a later credential edit
+    /// can commit. Keep the preferences wait off main, on the same owned worker.
+    func confirmLegacyCleanup(_ synchronization: @escaping @Sendable () -> Bool) async -> Bool {
+        await withCheckedContinuation { continuation in
+            self.worker.async { continuation.resume(returning: synchronization()) }
+        }
+    }
+
+    private func withUserAction<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        let admitted = self.cacheLock.withLock {
+            guard self.pendingUserActions == 0 else { return false }
             self.pendingUserActions += 1
             self.readinessState = .pending
+            return true
         }
-        return try await withCheckedThrowingContinuation { continuation in
+        guard admitted else { throw KeychainServiceError.unavailable }
+        defer {
+            self.cacheLock.withLock {
+                self.pendingUserActions -= 1
+                self.readinessState = self.backgroundLoadPending ? .pending : self.lastIOReadiness
+            }
+        }
+        return try await operation()
+    }
+
+    private func performIO<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
             self.worker.async {
                 let result = Result(catching: operation)
                 self.cacheLock.withLock {
-                    self.pendingUserActions -= 1
-                    self.readinessState = self.backgroundLoadPending || self.pendingUserActions > 0 ? .pending
-                        : ((try? result.get()) == nil ? .unavailable : .loaded)
+                    self.lastIOReadiness = (try? result.get()) == nil ? .unavailable : .loaded
                 }
                 continuation.resume(with: result)
             }
         }
     }
 
-    private func loadAndMigrate(_ additions: [String: String], interactive: Bool) throws -> [String: String] {
+    private func canonicalProviderID(_ id: String, mapping: [String: String]?) -> String {
+        guard let mapping else { return id }
+        if let canonical = mapping[id] { return canonical }
+        return id.hasPrefix("custom:") ? id : "custom:\(id)"
+    }
+
+    private func canonicalizedKeys(_ keys: [String: String], mapping: [String: String]?) -> [String: String] {
+        guard mapping != nil else { return keys }
+        var result: [String: String] = [:]
+        for id in keys.keys.sorted() {
+            let canonical = self.canonicalProviderID(id, mapping: mapping)
+            if result[canonical] == nil || id == canonical { result[canonical] = keys[id] }
+        }
+        return result
+    }
+
+    private func loadAndMigrate(_ additions: [String: String], canonicalProviderIDs: [String: String]?, interactive: Bool) throws -> [String: String] {
         self.ioLock.lock()
         defer { self.ioLock.unlock() }
         // A failed aggregate or legacy read aborts before any write or cleanup.
-        var keys = try self.readStoredKeys(interactive: interactive)
+        var keys = self.canonicalizedKeys(try self.readStoredKeys(interactive: interactive), mapping: canonicalProviderIDs)
         let legacy = try self.legacyProviderEntries(interactive: interactive)
         let normalizedLegacy = legacy.reduce(into: [String: String]()) { values, pair in
             let key = pair.value.trimmingCharacters(in: .whitespacesAndNewlines)
             if !key.isEmpty { values[pair.key] = key }
         }
-        keys.merge(normalizedLegacy) { _, migrated in migrated }
-        keys.merge(additions) { _, migrated in migrated }
+        keys.merge(self.canonicalizedKeys(normalizedLegacy, mapping: canonicalProviderIDs)) { current, _ in current }
+        keys.merge(self.canonicalizedKeys(additions, mapping: canonicalProviderIDs)) { current, _ in current }
         if !legacy.isEmpty || !additions.isEmpty {
             try self.saveAndVerify(keys, interactive: interactive)
-            try self.removeLegacyEntries(providerIDs: Array(legacy.keys), interactive: interactive)
+            let verifiedLegacyIDs = legacy.keys.filter {
+                keys[self.canonicalProviderID($0, mapping: canonicalProviderIDs)] == normalizedLegacy[$0]
+            }
+            try self.removeLegacyEntries(providerIDs: verifiedLegacyIDs, interactive: interactive)
         } else {
             self.setCachedKeys(keys)
         }
@@ -434,6 +505,7 @@ final class KeychainService: @unchecked Sendable {
     private func setCachedKeys(_ keys: [String: String]) {
         self.cacheLock.lock()
         self.keyCache = .loaded(keys)
+        self.lastIOReadiness = .loaded
         self.readinessState = self.backgroundLoadPending || self.pendingUserActions > 0 ? .pending : .loaded
         self.cacheLock.unlock()
     }
