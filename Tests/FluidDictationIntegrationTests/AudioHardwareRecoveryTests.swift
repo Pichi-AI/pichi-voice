@@ -1545,6 +1545,35 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testRecoveryFixtureTerminatesOnlyItsOwnedMediaService() async throws {
+        var retainedFixture: ASRRecoveryFixture?
+        let unrelatedTransport = RecoveryMediaTransport()
+        let unrelated = MediaPlaybackService(transport: unrelatedTransport, settle: {})
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            retainedFixture = fixture
+            XCTAssertTrue(fixture.service.mediaPlaybackOwnerForTesting === fixture.media)
+            XCTAssertFalse(fixture.service.mediaPlaybackOwnerForTesting === MediaPlaybackService.shared,
+                           "Terminal fixture cleanup must never own the app's shared media service")
+        }
+        let fixture = try XCTUnwrap(retainedFixture)
+        let ownedQueries = await fixture.mediaTransport.queryCount
+        fixture.media.recordingStarted(sessionID: 123, enabled: true)
+        await fixture.media.waitUntilSettled()
+        let ignoredQueries = await fixture.mediaTransport.queryCount
+        XCTAssertEqual(ignoredQueries, ownedQueries, "The fixture's private media owner is terminal after cleanup")
+
+        unrelated.recordingStarted(sessionID: 456, enabled: true)
+        await unrelated.waitUntilSettled()
+        let paused = await unrelatedTransport.commands
+        XCTAssertEqual(paused, [.pause], "Unrelated media owners remain usable after fixture shutdown")
+        unrelated.sessionFinished(sessionID: 456)
+        await unrelated.waitUntilSettled()
+        let restored = await unrelatedTransport.commands
+        XCTAssertEqual(restored, [.pause, .play])
+        await unrelated.shutdown()
+    }
+
+    @MainActor
     func testRecoveryFixtureUsesItsPrivateMicrophoneCoordinator() async throws {
         try await withASRRecoveryFixture(queryDelay: 0) { fixture in
             let injected = try XCTUnwrap(fixture.service.microphonePreferenceCoordinatorForTesting)
@@ -1659,6 +1688,8 @@ private final class ASRRecoveryFixture {
     let service: ASRService
     let controller: DirectCoreAudioLifecycleController
     let hardware: ASRRecoveryHardware
+    let mediaTransport: RecoveryMediaTransport
+    let media: MediaPlaybackService
     private let restore: () -> Void
     private let outputUID: String?
     private let modelID: String
@@ -1696,7 +1727,12 @@ private final class ASRRecoveryFixture {
         self.outputUID = settings.preferredOutputDeviceUID
         self.modelID = settings.selectedSpeechModel.rawValue
         self.providerID = settings.selectedProviderID
+        let mediaTransport = RecoveryMediaTransport()
+        let media = MediaPlaybackService(transport: mediaTransport, settle: {})
+        self.mediaTransport = mediaTransport
+        self.media = media
         let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.useMediaPlaybackForTesting(media)
         self.service = service
         let hardware = ASRRecoveryHardware(
             queryDelay: queryDelay,
@@ -1788,9 +1824,11 @@ private final class ASRRecoveryFixture {
 private actor RecoveryMediaTransport: MediaPlaybackTransport {
     private var playing = true
     private(set) var commands: [MediaPlaybackCommand] = []
+    private(set) var queryCount = 0
 
     func query() async -> MediaPlaybackQueryResult {
-        .snapshot(MediaPlaybackSnapshot(bundleIdentifier: "test.player", processID: 1, title: "Test item", isPlaying: self.playing))
+        self.queryCount += 1
+        return .snapshot(MediaPlaybackSnapshot(bundleIdentifier: "test.player", processID: 1, title: "Test item", isPlaying: self.playing))
     }
 
     func send(_ command: MediaPlaybackCommand) async -> MediaPlaybackCommandResult {

@@ -1039,6 +1039,8 @@ final class ASRService: ObservableObject {
         self.mediaPlaybackService = service
     }
 
+    var mediaPlaybackOwnerForTesting: MediaPlaybackService { self.mediaPlaybackService }
+
     func failAudioRouteRecoveryForTesting(stale: Bool = false) async {
         await self.finishAudioRouteRecoveryFailure(AudioRouteRecoveryRequest(
             generation: stale ? self.audioRouteRecoveryGeneration &- 1 : self.audioRouteRecoveryGeneration,
