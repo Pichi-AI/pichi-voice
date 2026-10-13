@@ -35,7 +35,16 @@ public actor GigaAMRuntime {
         }
         let environment = try ORTEnv(loggingLevel: .warning)
         let options = try ORTSessionOptions()
+        #if os(iOS)
+        // Mobile background capture needs bounded CPU overhead, not maximum
+        // operator parallelism. Freeze these options before opening this session;
+        // they do not cap other app threads or promise a background CPU budget.
+        try options.setIntraOpNumThreads(1)
+        try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
+        try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
+        #else
         try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
+        #endif
         try options.setGraphOptimizationLevel(.all)
         // Dynamic GigaAM shapes are supported by the CPU EP on both architectures.
         // CoreML remains opt-in until a particular export/device passes parity.
