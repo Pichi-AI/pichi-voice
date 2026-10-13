@@ -182,3 +182,25 @@ Native UI automation на этом iPadOS 17 завершилась до пер�
 Неоптимизированная Debug сборка получила iPadOS CPU resource termination, а не OOM: 9 CPU секунд за 11 секунд, лимит конкретного прогона 60% за 15 секунд, footprint 287 MB. Повторный аппаратный test product использует `-O` для самого PichiGigaAM и остального Swift кода; код, fingerprint, backend и privacy policy те же. Системные ограничения и permissions не изменялись. Оптимизированный прогон прошёл, но не доказывает безопасность часового разговора или всех background strict/diarization сочетаний.
 
 Обычная Release сборка ca0935e0 без XCTest bundle подписана Apple Development, зафиксирована, установлена и запущена на iPad. Profile, certificate и веса не входят в Git. Переносимые проверки пройдены. Общий native Mac regression по затронутым coordinator/backend/provider/buffered/memory-gate suites: 204 теста, 3 существующих opt-in пропуска, 0 ошибок. Независимые reviews проверили settings ownership, routing, preview scheduling и окончательный navigation diff; существенных P0-P2 production замечаний не осталось.
+
+## Повторный выбор раздела
+
+Повторное нажатие на выбранный раздел возвращает его главный экран. Settings очищает только свой navigation path, History закрывает выбранную расшифровку, Meetings сохраняет текущую встречу и запись. Переключение на другой раздел продолжает сохранять ранее открытый экран. Поиск, preferences, model preparation и PII preparation не сбрасываются. Sidebar и компактный TabView используют один UI selection handler; shared coordinator и pipeline не меняются.
+
+В истории область нажатия занимает всю строку. Native iPad тест обнаружил, что plain Button с растянутым label раньше реагировал только на содержимое; `contentShape(Rectangle())` после frame исправляет нажатие на пустую часть широкой строки.
+
+Для теста повторного выбора History нужно добавить публичную синтетическую встречу в store установленного приложения симулятора. Она не содержит аудио или персональных данных, production launch hooks не добавлены. Из рабочего дерева, после установки тестовой сборки:
+
+```sh
+task_sim_id=81F20D40-B2DE-482E-A771-CC4006792CEB
+task_container="$(xcrun simctl get_app_container "$task_sim_id" ai.pichi.voice.mobile data)"
+task_fixture_dir="$task_container/Library/Application Support/ai.pichi.voice.mobile/Meetings/DDD86147-F0B9-4B13-88B5-099B1E0D8BA5"
+mkdir -p "$task_fixture_dir"
+cp Tests/MobileUITests/Fixtures/NavigationMeeting.json "$task_fixture_dir/session.json"
+```
+
+Без этой fixture отдельный History test явно пропускается. Проверка успешной работы требует отсутствия пропуска, открытия расшифровки и возврата к списку после повторного нажатия; нажатия на уже открытый список недостаточно.
+
+На source `2b5fb5d0` прошли четыре native UI regression tests на iPad simulator и те же четыре на iPhone simulator, оба iOS 27.0: повторный выбор всех четырёх карточек Settings, повторный выбор History из расшифровки, переключение разделов из вложенных настроек, поворот с сохранением Settings detail и закрытие recording sheet. Восемь тестов, ноль ошибок и пропусков. Native screenshots сохранены в соответствующих xcresult bundles, экспортированы и проверены. До исправления hit area iPad History test воспроизводил ошибку открытия строки; после исправления весь прогон повторён. SwiftUI TabView Binding используется без замены его внутренних UIKit delegates; фактический повторный callback проверен через History state, а не только через штатный pop NavigationStack.
+
+Release `2b5fb5d0` без XCTest повторно собрана для iPadOS 17, подписана существующей Apple Development identity, зафиксирована и проверена strict deep codesign. CLI device results подтверждают успешную установку и запуск на подключённом iPad. Его native UI automation по-прежнему недоступна; перечисленные UI gestures проверены в симуляторах. Переносимые проверки и независимое review exact source `2b5fb5d0a1199facacc27697cc76795a188d7b3e` пройдены. ASR, privacy и shared meeting code в этом navigation исправлении не менялись, аппаратные speech checks предыдущей секции не выдаются за новый прогон.
