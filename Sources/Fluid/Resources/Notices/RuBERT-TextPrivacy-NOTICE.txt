@@ -1,0 +1,31 @@
+Local transcript privacy model attribution
+
+Model: r1char9/ner-rubert-tiny-news
+Base model: cointegrated/rubert-tiny2
+Public INT8 ONNX conversion: onnx-community/ner-rubert-tiny-news-ONNX
+Pinned revision: 930eccc0b433dae84126a5837e9a169f0a4639e3
+Model-card license: MIT
+Original model card: https://huggingface.co/r1char9/ner-rubert-tiny-news
+Conversion card: https://huggingface.co/onnx-community/ner-rubert-tiny-news-ONNX
+
+The model artifacts are downloaded separately. They are not included in this
+repository. Their SHA-256 digests, lengths and revision are frozen in the
+artifact descriptor. The private Pichi Transcribe PII fine-tune is not included
+or redistributed by this feature.
+
+This is a Russian news NER model for person entities. It is combined with
+structured-identifier detection adapted from Pichi Transcribe. Organizations,
+general locations, ordinary dates, drug names and ordinary long numbers are
+not redacted by this privacy policy. Address masking requires a residence/home
+address context. English person-entity recall is not established by this model.
+
+Detection can miss sensitive data or mask non-sensitive words. The public model
+is a small local candidate, not a claim of universal best quality. Synthetic
+tests confirm its native execution and selected cases, not production recall
+or performance on a particular iPad. Review exported text when needed.
+
+Text redaction does not redact retained audio recordings. If audio storage is
+enabled, the recording retains voices and spoken personal information.
+
+Native inference uses the existing ONNX Runtime distribution, licensed in the
+accompanying ONNXRuntime-LICENSE.txt notice.
