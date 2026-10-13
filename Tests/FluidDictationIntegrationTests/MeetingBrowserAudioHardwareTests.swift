@@ -134,7 +134,18 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
         }
 
         let tracks = try session.audioTracks.map { try Self.measure($0, in: directory) }
+        let eventSummary = events.summary()
         var failures: [String] = []
+        let terminalInterruptions: [MeetingInterruptionKind] = [
+            .writerFailure, .diskExhausted, .permissionRevoked, .captureStoppedUnexpectedly,
+            .applicationExited, .microphoneDisconnected,
+        ]
+        for kind in terminalInterruptions where eventSummary.interruptionsByKind[kind.rawValue, default: 0] > 0 {
+            failures.append("Capture reported \(kind.rawValue) before finalization.")
+        }
+        if eventSummary.droppedInterruptionDetails > 0 {
+            failures.append("Capture exceeded the bounded interruption evidence limit.")
+        }
         if Set(tracks.map(\.kind)) != Set(["applicationAudio", "microphone"]) {
             failures.append("Real meeting capture did not produce both tracks.")
         }
@@ -167,7 +178,7 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
             runID: options.runID, targetBundleID: options.bundleID, durationSeconds: options.durationSeconds,
             status: failures.isEmpty ? "passed" : "failed", failures: failures,
             sessionDirectory: directory.path, captureScope: start.captureScope.map { String(describing: $0) },
-            tracks: tracks, events: events.summary(), speechText: speechText
+            tracks: tracks, events: eventSummary, speechText: speechText
         )
     }
 
