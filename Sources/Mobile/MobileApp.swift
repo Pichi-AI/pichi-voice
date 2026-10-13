@@ -8,6 +8,7 @@ final class AppServices: ObservableObject {
     static let shared = AppServices()
     let asr: ASRService
     let meetingSessionCoordinator: MeetingSessionCoordinator
+    let meetingProcessingPipeline: MeetingProcessingPipeline
     let meetingStore: any MeetingSessionStoring
     let transcriptPrivacy: PichiTranscriptPrivacyService
     @Published private(set) var isUIReady = false
@@ -34,6 +35,7 @@ final class AppServices: ObservableObject {
             privacyRedactorProvider: { privacy },
             prepareDiarizationModel: { _ = try await MeetingDiarizationModelStore.shared.ensureInstalled(includingVoiceEncoder: true) },
             prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) })
+        self.meetingProcessingPipeline = pipeline
         let capture = injectedCapture ?? IOSMeetingCaptureEngine(memoryConsumerFactory: { session, _, track, event in
             try await pipeline.memoryConsumer(for: session.id, track: track, eventHandler: event)
         })
