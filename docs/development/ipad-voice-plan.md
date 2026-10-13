@@ -96,8 +96,6 @@ flowchart TB
 
 Кандидат deployment target: iOS/iPadOS 18. Он позволяет переиспользовать текущий SwiftUI renderer с `onScrollGeometryChange`, без второго scroll-контроллера для старой OS. Устройства стартового парка 2021+ поддерживают эту версию. Прототип компилирует этот renderer напрямую; весь service dependency graph пока не перенесён.
 
-## Модели и смешанная речь
-
 ## Общее приложение на разных платформах
 
 Один репозиторий содержит macOS target и universal iOS target для iPad/iPhone. На первом этапе Xcode target membership ссылается на одни и те же исходные файлы. Отдельный Swift Package имеет смысл после доказанной portable dependency closure, если он упрощает сборку и общие тесты. Новые `MobileMeetingSession`, `MobileProcessingPipeline` и независимый mobile model installer не нужны.

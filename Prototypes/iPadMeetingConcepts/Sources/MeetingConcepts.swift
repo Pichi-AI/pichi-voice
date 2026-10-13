@@ -26,7 +26,7 @@ struct PrototypeRoot: View {
     init(options: PrototypeOptions) {
         self.options = options
         self._screen = State(initialValue: options.screen)
-        self._currentMeetingState = State(initialValue: [.ready, .completed].contains(options.screen) ? options.screen : .active)
+        self._currentMeetingState = State(initialValue: [.ready, .processing, .completed].contains(options.screen) ? options.screen : .active)
         self._saveAudio = State(initialValue: options.saveAudio)
         if let time = options.replayTime {
             let controller = MeetingLiveReplayController()
