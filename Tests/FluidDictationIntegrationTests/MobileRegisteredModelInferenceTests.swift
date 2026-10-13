@@ -119,6 +119,32 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         }
     }
 
+    func testPCMAdmissionRejectsAnUnpreparedOrChangedAttemptBeforeInference() async throws {
+        var serviceRequested = false
+        let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: {
+            serviceRequested = true
+            return ASRService()
+        }, modelLocator: MeetingNemotronModelLocator())
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru",
+                                                                diarizationFingerprint: PichiMeetingProviderFactory.transcriptOnlyDiarizationFingerprint,
+                                                                speakerLabelsEnabled: false)
+        let attempt = UUID()
+        do {
+            _ = try await runtime.recognizePCM(samples: [Float](repeating: 0.1, count: 16_000), offset: 0,
+                                               trackID: UUID(), attemptID: attempt, configuration: configuration)
+            XCTFail("An unprepared attempt must fail before requesting the inference owner.")
+        } catch { XCTAssertEqual(error as? MeetingModelResidencyError, .staleGrant) }
+        try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
+        let changed = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", asrArtifactFingerprint: "changed",
+                                                          languageCode: "ru", diarizationFingerprint: configuration.diarizationFingerprint,
+                                                          speakerLabelsEnabled: false)
+        do {
+            try await runtime.preparePCMResources(attemptID: attempt, configuration: changed)
+            XCTFail("A prepared attempt cannot replace its frozen configuration.")
+        } catch { XCTAssertEqual(error as? MeetingModelResidencyError, .staleGrant) }
+        XCTAssertFalse(serviceRequested)
+    }
+
     func testPublicMobileArtifactsRecognizeRUENMixedAndPreserveStreamingTiming() async throws {
         let root = try self.assets()
         var report: [Observation] = []
@@ -183,6 +209,9 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
                 let configuration = try await self.installedConfiguration(model: model, assets: root)
                 let attempt = UUID()
+                try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                    try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
+                }
                 let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                     try await runtime.recognizePCM(samples: samples, offset: 12, trackID: track,
                                                    attemptID: attempt, configuration: configuration)
@@ -301,6 +330,9 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             let track = UUID()
             let attempt = UUID()
             let duration = Double(samples.count) / 16_000
+            try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
+            }
             let diagnostic = try await service.withMeetingModelResidency(attemptID: UUID(), acceptsCompletedCancellation: { _ in false }) {
                 try await runtime.withNemotronDiarization(artifact: locator.locate()) { factory in
                     let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)

@@ -44,6 +44,29 @@ private final nonisolated class MeetingPCMIdentityState: @unchecked Sendable {
     private var busy = false
     private var profiles: [MeetingSpeakerVoiceProfile] = []
     private var speakers: [MeetingSessionSpeaker] = []
+    private var resourcePin: (attemptID: UUID, configuration: String, artifact: MeetingNemotronModelArtifact?)?
+
+    func pin(attemptID: UUID, configuration: String, artifact: MeetingNemotronModelArtifact?) throws {
+        try self.lock.withLock {
+            guard !self.busy else { throw MeetingParakeetNemotronRuntimeError.concurrentPCMWindow }
+            if let pin = self.resourcePin, pin.attemptID == attemptID {
+                guard pin.configuration == configuration else { throw MeetingModelResidencyError.staleGrant }
+                guard pin.artifact == artifact else {
+                    throw MeetingNemotronModelReadinessError.artifactChanged(path: artifact?.packageURL.path ?? "")
+                }
+                return
+            }
+            self.resourcePin = (attemptID, configuration, artifact)
+        }
+    }
+
+    func pinnedArtifact(attemptID: UUID, configuration: String) throws -> MeetingNemotronModelArtifact? {
+        try self.lock.withLock {
+            guard let pin = self.resourcePin, pin.attemptID == attemptID,
+                  pin.configuration == configuration else { throw MeetingModelResidencyError.staleGrant }
+            return pin.artifact
+        }
+    }
 
     func begin(attemptID: UUID) throws -> (profiles: [MeetingSpeakerVoiceProfile], speakers: [MeetingSessionSpeaker]) {
         try self.lock.withLock {
@@ -173,6 +196,21 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         self.voiceModelDirectory = voiceModelDirectory ?? MeetingSpeakerVoiceModelArtifacts.packageURL()
         self.usesDefaultVoiceModelDirectory = voiceModelDirectory == nil
     }
+    func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws {
+        try Task.checkCancellation()
+        _ = try MeetingProviderOptions.resolve(configuration)
+        let artifact: MeetingNemotronModelArtifact?
+        if configuration.speakerLabelsEnabled {
+            guard !PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(configuration.diarizationFingerprint) else {
+                throw MeetingNemotronModelReadinessError.modelNotInstalled(path: MeetingNemotronModelLocator.defaultPackageURL().path)
+            }
+            artifact = try self.modelLocator.locate()
+            if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
+            try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
+        } else { artifact = nil }
+        try Task.checkCancellation()
+        try self.pcmIdentityState.pin(attemptID: attemptID, configuration: configuration.identityFingerprint, artifact: artifact)
+    }
 
     /// The strict privacy capture sink supplies bounded mono16k PCM directly. Each
     /// window uses the original residency scope, diarizer, prepared ASR and assembler;
@@ -186,6 +224,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
         }
         _ = try MeetingProviderOptions.resolve(configuration)
+        _ = try self.pcmIdentityState.pinnedArtifact(attemptID: attemptID, configuration: configuration.identityFingerprint)
         let prior = try self.pcmIdentityState.begin(attemptID: attemptID)
         defer { self.pcmIdentityState.end() }
         // The pipeline owns the outer withMeetingModelResidency scope, just as it
@@ -212,7 +251,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             guard !PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(configuration.diarizationFingerprint) else {
                 throw MeetingNemotronModelReadinessError.modelNotInstalled(path: MeetingNemotronModelLocator.defaultPackageURL().path)
             }
-            let artifact = try self.modelLocator.locate()
+            guard let artifact = try self.pcmIdentityState.pinnedArtifact(attemptID: attemptID, configuration: configuration.identityFingerprint) else {
+                throw MeetingModelResidencyError.staleGrant
+            }
             let phase = try await self.withNemotronDiarization(artifact: artifact) { factory in
                 let diarizer = try await factory.makeDiarizer(epoch: epoch)
                 let segments = try await diarizer.diarize(samples: samples)

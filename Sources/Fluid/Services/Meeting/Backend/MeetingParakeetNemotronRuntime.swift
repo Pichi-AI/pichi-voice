@@ -69,6 +69,7 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 protocol MeetingParakeetNemotronRunning: Sendable {
     nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
                                  attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch
+    nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws
     nonisolated func speakerVoiceProfiles(
         samples: [MeetingSpeakerVoiceSamples]
     ) async throws -> [MeetingSpeakerVoiceProfile]
@@ -91,6 +92,9 @@ extension MeetingParakeetNemotronRunning {
         throw MeetingPCMInputError.unsupportedRuntime
     }
 
+    nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws {
+        throw MeetingModelResidencyError.unsupportedProvider
+    }
     /// Existing injected runtimes without a voice encoder retain separate speaker identities.
     nonisolated func speakerVoiceProfiles(
         samples _: [MeetingSpeakerVoiceSamples]
