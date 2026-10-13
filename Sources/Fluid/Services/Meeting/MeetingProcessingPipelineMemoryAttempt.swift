@@ -47,6 +47,7 @@ extension MeetingProcessingPipeline {
         let attemptID = attempt.request.attemptID
         let trackID = track.id
         let redactor = attempt.redactor
+        let checkpoint = attempt.checkpoint
         let consumer = try Self.makeMemoryAudioConsumer(
             recognize: { samples, offset in
                 try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
@@ -56,7 +57,7 @@ extension MeetingProcessingPipeline {
                     return batch
                 }
             },
-            checkpoint: { batch in try await attempt.checkpoint(batch) },
+            checkpoint: { batch in try await checkpoint(batch) },
             failure: { _ in
                 // Neither provider errors nor transcript content cross into durable diagnostics.
                 eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: trackID,

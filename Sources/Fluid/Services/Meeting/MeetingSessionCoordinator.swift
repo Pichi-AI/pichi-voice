@@ -1585,7 +1585,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func performStopAndTranscribe(generation: UUID) async throws -> MeetingSession {
-        #if DEBUG
+        #if DEBUG && os(macOS)
         AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .coordinatorStop)
         var diagnosticsStopSucceeded = false
         defer {
@@ -1609,15 +1609,15 @@ final class MeetingSessionCoordinator: ObservableObject {
 
         let stopResult: MeetingCaptureStopResult
         do {
-            #if DEBUG
+            #if DEBUG && os(macOS)
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
             #endif
             stopResult = try await self.capture.stop(sessionID: session.id)
-            #if DEBUG
+            #if DEBUG && os(macOS)
             AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop)
             #endif
         } catch {
-            #if DEBUG
+            #if DEBUG && os(macOS)
             AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .captureStop, status: -1)
             #endif
             await self.handleStopFailure(error, session: session, generation: generation)
@@ -1641,7 +1641,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         try? await self.store.save(session)
         let processed = try await self.process(session, generation: generation)
-        #if DEBUG
+        #if DEBUG && os(macOS)
         diagnosticsStopSucceeded = true
         #endif
         return processed
@@ -1682,7 +1682,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         let speakers = Set(session.speakers.map(\.id))
         session.speakers.append(contentsOf: batch.speakers.filter { !speakers.contains($0.id) })
         session.transcriptTimeDomain = .meetingRelative
-        session.transcriptIsComplete = batch.isComplete
+        session.transcriptIsComplete = (session.transcriptIsComplete ?? true) && batch.isComplete
         session.updatedAt = Date()
         self.activeSession = session
         await self.persistence.flush()
@@ -1715,7 +1715,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             self.processingLogger(line)
         }
-        #if DEBUG
+        #if DEBUG && os(macOS)
         AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .processing)
         var diagnosticsProcessingSucceeded = false
         defer {
@@ -1837,7 +1837,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             diagnosticStage = .completed
             // afterTranscription policy deletes here; sweep failures are logged, never affect this result.
             Task { @MainActor [weak self] in await self?.sweepExpiredAudio() }
-            #if DEBUG
+            #if DEBUG && os(macOS)
             diagnosticsProcessingSucceeded = true
             #endif
             return session
@@ -2173,7 +2173,7 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func releaseActivityLease() async {
         guard let lease = self.activityLease else { return }
-        #if DEBUG
+        #if DEBUG && os(macOS)
         AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCoordinator, queueRole: .mainControl, phase: .activityLease)
         defer { AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCoordinator, queueRole: .mainControl, phase: .activityLease) }
         #endif

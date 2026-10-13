@@ -160,6 +160,7 @@ final class WhisperLanguageSelectionTests: XCTestCase {
     func testWhisperRunOptionsAllowAutomaticDetection() {
         XCTAssertNil(WhisperProvider.runOptions(languageCode: nil).language)
         XCTAssertNil(WhisperProvider.runOptions(languageCode: "auto").language)
+        XCTAssertTrue(WhisperProvider.runOptions(languageCode: "auto", timestamps: .word).timestamps == .word)
     }
 
     @MainActor

@@ -64,12 +64,12 @@ enum PichiMeetingProviderFactory {
                 execution: .local,
                 supportedLanguageCodes: Set(VoiceEngineLanguageCatalog.whisperLanguages.map(\.id)).union(["auto"]),
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
-                supportedFinalPrecisions: [.utterance],
+                supportedFinalPrecisions: [.word, .utterance],
                 resultContract: .canonicalEvidence,
                 knownLimits: [
                     "Whisper Tiny multilingual uses the registered GGUF artifact, not an English-only or legacy GGML checkpoint.",
                     "Automatic language detection occurs per bounded recognition window; mixed-language accuracy requires device testing.",
-                    "This adapter emits utterance text without invented word timings.",
+                    "Word times are requested only when the loaded runtime advertises them; otherwise text remains an utterance.",
                     "Automatic speaker separation is independent of Whisper and requires an installed Nemotron model.",
                 ],
                 analysisSampleRate: 16_000

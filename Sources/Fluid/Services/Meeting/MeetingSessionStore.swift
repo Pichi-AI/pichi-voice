@@ -49,7 +49,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             let applicationSupport = fileManager.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
-            ).first ?? fileManager.homeDirectoryForCurrentUser
+            ).first ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
             self.rootDirectory = applicationSupport
                 .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
