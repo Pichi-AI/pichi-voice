@@ -152,15 +152,20 @@ private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession
 final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronRunning {
     private let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let modelLocator: any MeetingNemotronModelLocating
+    private let voiceModelDirectory: URL
+    private let usesDefaultVoiceModelDirectory: Bool
     private let pcmIdentityState = MeetingPCMIdentityState()
     private let pcmSpeakerNameFormat = PichiLocalization.text("Speaker %lld")
 
     init(
         asrServiceProvider: @escaping @MainActor () -> any MeetingASRServicing,
-        modelLocator: any MeetingNemotronModelLocating
+        modelLocator: any MeetingNemotronModelLocating,
+        voiceModelDirectory: URL? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
         self.modelLocator = modelLocator
+        self.voiceModelDirectory = voiceModelDirectory ?? MeetingSpeakerVoiceModelArtifacts.packageURL()
+        self.usesDefaultVoiceModelDirectory = voiceModelDirectory == nil
     }
 
     /// The strict privacy capture sink supplies bounded mono16k PCM directly. Each
@@ -264,10 +269,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         #else
         let computeUnits: MLComputeUnits = .cpuAndNeuralEngine
         #endif
-        try MeetingSpeakerVoiceModelArtifacts.validate()
+        if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
+        try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
         let configuration = MLModelConfiguration()
         configuration.computeUnits = computeUnits
-        let model = try MLModel(contentsOf: MeetingSpeakerVoiceModelArtifacts.packageURL(), configuration: configuration)
+        let model = try MLModel(contentsOf: self.voiceModelDirectory, configuration: configuration)
         try Task.checkCancellation()
         guard let maskFrames = model.modelDescription.inputDescriptionsByName["mask"]?.multiArrayConstraint?.shape.last?.intValue,
               (1...4096).contains(maskFrames) else {

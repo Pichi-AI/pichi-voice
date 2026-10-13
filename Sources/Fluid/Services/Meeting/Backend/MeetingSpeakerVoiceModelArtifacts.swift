@@ -55,9 +55,15 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
         }
     }
     static func ensureInstalled(progress: @escaping @Sendable (Double) -> Void) async throws {
-        if (try? self.validate()) != nil { return }
         try self.validateRootContainment()
-        let root = self.packageURL().deletingLastPathComponent()
+        try await self.ensureInstalled(at: self.packageURL(), progress: progress)
+    }
+    /// Explicit trusted destinations let native tests and imports use isolated model storage.
+    /// The model revision, integrity checks and installation operation stay unchanged.
+    static func ensureInstalled(at destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+        guard destination.isFileURL else { throw MeetingModelResidencyError.unsupportedProvider }
+        if (try? self.validate(at: destination)) != nil { return }
+        let root = destination.deletingLastPathComponent()
         let stage = root.appendingPathComponent(".wespeaker-\(self.revision).staging", isDirectory: true)
         let downloader = await HuggingFaceModelDownloader(owner: "FluidInference", repo: "speaker-diarization-coreml", revision: self.revision,
                                                      requiredItems: [.init(path: self.packageName, isDirectory: true)])
@@ -71,11 +77,10 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
         }
         try Task.checkCancellation()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let destination = self.packageURL()
         if FileManager.default.fileExists(atPath: destination.path) {
             _ = try FileManager.default.replaceItemAt(destination, withItemAt: source)
         } else { try FileManager.default.moveItem(at: source, to: destination) }
-        try self.validate()
+        try self.validate(at: destination)
         try? FileManager.default.removeItem(at: stage)
     }
 }
