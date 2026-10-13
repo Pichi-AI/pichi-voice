@@ -19,6 +19,7 @@ start = source.index('nonisolated enum MeetingLiveSampleCopy {')
 root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + source[start:])
 PY
 xcrun swiftc -parse-as-library -swift-version 6 \
+    Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \

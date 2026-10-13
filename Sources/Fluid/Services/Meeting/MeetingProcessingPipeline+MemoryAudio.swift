@@ -27,10 +27,10 @@ nonisolated enum MeetingMemoryAudioError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .invalidBudget: return "The in-memory audio budget is invalid."
-        case .invalidPCM: return "In-memory transcription requires finite mono 16 kHz PCM."
-        case .overload: return "In-memory transcription could not keep up. Recording stopped and completed text was preserved."
-        case .timelineDiscontinuity: return "The in-memory microphone timeline changed. Completed text was preserved."
+        case .invalidBudget: return PichiLocalization.text("The in-memory audio budget is invalid.")
+        case .invalidPCM: return PichiLocalization.text("In-memory transcription requires finite mono 16 kHz PCM.")
+        case .overload: return PichiLocalization.text("In-memory transcription could not keep up. Recording stopped and completed text was preserved.")
+        case .timelineDiscontinuity: return PichiLocalization.text("The in-memory microphone timeline changed. Completed text was preserved.")
         }
     }
 }

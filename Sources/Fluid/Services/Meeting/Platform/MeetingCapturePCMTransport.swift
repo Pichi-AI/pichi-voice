@@ -72,12 +72,12 @@ nonisolated enum MeetingCapturePCMError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .invalidBuffer: return "The microphone supplied an invalid PCM buffer."
-        case .nonFiniteSample: return "The microphone supplied a non-finite PCM sample."
-        case .invalidPresentationTime: return "The microphone supplied an invalid presentation timestamp."
-        case .timelineDiscontinuity: return "The microphone PCM timeline changed unexpectedly."
-        case let .conversionFailed(detail): return "Microphone PCM conversion failed. \(detail)"
-        case let .sampleBufferFailed(status): return "Microphone sample-buffer construction failed (\(status))."
+        case .invalidBuffer: return PichiLocalization.text("The microphone supplied an invalid PCM buffer.")
+        case .nonFiniteSample: return PichiLocalization.text("The microphone supplied a non-finite PCM sample.")
+        case .invalidPresentationTime: return PichiLocalization.text("The microphone supplied an invalid presentation timestamp.")
+        case .timelineDiscontinuity: return PichiLocalization.text("The microphone PCM timeline changed unexpectedly.")
+        case let .conversionFailed(detail): return PichiLocalization.format("Microphone PCM conversion failed. %@", detail)
+        case let .sampleBufferFailed(status): return PichiLocalization.format("Microphone sample-buffer construction failed (%d).", status)
         }
     }
 }
@@ -144,7 +144,7 @@ final nonisolated class MeetingCapturePCMConverter {
         }
         if self.converter == nil {
             guard let converter = AVAudioConverter(from: buffer.format, to: self.targetFormat) else {
-                throw MeetingCapturePCMError.conversionFailed("Unsupported source format.")
+                throw MeetingCapturePCMError.conversionFailed(PichiLocalization.text("Unsupported source format."))
             }
             self.sourceFormat = buffer.format
             self.converter = converter
@@ -177,7 +177,7 @@ final nonisolated class MeetingCapturePCMConverter {
             return nil
         }
         guard status != .error, failure == nil else {
-            throw MeetingCapturePCMError.conversionFailed(failure?.localizedDescription ?? "Unknown converter error.")
+            throw MeetingCapturePCMError.conversionFailed(failure?.localizedDescription ?? PichiLocalization.text("Unknown converter error."))
         }
         guard output.frameLength > 0 else { return nil }
         let pts = origin + CMTime(value: self.producedFrames, timescale: 16_000)

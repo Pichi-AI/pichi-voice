@@ -49,10 +49,10 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = nil
     ) async throws -> MeetingCaptureStartResult {
         try configuration.validate()
-        guard !self.terminating else { throw MeetingCaptureError.captureStartFailed("The app is shutting down.") }
+        guard !self.terminating else { throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("The app is shutting down.")) }
         guard self.active == nil, !self.starting, self.stopTask == nil else { throw MeetingCaptureError.captureAlreadyActive }
         guard configuration.mode == .inRoom, configuration.application == nil else {
-            throw MeetingCaptureError.captureStartFailed("Only in-room microphone capture is available on this platform.")
+            throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("Only in-room microphone capture is available on this platform."))
         }
         guard AVAudioApplication.shared.recordPermission == .granted else {
             throw MeetingCaptureError.microphonePermissionDenied
@@ -80,7 +80,7 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
             memoryConsumer = nil
         case .memoryOnly:
             guard let memoryConsumerFactory else {
-                throw MeetingCaptureError.captureStartFailed("In-memory transcription is not available for this attempt.")
+                throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("In-memory transcription is not available for this attempt."))
             }
             writer = nil
             memoryConsumer = try await memoryConsumerFactory(session, configuration, track, eventHandler)
@@ -327,7 +327,7 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         defer { self.producerGroup.leave() }
         guard let reservation = self.gate.reserve(frames: Int(buffer.frameLength),
                                                    channels: Int(buffer.format.channelCount), sampleRate: buffer.format.sampleRate) else {
-            self.fail(MeetingCapturePCMError.conversionFailed("The bounded microphone queue is full."), kind: .writerBackpressure)
+            self.fail(MeetingCapturePCMError.conversionFailed(PichiLocalization.text("The bounded microphone queue is full.")), kind: .writerBackpressure)
             return
         }
         do {
@@ -350,11 +350,11 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
 
     private func deliver(_ sample: CMSampleBuffer) {
         if let writer, !writer.enqueue(sample) {
-            self.fail(MeetingCaptureError.writerFailed("The bounded audio writer rejected microphone PCM."), kind: .writerBackpressure)
+            self.fail(MeetingCaptureError.writerFailed(PichiLocalization.text("The bounded audio writer rejected microphone PCM.")), kind: .writerBackpressure)
             return
         }
         if let memoryConsumer, !memoryConsumer.enqueue(sample) {
-            self.fail(MeetingCapturePCMError.conversionFailed("In-memory transcription could not keep up with microphone capture."),
+            self.fail(MeetingCapturePCMError.conversionFailed(PichiLocalization.text("In-memory transcription could not keep up with microphone capture.")),
                       kind: .writerBackpressure)
             return
         }
@@ -389,12 +389,12 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                 if notification.name == AVAudioSession.interruptionNotification {
                     guard let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                           AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
-                    self.fail(MeetingCaptureError.captureStartFailed("The audio session was interrupted by the operating system."), kind: .sourceLost)
+                    self.fail(MeetingCaptureError.captureStartFailed(PichiLocalization.text("The audio session was interrupted by the operating system.")), kind: .sourceLost)
                 } else if notification.name == AVAudioSession.routeChangeNotification {
                     guard !AVAudioSession.sharedInstance().currentRoute.inputs.contains(where: { $0.uid == self.microphone.captureDeviceID }) else { return }
                     self.fail(MeetingCaptureError.microphoneUnavailable, kind: .microphoneDisconnected)
                 } else {
-                    self.fail(MeetingCaptureError.captureStartFailed("The microphone audio configuration changed."), kind: .sourceLost)
+                    self.fail(MeetingCaptureError.captureStartFailed(PichiLocalization.text("The microphone audio configuration changed.")), kind: .sourceLost)
                 }
             }
         }
