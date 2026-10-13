@@ -116,7 +116,7 @@ struct PrototypeRoot: View {
             Button(Copy.text("close"), role: .cancel) {}
         } message: { Text(Copy.text("copy_preview_detail")) }
         .task {
-            if screen == .active && options.exportPath == nil { await replay.start() }
+            if screen == .active && options.exportPath == nil && options.replayTime == nil { await replay.start() }
         }
         .onDisappear {
             processingTask?.cancel()
@@ -462,7 +462,7 @@ struct PrototypeRoot: View {
         guard screen == .completed, selectedSessionID == 1, completedReplayDuration != nil else { return data.utterances }
         return replay.snapshot.utterances.enumerated().map { index, utterance in
             let seconds = Int(utterance.start)
-            return .init(id: index, time: String(format: "%02d:%02d", seconds / 60, seconds % 60), owner: false, text: utterance.text)
+            return .init(id: index, time: String(format: "%02d:%02d", seconds / 60, seconds % 60), owner: true, text: utterance.text)
         }
     }
 
