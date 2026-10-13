@@ -681,7 +681,7 @@ final class FluidServeTests: XCTestCase {
         var session = self.session(title: "Grounded fixture")
         try self.save(session)
         let turn = try XCTUnwrap(PichiMeetingSummaryInput.turns(for: session).first)
-        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Fixture summary", evidence: [turn.evidence])],
+        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Fixture summary", evidence: [.init(segmentID: turn.id, quote: turn.text)])],
                                                   decisions: [], actions: [], openQuestions: [])
         func saveArtifact(_ document: PichiMeetingSummaryDocument, hash: String) throws {
             let artifact = PichiMeetingSummaryArtifact(version: 6, transcriptHash: hash, configurationIdentity: "fixture",
