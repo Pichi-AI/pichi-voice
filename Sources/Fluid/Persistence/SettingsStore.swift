@@ -49,8 +49,6 @@ final class SettingsStore: ObservableObject {
     private init() {
         self.migrateTranscriptionStartSoundIfNeeded()
         self.ensureDebugLoggingDefaults()
-        self.migrateProviderAPIKeysIfNeeded()
-        self.scrubSavedProviderAPIKeys()
         self.migrateExplicitDictationPromptsIfNeeded()
         self.migrateDictationPromptProfilesIfNeeded()
         self.migrateLegacyDictationAIPreferenceIfNeeded()
@@ -64,6 +62,9 @@ final class SettingsStore: ObservableObject {
         Self.migrateTextInsertionModeToReliablePasteIfNeeded(defaults: self.defaults)
         Self.migrateFillerWordDefaultsIfNeeded(defaults: self.defaults)
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
+        // Do not dispatch while shared initialization owns its once token. Provider
+        // canonicalization may consult ModelRepository/SettingsStore again.
+        DispatchQueue.main.async { self.refreshProviderAPIKeys() }
     }
 
     static func clampPrivateAIContextTokenLimit(_ value: Int) -> Int {
@@ -1600,27 +1601,52 @@ final class SettingsStore: ObservableObject {
     }
 
     var providerAPIKeys: [String: String] {
-        get { (try? self.keychain.fetchAllKeys()) ?? [:] }
-        set {
-            objectWillChange.send()
-            do {
-                _ = try self.saveProviderAPIKeys(newValue)
-            } catch {
-                self.logProviderAPIKeyPersistenceFailure(error)
+        self.keychain.cachedKeys ?? [:]
+    }
+
+    var providerAPIKeyReadiness: KeychainService.Readiness { self.keychain.readiness }
+
+    @MainActor
+    func loadProviderAPIKeysForUserAction() async throws -> [String: String] {
+        defer { self.objectWillChange.send() }
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        let keys = try await self.keychain.loadForUserAction(migrating: snapshot.keys)
+        self.completeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+        return keys
+    }
+
+    @MainActor
+    @discardableResult
+    func saveProviderAPIKeys(
+        _ values: [String: String], replacing knownValues: [String: String], removing providerIDs: [String] = []
+    ) async throws -> [String: String] {
+        defer { self.objectWillChange.send() }
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        let result = try await self.keychain.saveForUserAction(
+            self.sanitizeAPIKeys(values), replacing: self.sanitizeAPIKeys(knownValues),
+            removing: providerIDs, migrating: snapshot.keys
+        )
+        self.completeProviderCredentialMigration(snapshot, verifiedKeys: result.migratedKeys)
+        return result.keys
+    }
+
+    /// Startup and activation are cache-only on main and coalesce on the owned
+    /// worker. Authentication prompts are reserved for explicit credential actions.
+    func refreshProviderAPIKeys() {
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        self.keychain.loadInBackground(migrating: snapshot.keys) { result in
+            DispatchQueue.main.async {
+                if case let .success(keys) = result {
+                    self.completeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+                }
+                self.objectWillChange.send()
             }
         }
     }
 
-    @discardableResult
-    func saveProviderAPIKeys(_ values: [String: String]) throws -> [String: String] {
-        let trimmed = self.sanitizeAPIKeys(values)
-        try self.keychain.storeAllKeys(trimmed)
-        return try self.keychain.fetchAllKeys()
-    }
-
     /// Securely retrieve API key for a provider, handling custom prefix logic
     func getAPIKey(for providerID: String) -> String? {
-        let keys = self.providerAPIKeys
+        guard let keys = self.keychain.loadedKeys else { return nil }
         // Try exact match first
         if let key = keys[providerID] { return key }
 
@@ -4030,34 +4056,52 @@ final class SettingsStore: ObservableObject {
         self.defaults.removeObject(forKey: Keys.enableTranscriptionSounds)
     }
 
-    private func migrateProviderAPIKeysIfNeeded() {
-        self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+    private struct ProviderCredentialMigrationSnapshot: Sendable {
+        let legacyDefaults: [String: String]?
+        let savedProviderBytes: Data?
+        let keys: [String: String]
+    }
 
-        var merged = (try? self.keychain.fetchAllKeys()) ?? [:]
-        var didMutate = false
-
-        if let legacyDefaults = defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String],
-           legacyDefaults.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyDefaults)) { _, new in new }
-            didMutate = true
-        }
-        self.defaults.removeObject(forKey: Keys.providerAPIKeys)
-
-        if let legacyKeychain = try? keychain.legacyProviderEntries(),
-           legacyKeychain.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyKeychain)) { _, new in new }
-            didMutate = true
-            try? self.keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
-        }
-
-        if didMutate {
-            do {
-                _ = try self.saveProviderAPIKeys(merged)
-            } catch {
-                self.logProviderAPIKeyPersistenceFailure(error)
+    /// Called on main after init, before dispatch; workers never consult mutable
+    /// preferences or ModelRepository while SettingsStore.shared is initializing.
+    private func providerCredentialMigrationSnapshot() -> ProviderCredentialMigrationSnapshot {
+        let legacy = self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]
+        let savedBytes = self.defaults.data(forKey: Keys.savedProviders)
+        var keys = self.sanitizeAPIKeys(legacy ?? [:])
+        if let savedBytes, let providers = try? JSONDecoder().decode([SavedProvider].self, from: savedBytes) {
+            for provider in providers {
+                let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !key.isEmpty { keys[self.canonicalProviderKey(for: provider.id)] = key }
             }
+        }
+        return ProviderCredentialMigrationSnapshot(legacyDefaults: legacy, savedProviderBytes: savedBytes, keys: keys)
+    }
+
+    private func completeProviderCredentialMigration(
+        _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
+    ) {
+        // Compare original values so an in-flight migration cannot clear a newer
+        // edit. Each source is removed only after its own secret was verified.
+        if let legacy = snapshot.legacyDefaults,
+           self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] == legacy,
+           self.sanitizeAPIKeys(legacy).allSatisfy({ verifiedKeys[$0.key] == $0.value })
+        {
+            self.defaults.removeObject(forKey: Keys.providerAPIKeys)
+            self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+        }
+        guard let bytes = snapshot.savedProviderBytes,
+              self.defaults.data(forKey: Keys.savedProviders) == bytes,
+              var providers = try? JSONDecoder().decode([SavedProvider].self, from: bytes) else { return }
+        var changed = false
+        for index in providers.indices {
+            let provider = providers[index]
+            let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, verifiedKeys[self.canonicalProviderKey(for: provider.id)] == key else { continue }
+            providers[index] = provider.redactingAPIKey()
+            changed = true
+        }
+        if changed, let sanitized = try? JSONEncoder().encode(providers) {
+            self.defaults.set(sanitized, forKey: Keys.savedProviders)
         }
     }
 
@@ -4322,46 +4366,6 @@ final class SettingsStore: ObservableObject {
         self.defaults.set(50.0, forKey: Keys.overlayBottomOffset)
         self.defaults.set(true, forKey: Keys.overlayBottomOffsetMigratedTo50)
         NotificationCenter.default.post(name: NSNotification.Name("OverlayOffsetChanged"), object: nil)
-    }
-
-    private func scrubSavedProviderAPIKeys() {
-        guard let data = defaults.data(forKey: Keys.savedProviders),
-              var decoded = try? JSONDecoder().decode([SavedProvider].self, from: data) else { return }
-
-        var didModify = false
-        for index in decoded.indices {
-            let provider = decoded[index]
-            let trimmed = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.isEmpty == false else { continue }
-
-            let keyID = self.canonicalProviderKey(for: provider.id)
-            do {
-                try self.keychain.storeKey(trimmed, for: keyID)
-                didModify = true
-            } catch {
-                DebugLogger.shared
-                    .error(
-                        "Failed to migrate API key for \(provider.name): \(error.localizedDescription)",
-                        source: "SettingsStore"
-                    )
-            }
-
-            decoded[index] = SavedProvider(
-                id: provider.id,
-                name: provider.name,
-                baseURL: provider.baseURL,
-                apiKey: "",
-                models: provider.models
-            )
-        }
-
-        if didModify,
-           let encoded = try? JSONEncoder().encode(decoded)
-        {
-            self.defaults.set(encoded, forKey: Keys.savedProviders)
-        }
-
-        // No need to track migrated IDs; consolidated storage keeps them together.
     }
 
     private func canonicalProviderKey(for providerID: String) -> String {

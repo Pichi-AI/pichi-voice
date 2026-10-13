@@ -143,11 +143,13 @@ struct AddProviderSheet<Logo: View>: View {
                     .fluidGlassAction()
                 Spacer()
                 Button("Add Provider") {
-                    if self.viewModel.addProvider(self.draft) { self.dismiss() } else { self.saveFailed = true }
+                    Task {
+                        if await self.viewModel.addProvider(self.draft) { self.dismiss() } else { self.saveFailed = true }
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
                 .fluidGlassAction(prominent: true)
-                .disabled(self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
+                .disabled(self.viewModel.isSavingProviderCredentials || self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
             }
         }
     }

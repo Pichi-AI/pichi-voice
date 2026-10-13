@@ -1,6 +1,57 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Provider credentials are loading.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Provider credentials are loading."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка ключей провайдеров."
+          }
+        }
+      }
+    },
+    "Provider credentials are unavailable. Open API key settings to retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Provider credentials are unavailable. Open API key settings to retry."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключи провайдеров недоступны. Откройте настройки API-ключа, чтобы повторить попытку."
+          }
+        }
+      }
+    },
+    "Saved API keys could not be verified in Keychain.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved API keys could not be verified in Keychain."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить сохранённые API-ключи в Связке ключей."
+          }
+        }
+      }
+    },
     "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
       "extractionState": "manual",
       "localizations": {

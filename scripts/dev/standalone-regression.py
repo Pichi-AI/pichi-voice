@@ -205,7 +205,7 @@ class Probe:
 SHELL_PROBES = (
     "analytics_config", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
-    "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
+    "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
     "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export",
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
