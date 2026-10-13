@@ -84,7 +84,7 @@ Verification uses Apple Silicon, macOS 26.6.2 and Xcode 27.0. Mutable DerivedDat
 | Portable checks | Passed: configuration, shell syntax, 2737 catalog keys, six catalog regressions, duplicate Xcode settings guard with three regressions, and offline synthetic Git sync regressions. |
 | Corrected Release arm64 build | Passed; emitted product is Pichi Voice, bundle `ai.pichi.voice`, version 1.6.11, build 28. |
 | Corrected Debug build-for-testing | Passed; product is Pichi Voice Debug, bundle `ai.pichi.voice.debug`, version 1.6.11, build 28. Local frozen signature passes deep/strict verification. |
-| Full combined macOS suite | 2575 tests: 2510 passed, 65 skipped, zero failures, 163.216 seconds at final application revision `41a009a2`. The same known upstream Whisper tiny fixture remains excluded. |
+| Full combined macOS suite | 2575 tests: 2510 passed, 65 skipped, zero failures at final application revision `41a009a2`. The same known upstream Whisper tiny fixture remains excluded. |
 | Explicit real GigaAM provider/files/API/meeting regression | Passed with a copied installed optimized model and synthetic Russian audio. |
 | Default public GigaAM plus native S1-mini service chain | Passed, using an isolated pinned public model installation and synthetic Russian speech. The corrected Thursday was retained. |
 | Actual S1-mini English/Russian cleanup | Passed, including correction from Friday to Thursday in both languages and no leaked reasoning/chat tokens. |
