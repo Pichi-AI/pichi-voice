@@ -57,7 +57,9 @@ enum PichiMeetingProviderFactory {
                                                                diarizationEnabled: diarizationEnabled)
             },
             modelsExistOnDisk: { PichiGigaAMModelStore.shared.modelsExistOnDisk() },
-            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2)
+            // Sustained buffered captions passed on a nominal 4 GB iPad reporting
+            // 4,166,696,960 physical bytes. Express this registration in decimal GB.
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4_000_000_000, maximumTrackCount: 2)
         ),
         PichiMeetingProviderFactory.whisperTinyModelID: Registration(
             descriptor: MeetingBackendDescriptor(

@@ -328,6 +328,37 @@ final class MeetingLiveMemoryGateTests: XCTestCase {
         wait(for: [notice], timeout: 1)
     }
 
+    func testGigaAMLiveAdmissionIncludesMeasuredNominalFourGBDevice() throws {
+        let admission = try XCTUnwrap(PichiMeetingProviderFactory.registeredLiveAdmission(
+            for: PichiMeetingProviderFactory.gigaamModelID))
+        XCTAssertEqual(admission.minimumPhysicalMemoryBytes, 4_000_000_000)
+        // The physical iPad's reported capacity is below four binary GiB.
+        let measuredPhysicalMemory: UInt64 = 4_166_696_960
+        XCTAssertLessThan(measuredPhysicalMemory, 4 * 1_073_741_824)
+        XCTAssertGreaterThanOrEqual(measuredPhysicalMemory, admission.minimumPhysicalMemoryBytes)
+        XCTAssertLessThan(UInt64(4_000_000_000 - 1), admission.minimumPhysicalMemoryBytes)
+        XCTAssertLessThan(UInt64(3 * 1_073_741_824), admission.minimumPhysicalMemoryBytes)
+        XCTAssertEqual(admission.maximumTrackCount, 2)
+        XCTAssertLessThanOrEqual(1, admission.maximumTrackCount)
+        XCTAssertLessThanOrEqual(2, admission.maximumTrackCount)
+        XCTAssertGreaterThan(3, admission.maximumTrackCount)
+    }
+
+    func testOtherRegisteredLiveAdmissionFloorsAndLegacyGateRemainUnchanged() throws {
+        let tiny = try XCTUnwrap(PichiMeetingProviderFactory.registeredLiveAdmission(
+            for: PichiMeetingProviderFactory.whisperTinyModelID))
+        let parakeet = try XCTUnwrap(PichiMeetingProviderFactory.registeredLiveAdmission(
+            for: PichiMeetingProviderFactory.parakeetV3ModelID))
+        XCTAssertEqual(tiny.minimumPhysicalMemoryBytes, 2 * 1_073_741_824)
+        XCTAssertEqual(parakeet.minimumPhysicalMemoryBytes, 4 * 1_073_741_824)
+        XCTAssertEqual(tiny.maximumTrackCount, 2)
+        XCTAssertEqual(parakeet.maximumTrackCount, 2)
+        XCTAssertLessThan(UInt64(4_166_696_960), parakeet.minimumPhysicalMemoryBytes)
+        XCTAssertNil(PichiMeetingProviderFactory.registeredLiveAdmission(for: "synthetic-unregistered"))
+        XCTAssertEqual(MeetingLiveTranscriptionCoordinator.minimumPhysicalMemoryBytes, 8 * 1_073_741_824)
+        XCTAssertFalse(MeetingLiveTranscriptionCoordinator.isMemorySufficient(physicalMemory: 4_166_696_960))
+    }
+
     func testBelowThresholdDisablesLive() {
         let oneGigabyte: UInt64 = 1 * 1024 * 1024 * 1024
         XCTAssertFalse(MeetingLiveTranscriptionCoordinator.isMemorySufficient(physicalMemory: oneGigabyte))
