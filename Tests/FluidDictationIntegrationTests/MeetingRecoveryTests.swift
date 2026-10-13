@@ -12,6 +12,65 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testMemoryTailCheckpointSurvivesPartialStopFailure() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("partialFailure")
+    }
+    func testMemoryTailCheckpointSurvivesUnexpectedStopGenerationInvalidation() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("unexpected")
+    }
+    func testMemoryTailCheckpointSurvivesTerminationGenerationInvalidation() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("termination")
+    }
+    func testMemoryTailCheckpointSurvivesNormalStop() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("normal")
+    }
+    private func assertMemoryTailSurvivesTerminalPath(_ path: String) async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        let originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = MeetingCaptureStartResult(tracks: [track], firstPresentationTime: nil)
+        capture.stopResult = MeetingCaptureStopResult(tracks: [track], stoppedAt: Date().addingTimeInterval(1))
+        let processing = MemoryCheckpointProcessingController()
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter)
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        configuration.languageCode = "en"
+        let session = try await coordinator.startRecording(configuration: configuration)
+        let first = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1), end: .init(value: 1, timescale: 1),
+            sourceTrackID: track.id, speakerID: nil, text: "Already durable", revision: 0, status: .final, overlap: .none, completeness: .complete)
+        let tail = MeetingTranscriptSegment(id: UUID(), start: .init(value: 1, timescale: 1), end: .init(value: 2, timescale: 1),
+            sourceTrackID: track.id, speakerID: nil, text: "Joined final tail", revision: 0, status: .final, overlap: .none, completeness: .complete)
+        try await processing.checkpoint(.init(segments: [first]))
+        capture.onStop = { try await processing.checkpoint(.init(segments: [tail])) }
+        if path == "partialFailure" {
+            capture.stopError = MeetingCaptureError.captureStopFailed("Synthetic partial stop", partialResult: try XCTUnwrap(capture.stopResult))
+            do { _ = try await coordinator.stopAndTranscribe(); XCTFail("Expected partial failure") } catch { }
+        } else if path == "unexpected" {
+            capture.emit(.interrupted(kind: .captureStoppedUnexpectedly, trackID: track.id, detail: "Synthetic stop"))
+            for _ in 0..<200 { if arbiter.releaseCount > 0 { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        } else if path == "termination" {
+            await coordinator.shutdownForTermination()
+        } else {
+            let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertEqual(completed.transcriptSegments.map(\.text), [first.text, tail.text])
+            XCTAssertEqual(completed.transcriptTimeDomain, .meetingRelative)
+            XCTAssertEqual(completed.transcriptIsComplete, true)
+        }
+        let persisted = try await store.load(id: session.id)
+        XCTAssertEqual(persisted?.transcriptSegments.map(\.text), [first.text, tail.text], "Terminal snapshot must never roll back joined durable text")
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(processing.cancelCount, path == "normal" ? 0 : 1)
+    }
+
     func testUnexpectedStopPublishesQuiescenceAfterDelayedAudioHandback() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -5045,6 +5104,9 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var startError: Error?
     var startupEvents: [MeetingCaptureEvent] = []
     var onStart: (@Sendable () async -> Void)?
+    var onStop: (@Sendable () async throws -> Void)?
+    var stopResult: MeetingCaptureStopResult?
+    var stopError: Error?
     var preflightError: Error?
     var onPreflight: (@Sendable () async -> Void)?
     private(set) var preflightCount = 0
@@ -5077,7 +5139,9 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
-        MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
+        try await self.onStop?()
+        if let stopError { throw stopError }
+        return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
     }
 
     func shutdownForTermination() async {}
@@ -5617,5 +5681,20 @@ final class MeetingProcessingSerializationGateTests: XCTestCase {
 
         try await self.acquireOrTimeout(gate)
         await gate.release()
+    }
+}
+
+@MainActor
+private final class MemoryCheckpointProcessingController: MeetingProcessingControlling {
+    private var operation: (@MainActor (MeetingPCMTranscriptBatch) async throws -> Void)?
+    private(set) var cancelCount = 0
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws { operation = checkpoint }
+    func checkpoint(_ batch: MeetingPCMTranscriptBatch) async throws { try await operation?(batch) }
+    func cancelMemoryAudio(sessionID: MeetingSessionID) async { cancelCount += 1; operation = nil }
+    func process(session: MeetingSession, sessionDirectory: URL, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        let attempt = MeetingProcessingAttempt(id: UUID(), startedAt: session.startedAt, completedAt: Date(), stage: .completed,
+            pipelineVersion: 13, asrProvider: "synthetic", asrModel: "synthetic", languageCode: session.languageCode,
+            diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil)
+        return MeetingProcessingResult(speakers: session.speakers, segments: session.transcriptSegments, attempt: attempt)
     }
 }

@@ -23,8 +23,7 @@ extension MeetingProcessingPipeline {
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
         guard let descriptor = self.backendRegistry.descriptor(for: backendID) else { throw MeetingBackendError.unknownBackend(backendID) }
         if session.speakerLabelsEnabled != false {
-            try await self.prepareDiarizationDependencies(descriptor.diarizationDependencies)
-            try Task.checkCancellation()
+            try await self.prepareSpeakerDependencies(for: descriptor, session: session)
         }
         let configuration = PichiMeetingProviderFactory.configuration(
             backendID: backendID, languageCode: session.languageCode,
@@ -39,6 +38,7 @@ extension MeetingProcessingPipeline {
         // returned before capture, then each bounded window takes the same shared resource gate.
         let service = self.asrServiceProvider()
         try await service.withMeetingModelResidency(attemptID: request.attemptID, acceptsCompletedCancellation: { _ in false }) {
+            try await runtime.preparePCMResources(attemptID: request.attemptID, configuration: configuration)
             _ = try await runtime.withPreparedASR(attemptID: request.attemptID, configuration: configuration) { _ in MeetingParakeetPhaseResult() }
         }
         try Task.checkCancellation()
@@ -77,8 +77,9 @@ extension MeetingProcessingPipeline {
     }
 
     func cancelMemoryAudio(sessionID: MeetingSessionID) async {
-        guard let attempt = self.memoryAttempts.removeValue(forKey: sessionID) else { return }
+        guard let attempt = self.memoryAttempts[sessionID] else { return }
         try? await attempt.consumer?.finish()
+        if self.memoryAttempts[sessionID] === attempt { self.memoryAttempts.removeValue(forKey: sessionID) }
     }
 
     func finishMemoryAudio(session: MeetingSession, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {

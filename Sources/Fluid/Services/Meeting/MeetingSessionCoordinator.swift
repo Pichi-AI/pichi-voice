@@ -142,6 +142,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
     private var captureGeneration: UUID?
+    /// Capture events may be invalidated before a joined stop; its durable text drain still owns
+    /// this token until recognition/privacy finalization and terminal persistence have completed.
+    private var memoryCheckpointGeneration: UUID?
     private var operationGeneration: UUID?
     private var stopTask: Task<MeetingSession, Error>? {
         willSet { if (newValue == nil) != (self.stopTask == nil) { self.objectWillChange.send() } }
@@ -419,7 +422,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         try await self.validateRecordingModels()
         let dependencyDescriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
-        if configuration.speakerLabelsEnabled != false, let dependencyDescriptor {
+        if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
+           CPUArchitecture.isAppleSilicon || !dependencyDescriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
             try await self.prepareRecordingDependencies(dependencyDescriptor.diarizationDependencies)
         }
         try Task.checkCancellation()
@@ -464,7 +468,8 @@ final class MeetingSessionCoordinator: ObservableObject {
                 selectedModelID: recordingModelID
             )
             if configuration.speakerLabelsEnabled != false,
-               let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID) {
+               let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID),
+               CPUArchitecture.isAppleSilicon || !descriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
                 try await self.prepareRecordingDependencies(descriptor.diarizationDependencies)
                 try Task.checkCancellation()
                 guard self.startReservation == reservation,
@@ -541,10 +546,11 @@ final class MeetingSessionCoordinator: ObservableObject {
                   !Task.isCancelled
             else { throw CancellationError() }
             if configuration.audioStorageMode == .memoryOnly {
+                self.memoryCheckpointGeneration = generation
                 _ = try await self.processing.prepareMemoryAudio(
                     session: session, sessionDirectory: sessionDirectory
                 ) { [weak self] batch in
-                    guard let self, self.captureGeneration == generation else { throw CancellationError() }
+                    guard let self, self.memoryCheckpointGeneration == generation else { throw CancellationError() }
                     try await self.checkpointMemoryTranscript(batch, sessionID: session.id, generation: generation)
                 }
             }
@@ -661,7 +667,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             if let latestSession = self.activeSession, latestSession.id == session.id {
                 session.events = latestSession.events
             }
-            await self.processing.cancelMemoryAudio(sessionID: session.id)
+            await self.finishMemoryCheckpointDrain(sessionID: session.id)
+            self.mergeLatestMemoryCheckpoint(into: &session)
             let hasRecoverableAudio = Self.hasRecoverableAudio(session)
             let failureDomain: MeetingFailureDomain = captureStarted
                 ? .persistence
@@ -1563,6 +1570,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         } else {
             await self.capture.shutdownForTermination()
         }
+        await self.finishMemoryCheckpointDrain(sessionID: session.id)
+        self.mergeLatestMemoryCheckpoint(into: &session)
         await self.tearDownLiveTranscription()
 
         session.state = .interrupted
@@ -1620,6 +1629,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         await self.flushQueuedPersistence()
         // Capture finalization takes priority over persistence availability.
+        self.mergeLatestMemoryCheckpoint(into: &session)
         try? await self.store.save(session)
 
         let stopResult: MeetingCaptureStopResult
@@ -1639,15 +1649,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             throw error
         }
         await self.tearDownLiveTranscription()
-        guard self.operationGeneration == generation, !Task.isCancelled else {
+        guard self.operationGeneration == generation else { throw CancellationError() }
+        if Task.isCancelled {
+            let stopped = MeetingCaptureError.captureStopFailed("Meeting processing was cancelled after capture stopped.", partialResult: stopResult)
+            await self.handleStopFailure(stopped, session: session, generation: generation)
             throw CancellationError()
         }
         self.captureGeneration = nil
         self.degradeReason = nil
-        if session.audioStorageMode == .memoryOnly, let latest = self.activeSession, latest.id == session.id {
-            session.transcriptSegments = latest.transcriptSegments
-            session.speakers = latest.speakers
-        }
+        self.mergeLatestMemoryCheckpoint(into: &session)
+        self.memoryCheckpointGeneration = nil
         Self.apply(stopResult, to: &session)
         session.state = .processing
         session.processingAttempts.append(Self.pendingProcessingAttempt())
@@ -1660,6 +1671,32 @@ final class MeetingSessionCoordinator: ObservableObject {
         diagnosticsStopSucceeded = true
         #endif
         return processed
+    }
+
+    private func mergeLatestMemoryCheckpoint(into session: inout MeetingSession) {
+        guard session.audioStorageMode == .memoryOnly, let latest = self.activeSession, latest.id == session.id else { return }
+        // Checkpoint state is authoritative for the transcript and all session metadata.
+        // Preserve only physical stop facts and terminal additions from this caller's copy.
+        let capturedTracks = session.audioTracks
+        let captureTimebase = session.timebase
+        let endedAt = session.endedAt
+        let state = session.state
+        let events = session.events
+        let failures = session.failures
+        session = latest
+        if !capturedTracks.isEmpty { session.audioTracks = capturedTracks }
+        if captureTimebase.firstPresentationTime != nil { session.timebase = captureTimebase }
+        session.endedAt = endedAt ?? session.endedAt
+        session.state = state
+        let eventIDs = Set(session.events.map(\.id))
+        session.events.append(contentsOf: events.filter { !eventIDs.contains($0.id) })
+        let failureIDs = Set(session.failures.map(\.id))
+        session.failures.append(contentsOf: failures.filter { !failureIDs.contains($0.id) })
+    }
+
+    private func finishMemoryCheckpointDrain(sessionID: MeetingSessionID) async {
+        await self.processing.cancelMemoryAudio(sessionID: sessionID)
+        self.memoryCheckpointGeneration = nil
     }
 
     private func publishLiveTranscript(_ snapshot: MeetingLiveTranscriptSnapshot, generation: UUID, redactor: (any TranscriptTextRedacting)?) {
@@ -1690,10 +1727,17 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func checkpointMemoryTranscript(_ batch: MeetingPCMTranscriptBatch, sessionID: UUID, generation: UUID) async throws {
-        guard self.captureGeneration == generation, var session = self.activeSession, session.id == sessionID else { throw CancellationError() }
+        guard self.memoryCheckpointGeneration == generation, var session = self.activeSession, session.id == sessionID else { throw CancellationError() }
         if let track = batch.sourceTrack, !session.audioTracks.contains(where: { $0.id == track.id }) { session.audioTracks.append(track) }
-        let existing = Set(session.transcriptSegments.map(\.id))
-        session.transcriptSegments.append(contentsOf: batch.segments.filter { !existing.contains($0.id) })
+        var indices = Dictionary(uniqueKeysWithValues: session.transcriptSegments.enumerated().map { ($0.element.id, $0.offset) })
+        for segment in batch.segments {
+            if let index = indices[segment.id] {
+                if segment.revision >= session.transcriptSegments[index].revision { session.transcriptSegments[index] = segment }
+            } else {
+                indices[segment.id] = session.transcriptSegments.count
+                session.transcriptSegments.append(segment)
+            }
+        }
         let speakers = Set(session.speakers.map(\.id))
         session.speakers.append(contentsOf: batch.speakers.filter { !speakers.contains($0.id) })
         session.transcriptTimeDomain = .meetingRelative
@@ -1701,7 +1745,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         session.updatedAt = Date()
         self.activeSession = session
         await self.persistence.flush()
-        guard self.captureGeneration == generation else { throw CancellationError() }
+        guard self.memoryCheckpointGeneration == generation else { throw CancellationError() }
         try await self.store.save(session)
         // Only durable, privacy-filtered text is published by the strict path.
         var snapshot = MeetingLiveTranscriptSnapshot.empty
@@ -1767,10 +1811,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             // by the pipeline; legacy attempts leave this nil. The reference only becomes durable
             // with the session save below, and the checkpoint survives until that save succeeds.
             session.resultSidecarReference = result.resultSidecarReference
-            session.transcriptIsComplete = result.resultSidecarReference == nil
-                ? nil
-                : result.isComplete
-            if result.resultSidecarReference != nil {
+            session.transcriptIsComplete = (result.resultSidecarReference != nil || session.audioStorageMode == .memoryOnly)
+                ? result.isComplete
+                : nil
+            if result.resultSidecarReference != nil || session.audioStorageMode == .memoryOnly {
                 session.transcriptTimeDomain = .meetingRelative
             }
             session.processingAttempts.removeAll {
@@ -2109,6 +2153,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             session.failures.append(Self.failure(from: error, domain: .capture, recoverable: true))
         }
+        await self.finishMemoryCheckpointDrain(sessionID: session.id)
+        self.mergeLatestMemoryCheckpoint(into: &session)
         await self.tearDownLiveTranscription()
         guard self.terminationTask == nil, !Task.isCancelled else { return }
 
@@ -2142,6 +2188,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             await self.capture.shutdownForTermination()
             session.endedAt = session.endedAt ?? Date()
         }
+        await self.finishMemoryCheckpointDrain(sessionID: session.id)
+        self.mergeLatestMemoryCheckpoint(into: &session)
         await self.tearDownLiveTranscription()
         let failure = Self.failure(from: error, domain: .capture, recoverable: true)
         session.failures.append(failure)

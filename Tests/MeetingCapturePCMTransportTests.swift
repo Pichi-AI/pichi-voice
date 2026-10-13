@@ -30,6 +30,13 @@ private actor Latch {
     func release() { self.released = true; self.continuation?.resume(); self.continuation = nil }
 }
 
+private actor FinalizerProbe {
+    private(set) var count = 0
+    private(set) var checkpoints: [[String]] = []
+    func started() { count += 1 }
+    func saved(_ values: [String]) { checkpoints.append(values) }
+}
+
 @main
 struct MeetingCapturePCMTransportTests {
     static func require(_ condition: Bool, _ detail: String) throws {
@@ -165,6 +172,27 @@ struct MeetingCapturePCMTransportTests {
         await cancelLatch.release()
         try await cancelledFinish.value
         try require(cancelProbe.snapshot.1 == 1 && cancelProbe.snapshot.2 == 0, "cancelled finish caller still joins owned recognition/checkpoint")
+
+        let finalizerProbe = FinalizerProbe()
+        let finalizerLatch = Latch()
+        let finalizing = try MeetingProcessingPipeline.makeMemoryAudioConsumer(
+            recognize: { _, _ in MeetingPCMTranscriptBatch(segments: [], speakers: []) },
+            checkpoint: { batch in await finalizerProbe.saved(batch.segments) },
+            finalize: {
+                await finalizerProbe.started()
+                await finalizerLatch.wait()
+                return MeetingPCMTranscriptBatch(segments: ["safe pending privacy tail"], speakers: [])
+            }, failure: { _ in })
+        let firstFinalizing = Task { try await finalizing.finish() }
+        for _ in 0..<1000 { if await finalizerLatch.entered { break }; await Task.yield() }
+        firstFinalizing.cancel()
+        let secondFinalizing = Task { try await finalizing.finish() }
+        try require(await finalizerProbe.count == 1, "concurrent finish callers share one privacy finalization")
+        try require(await finalizerProbe.checkpoints.isEmpty, "cancelled caller does not abandon or prematurely persist privacy tail")
+        await finalizerLatch.release()
+        try await firstFinalizing.value
+        try await secondFinalizing.value
+        try require(await finalizerProbe.checkpoints == [["safe pending privacy tail"]], "pending redacted tail checkpoints exactly once")
 
         let wrongFormatProbe = Probe()
         let wrongFormat = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.25, maximumPendingSeconds: 1,

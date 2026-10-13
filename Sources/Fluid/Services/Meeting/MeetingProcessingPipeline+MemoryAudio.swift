@@ -11,11 +11,12 @@ extension MeetingProcessingPipeline {
         maximumPendingSeconds: Double = 24,
         recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
+        finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)? = nil,
         failure: @escaping @Sendable (Error) -> Void
     ) throws -> any MeetingMemoryAudioConsuming {
         try MeetingPipelineMemoryAudioConsumer(chunkSeconds: chunkSeconds,
                                               maximumPendingSeconds: maximumPendingSeconds,
-                                              recognize: recognize, checkpoint: checkpoint, failure: failure)
+                                              recognize: recognize, checkpoint: checkpoint, finalize: finalize, failure: failure)
     }
 }
 
@@ -49,6 +50,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private let maximumPendingFrames: Int
     private let recognize: @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch
     private let checkpoint: @Sendable (MeetingPCMTranscriptBatch) async throws -> Void
+    private let finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?
     private let failure: @Sendable (Error) -> Void
     private var accepting = true
     private var terminalError: Error?
@@ -59,10 +61,12 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private var origin: CMTime?
     private var expectedPTS: CMTime?
     private var worker: Task<Void, Never>?
+    private var finishTask: Task<Void, Error>?
 
     init(chunkSeconds: Double, maximumPendingSeconds: Double,
          recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
          checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
+         finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?,
          failure: @escaping @Sendable (Error) -> Void) throws {
         guard chunkSeconds.isFinite, maximumPendingSeconds.isFinite,
               chunkSeconds >= 0.25, chunkSeconds <= 30,
@@ -73,6 +77,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         self.maximumPendingFrames = Int((maximumPendingSeconds * 16_000).rounded())
         self.recognize = recognize
         self.checkpoint = checkpoint
+        self.finalize = finalize
         self.failure = failure
         self.tail.reserveCapacity(self.chunkFrames)
     }
@@ -135,19 +140,34 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     /// Closing is synchronous, then the finite tail and already accepted work are joined. A
     /// cancelled caller cannot release model residency while this consumer still owns inference.
     func finish() async throws {
-        let worker = self.lock.withLock { () -> Task<Void, Never>? in
-            if self.accepting {
-                self.accepting = false
-                if !self.tail.isEmpty, self.terminalError == nil {
-                    self.jobs.append(Job(samples: self.tail, start: self.tailStart))
-                    self.tail = []
-                }
-                self.startWorkerIfNeededLocked()
+        let task = self.lock.withLock { () -> Task<Void, Error> in
+            if let finishTask { return finishTask }
+            self.accepting = false
+            if !self.tail.isEmpty, self.terminalError == nil {
+                self.jobs.append(Job(samples: self.tail, start: self.tailStart))
+                self.tail = []
             }
-            return self.worker
+            self.startWorkerIfNeededLocked()
+            let worker = self.worker
+            let task = Task { [self] in
+                // Caller cancellation cannot abandon already owned recognition or privacy tails.
+                await worker?.value
+                let priorError = self.lock.withLock { self.terminalError }
+                do {
+                    if let finalize, var batch = try await finalize() {
+                        if priorError != nil { batch.isComplete = false }
+                        if !batch.segments.isEmpty || !batch.speakers.isEmpty { try await self.checkpoint(batch) }
+                    }
+                } catch {
+                    self.fail(error)
+                    throw error
+                }
+                if let priorError { throw priorError }
+            }
+            self.finishTask = task
+            return task
         }
-        await worker?.value
-        if let error = self.lock.withLock({ self.terminalError }) { throw error }
+        try await task.value
     }
 
     // Caller must hold lock. One worker serializes inference AND durable checkpoints.

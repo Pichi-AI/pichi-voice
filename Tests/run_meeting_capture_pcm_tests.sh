@@ -14,7 +14,7 @@ contract = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingCaptureControllin
 start = contract.index('nonisolated protocol MeetingMemoryAudioConsuming:')
 root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + contract[start:] + '\n'
     + 'class MeetingProcessingPipeline {}\n'
-    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String] }\n')
+    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
 start = source.index('nonisolated enum MeetingLiveSampleCopy {')
 root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + source[start:])
