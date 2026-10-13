@@ -183,6 +183,141 @@ final class ModelTemperatureSupportTests: XCTestCase {
         XCTAssertNil(store.isSupported("claude-haiku-5-5", baseURL: "https://temperature-reject.test/v1"))
     }
 
+    // MARK: - Registered cloud rejection classification before redaction
+
+    func testCloudCall_retriesForRegisteredProvidersInBothModesWithoutChangingAuthorizationOrInput() async throws {
+        for provider in CloudTextProvider.registered {
+            for streaming in [false, true] {
+                let store = ModelTemperatureSupport(defaults: self.defaults)
+                let context = CloudTemperatureContext(provider: provider, scenario: .recover, store: store)
+                defer { context.cleanup() }
+                let config = context.config(streaming: streaming)
+                let response = try await context.client.call(config)
+                XCTAssertEqual(response.content, "Synthetic cloud summary.")
+                XCTAssertEqual(context.fixture.temperatures, [true, false])
+                XCTAssertEqual(context.fixture.authorizationHeaders, [context.expectedAuthorization, context.expectedAuthorization])
+                XCTAssertEqual(context.fixture.projectHeaders, [config.providerOptions["project"], config.providerOptions["project"]])
+                XCTAssertEqual(context.fixture.oauthRequests, context.requiresOAuth ? 1 : 0)
+                XCTAssertEqual(store.isSupported(config.model, baseURL: config.baseURL), false)
+                XCTAssertTrue(context.fixture.unexpectedRequests.isEmpty)
+                let bodies = try context.fixture.bodies.map {
+                    try XCTUnwrap(try JSONSerialization.jsonObject(with: $0) as? [String: Any])
+                }
+                var first = try XCTUnwrap(bodies.first)
+                let second = try XCTUnwrap(bodies.last)
+                XCTAssertEqual(first.removeValue(forKey: "temperature") as? Double, 0.2)
+                XCTAssertEqual(try JSONSerialization.data(withJSONObject: first, options: .sortedKeys),
+                               try JSONSerialization.data(withJSONObject: second, options: .sortedKeys))
+            }
+        }
+    }
+
+    func testCloudCall_unrelated400DoesNotLearnFromAnEchoedTemperatureRejection() async {
+        for provider in CloudTextProvider.registered {
+            for streaming in [false, true] {
+                let store = ModelTemperatureSupport(defaults: self.defaults)
+                let context = CloudTemperatureContext(provider: provider, scenario: .unrelated, store: store)
+                defer { context.cleanup() }
+                let config = context.config(streaming: streaming)
+                await self.assertSafeCloud400(context, config: config)
+                XCTAssertEqual(context.fixture.temperatures, [true])
+                XCTAssertNil(store.isSupported(config.model, baseURL: config.baseURL))
+                XCTAssertTrue(context.fixture.unexpectedRequests.isEmpty)
+            }
+        }
+    }
+
+    func testCloudCall_invalidTemperatureValueIsNotLearnedAsAnUnsupportedCapability() async {
+        for provider in CloudTextProvider.registered {
+            for streaming in [false, true] {
+                let store = ModelTemperatureSupport(defaults: self.defaults)
+                let context = CloudTemperatureContext(provider: provider, scenario: .invalidValue, store: store)
+                defer { context.cleanup() }
+                let config = context.config(streaming: streaming)
+                await self.assertSafeCloud400(context, config: config)
+                XCTAssertEqual(context.fixture.temperatures, [true])
+                XCTAssertNil(store.isSupported(config.model, baseURL: config.baseURL))
+                XCTAssertTrue(context.fixture.unexpectedRequests.isEmpty)
+            }
+        }
+    }
+
+    func testCloudCall_second400StopsAfterTwoAttemptsAndKeepsThePublicErrorRedacted() async {
+        for provider in CloudTextProvider.registered {
+            for streaming in [false, true] {
+                let store = ModelTemperatureSupport(defaults: self.defaults)
+                let context = CloudTemperatureContext(provider: provider, scenario: .rejectBoth, store: store)
+                defer { context.cleanup() }
+                let config = context.config(streaming: streaming)
+                await self.assertSafeCloud400(context, config: config)
+                XCTAssertEqual(context.fixture.temperatures, [true, false])
+                XCTAssertEqual(context.fixture.oauthRequests, context.requiresOAuth ? 1 : 0)
+                XCTAssertEqual(store.isSupported(config.model, baseURL: config.baseURL), false)
+                XCTAssertTrue(context.fixture.unexpectedRequests.isEmpty)
+            }
+        }
+    }
+
+    func testCloudCall_oversizedErrorIsRedactedWithoutLearningFromItsCompleteJSONPrefix() async {
+        for provider in CloudTextProvider.registered {
+            for streaming in [false, true] {
+                let store = ModelTemperatureSupport(defaults: self.defaults)
+                let context = CloudTemperatureContext(provider: provider, scenario: .oversized, store: store)
+                defer { context.cleanup() }
+                let config = context.config(streaming: streaming)
+                await self.assertSafeCloud400(context, config: config)
+                XCTAssertEqual(context.fixture.temperatures, [true])
+                XCTAssertNil(store.isSupported(config.model, baseURL: config.baseURL))
+                XCTAssertTrue(context.fixture.unexpectedRequests.isEmpty)
+            }
+        }
+    }
+
+    func testCloudCall_cancellationDuringHeldErrorDoesNotRetryOrLearn() async {
+        for provider in CloudTextProvider.registered {
+            for streaming in [false, true] {
+                let started = expectation(description: "Registered error body is held")
+                let stopped = expectation(description: "Registered held request stopped")
+                let store = ModelTemperatureSupport(defaults: self.defaults)
+                let context = CloudTemperatureContext(provider: provider, scenario: .held, store: store,
+                                                      started: started, stopped: stopped)
+                defer { context.cleanup() }
+                let config = context.config(streaming: streaming)
+                let client = context.client
+                let pending = Task { try await client.call(config) }
+                await fulfillment(of: [started], timeout: 2)
+                pending.cancel()
+                do {
+                    _ = try await pending.value
+                    XCTFail("Cancelled cloud inference cannot return a response")
+                } catch is CancellationError {
+                } catch let LLMError.networkError(error) {
+                    XCTAssertEqual((error as? URLError)?.code, .cancelled)
+                } catch {
+                    XCTFail("Unexpected cancellation error: \(error)")
+                }
+                await fulfillment(of: [stopped], timeout: 2)
+                XCTAssertEqual(context.fixture.temperatures, [true])
+                XCTAssertNil(store.isSupported(config.model, baseURL: config.baseURL))
+                XCTAssertTrue(context.fixture.unexpectedRequests.isEmpty)
+            }
+        }
+    }
+
+    private func assertSafeCloud400(_ context: CloudTemperatureContext, config: LLMClient.Config) async {
+        do {
+            _ = try await context.client.call(config)
+            XCTFail("Cloud rejection must remain an HTTP error")
+        } catch let LLMError.httpError(status, body) {
+            XCTAssertEqual(status, 400)
+            XCTAssertEqual(body, PichiLocalization.text("Cloud provider request failed."))
+            XCTAssertFalse(body.contains(CloudTemperatureFixture.secretMarker))
+            XCTAssertFalse(body.contains(config.apiKey))
+        } catch {
+            XCTFail("Internal rejection leaked instead of LLMError.httpError: \(error)")
+        }
+    }
+
     // MARK: - Native local retry resource ownership
 
     func testNativeCall_temperatureRetryJoinsPreviousSessionsAndKeepsTheFrozenRequest() async throws {
@@ -574,4 +709,175 @@ private final class NativeTemperatureURLProtocol: URLProtocol {
     override func stopLoading() {
         if self.activeChat { self.activeFixture?.stoppedChat() }
     }
+}
+
+private final class CloudTemperatureContext {
+    let fixture: CloudTemperatureFixture
+    let session: URLSession
+    let client: LLMClient
+    let provider: CloudTextProvider
+    private let token = UUID().uuidString
+    var requiresOAuth: Bool { if case .oauth = self.provider.authorization { return true }; return false }
+    var expectedAuthorization: String {
+        if case let .apiKey(scheme) = self.provider.authorization { return "\(scheme) synthetic-key-A16B" }
+        return "Bearer synthetic-token-CC19"
+    }
+
+    init(provider: CloudTextProvider, scenario: CloudTemperatureFixture.Scenario, store: ModelTemperatureSupport,
+         started: XCTestExpectation? = nil, stopped: XCTestExpectation? = nil) {
+        self.provider = provider
+        let fixture = CloudTemperatureFixture(provider: provider, scenario: scenario, started: started, stopped: stopped)
+        self.fixture = fixture
+        CloudTemperatureURLProtocol.register(fixture, token: self.token)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CloudTemperatureURLProtocol.self]
+        configuration.httpAdditionalHeaders = [CloudTemperatureURLProtocol.tokenHeader: self.token]
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
+        let session = URLSession(configuration: configuration)
+        self.session = session
+        self.client = LLMClient(session: session, temperatureSupport: store)
+    }
+
+    func config(streaming: Bool) -> LLMClient.Config {
+        let model = self.provider.projectHeader == nil ? "synthetic-model" : "gpt://synthetic-folder/synthetic-model"
+        var config = LLMClient.Config(messages: [["role": "user", "content": "Synthetic prompt only."]],
+                                      model: model, baseURL: self.provider.baseURL, apiKey: "synthetic-key-A16B",
+                                      streaming: streaming, temperature: 0.2, maxTokens: 128)
+        config.providerOptions = Dictionary(uniqueKeysWithValues: self.provider.fields.map {
+            ($0.id, $0.defaultValue.isEmpty ? "synthetic-folder" : $0.defaultValue)
+        })
+        config.maxRetries = 3
+        config.retryDelayMs = 0
+        config.timeoutSeconds = 5
+        return config
+    }
+
+    func cleanup() {
+        self.session.invalidateAndCancel()
+        CloudTemperatureURLProtocol.unregister(token: self.token)
+    }
+}
+
+private final class CloudTemperatureFixture: @unchecked Sendable {
+    enum Scenario { case recover, unrelated, invalidValue, rejectBoth, oversized, held }
+    static let secretMarker = "SyntheticSecretEchoMustStayPrivate771C"
+    let provider: CloudTextProvider
+    let scenario: Scenario
+    let started: XCTestExpectation?
+    let stopped: XCTestExpectation?
+    private let lock = NSLock()
+    private var recordedTemperatures: [Bool] = []
+    private var recordedBodies: [Data] = []
+    private var recordedAuthorizations: [String?] = []
+    private var recordedProjects: [String?] = []
+    private var exchanges = 0
+    private var stoppedCount = 0
+    private var unexpected: [String] = []
+
+    init(provider: CloudTextProvider, scenario: Scenario, started: XCTestExpectation?, stopped: XCTestExpectation?) {
+        self.provider = provider
+        self.scenario = scenario
+        self.started = started
+        self.stopped = stopped
+    }
+    var temperatures: [Bool] { self.lock.withLock { self.recordedTemperatures } }
+    var bodies: [Data] { self.lock.withLock { self.recordedBodies } }
+    var authorizationHeaders: [String?] { self.lock.withLock { self.recordedAuthorizations } }
+    var projectHeaders: [String?] { self.lock.withLock { self.recordedProjects } }
+    var oauthRequests: Int { self.lock.withLock { self.exchanges } }
+    var unexpectedRequests: [String] { self.lock.withLock { self.unexpected } }
+    func recordUnexpected(_ message: String) { self.lock.withLock { self.unexpected.append(message) } }
+    func recordOAuth() { self.lock.withLock { self.exchanges += 1 } }
+    func recordChat(_ request: URLRequest, body: [String: Any]) -> Bool {
+        let temperature = body["temperature"] != nil
+        self.lock.withLock {
+            self.recordedTemperatures.append(temperature)
+            self.recordedBodies.append((try? JSONSerialization.data(withJSONObject: body, options: .sortedKeys)) ?? Data())
+            self.recordedAuthorizations.append(request.value(forHTTPHeaderField: "Authorization"))
+            self.recordedProjects.append(request.value(forHTTPHeaderField: "OpenAI-Project"))
+        }
+        return temperature
+    }
+    func stoppedChat() {
+        let first = self.lock.withLock { self.stoppedCount += 1; return self.stoppedCount == 1 }
+        if first { self.stopped?.fulfill() }
+    }
+}
+
+/// Fully intercepted session fixture, including the descriptor's OAuth exchange.
+/// A missing token or unexpected request fails locally instead of reaching a server.
+private final class CloudTemperatureURLProtocol: URLProtocol {
+    static let tokenHeader = "X-Cloud-Temperature-Fixture"
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var fixtures: [String: CloudTemperatureFixture] = [:]
+    private var fixture: CloudTemperatureFixture?
+    private var activeChat = false
+    static func register(_ fixture: CloudTemperatureFixture, token: String) { self.lock.withLock { self.fixtures[token] = fixture } }
+    static func unregister(token: String) { self.lock.withLock { _ = self.fixtures.removeValue(forKey: token) } }
+    override static func canInit(with request: URLRequest) -> Bool { true }
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let token = self.request.value(forHTTPHeaderField: Self.tokenHeader),
+              let fixture = Self.lock.withLock({ Self.fixtures[token] }), let url = self.request.url else {
+            self.client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL)); return
+        }
+        self.fixture = fixture
+        let status: Int
+        var data: Data
+        let contentType: String
+        if case let .oauth(tokenURL) = fixture.provider.authorization, url == tokenURL {
+            fixture.recordOAuth()
+            status = 200
+            data = try! JSONSerialization.data(withJSONObject: ["access_token": "synthetic-token-CC19", "expires_at": Date().addingTimeInterval(1800).timeIntervalSince1970 * 1000])
+            contentType = "application/json"
+        } else {
+            guard let base = URL(string: fixture.provider.baseURL), url.host == base.host, url.path == "/v1/chat/completions" else {
+                fixture.recordUnexpected("Unexpected request route")
+                self.client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL)); return
+            }
+            self.activeChat = true
+            let body = TemperatureRejectingURLProtocol.bodyJSON(of: self.request)
+            let hasTemperature = fixture.recordChat(self.request, body: body)
+            let rejected = hasTemperature || fixture.scenario == .rejectBoth
+            status = rejected ? 400 : 200
+            if status == 400 {
+                let message = "temperature is unsupported. " + CloudTemperatureFixture.secretMarker + " synthetic-key-A16B"
+                let error: [String: Any]
+                if fixture.scenario == .unrelated {
+                    error = ["error": ["param": "max_tokens", "message": message]]
+                } else if fixture.scenario == .invalidValue {
+                    error = ["error": ["param": "temperature", "code": "invalid_value",
+                                       "message": "The supplied temperature value is unsupported because it is out of range. " + CloudTemperatureFixture.secretMarker]]
+                } else if fixture.provider.projectHeader != nil {
+                    error = ["error": ["param": "temperature", "type": "invalid_request_error", "message": message]]
+                } else {
+                    error = ["status": 400, "message": message]
+                }
+                data = try! JSONSerialization.data(withJSONObject: error)
+                if fixture.scenario == .oversized { data.append(Data(repeating: 0x20, count: 70 * 1024)) }
+                contentType = "application/json"
+            } else if body["stream"] as? Bool == true {
+                data = Data("data: {\"choices\":[{\"delta\":{\"content\":\"Synthetic cloud summary.\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".utf8)
+                contentType = "text/event-stream"
+            } else {
+                data = Data(#"{"choices":[{"message":{"role":"assistant","content":"Synthetic cloud summary."},"finish_reason":"stop"}]}"#.utf8)
+                contentType = "application/json"
+            }
+        }
+        guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
+                                             headerFields: ["Content-Type": contentType]) else {
+            self.client?.urlProtocol(self, didFailWithError: URLError(.badURL)); return
+        }
+        self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        if self.activeChat && fixture.scenario == .held {
+            self.client?.urlProtocol(self, didLoad: data.prefix(32))
+            fixture.started?.fulfill()
+            return
+        }
+        self.client?.urlProtocol(self, didLoad: data)
+        self.client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { if self.activeChat { self.fixture?.stoppedChat() } }
 }

@@ -289,7 +289,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
             self.benchmark(config, "call_return")
             return response
-        } catch let LLMError.httpError(400, body) where config.temperature != nil && body.lowercased().contains("temperature") {
+        } catch let failure as HTTPRejection where config.temperature != nil && failure.reason == .temperatureRejected {
             if let boundedLocalSession {
                 await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
             }
@@ -309,7 +309,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
                 await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
             }
             self.benchmark(config, "call_fail")
-            throw error
+            // Internal protocol classification never escapes to presentation.
+            throw (error as? HTTPRejection)?.outwardError ?? error
         }
     }
 
@@ -670,6 +671,50 @@ final nonisolated class LLMClient: @unchecked Sendable {
         return (session, lifetime)
     }
 
+    // Retain only a stable wire reason after inspecting a bounded error. The
+    // registered-provider body remains redacted in every public error and log.
+    private enum HTTPRejectionReason { case temperatureRejected }
+    private struct HTTPRejection: Error {
+        let reason: HTTPRejectionReason
+        let outwardError: LLMError
+    }
+    private static let maximumHTTPErrorBytes = 64 * 1024
+
+    private func boundedHTTPErrorBody(_ bytes: URLSession.AsyncBytes) async throws -> (data: Data, complete: Bool) {
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < Self.maximumHTTPErrorBytes else { return (data, false) }
+            data.append(byte)
+        }
+        return (data, true)
+    }
+
+    private func httpFailure(status: Int, body: (data: Data, complete: Bool), request: URLRequest) -> Error {
+        let outward = LLMError.httpError(status, self.safeHTTPErrorBody(body.data, request: request))
+        guard status == 400, body.complete, Self.temperatureWasRejected(in: body.data) else { return outward }
+        return HTTPRejection(reason: .temperatureRejected, outwardError: outward)
+    }
+
+    private static func temperatureWasRejected(in data: Data) -> Bool {
+        guard data.count <= self.maximumHTTPErrorBytes,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        let fields = root["error"] as? [String: Any] ?? root
+        let parameter = fields["param"] as? String
+        if let parameter, !parameter.isEmpty, parameter != "temperature" { return false }
+        let codes = [fields["code"] as? String, fields["type"] as? String].compactMap { $0?.lowercased() }
+        // A value/range rejection is not evidence of an unsupported parameter.
+        if codes.contains(where: { ["invalid_value", "unsupported_value", "out_of_range", "invalid_parameter_value"].contains($0) }) {
+            return false
+        }
+        if parameter == "temperature", codes.contains("unsupported_parameter") { return true }
+        guard let message = (root["error"] as? String) ?? fields["message"] as? String else { return false }
+        let wireMessage = message.lowercased()
+        guard wireMessage.range(of: #"\btemperature\b"#, options: .regularExpression) != nil else { return false }
+        return ["unsupported", "not supported", "does not support", "deprecated", "not allowed", "not permitted"]
+            .contains { wireMessage.contains($0) }
+    }
+
     private func safeHTTPErrorBody(_ data: Data, request: URLRequest) -> String {
         if CloudTextProvider.descriptor(forEndpoint: request.url?.absoluteString ?? "") != nil { return PichiLocalization.text("Cloud provider request failed.") }
         return String(data: data, encoding: .utf8) ?? "Unknown error"
@@ -680,15 +725,19 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private func processNonStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            let body = try await self.boundedHTTPErrorBody(bytes)
+            let errText = self.safeHTTPErrorBody(body.data, request: request)
+            DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode): \(errText.prefix(200))", source: "LLMClient")
+            throw self.httpFailure(status: http.statusCode, body: body, request: request)
+        }
+        // Successful replies retain the same complete Data and parsing contract.
+        var data = Data()
+        for try await byte in bytes { try Task.checkCancellation(); data.append(byte) }
         try Task.checkCancellation()
         self.benchmark(config, "response_data bytes=\(data.count)")
-
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let errText = self.safeHTTPErrorBody(data, request: request)
-            DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode): \(errText.prefix(200))", source: "LLMClient")
-            throw LLMError.httpError(http.statusCode, errText)
-        }
 
         DebugLogger.shared.debug("LLMClient: Non-streaming response received (\(data.count) bytes)", source: "LLMClient")
 
@@ -726,15 +775,12 @@ final nonisolated class LLMClient: @unchecked Sendable {
         DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
         let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
         self.benchmark(config, "response_headers")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
-            let errText = self.safeHTTPErrorBody(errorData, request: request)
-            throw LLMError.httpError(http.statusCode, errText)
+            let body = try await self.boundedHTTPErrorBody(bytes)
+            throw self.httpFailure(status: http.statusCode, body: body, request: request)
         }
 
         var contentBuffer: [String] = []
@@ -842,12 +888,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
         // Check for HTTP errors
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
-            let errText = self.safeHTTPErrorBody(errorData, request: request)
-            throw LLMError.httpError(http.statusCode, errText)
+            let body = try await self.boundedHTTPErrorBody(bytes)
+            throw self.httpFailure(status: http.statusCode, body: body, request: request)
         }
 
         // Create the appropriate parser for this model
