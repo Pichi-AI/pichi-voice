@@ -74,6 +74,21 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## Reproducible macOS regression
 
+Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 37 current runners, including the native export, relative-date and contrast probes. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
+
+Full runs require an isolated worktree, macOS and full Xcode. The runner prevents simultaneous standalone runs in one worktree. `--list` lists the names without starting native probes and is portable. Narrow a repeat run with repeated `--only NAME` options:
+
+```bash
+bash scripts/dev/standalone-regression.sh --list
+bash scripts/dev/standalone-regression.sh --only file_export --only file_transcript_relative_date --only ui_contrast
+```
+
+Each probe owns a separate process session. Cancellation sends TERM then KILL if necessary, waits for runnable descendants to stop and reaps the direct process before releasing the worktree lock. If cleanup cannot finish, its ownership marker blocks another suite from using those build directories.
+
+The update prompt probe can activate test UI. It is recorded as `SKIP` by default and runs only with the explicit `--include-ui` flag. Selecting it with `--only update_prompt` does not implicitly enable UI. Skipped probes are never counted as passes, and an all-skipped run returns failure.
+
+Every started suite keeps `summary.json`, `summary.txt` and one combined stdout/stderr log per selected probe under a unique ignored `.build/standalone-regression/` directory. Reports include the exact revision, dirty/clean state, interpreter, argv, exit code, duration and PASS/FAIL/SKIP accounting. Any failed probe, missing script, launch error or interrupted run returns nonzero. These counts describe standalone probes, not the assertions reported inside each probe or full application XCTest coverage. Setup errors stop before starting the suite. Verify runner behavior portably with `python3 -S Tests/test_standalone_regression.py`.
+
 The separate `FluidASRBaseline` scheme has an explicit fixture staging contract and keeps Xcode user script sandboxing enabled. Its default declarations copy only the tracked public placeholder. To bundle an authorized local fixture directory, prepare private input/output filelists and a manifest under the current worktree's ignored `.build/asr-baseline-inputs/`:
 
 ```bash

@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Run the registered native standalone probes and retain their actual outcomes."""
+
+import argparse
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import fcntl
+import json
+import os
+from pathlib import Path
+import platform
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+
+CANCEL_GRACE_SECONDS = 2
+KILL_WAIT_SECONDS = 2
+PROCESS_MARKER = "standalone-regression.process.json"
+
+
+@contextmanager
+def defer_interrupts():
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def live_process_group(group):
+    if type(group) is not int or group <= 1:
+        raise ValueError("Invalid owned process group")
+    # Zombies cannot keep writing and may wait for an external init to reap them.
+    # Read only group/state fields, omitting command lines.
+    rows = subprocess.check_output(["ps", "-A", "-o", "pgid=", "-o", "stat="], text=True, timeout=2)
+    return any(len(fields) == 2 and fields[0] == str(group) and not fields[1].startswith("Z")
+               for fields in (line.split() for line in rows.splitlines()))
+
+
+def stop_process_group(process):
+    with defer_interrupts():
+        for termination_signal, budget in ((signal.SIGTERM, CANCEL_GRACE_SECONDS), (signal.SIGKILL, KILL_WAIT_SECONDS)):
+            try:
+                os.killpg(process.pid, termination_signal)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + budget
+            while live_process_group(process.pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            if not live_process_group(process.pid):
+                break
+        process.wait(timeout=KILL_WAIT_SECONDS)
+        if live_process_group(process.pid):
+            raise OSError("Owned descendants did not stop; this worktree remains reserved")
+
+
+def run_owned_process(command, root, stream):
+    marker = root / ".build" / PROCESS_MARKER
+    process = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL,
+                               stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        marker.write_text(json.dumps({"processGroup": process.pid}) + "\n")
+        code = process.wait()
+        if live_process_group(process.pid):
+            stop_process_group(process)
+            return code, "Probe left unjoined descendant processes"
+        return code, None
+    except BaseException:
+        stop_process_group(process)
+        raise
+    finally:
+        if not live_process_group(process.pid):
+            marker.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class Probe:
+    script: str
+    interpreter: str
+    requires_ui: bool = False
+
+    @property
+    def name(self):
+        return Path(self.script).stem.removeprefix("run_").removesuffix("_tests")
+
+    @property
+    def command(self):
+        interpreters = {"python3": sys.executable, "sh": "/bin/sh", "bash": "/bin/bash"}
+        return [interpreters[self.interpreter], self.script]
+
+
+# Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
+SHELL_PROBES = (
+    "analytics_config", "brand_owned_native_menu", "brand_profile",
+    "command_archive_search", "command_cancellation", "command_markdown",
+    "command_model_catalog", "command_session_boundary", "command_workspace_presentation",
+    "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
+    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_export",
+    "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
+    "fluid_typography", "history_decode_recovery", "history_persistence",
+    "local_text_model_catalog", "meeting_summary_evidence", "onboarding",
+    "page_presentation", "paste_key_cache", "private_ai_idle_unloader",
+    "release_highlights", "speech_model_provider_presentation", "ui_contrast",
+    "voice_edit_cancellation",
+)
+PYTHON_PROBES = (
+    "dictionary_training_save", "local_api_lease", "meeting_backup_refresh",
+    "settings_backup_concurrency",
+)
+PROBES = tuple(sorted(
+    [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]
+    + [Probe(f"Tests/run_{name}_tests.py", "python3") for name in PYTHON_PROBES]
+    + [Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
+       Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True)],
+    key=lambda probe: probe.name,
+))
+
+
+def validate_registry(root, probes=PROBES):
+    registered = {probe.script for probe in probes}
+    if len(registered) != len(probes) or len({probe.name for probe in probes}) != len(probes):
+        raise ValueError("Standalone registry contains duplicate paths or names")
+    discovered = {str(path.relative_to(root)) for path in (root / "Tests").glob("run_*")
+                  if path.suffix in (".sh", ".py")}
+    if registered != discovered:
+        raise ValueError(f"Standalone registry mismatch: unregistered={sorted(discovered - registered)}, missing={sorted(registered - discovered)}")
+    for probe in probes:
+        path = root / probe.script
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Standalone probe must be a regular tracked script: {probe.script}")
+        first_line = path.read_text().splitlines()[0]
+        expected = {"sh": ("#!/bin/sh",), "bash": ("#!/bin/bash", "#!/usr/bin/env bash"),
+                    "python3": ("#!/usr/bin/env python3",)}.get(probe.interpreter, ())
+        if first_line not in expected:
+            raise ValueError(f"Review changed interpreter for {probe.script}: {first_line}")
+
+
+def select_probes(names, probes=PROBES):
+    if not names:
+        return probes
+    unknown = set(names) - {probe.name for probe in probes}
+    if unknown:
+        raise ValueError(f"Unknown standalone probe(s): {', '.join(sorted(unknown))}; use --list")
+    return tuple(probe for probe in probes if probe.name in set(names))
+
+
+@contextmanager
+def run_lock(root):
+    build = root / ".build"
+    if build.is_symlink():
+        raise ValueError("Standalone build storage must belong to this worktree")
+    build.mkdir(exist_ok=True)
+    with (build / "standalone-regression.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("A standalone regression run is already active in this worktree") from error
+        try:
+            marker = build / PROCESS_MARKER
+            if marker.exists():
+                group = json.loads(marker.read_text())["processGroup"]
+                if live_process_group(group):
+                    raise ValueError("A previous probe still owns this worktree's build storage")
+                marker.unlink()
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def timestamp():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False):
+    root = root.resolve()
+    with run_lock(root):
+        base = root / ".build/standalone-regression"
+        if base.is_symlink():
+            raise ValueError("Standalone artifacts must belong to this worktree")
+        base.mkdir(exist_ok=True)
+        directory = Path(tempfile.mkdtemp(prefix=f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{revision[:8]}-", dir=base))
+        report = {"version": 1, "revision": revision, "workingTree": "dirty" if dirty else "clean",
+                  "platform": platform.system(), "startedAt": timestamp(), "status": "RUNNING",
+                  "artifactDirectory": str(directory), "uiOptIn": include_ui, "results": []}
+        print(f"Standalone artifacts: {directory}", flush=True)
+
+        def save():
+            results = report["results"]
+            report["counts"] = {"total": len(probes), "passed": sum(item["status"] == "PASS" for item in results),
+                                "failed": sum(item["status"] == "FAIL" for item in results),
+                                "skipped": sum(item["status"] == "SKIP" for item in results)}
+            temporary = directory / "summary.json.tmp"
+            temporary.write_text(json.dumps(report, indent=2) + "\n")
+            temporary.replace(directory / "summary.json")
+
+        save()
+        interrupted = False
+        abort_reason = None
+
+        def make_row(probe):
+            return {"name": probe.name, "script": probe.script, "interpreter": probe.interpreter,
+                    "command": probe.command, "requiresUI": probe.requires_ui, "status": "RUNNING",
+                    "exitCode": None, "durationSeconds": 0.0, "log": f"{probe.name}.log"}
+
+        try:
+            for probe in probes:
+                row = make_row(probe)
+                report["results"].append(row)
+                log = directory / row["log"]
+                if interrupted or abort_reason or (probe.requires_ui and not include_ui):
+                    row.update(status="SKIP", reason="not run after interruption" if interrupted else (abort_reason or "UI probe requires --include-ui"))
+                    log.write_text(f"SKIP: {row['reason']}\n")
+                elif not (root / probe.script).is_file():
+                    row.update(status="FAIL", reason="registered script missing")
+                    log.write_text(f"FAIL: {row['reason']}\n")
+                else:
+                    save()
+                    print(f"RUN {probe.name}", flush=True)
+                    start = time.monotonic()
+                    with log.open("wb") as stream:
+                        try:
+                            code, ownership_error = run_owned_process(probe.command, root, stream)
+                            row.update(status="PASS" if code == 0 and not ownership_error else "FAIL", exitCode=code)
+                            if ownership_error:
+                                row["reason"] = ownership_error
+                        except (OSError, subprocess.SubprocessError) as error:
+                            row.update(status="FAIL", reason=str(error))
+                            stream.write(f"Runner error: {error}\n".encode())
+                            stream.write(traceback.format_exc().encode())
+                            if (root / ".build" / PROCESS_MARKER).exists():
+                                abort_reason = "not run while previous process cleanup is incomplete"
+                        except KeyboardInterrupt:
+                            row.update(status="FAIL", exitCode=130, reason="interrupted")
+                            interrupted = True
+                    row["durationSeconds"] = round(time.monotonic() - start, 3)
+                print(f"{row['status']} {probe.name}", flush=True)
+                save()
+        except KeyboardInterrupt:
+            interrupted = True
+            for row in report["results"]:
+                if row["status"] == "RUNNING":
+                    row.update(status="FAIL", exitCode=130, reason="interrupted")
+                    (directory / row["log"]).touch()
+            for probe in probes[len(report["results"]):]:
+                row = make_row(probe)
+                row.update(status="SKIP", reason="not run after interruption")
+                (directory / row["log"]).write_text("SKIP: not run after interruption\n")
+                report["results"].append(row)
+            save()
+        with defer_interrupts():
+            counts = report["counts"]
+            report["interrupted"] = interrupted
+            report["status"] = "PASS" if counts["passed"] and not counts["failed"] and not interrupted else "FAIL"
+            if interrupted:
+                report["reason"] = "Run interrupted"
+            elif not counts["passed"] and not counts["failed"]:
+                report["reason"] = "No probes executed successfully"
+            report["finishedAt"] = timestamp()
+            save()
+            lines = [f"Revision: {revision} ({report['workingTree']})", f"Status: {report['status']}",
+                     f"Probes: {counts['total']} total, {counts['passed']} passed, {counts['failed']} failed, {counts['skipped']} skipped"]
+            lines += [f"{row['status']} {row['name']} exit={row['exitCode']} log={row['log']}" for row in report["results"]]
+            (directory / "summary.txt").write_text("\n".join(lines) + "\n")
+            print(lines[2], flush=True)
+            return (130 if interrupted else (0 if report["status"] == "PASS" else 1)), report
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--list", action="store_true", help="List registered probes without running them")
+    parser.add_argument("--only", action="append", metavar="NAME", help="Run a named probe; repeat for several")
+    parser.add_argument("--include-ui", action="store_true", help="Also run the update prompt probe, which can activate UI")
+    arguments = parser.parse_args()
+    root = Path(__file__).resolve().parents[2]
+    try:
+        validate_registry(root)
+        probes = select_probes(arguments.only)
+        if arguments.list:
+            for probe in probes:
+                print(f"{probe.name}\t{probe.interpreter}\t{'UI opt-in' if probe.requires_ui else 'native'}")
+            return 0
+        subprocess.run(["bash", "scripts/dev/assert-worktree.sh"], cwd=root, check=True)
+        if platform.system() != "Darwin":
+            raise ValueError("Native standalone regressions require macOS and full Xcode; --list and runner unit tests are portable")
+        developer = os.environ.get("DEVELOPER_DIR") or subprocess.check_output(["xcode-select", "-p"], text=True).strip()
+        if not (Path(developer) / "Platforms/MacOSX.platform").is_dir():
+            raise ValueError("Select an installed full Xcode before running native standalone regressions")
+        os.environ["DEVELOPER_DIR"] = developer
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root, text=True).strip())
+        status, _ = run_suite(root, probes, include_ui=arguments.include_ui, revision=revision, dirty=dirty)
+        return status
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"Standalone regression setup failed: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
