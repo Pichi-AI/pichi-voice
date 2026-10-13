@@ -26,10 +26,10 @@ The preferred E2E v5 export and its vocabulary occupy 456,341,702 bytes (435.2 M
 
 E2E output includes punctuation, capitalization and text normalization. The FP16 conversion reduces weight storage, and Pichi's trained EOU head detects phrase completion using the shared speech encoder. The native provider does not include the browser/server domain-term spotter or a separate grammar-correction model. Older character exports do not produce the E2E formatting features. The installation snapshot supplies the imported descriptor's characteristics to the common library card without filesystem reads during rendering.
 
-The library distinguishes measured/reference characteristics from its inherited relative product ratings:
+The library uses the same shared percentage rows and liquid bars as the other models: speed 90% and accuracy 90% for Russian. These are relative product ratings chosen for the library scale, not measured percentages of correctly recognized words and not a conversion from WER. The existing tooltip keeps their reference context:
 
 - On October 12, 2026, the synthetic Russian prototype fixture (8.4765 seconds, 16 kHz mono) took 0.9674 seconds to transcribe with the preferred v5 export on an Apple M4 Max CPU, about 8.8 times real time. The model load took 0.8108 seconds and is excluded. This short warm inference measurement does not establish Intel, long-recording or concurrent-load performance.
-- The [publisher's evaluation](https://github.com/salute-developers/GigaAM/blob/main/evaluation.md) reports average normalized word error rate (WER) across ten Russian datasets: 12.0% for base v3 E2E CTC and 9.1% for base v3 CTC. Lower WER is better. These are reference values for the base models, not measurements of our optimized artifacts, and not the other cards' relative accuracy percentages.
+- The [publisher's evaluation](https://github.com/salute-developers/GigaAM/blob/main/evaluation.md) reports average normalized word error rate (WER) across ten Russian datasets: 12.0% for base v3 E2E CTC and 9.1% for base v3 CTC. Lower WER is better. These are reference values for the base models, not measurements of our optimized artifacts or the library's relative accuracy score.
 
 No ASR accuracy percentage is inferred from the EOU head's phrase-completion classification metrics.
 

@@ -13,13 +13,10 @@ extension GigaAMModelDescriptor {
             features: formatted
                 ? "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head."
                 : "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization.",
-            performance: .init(
-                speed: self.id == "gigaam-v3-e2e-eou-v5" ? "8.8× real time" : "CPU inference",
-                accuracy: formatted ? "Base WER 12.0%" : "Base WER 9.1%",
-                explanation: self.id == "gigaam-v3-e2e-eou-v5"
-                    ? "Speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. Accuracy: the publisher's average word error rate for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings."
-                    : "CPU speed has not been benchmarked for this export. Accuracy: the publisher's average word error rate for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings."
-            )
+            performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
+            performanceExplanation: self.id == "gigaam-v3-e2e-eou-v5"
+                ? "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+                : "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
         )
     }
 }

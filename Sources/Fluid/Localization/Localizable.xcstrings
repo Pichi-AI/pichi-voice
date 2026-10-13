@@ -46362,23 +46362,6 @@
         }
       }
     },
-    "8.8× real time": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "8.8× real time"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "В 8,8 раза быстрее речи"
-          }
-        }
-      }
-    },
     "Apple Silicon / Intel CPU": {
       "extractionState": "manual",
       "localizations": {
@@ -46392,91 +46375,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "CPU Apple Silicon / Intel"
-          }
-        }
-      }
-    },
-    "Base WER 12.0%": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Base WER 12.0%"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "WER базы: 12,0%"
-          }
-        }
-      }
-    },
-    "Base WER 9.1%": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Base WER 9.1%"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "WER базы: 9,1%"
-          }
-        }
-      }
-    },
-    "CPU inference": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CPU inference"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Распознавание на CPU"
-          }
-        }
-      }
-    },
-    "CPU speed / base WER": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CPU speed / base WER"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скорость CPU / WER базовой модели"
-          }
-        }
-      }
-    },
-    "CPU speed has not been benchmarked for this export. Accuracy: the publisher's average word error rate for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CPU speed has not been benchmarked for this export. Accuracy: the publisher's average word error rate for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скорость на CPU для этого варианта не измерена. Точность: средняя доля ошибок в словах базовой GigaAM v3 CTC по десяти наборам данных из оценки разработчика. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался. Эти показатели отличаются от относительных оценок других моделей."
           }
         }
       }
@@ -46549,23 +46447,6 @@
         }
       }
     },
-    "Speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. Accuracy: the publisher's average word error rate for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. Accuracy: the publisher's average word error rate for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets. These measurements are separate from the other models' relative ratings."
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Скорость: 8,48 секунды синтетической русской речи обработаны за 0,97 секунды на CPU Apple M4 Max, без учёта загрузки модели. Точность: средняя доля ошибок в словах базовой GigaAM v3 E2E CTC по десяти наборам данных из оценки разработчика. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался. Эти показатели отличаются от относительных оценок других моделей."
-          }
-        }
-      }
-    },
     "~428.8 MiB": {
       "extractionState": "manual",
       "localizations": {
@@ -46596,6 +46477,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "~435,2 MiB"
+          }
+        }
+      }
+    },
+    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Замер скорости: 8,48 секунды синтетической русской речи обработаны за 0,97 секунды на CPU Apple M4 Max, без учёта загрузки модели. Разработчик сообщает среднюю долю ошибок в словах WER 12,0% для базовой GigaAM v3 E2E CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
+          }
+        }
+      }
+    },
+    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Скорость на CPU для этого варианта не измерена. Разработчик сообщает среднюю долю ошибок в словах WER 9,1% для базовой GigaAM v3 CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
           }
         }
       }

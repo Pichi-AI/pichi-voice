@@ -15,17 +15,22 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         XCTAssertTrue(metadata.features.contains("Punctuation"))
         XCTAssertTrue(metadata.features.contains("capitalization"))
         XCTAssertTrue(metadata.features.contains("normalization"))
-        XCTAssertTrue(metadata.performance.explanation.contains("excluding model loading"))
-        XCTAssertTrue(metadata.performance.explanation.contains("has not been evaluated"))
-        XCTAssertFalse(model.hasPerformanceRatings, "Published base WER is not a relative product score")
+        XCTAssertTrue(metadata.performanceExplanation.contains("excluding model loading"))
+        XCTAssertTrue(metadata.performanceExplanation.contains("has not been evaluated"))
+        XCTAssertTrue(model.hasPerformanceRatings)
+        XCTAssertEqual(model.speedPercent, metadata.performanceRatings.speedPercent)
+        XCTAssertEqual(model.accuracyPercent, metadata.performanceRatings.accuracyPercent)
+        XCTAssertEqual(model.speedRating, metadata.performanceRatings.speedRating)
+        XCTAssertEqual(model.accuracyRating, metadata.performanceRatings.accuracyRating)
+        XCTAssertTrue(metadata.performanceExplanation.contains("not measured transcription accuracy"))
 
         for descriptor in GigaAMModelCatalog.models.dropFirst() {
             let older = descriptor.libraryMetadata
             XCTAssertNotEqual(older.size, metadata.size)
             XCTAssertTrue(older.features.contains("does not add punctuation or capitalization"))
-            XCTAssertEqual(older.performance.speed, "CPU inference")
-            XCTAssertNotEqual(older.performance.accuracy, metadata.performance.accuracy)
-            XCTAssertTrue(older.performance.explanation.contains("has not been benchmarked"))
+            XCTAssertFalse(older.performanceExplanation.contains("8.48 seconds"))
+            XCTAssertTrue(older.performanceExplanation.contains("9.1%"))
+            XCTAssertTrue(older.performanceExplanation.contains("has not been benchmarked"))
         }
     }
 
@@ -111,7 +116,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         let model = SettingsStore.SpeechModel.gigaam
         XCTAssertFalse(model.isWhisperModel)
         XCTAssertFalse(model.requiresAppleSilicon)
-        XCTAssertFalse(model.hasPerformanceRatings)
+        XCTAssertTrue(model.hasPerformanceRatings)
         XCTAssertEqual(model.provider, .pichi)
         XCTAssertEqual(model.analyticsDescriptor.model, "gigaam-v3-eou")
         XCTAssertTrue(SettingsStore.SpeechModel.availableModels.contains(model))

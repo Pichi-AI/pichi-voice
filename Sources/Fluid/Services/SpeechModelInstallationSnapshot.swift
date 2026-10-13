@@ -4,20 +4,15 @@ import Foundation
 import FluidAudio
 #endif
 
-/// Descriptive measurements stay separate from the library's relative product ratings.
+/// Descriptive measurements explain the library's relative product ratings.
 /// A background installation scan can replace the default with the imported export's metadata.
 nonisolated struct SpeechModelLibraryMetadata: Equatable, Sendable {
-    struct Performance: Equatable, Sendable {
-        let speed: String
-        let accuracy: String
-        let explanation: String
-    }
-
     let size: String
     let processor: String
     let recommendedMemory: String
     let features: String
-    let performance: Performance
+    let performanceRatings: SpeechModelPerformanceRatings
+    let performanceExplanation: String
 }
 
 /// UI reads immutable IDs. Only an event-triggered worker inspects downloaded files.

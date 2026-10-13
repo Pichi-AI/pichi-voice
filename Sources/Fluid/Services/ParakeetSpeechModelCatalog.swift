@@ -1,6 +1,14 @@
 import CryptoKit
 import Foundation
 
+/// Relative product scores shared by speech model cards and sorting, not measured WER.
+nonisolated struct SpeechModelPerformanceRatings: Equatable, Sendable {
+    let speedRating: Int
+    let accuracyRating: Int
+    let speedPercent: Double
+    let accuracyPercent: Double
+}
+
 /// Immutable metadata shared by model selection, cache ownership and ASR routing.
 /// Resolving a descriptor performs no hardware, network or filesystem queries.
 nonisolated enum ParakeetSpeechModelCatalog {
@@ -8,12 +16,7 @@ nonisolated enum ParakeetSpeechModelCatalog {
         case v2, v3, mini, pico
     }
 
-    struct PerformanceRatings: Equatable, Sendable {
-        let speedRating: Int
-        let accuracyRating: Int
-        let speedPercent: Double
-        let accuracyPercent: Double
-    }
+    typealias PerformanceRatings = SpeechModelPerformanceRatings
 
     struct Descriptor: Equatable, Sendable {
         enum InstallationRevisionError: Error { case invalidChecksum }
