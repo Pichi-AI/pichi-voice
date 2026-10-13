@@ -2221,10 +2221,12 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Must complete before any code path that calls into `processing.process`, so both live
     /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads.
     private func tearDownLiveTranscription() async {
-        await self.livePrivacyPublication.stop()
-        guard let coordinator = self.liveTranscriptionCoordinator else { return }
+        // Close callback admission before suspension. A queued update must not
+        // start new privacy work while the canceled worker is being joined.
+        let coordinator = self.liveTranscriptionCoordinator
         self.liveTranscriptionCoordinator = nil
-        await coordinator.stop()
+        await self.livePrivacyPublication.stop()
+        await coordinator?.stop()
         self.liveTranscript = .empty
     }
 
