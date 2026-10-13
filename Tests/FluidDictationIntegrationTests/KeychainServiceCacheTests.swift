@@ -495,8 +495,8 @@ final class KeychainServiceCacheTests: XCTestCase {
         let cleanupEntered = self.expectation(description: "main cleanup entered before user intent")
         let finished = self.expectation(description: "user action joined cleanup")
         let expected = deleting ? ["other": "synthetic-keep"] : ["target": "synthetic-new", "other": "synthetic-keep"]
-        // Native test hosts isolate this helper to MainActor. Admission must
-        // begin off that actor before the synchronous read-start barrier below.
+        // Start independently of the caller; the native service can still hop
+        // to MainActor, which the XCTest expectation wait below keeps available.
         Task.detached {
             do {
                 let result = try await service.saveForUserAction(expected, replacing: baseline,
@@ -513,7 +513,12 @@ final class KeychainServiceCacheTests: XCTestCase {
             } catch { XCTFail("Unexpected error: \(error)") }
             finished.fulfill()
         }
-        XCTAssertEqual(state.readStarted.wait(timeout: .now() + 1), .success)
+        let readEntered = self.expectation(description: "explicit user IO entered blocked read")
+        DispatchQueue.global(qos: .userInitiated).async {
+            XCTAssertEqual(state.readStarted.wait(timeout: .now() + 1), .success)
+            readEntered.fulfill()
+        }
+        self.wait(for: [readEntered], timeout: 2)
         XCTAssertEqual(service.cachedKeys, baseline)
         XCTAssertFalse(service.loadInBackground(migrating: state.snapshot()) { _ in XCTFail("Stale activation must not be admitted behind explicit IO") })
         state.releaseRead.signal()
