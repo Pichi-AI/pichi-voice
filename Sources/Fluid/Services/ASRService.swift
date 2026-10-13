@@ -5725,6 +5725,16 @@ final class ASRService: ObservableObject {
             // retry. A parallel five-second route recovery would cancel that
             // retry while Core Audio is still draining the old call.
             self.audioRouteRecoveryGeneration &+= 1
+            self.pendingAudioRouteRecovery = nil
+            self.audioRouteRecoveryTask?.cancel()
+            if self.isRecoveringAudioRoute == false {
+                // A sleeping request returns before the recovery defer. Retire
+                // it here so startup cannot keep joining a completed stale task.
+                self.audioRouteRecoveryTask = nil
+            }
+            // A retry reads a fresh device snapshot after hardware retirement.
+            // An active cancelled recovery still owns its defer and is joined
+            // by prepareAudioCaptureStartRetry before the new attempt starts.
             DebugLogger.shared.warning(
                 "Abnormal microphone startup stop deferred to the current capture retry",
                 source: "ASRService"

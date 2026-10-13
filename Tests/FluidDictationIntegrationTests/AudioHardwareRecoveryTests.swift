@@ -1251,6 +1251,27 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testAbnormalStartupRetiresAnAlreadyScheduledRouteRecovery() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.35) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            let starting = Task { await fixture.service.start(forDictionaryTraining: true, requiresPronunciation: false) }
+            try await fixture.waitForBuiltInStartCount(1)
+            fixture.service.triggerAudioRouteRecoveryForTesting()
+            XCTAssertTrue(fixture.service.audioRouteRecoveryStateForTesting.pending)
+            fixture.controller.simulateAbnormalStopNotificationForTesting(generation: fixture.controller.snapshot.generation)
+            let outcome = await starting.value
+            XCTAssertEqual(outcome, .started)
+            XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.pending)
+            XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.recovering)
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 100), 2)
+            XCTAssertFalse(fixture.service.showError)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
+        }
+    }
+
+    @MainActor
     func testCancelWhileAbnormalStartupDrainsNeverStartsReplacement() async throws {
         try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.65) { fixture in
             await fixture.service.stopWithoutTranscription()
