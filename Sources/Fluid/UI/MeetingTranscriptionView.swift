@@ -561,7 +561,7 @@ struct MeetingTranscriptionView: View {
         let requiresAppleSilicon = self.settings.selectedSpeechModel.requiresAppleSilicon
         let (ready, speakerReady) = await Task.detached(priority: .utility) {
             let speakerReady = CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
-            let providerReady = registered ? (PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) ?? false) : speakerReady
+            let providerReady = registered ? (await PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) ?? false) : speakerReady
             return (providerReady && (!requiresAppleSilicon || CPUArchitecture.isAppleSilicon), speakerReady)
         }.value
         // An older check must not overwrite an import completion's newer result.
