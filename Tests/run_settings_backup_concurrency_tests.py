@@ -3,7 +3,8 @@
 
 No production defaults, disk stores, UI, hardware, or network are used.
 --ref REF --expect-overlap-gap reproduces a historical overlapping snapshot gap.
-Normal execution needs only the current source, including its single-flight gate.
+Normal execution checks the current gate and credential serialization boundaries.
+--ref selects BackupService and SettingsStore source from the same revision.
 """
 
 import argparse
@@ -23,6 +24,212 @@ def declaration(source: str, marker: str) -> str:
     return source[start:end]
 
 
+def credential_probe(source: str, settings_source: str) -> str:
+    """Compile production serialization/redaction with inert unrelated value types."""
+    payload = declaration(source, "struct SettingsBackupPayload:")
+    redaction = declaration(payload, "    nonisolated func redactingProviderCredentials()")
+    saved_provider = declaration(settings_source, "    struct SavedProvider:")
+    settings_export = declaration(settings_source, "    func makeBackupPayload()")
+    export_lines = [line.strip() for line in settings_export.splitlines() if line.strip().startswith("savedProviders:")]
+    assert len(export_lines) == 1, "Ambiguous saved-provider backup boundary"
+    export_argument = export_lines[0].split(":", 1)[1].strip().removesuffix(",")
+    members = "\n".join(declaration(source, marker) for marker in (
+        "    func encode(_ document: AppBackupDocument)",
+        "    func decode(_ data: Data)",
+        "    private func validate(_ document: AppBackupDocument)",
+        "    private static func dataByMigratingLegacyPrivateAIKeys(",
+    ))
+    swift = r'''
+import Foundation
+// Display preferences remain inert, matching the concurrency probe below.
+nonisolated final class UserDefaults: @unchecked Sendable {
+    static let standard = UserDefaults()
+    func string(forKey key: String) -> String? { nil }
+    func set(_ value: Any?, forKey key: String) { fatalError("Unexpected preference write") }
+}
+SCHEMA
+ERRORS
+struct SettingsBackupPayload: Codable, Equatable {
+    var savedProviders: [SettingsStore.SavedProvider]
+    var selectedProviderID = "custom:fixture"
+    var selectedModelByProvider = ["custom:fixture": "модель-ёж"]
+    var privateAIPrefixKVCacheEnabled: Bool? = nil
+    var visualizerNoiseThreshold = 0.15
+    PAYLOAD_REDACTION
+}
+// Only persistence dependencies and unrelated nested value types are replaced.
+// SavedProvider, document, redaction and encode/decode bodies are actual source.
+final class MemoryPreferences {
+    private var values: [String: Data]
+    private(set) var writes = 0
+    init(providerBytes: Data) { values = ["SavedProviders": providerBytes] }
+    func data(forKey key: String) -> Data? { values[key] }
+    func set(_ value: Data, forKey key: String) { writes += 1; values[key] = value }
+}
+enum SyntheticMigrationError: Error { case blockedKeychain }
+final class FailingKeychain {
+    private(set) var attempts = 0
+    func storeKey(_ value: String, for key: String) throws {
+        attempts += 1
+        throw SyntheticMigrationError.blockedKeychain
+    }
+}
+final class ChangeCounter { func send() {} }
+final class DebugLogger {
+    static let shared = DebugLogger()
+    func error(_ message: String, source: String) {}
+}
+final class SettingsStore {
+    SAVED_PROVIDER
+    typealias DictationPromptProfile = String
+    typealias AppPromptBinding = String
+    enum Keys { static let savedProviders = "SavedProviders" }
+    private let defaults: MemoryPreferences
+    private let keychain = FailingKeychain()
+    private let objectWillChange = ChangeCounter()
+    init(savedProviders: [SavedProvider]) {
+        defaults = MemoryPreferences(providerBytes: try! JSONEncoder().encode(savedProviders))
+    }
+    SAVED_PROVIDERS_ACCESSOR
+    FAILED_MIGRATION
+    private func canonicalProviderKey(for providerID: String) -> String { providerID }
+    func exerciseFailedMigration() { self.scrubSavedProviderAPIKeys() }
+    var sourceBytes: Data { defaults.data(forKey: Keys.savedProviders)! }
+    var preferenceWrites: Int { defaults.writes }
+    var keychainAttempts: Int { keychain.attempts }
+    func makeBackupPayload() -> SettingsBackupPayload {
+        .init(savedProviders: SETTINGS_EXPORT_ARGUMENT)
+    }
+}
+typealias TranscriptionHistoryEntry = String
+typealias PronunciationDictionaryProfile = String
+DOCUMENT
+@MainActor final class BackupService {
+MEMBERS
+}
+@MainActor var assertions = 0
+@MainActor func expect(_ condition: Bool, _ message: String) {
+    assertions += 1
+    if !condition { fatalError("FAIL: " + message) }
+}
+@MainActor func expectMetadata(_ original: AppBackupDocument, _ redacted: AppBackupDocument) {
+    expect(redacted.schemaVersion == original.schemaVersion, "schema version preserved")
+    expect(redacted.appVersion == original.appVersion && redacted.exportedAt == original.exportedAt, "app version and ISO timestamp preserved")
+    expect(redacted.settings.selectedProviderID == original.settings.selectedProviderID
+        && redacted.settings.selectedModelByProvider == original.settings.selectedModelByProvider
+        && redacted.settings.privateAIPrefixKVCacheEnabled == original.settings.privateAIPrefixKVCacheEnabled
+        && redacted.settings.visualizerNoiseThreshold == original.settings.visualizerNoiseThreshold, "unrelated settings preserved")
+    expect(redacted.promptProfiles == original.promptProfiles && redacted.appPromptBindings == original.appPromptBindings, "prompt profiles and bindings preserved")
+    expect(redacted.transcriptionHistory == original.transcriptionHistory && redacted.pronunciationProfiles == original.pronunciationProfiles, "history and pronunciation payload preserved")
+    expect(redacted.settings.savedProviders.count == original.settings.savedProviders.count, "provider order and count preserved")
+    for (before, after) in zip(original.settings.savedProviders, redacted.settings.savedProviders) {
+        expect(after.apiKey.isEmpty, "every saved-provider key redacted")
+        expect(after.id == before.id && after.name == before.name
+            && after.baseURL == before.baseURL && after.models == before.models, "provider metadata preserved exactly")
+    }
+}
+@main struct Run {
+    @MainActor static func main() throws {
+        let providers = [
+            SettingsStore.SavedProvider(id: "custom:fixture", name: "Ёж и café", baseURL: "https://fixture.invalid/v1", apiKey: "synthetic-key-leak-marker", models: ["модель-ёж", "model-42"]),
+            SettingsStore.SavedProvider(id: "empty-key", name: "Empty", baseURL: "http://127.0.0.1:11434/v1", models: []),
+            SettingsStore.SavedProvider(id: "custom:русский", name: "Синтетический провайдер", baseURL: "https://another.invalid/api", apiKey: "синтетический-ключ-ёж", models: ["custom-model"]),
+        ]
+        let original = AppBackupDocument(schemaVersion: .init(major: 1, minor: 7), appVersion: "fixture-1.2.3",
+            exportedAt: Date(timeIntervalSince1970: 1_700_000_000), settings: .init(savedProviders: providers),
+            promptProfiles: ["Keep user prompt: ёж"], appPromptBindings: ["fixture.app"],
+            transcriptionHistory: ["User transcript: Do not translate 42"], pronunciationProfiles: ["synthetic voice metadata"])
+        let service = BackupService()
+        let sanitizedProvider = providers[0].redactingAPIKey()
+        expect(sanitizedProvider.apiKey.isEmpty && providers[0].apiKey == "synthetic-key-leak-marker", "provider helper redacts a copy")
+        let snapshot = original.redactingProviderCredentials()
+        expectMetadata(original, snapshot)
+        expect(snapshot.redactingProviderCredentials() == snapshot, "redaction is idempotent")
+        let exported = try service.encode(original)
+        expect(!String(decoding: exported, as: UTF8.self).contains("synthetic-key-leak-marker")
+            && !String(decoding: exported, as: UTF8.self).contains("синтетический-ключ-ёж"), "export bytes contain no synthetic credentials")
+        let exportedJSON = try JSONSerialization.jsonObject(with: exported) as! [String: Any]
+        let exportedSettings = exportedJSON["settings"] as! [String: Any]
+        let exportedProviders = exportedSettings["savedProviders"] as! [[String: Any]]
+        expect(exportedProviders.allSatisfy { ($0["apiKey"] as? String) == "" }, "JSON retains compatible empty apiKey fields")
+        let decoded = try service.decode(exported)
+        expectMetadata(original, decoded)
+        expect(decoded == snapshot, "real production encode/decode roundtrip matches sanitized snapshot")
+        expect(original.settings.savedProviders == providers && providers[2].apiKey == "синтетический-ключ-ёж", "serialization leaves caller's original credentials unchanged")
+        let legacyStore = SettingsStore(savedProviders: providers)
+        let preferenceBytes = legacyStore.sourceBytes
+        legacyStore.exerciseFailedMigration()
+        expect(legacyStore.keychainAttempts == 2 && legacyStore.preferenceWrites == 0, "actual scrub with failing Keychain never rewrites in-memory legacy preferences")
+        expect(legacyStore.savedProviders == providers && legacyStore.sourceBytes == preferenceBytes, "actual savedProviders getter retains legacy keys after failed migration")
+        let settingsSnapshot = legacyStore.makeBackupPayload()
+        expect(settingsSnapshot.savedProviders == snapshot.settings.savedProviders, "actual settings-export argument redacts saved providers before document construction")
+        expect(legacyStore.sourceBytes == preferenceBytes && legacyStore.savedProviders == providers,
+            "settings export does not mutate legacy preference bytes or provider values")
+
+        // Encode a legacy fixture independently so production encode cannot
+        // sanitize the input before the production decode boundary is tested.
+        let fixtureEncoder = JSONEncoder()
+        fixtureEncoder.dateEncodingStrategy = .iso8601
+        let legacyBytes = try fixtureEncoder.encode(original)
+        let pristineBytes = legacyBytes
+        expect(String(decoding: legacyBytes, as: UTF8.self).contains("synthetic-key-leak-marker"), "legacy fixture actually contains a credential")
+        let legacyDecoded = try service.decode(legacyBytes)
+        expectMetadata(original, legacyDecoded)
+        expect(legacyDecoded == snapshot && legacyBytes == pristineBytes, "legacy decode sanitizes its value without mutating input bytes")
+        let legacyReencoded = try service.encode(legacyDecoded)
+        expect(!String(decoding: legacyReencoded, as: UTF8.self).contains("synthetic-key-leak-marker"), "legacy decode/reencode never republishes the key")
+
+        var root = try JSONSerialization.jsonObject(with: legacyBytes) as! [String: Any]
+        var settings = root["settings"] as! [String: Any]
+        let legacyCacheKey = ["fluid", "Int", "elligence", "PrefixKVCacheEnabled"].joined()
+        settings.removeValue(forKey: "privateAIPrefixKVCacheEnabled")
+        settings[legacyCacheKey] = false
+        root["settings"] = settings
+        let migrated = try service.decode(JSONSerialization.data(withJSONObject: root))
+        expect(migrated.settings.privateAIPrefixKVCacheEnabled == false, "legacy cache-field migration remains effective alongside credential redaction")
+        expect(migrated.settings.savedProviders == snapshot.settings.savedProviders, "migrated legacy decode redacts credentials")
+        settings["privateAIPrefixKVCacheEnabled"] = true
+        root["settings"] = settings
+        let modernWins = try service.decode(JSONSerialization.data(withJSONObject: root))
+        expect(modernWins.settings.privateAIPrefixKVCacheEnabled == true, "current cache field takes precedence over a legacy field")
+
+        // Actual encoder failures return no partial Data and retain source state.
+        var invalidSettings = original.settings
+        invalidSettings.visualizerNoiseThreshold = .nan
+        let invalid = AppBackupDocument(schemaVersion: original.schemaVersion, appVersion: original.appVersion,
+            exportedAt: original.exportedAt, settings: invalidSettings, promptProfiles: original.promptProfiles,
+            appPromptBindings: original.appPromptBindings, transcriptionHistory: original.transcriptionHistory,
+            pronunciationProfiles: original.pronunciationProfiles)
+        var partial: Data?
+        do { partial = try service.encode(invalid); fatalError("Expected nonfinite JSON encode failure") }
+        catch EncodingError.invalidValue { }
+        expect(partial == nil && invalid.settings.savedProviders == providers, "encode failure publishes no bytes and leaves source state unchanged")
+        do { _ = try service.decode(Data("{}".utf8)); fatalError("Expected invalid JSON document rejection") }
+        catch BackupServiceError.invalidJSON { }
+        root["schemaVersion"] = ["major": 99, "minor": 0]
+        do { _ = try service.decode(JSONSerialization.data(withJSONObject: root)); fatalError("Expected unsupported-schema rejection") }
+        catch BackupServiceError.unsupportedSchemaVersion(let version) { expect(version.major == 99, "schema rejection retains error classification") }
+        expect(original.settings.savedProviders == providers, "all success and failure paths leave original providers unchanged")
+        print("PASS: \(assertions) production serialization/redaction assertions; synthetic data only, no defaults/Keychain/store I/O")
+    }
+}
+'''
+    substitutions = {
+        "SCHEMA": declaration(source, "struct BackupFileVersion:"),
+        "ERRORS": declaration(source, "enum BackupServiceError:"),
+        "PAYLOAD_REDACTION": redaction,
+        "SAVED_PROVIDER": saved_provider,
+        "SAVED_PROVIDERS_ACCESSOR": declaration(settings_source, "    var savedProviders:"),
+        "FAILED_MIGRATION": declaration(settings_source, "    private func scrubSavedProviderAPIKeys()"),
+        "SETTINGS_EXPORT_ARGUMENT": export_argument,
+        "DOCUMENT": declaration(source, "struct AppBackupDocument:"),
+        "MEMBERS": members,
+    }
+    for marker in sorted(substitutions, key=len, reverse=True):
+        swift = swift.replace(marker, substitutions[marker])
+    return swift
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref")
@@ -40,6 +247,11 @@ def main() -> None:
     source = (
         subprocess.check_output(["git", "show", f"{args.ref}:{source_path}"], cwd=repo, text=True, timeout=10)
         if args.ref else (repo / source_path).read_text()
+    )
+    settings_path = "Sources/Fluid/Persistence/SettingsStore.swift"
+    settings_source = (
+        subprocess.check_output(["git", "show", f"{args.ref}:{settings_path}"], cwd=repo, text=True, timeout=10)
+        if args.ref else (repo / settings_path).read_text()
     )
     members = "\n".join(declaration(source, marker) for marker in (
         "    func makeBackupDocument() async throws -> AppBackupDocument",
@@ -555,21 +767,31 @@ func awaitGate(_ gate: Gate) async {
         print("LIMIT: ordinary dictionary/settings edits remain outside backup-operation admission")
         print("PASS: \(assertions) production-method concurrency assertions")
 ''')
-    with tempfile.TemporaryDirectory(prefix="fluidvoice-backup-concurrency-") as directory:
+    build_root = repo / ".build/settings-backup-tests"
+    build_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="probe-", dir=build_root) as directory:
         swift_path = Path(directory) / "Probe.swift"
         binary = Path(directory) / "probe"
         swift_path.write_text(swift)
         package_source = (repo / "Sources/Fluid/Branding/BrandPackage.swift").read_text()
         package_path = Path(directory) / "BrandPackageMetadata.swift"
         package_path.write_text(package_source[:package_source.index("nonisolated final class BrandPackageStore:")])
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library",
+        compile_prefix = ["xcrun", "swiftc", "-parse-as-library", "-module-cache-path", str(build_root / "ModuleCache"),
                         str(repo / "Sources/Fluid/Localization/PichiLocalization.swift"),
                         str(repo / "Sources/Fluid/Branding/AppBrand.swift"),
                         str(repo / "Sources/Fluid/Branding/BrandDistribution.swift"),
                         str(repo / "Tests/Support/StandaloneBrandPackageStore.swift"),
-                        str(package_path), str(swift_path), "-o", str(binary)],
+                        str(package_path)]
+        subprocess.run(compile_prefix + [str(swift_path), "-o", str(binary)],
                        cwd=repo, env=environment, check=True, timeout=60)
         subprocess.run([str(binary)], env=environment, check=True, timeout=20)
+        if not args.expect_overlap_gap and not args.expect_active_work_gap:
+            credentials_path = Path(directory) / "Credentials.swift"
+            credentials_binary = Path(directory) / "credentials"
+            credentials_path.write_text(credential_probe(source, settings_source))
+            subprocess.run(compile_prefix + [str(credentials_path), "-o", str(credentials_binary)],
+                           cwd=repo, env=environment, check=True, timeout=60)
+            subprocess.run([str(credentials_binary)], env=environment, check=True, timeout=20)
 
 
 if __name__ == "__main__":
