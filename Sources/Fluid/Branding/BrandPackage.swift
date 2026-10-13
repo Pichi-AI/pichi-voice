@@ -112,8 +112,9 @@ nonisolated struct BrandPalette: Codable, Equatable, Sendable {
             throw BrandProfile.ValidationError.invalid("Theme must define every supported color token.")
         }
         for value in self.colors.values { try BrandProfile.validateColor(value) }
+        let backgrounds = ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"]
         // Validate readable text across the actual surfaces used by the shared theme.
-        for background in ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"] {
+        for background in backgrounds {
             let surface = self.colors[background]!
             guard Self.contrast(self.colors["primaryText"]!, surface) >= 4.5,
                   ["secondaryText", "tertiaryText", "warning", "success"].allSatisfy({
@@ -122,6 +123,18 @@ nonisolated struct BrandPalette: Codable, Equatable, Sendable {
                 // Accent and status colors are also used as text and standalone icons,
                 // not only as button fills. Checking the paired button label alone
                 // would accept a white accent that disappears on a light surface.
+                throw BrandProfile.ValidationError.invalid("Theme text needs more contrast against its backgrounds.")
+            }
+        }
+        // Opaque contrast alone admits mid-gray ink on both black and white.
+        // Translucent layers can blend those surfaces into the ink's luminance.
+        // Each shared foreground therefore needs one polarity across all surfaces.
+        let backgroundLuminances = backgrounds.map { Self.luminance(self.colors[$0]!) }
+        let darkest = backgroundLuminances.min()!
+        let lightest = backgroundLuminances.max()!
+        for foreground in ["primaryText", "secondaryText", "tertiaryText", "warning", "success"].map({ self.colors[$0]! }) + [accent] {
+            let luminance = Self.luminance(foreground)
+            guard luminance < darkest || luminance > lightest else {
                 throw BrandProfile.ValidationError.invalid("Theme text needs more contrast against its backgrounds.")
             }
         }

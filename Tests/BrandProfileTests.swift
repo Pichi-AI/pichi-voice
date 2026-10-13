@@ -100,6 +100,10 @@ struct BrandProfileTests {
         // fail atomically, even though its dark button label is readable.
         let unsafeAccent = try self.invisibleAccentPackage(packaged, appearance: "light", background: "cardBackground")
         self.reject { _ = try store.importData(unsafeAccent) }
+        for appearance in ["light", "dark"] {
+            let unsafePolarity = try self.oppositePolarityPackage(packaged, appearance: appearance)
+            self.reject { _ = try store.importData(unsafePolarity) }
+        }
         precondition(store.current() == sizeable && store.revision == previousRevision)
         try self.require(try Data(contentsOf: active) == previousFile)
         try self.require(try BrandPackage.decode(store.exportData()) == sizeable)
@@ -185,6 +189,22 @@ struct BrandProfileTests {
         return try JSONSerialization.data(withJSONObject: object)
     }
 
+    static func oppositePolarityPackage(_ packaged: BrandPackage, appearance: String) throws -> Data {
+        var object = try JSONSerialization.jsonObject(with: packaged.encoded()) as! [String: Any]
+        var profile = object["profile"] as! [String: Any]
+        var theme = object["theme"] as! [String: Any]
+        var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, "#767676") })
+        for (index, background) in ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"].enumerated() {
+            colors[background] = index.isMultiple(of: 2) ? "#000000" : "#FFFFFF"
+        }
+        colors["accentForeground"] = "#FFFFFF"
+        profile[appearance == "light" ? "accentLight" : "accentDark"] = "#767676"
+        theme[appearance] = ["colors": colors]
+        object["profile"] = profile
+        object["theme"] = theme
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
     static func verifyPaletteForegroundContrast(_ packaged: BrandPackage) throws {
         let backgrounds = ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"]
         for (appearance, palette) in [("light", packaged.theme!.light), ("dark", packaged.theme!.dark)] {
@@ -216,6 +236,24 @@ struct BrandProfileTests {
                 }
             }
         }
+        for appearance in ["light", "dark"] {
+            let data = try self.oppositePolarityPackage(packaged, appearance: appearance)
+            // Decode without validation only to establish the adversarial fixture:
+            // every opaque pairing meets the old thresholds, including button ink.
+            let unsafe = try JSONDecoder().decode(BrandPackage.self, from: data)
+            let palette = appearance == "light" ? unsafe.theme!.light : unsafe.theme!.dark
+            for token in ["primaryText", "secondaryText", "tertiaryText", "warning", "success"] {
+                for background in backgrounds {
+                    precondition(BrandPalette.contrast(palette.colors[token]!, palette.colors[background]!) >= 4.5)
+                }
+            }
+            precondition(BrandPalette.contrast(palette.colors["accentForeground"]!, "#767676") >= 4.5)
+            for background in backgrounds {
+                precondition(BrandPalette.contrast("#767676", palette.colors[background]!) >= 3)
+            }
+            // A black/white mixture can equal #767676 and erase all those roles.
+            self.reject { _ = try BrandPackage.decode(data) }
+        }
         // The new standalone-accent rule must still permit readable portable
         // themes. Shipped and both bank packages are decoded earlier in main.
         for (background, foreground, accent) in [("#FFFFFF", "#000000", "#0000FF"), ("#000000", "#FFFFFF", "#00FFFF")] {
@@ -224,7 +262,7 @@ struct BrandProfileTests {
             colors["accentForeground"] = background
             try BrandPalette(colors: colors).validate(accent: accent)
         }
-        print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections and 2 readable palette checks passed")
+        print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections, 2 opposite-polarity rejections and 2 readable palette checks passed")
     }
 
     static func verifyDiagnosticLogIsolation() throws {
