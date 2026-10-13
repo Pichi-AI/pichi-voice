@@ -60,6 +60,12 @@ def main() -> None:
     asr_restore = declaration(asr_source, "    func handleSettingsBackupDidRestore()")
     swift = r'''
 import Foundation
+// Keep production display metadata, with only preferences/package storage isolated.
+nonisolated final class UserDefaults: @unchecked Sendable {
+    static let standard = UserDefaults()
+    func string(forKey key: String) -> String? { nil }
+    func set(_ value: Any?, forKey key: String) { fatalError("Unexpected preference write") }
+}
 SCHEMA
 ERRORS
 struct Payload: Codable {
@@ -553,7 +559,15 @@ func awaitGate(_ gate: Gate) async {
         swift_path = Path(directory) / "Probe.swift"
         binary = Path(directory) / "probe"
         swift_path.write_text(swift)
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", str(swift_path), "-o", str(binary)],
+        package_source = (repo / "Sources/Fluid/Branding/BrandPackage.swift").read_text()
+        package_path = Path(directory) / "BrandPackageMetadata.swift"
+        package_path.write_text(package_source[:package_source.index("nonisolated final class BrandPackageStore:")])
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library",
+                        str(repo / "Sources/Fluid/Localization/PichiLocalization.swift"),
+                        str(repo / "Sources/Fluid/Branding/AppBrand.swift"),
+                        str(repo / "Sources/Fluid/Branding/BrandDistribution.swift"),
+                        str(repo / "Tests/Support/StandaloneBrandPackageStore.swift"),
+                        str(package_path), str(swift_path), "-o", str(binary)],
                        cwd=repo, env=environment, check=True, timeout=60)
         subprocess.run([str(binary)], env=environment, check=True, timeout=20)
 
