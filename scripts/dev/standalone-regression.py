@@ -126,7 +126,10 @@ def run_owned_process(command, root, stream, protect_creation):
         return code, None
     except BaseException as error:
         if process is not None:
-            stop_process_group(process)
+            try:
+                stop_process_group(process)
+            except (OSError, subprocess.SubprocessError) as cleanup_error:
+                error.cleanup_error = str(cleanup_error)
             error.child_exit_code = process.returncode
         raise
     finally:
@@ -154,7 +157,7 @@ class Probe:
 SHELL_PROBES = (
     "analytics_config", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
-    "command_model_catalog", "command_session_boundary", "command_workspace_presentation",
+    "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
     "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_export",
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
@@ -301,6 +304,8 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
                             interrupt_code = interruption_status(error)
                             row.update(status="FAIL", exitCode=getattr(error, "child_exit_code", None),
                                        runnerExitCode=interrupt_code, reason="interrupted")
+                            if hasattr(error, "cleanup_error"):
+                                row["cleanupError"] = error.cleanup_error
                             interrupted = True
                     row["durationSeconds"] = round(time.monotonic() - start, 3)
                 print(f"{row['status']} {probe.name}", flush=True)

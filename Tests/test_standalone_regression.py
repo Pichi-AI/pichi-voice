@@ -52,11 +52,11 @@ class StandaloneRunnerTests(unittest.TestCase):
 
     def test_current_registry_covers_every_standalone_and_only_update_prompt_opts_in(self):
         RUNNER.validate_registry(ROOT)
-        self.assertEqual(len(RUNNER.PROBES), 37)
-        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 33)
+        self.assertEqual(len(RUNNER.PROBES), 38)
+        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 34)
         self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 4)
         self.assertEqual([probe.name for probe in RUNNER.PROBES if probe.requires_ui], ["update_prompt"])
-        self.assertTrue({"file_export", "ui_contrast", "file_transcript_relative_date", "clipboard_backup_reproduction"}
+        self.assertTrue({"file_export", "ui_contrast", "file_transcript_relative_date", "command_ui_localization", "clipboard_backup_reproduction"}
                         .issubset({probe.name for probe in RUNNER.PROBES}))
 
     def test_failure_is_counted_and_later_probes_still_run(self):
@@ -234,6 +234,21 @@ class StandaloneRunnerTests(unittest.TestCase):
         status, _, directory = self.run_probes([probe])
         self.assertEqual(status, 0)
         self.assertEqual(json.loads((directory / "mask.log").read_text()), expected)
+
+    def test_incomplete_term_cleanup_retains_143_and_reserves_the_worktree(self):
+        class Process:
+            pid = 123456
+            returncode = None
+            def wait(self):
+                raise RUNNER.RunTermination(signal.SIGTERM)
+        with patch.object(RUNNER.subprocess, "Popen", return_value=Process()), \
+             patch.object(RUNNER, "stop_process_group", side_effect=OSError("synthetic cleanup failure")), \
+             patch.object(RUNNER, "live_process_group", return_value=True):
+            status, report, _ = self.run_probes([self.probe("first"), self.probe("later")])
+        self.assertEqual(status, 143)
+        self.assertEqual(report["results"][0]["cleanupError"], "synthetic cleanup failure")
+        self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
+        self.assertTrue((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
 
     def test_background_descendant_is_not_a_success_or_left_running(self):
         probe = self.worker_probe(wait=False)
