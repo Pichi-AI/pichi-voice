@@ -27,17 +27,6 @@ final class SettingsStore: ObservableObject {
     }
 
     #if os(macOS)
-    enum UpdateKeys {
-        static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
-        static let showUpdatePopups = "ShowUpdatePopups"
-        static let popupPreferenceRevision = "UpdatePopupPreferenceRevision"
-        static let betaReleasesEnabled = "BetaReleasesEnabled"
-        static let channelPreferenceRevision = "UpdateChannelPreferenceRevision"
-        static let lastUpdateCheckDate = "LastUpdateCheckDate"
-        static let updatePromptSnoozedUntil = "UpdatePromptSnoozedUntil"
-        static let snoozedUpdateVersion = "SnoozedUpdateVersion"
-    }
-
     static let microphonePriorityMigrationVersion = 4
 
     static let transcriptionPreviewCharLimitRange: ClosedRange<Int> = 50...800
@@ -2765,21 +2754,6 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    var onboardingSelectedLanguageID: String {
-        get { Self.onboardingLanguagePreference(in: self.defaults, defaultLanguageID: VoiceEngineLanguageCatalog.defaultOnboardingLanguageID) }
-        set {
-            objectWillChange.send()
-            let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if normalized.isEmpty { self.defaults.removeObject(forKey: Keys.onboardingSelectedLanguageID) }
-            else { self.defaults.set(normalized, forKey: Keys.onboardingSelectedLanguageID) }
-        }
-    }
-
-    /// Read an explicit choice before applying the distribution's first-run default.
-    static func onboardingLanguagePreference(in defaults: UserDefaults, defaultLanguageID: String) -> String {
-        let stored = defaults.string(forKey: Keys.onboardingSelectedLanguageID)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return stored.flatMap { $0.isEmpty ? nil : $0 } ?? defaultLanguageID
-    }
 
     var selectedAppleSpeechLocale: Locale {
         Locale(identifier: self.selectedAppleSpeechLocaleIdentifier)

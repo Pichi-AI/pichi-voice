@@ -7,6 +7,34 @@ import AppKit
 
 // The same defaults keys and Codable records are used by desktop and mobile targets.
 extension SettingsStore {
+    enum UpdateKeys {
+        static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
+        static let showUpdatePopups = "ShowUpdatePopups"
+        static let popupPreferenceRevision = "UpdatePopupPreferenceRevision"
+        static let betaReleasesEnabled = "BetaReleasesEnabled"
+        static let channelPreferenceRevision = "UpdateChannelPreferenceRevision"
+        static let lastUpdateCheckDate = "LastUpdateCheckDate"
+        static let updatePromptSnoozedUntil = "UpdatePromptSnoozedUntil"
+        static let snoozedUpdateVersion = "SnoozedUpdateVersion"
+    }
+
+    var onboardingSelectedLanguageID: String {
+        get { Self.onboardingLanguagePreference(in: self.defaults, defaultLanguageID: VoiceEngineLanguageCatalog.defaultOnboardingLanguageID) }
+        set {
+            objectWillChange.send()
+            let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalized.isEmpty { self.defaults.removeObject(forKey: Keys.onboardingSelectedLanguageID) }
+            else { self.defaults.set(normalized, forKey: Keys.onboardingSelectedLanguageID) }
+        }
+    }
+
+    /// Read an explicit choice before applying the distribution's first-run default.
+    static func onboardingLanguagePreference(in defaults: UserDefaults, defaultLanguageID: String) -> String {
+        let stored = defaults.string(forKey: Keys.onboardingSelectedLanguageID)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return stored.flatMap { $0.isEmpty ? nil : $0 } ?? defaultLanguageID
+    }
+
+
     var vocabularyBoostingEnabled: Bool {
         get {
             let value = self.defaults.object(forKey: Keys.vocabularyBoostingEnabled)
