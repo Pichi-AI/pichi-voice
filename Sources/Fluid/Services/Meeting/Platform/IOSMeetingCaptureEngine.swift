@@ -23,6 +23,7 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     private var starting = false
     private var terminating = false
     private var stopTask: Task<MeetingCaptureStopResult, Error>?
+    private var startTask: Task<MeetingCaptureStartResult, Error>?
 
     init(memoryConsumerFactory: MemoryConsumerFactory? = nil) {
         self.memoryConsumerFactory = memoryConsumerFactory
@@ -48,6 +49,25 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = nil
     ) async throws -> MeetingCaptureStartResult {
+        guard !self.terminating else { throw CancellationError() }
+        guard self.startTask == nil else { throw MeetingCaptureError.captureAlreadyActive }
+        let operation = Task {
+            try await self.performStart(session: session, configuration: configuration,
+                sessionDirectory: sessionDirectory, eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+        }
+        self.startTask = operation
+        defer { self.startTask = nil }
+        return try await withTaskCancellationHandler { try await operation.value } onCancel: { operation.cancel() }
+    }
+
+    private func performStart(
+        session: MeetingSession,
+        configuration: MeetingCaptureConfiguration,
+        sessionDirectory: URL,
+        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    ) async throws -> MeetingCaptureStartResult {
+        try Task.checkCancellation()
         try configuration.validate()
         guard !self.terminating else { throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("The app is shutting down.")) }
         guard self.active == nil, !self.starting, self.stopTask == nil else { throw MeetingCaptureError.captureAlreadyActive }
@@ -89,6 +109,8 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
                                                      writer: writer, memoryConsumer: memoryConsumer,
                                                      eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
         do {
+            try Task.checkCancellation()
+            guard !self.terminating else { throw CancellationError() }
             try await runtime.start()
             try Task.checkCancellation()
             guard !self.terminating else { throw CancellationError() }
@@ -136,6 +158,9 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
 
     func shutdownForTermination() async {
         self.terminating = true
+        let starting = self.startTask
+        starting?.cancel()
+        _ = await starting?.result
         if let active { _ = try? await self.stop(sessionID: active.sessionID) }
     }
 

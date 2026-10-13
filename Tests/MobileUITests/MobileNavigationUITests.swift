@@ -115,7 +115,7 @@ final class MobileNavigationUITests: XCTestCase {
     }
 
     private func capture(_ step: String) {
-        let attachment = XCTAttachment(screenshot: XCUIDevice.shared.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "working-tree"
         attachment.name = "\(name)-\(step)-\(revision)"
         attachment.lifetime = .keepAlways
