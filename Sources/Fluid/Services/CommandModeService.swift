@@ -699,9 +699,9 @@ final class CommandModeService: ObservableObject {
 
     private func stepDescription(for stepType: Message.StepType) -> String {
         switch stepType {
-        case .checking: return "Checking prerequisites..."
-        case .verifying: return "Verifying the result..."
-        case .executing: return "Executing command..."
+        case .checking: return PichiLocalization.text("Checking prerequisites...")
+        case .verifying: return PichiLocalization.text("Verifying the result...")
+        case .executing: return PichiLocalization.text("Executing command...")
         default: return ""
         }
     }

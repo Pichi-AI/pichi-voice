@@ -25,6 +25,7 @@ final class UserDefaults {
     static var executed: [String] = []
     static var delay = false
     static var pending: CheckedContinuation<CommandResult, Never>?
+    static var output = "fake output"
     func execute(command: String, workingDirectory: String?) async -> CommandResult {
         Self.executed.append(command)
         if Self.delay {
@@ -34,7 +35,7 @@ final class UserDefaults {
     }
 
     static func result(_ command: String) -> CommandResult {
-        .init(success: true, command: command, output: "fake output", error: nil, exitCode: 0, executionTimeMs: 1)
+        .init(success: true, command: command, output: Self.output, error: nil, exitCode: 0, executionTimeMs: 1)
     }
 }
 
@@ -135,7 +136,14 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         let id: String
         let name = "execute_terminal_command"
         let command: String
-        func getString(_ key: String) -> String? { key == "command" ? self.command : nil }
+        var purpose: String? = nil
+        func getString(_ key: String) -> String? {
+            switch key {
+            case "command": self.command
+            case "purpose": self.purpose
+            default: nil
+            }
+        }
         func getOptionalString(_ key: String) -> String? { nil }
     }
 
@@ -240,6 +248,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         TerminalService.executed = []
         TerminalService.delay = false
         TerminalService.pending = nil
+        TerminalService.output = "fake output"
         DebugLogger.shared.errors = 0
         NotificationService.failures = 0
         NotchOverlayManager.shared.shows = 0
@@ -250,6 +259,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
     }
 
     static func main() async {
+        await self.generatedStepDescriptionsRespectLocale()
         await self.cancelDelayedLLM(response: .tool)
         await self.cancelDelayedLLM(response: .done)
         await self.cancelDelayedLLMError()
@@ -272,6 +282,64 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         await self.invalidRequestDoesNothing()
         self.check(MeetingSummaryActivityCoordinator.busyErrors == 0, "A canceled request left processing locked")
         print("Command cancellation: \(self.checks) checks passed (production agent loop, streaming callbacks, real in-memory chat store)")
+    }
+
+    static func generatedStepDescriptionsRespectLocale() async {
+        self.check(Bundle.main.localizations.contains("ru"), "Service fixture must load the actual compiled Russian catalog")
+        let original = UserDefaults.standard.string(forKey: PichiInterfaceLanguage.defaultsKey)
+        defer { UserDefaults.standard.set(original, forKey: PichiInterfaceLanguage.defaultsKey) }
+        for (language, expected) in [
+            ("en", ["Checking prerequisites...", "Executing command...", "Verifying the result..."]),
+            ("ru", ["Проверка необходимых условий...", "Выполнение команды...", "Проверка результата..."]),
+        ] {
+            UserDefaults.standard.set(language, forKey: PichiInterfaceLanguage.defaultsKey)
+            for (index, command, purpose) in [(0, "ls synthetic", Optional<String>.none),
+                                               (1, "printf 'Synthetic safe command'", Optional<String>.none),
+                                               (2, "printf 'Synthetic result'", Optional("result"))] {
+                let service = self.fixture()
+                LLMClient.shared.delay = false
+                LLMClient.shared.responses = [.init(content: "", thinking: nil,
+                                                     toolCalls: [.init(id: "localized-step", command: command, purpose: purpose)]), .done]
+                let user = "Executing command... Ё user text"
+                await service.processUserCommand(user)
+                self.check(service.conversationHistory.first { $0.toolCall?.id == "localized-step" }?.content == expected[index],
+                           "An app-generated empty-response fallback must use the selected interface language")
+                self.check(service.conversationHistory.first?.content == user, "Interface fallback localization must not translate user requests")
+                self.check(service.conversationHistory.last?.content == "Done", "Nonempty model output must remain verbatim")
+                self.check(service.conversationHistory.first { $0.toolCall != nil }?.toolCall?.purpose == purpose,
+                           "Provider-owned purpose must not change when a fallback is localized")
+                self.check(TerminalService.executed == [command], "Localization must not rewrite the tool command")
+                self.check(NotchContentState.shared.commandConversationHistory.contains {
+                    $0.role == .status && $0.content == (purpose ?? expected[index])
+                }, "Notch must localize only its generated fallback, preserving provider-owned purpose")
+            }
+
+            for purpose in ["executing", "Executing command..."] {
+                let service = self.fixture()
+                LLMClient.shared.delay = false
+                let modelText = "Executing command..."
+                let command = "printf 'Executing command... Ё'"
+                let output = "Executing command... Ё tool output"
+                TerminalService.output = output
+                LLMClient.shared.responses = [.init(content: modelText, thinking: nil,
+                                                     toolCalls: [.init(id: "literal-model-data", command: command, purpose: purpose)]), .done]
+                await service.processUserCommand("Synthetic literal model data")
+                let proposal = service.conversationHistory.first { $0.toolCall?.id == "literal-model-data" }
+                self.check(proposal?.content == modelText && proposal?.toolCall?.purpose == purpose,
+                           "A nonempty model response or purpose equal to a UI key must remain literal data")
+                let result = service.conversationHistory.first { $0.role == .tool }!
+                let json = try! JSONSerialization.jsonObject(with: Data(result.content.utf8)) as! [String: Any]
+                self.check(json["purpose"] as? String == purpose && json["command"] as? String == command && json["output"] as? String == output,
+                           "Actual enhanced terminal result fields must stay byte-identical to provider/tool data")
+                let parsed = CommandToolOutput.parse(result.content)
+                self.check(parsed.title == purpose && parsed.output == output,
+                           "Result presentation must not localize arbitrary tool metadata matching UI keys")
+                self.check(TerminalService.executed == [command], "Localized interface must dispatch the same exact command")
+                self.check(NotchContentState.shared.commandConversationHistory.contains {
+                    $0.role == .status && $0.content == purpose
+                }, "Notch must preserve provider metadata even when it matches a translated UI key")
+            }
+        }
     }
 
     static func cancelDelayedLLM(response: LLMClient.Response) async {
