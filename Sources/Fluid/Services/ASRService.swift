@@ -6747,6 +6747,11 @@ final class ASRService: ObservableObject {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
         guard !self.isOrdinaryASRBlockedByMeetingCapture else { throw MeetingModelResidencyError.busy }
+        // A claimed meeting owns the provider. Reject before preference reads or new
+        // residency admission, including in the isolated host that forbids credentials.
+        guard !self.isMeetingASRPreparationClaimed else {
+            throw MeetingASRPreparationError.preparationInProgress
+        }
         let admission = try self.meetingModelResidency.beginOperation(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )

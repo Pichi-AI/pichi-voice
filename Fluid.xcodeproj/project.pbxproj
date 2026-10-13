@@ -802,16 +802,18 @@
 			files = (
 			);
 			inputFileListPaths = (
+				"$(FLUID_ASR_BASELINE_INPUT_LIST)",
 			);
 			inputPaths = (
-				"$(FLUID_ASR_BASELINE_INPUTS)",
 				"$(SRCROOT)/Tests/FluidASRBaselineHost/stage-inputs.sh",
+				"$(SRCROOT)/scripts/dev/asr-baseline-inputs.py",
+				"$(FLUID_ASR_BASELINE_STAGING_MANIFEST)",
 			);
 			name = "Stage ASR Baseline Inputs";
 			outputFileListPaths = (
+				"$(FLUID_ASR_BASELINE_OUTPUT_LIST)",
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ASRBaselineInputs",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -1286,6 +1288,9 @@
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				FLUID_ASR_BASELINE_INPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/inputs.xcfilelist";
+				FLUID_ASR_BASELINE_OUTPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/outputs.xcfilelist";
+				FLUID_ASR_BASELINE_STAGING_MANIFEST = "$(SRCROOT)/Tests/FluidASRBaselineHost/staging-manifest.json";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1327,6 +1332,9 @@
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				FLUID_ASR_BASELINE_INPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/inputs.xcfilelist";
+				FLUID_ASR_BASELINE_OUTPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/outputs.xcfilelist";
+				FLUID_ASR_BASELINE_STAGING_MANIFEST = "$(SRCROOT)/Tests/FluidASRBaselineHost/staging-manifest.json";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";

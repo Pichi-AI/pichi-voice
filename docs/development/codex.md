@@ -74,6 +74,22 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## Reproducible macOS regression
 
+The separate `FluidASRBaseline` scheme has an explicit fixture staging contract and keeps Xcode user script sandboxing enabled. Its default declarations copy only the tracked public placeholder. To bundle an authorized local fixture directory, prepare private input/output filelists and a manifest under the current worktree's ignored `.build/asr-baseline-inputs/`:
+
+```bash
+pichi_baseline_config="$(python3 -S scripts/dev/asr-baseline-inputs.py prepare /absolute/approved/fixtures)"
+xcodebuild -project Fluid.xcodeproj -target FluidASRBaselineHost -configuration Debug \
+  -clonedSourcePackagesDirPath "$PWD/.build/SourcePackages" \
+  OBJROOT="$PWD/.build/Xcode/Build/Intermediates.noindex" \
+  SYMROOT="$PWD/.build/Xcode/Build/Products" clean
+xcodebuild -project Fluid.xcodeproj -scheme FluidASRBaseline \
+  -xcconfig "$pichi_baseline_config" -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath "$PWD/.build/Xcode" \
+  -clonedSourcePackagesDirPath "$PWD/.build/SourcePackages" test
+```
+
+Preparation deterministically enumerates regular files with bounded counts and sizes, rejects symlinks and unsafe paths, and pins the selected input directory. Staging copies only those declared files with bounded memory. A changed directory or file set requires cleaning the baseline products, so resources from a previous private fixture set cannot survive a successful build. Changed file sizes require preparing the declarations again. Keep fixture data and generated declarations local; they are not application resources or a distributable build. The scheme's benchmark remains opt-in through its existing `FLUID_ASR_RUN_BENCHMARK` test environment flag.
+
 Run `bash scripts/dev/macos.sh regression` in the current task worktree. This uses the existing isolated build and package paths, builds Debug test products, recursively configures every test target, then runs `test-without-building`. It retains the upstream Whisper tiny exclusion. The existing test-host guard receives `FLUIDVOICE_MIC_PHASE1=disabled`, so the normal application UI/audio startup and the Phase 1 microphone probe are disabled. Other hardware, UI and real-model probes remain opt-in through their existing test gates. This command does not establish interactive E2E coverage.
 
 `PICHI_INTERFACE_LANGUAGE` defaults to `en` for upstream assertions, independently of the user's stored language. An explicit caller value is retained. Caller environment variables with prefixes `PICHI_`, `FLUIDVOICE_`, `FLUIDAUDIO_`, `FV_`, and `TEST_`, plus `CI` and `GITHUB_ACTIONS`, are copied to the test host. This preserves existing real-model fixture opt-ins, such as `PICHI_GIGAAM_APP_TEST_MODEL_DIR` and `PICHI_GIGAAM_APP_TEST_AUDIO`. Phase 1 microphone capture remains disabled even if the caller supplies its flag. Fixture paths and test products stay in ignored local storage; never commit private fixtures or the generated plist.

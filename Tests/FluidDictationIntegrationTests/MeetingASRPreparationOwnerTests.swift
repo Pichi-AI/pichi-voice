@@ -1763,6 +1763,10 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         XCTAssertEqual(legacy.text, "")
     }
 
+    // These two tests intentionally initialize the application's persisted dictation
+    // preferences. Keep them in the full integration host; the isolated baseline host
+    // prohibits SettingsStore's credential migrations and login-item initialization.
+    #if !FLUID_ASR_BASELINE_TESTS
     func testRetireDictationResourcesRequiresExactLeaseAndDropsCachedProviders() async throws {
         let service = ASRService()
         let settings = SettingsStore.shared
@@ -1815,6 +1819,7 @@ final class ASRServiceMeetingASRScopeTests: XCTestCase {
         // Dictation selection is untouched by meeting provider construction.
         XCTAssertEqual(settings.selectedSpeechModel, .parakeetTDT)
     }
+    #endif
 
     func testDictationReadinessAndDownloadsRejectedWhileScopeClaimed() async throws {
         let harness = self.makeHarness()
