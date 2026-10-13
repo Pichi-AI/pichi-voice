@@ -29,11 +29,13 @@ nonisolated final class CGEvent: NSObject, @unchecked Sendable {
     func postToPid(_ pid: pid_t) {
         guard let field = syntheticAX.focus, field.pid == pid else { return }
         self.insert(into: field.id)
+        syntheticAX.onNativeEventPost?(self.keyDown)
     }
 
     func post(tap: CGEventTapLocation) {
         guard let field = syntheticAX.focus else { return }
         self.insert(into: field.id)
+        syntheticAX.onNativeEventPost?(self.keyDown)
     }
 
     private func insert(into id: String) {

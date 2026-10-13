@@ -17,6 +17,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('reference', nargs='?', default='', help='Project this revision of the identity helper into current caller contracts')
 parser.add_argument('--rewrite-reference', default='', help='Project original Rewrite acceptance body for the independent failed-restore proof')
 parser.add_argument('--conditional-reference', default='', help='Compare earlier history/reprocess field binding without changing current delivery gates')
+parser.add_argument('--direct-reference', default='', help='Execute this earlier direct pipeline for the partial-output regression')
+parser.add_argument('--ownership-reference', default='', help='Execute this earlier coordinator for the newer-clipboard ownership regression')
 parser.add_argument('--mutation', choices=['ambient_cancel', 'clipboard_focus', 'direct_focus', 'view_cancel','restored_forwarding'])
 args = parser.parse_args()
 def read(path, reference=''):
@@ -39,14 +41,18 @@ def method(text, name, static=False):
 def mutate(text, old, new, count=1):
     assert text.count(old) == count, (old,text.count(old))
     return text.replace(old,new)
-source = read('Sources/Fluid/Services/TypingService.swift')
+source = read('Sources/Fluid/Services/TypingService.swift',args.direct_reference)
 declarations = [block(source, '    struct '+name+' {') for name in ('CapturedFocusTarget','RecordingTargetContext')]
 declarations += [block(source, '    enum '+name+': '+base+' {') for name,base in [('DeliveryOutcome','Equatable'),('FocusPreparationResult','String')]]
-static_names = ('currentFocusedPID','captureSystemFocusTarget','copyAXElementAttribute','isExactFocusTargetActive','prepareTargetForDelivery','restoreExactTarget','isCapturedFocusStillActive','activateAppForRecovery','canDispatchPostInsertionAction','canInsertBeforePostInsertionAction','stringAXAttribute','isCurrentlyFocusedElement','elapsedMs','attemptDirectInsertion','unicodeChunkEnd','isHighSurrogate','isLowSurrogate')
+declarations += [block(read('Sources/Fluid/Services/TypingService.swift'),'    nonisolated enum DirectDispatchOutcome: Equatable, Sendable {')]
+static_names = ('currentFocusedPID','captureSystemFocusTarget','copyAXElementAttribute','isExactFocusTargetActive','prepareTargetForDelivery','restoreExactTarget','isCapturedFocusStillActive','activateAppForRecovery','canDispatchPostInsertionAction','canInsertBeforePostInsertionAction','stringAXAttribute','isCurrentlyFocusedElement','elapsedMs','unicodeChunkEnd','isHighSurrogate','isLowSurrogate')
 methods = [method(source,name,static=True) for name in static_names]
 if args.reference:
     original = read('Sources/Fluid/Services/TypingService.swift',args.reference)
     methods[static_names.index('isCurrentlyFocusedElement')] = method(original,'isCurrentlyFocusedElement',static=True)
+attempts=list(re.finditer(r'(?m)^    nonisolated static func attemptDirectInsertion\(',source))
+assert len(attempts)==(1 if args.direct_reference else 2)
+methods += [block(source,source[match.start():source.index('\n',match.start())]) for match in attempts]
 for name in ('insertTextDirectlyOffMain','insertTextDirectly','insertTextBulkInstant','insertTextBulkHIDInstant','postUnicodeChunks','insertTextViaAccessibility','getFocusedTextElement','findTextElementInFrontmostApp','findTextElementRecursively','findKeyboardFocusedElement','tryAllTextInsertionMethods','getElementAttribute','getSystemFocusedElementAndPID','getElementStringValue','getSelectedTextRange','insertTextAtCursorUsingSelectedRange','setTextViaValue','setTextViaSelection','insertTextAtInsertionPoint'):
     methods.append(method(source,name))
 for name, expected in [('typeOutputPlanInstantly',2),('typeTextInstantly',3)]:
@@ -58,10 +64,10 @@ if args.mutation=='direct_focus':
 snapshot = read('Sources/Fluid/Services/DictationStopSnapshot.swift')
 snapshot_methods = '\n'.join(block(snapshot,marker) for marker in ('    var focusTarget: TypingService.CapturedFocusTarget? {','    static func selectTarget(','    func prepareDelivery('))
 coordinator = read('Sources/Fluid/Services/PasteDeliveryCoordinator.swift')
-coord_body = block(coordinator,'final class PasteDeliveryCoordinator {')
+coord_body = block(read('Sources/Fluid/Services/PasteDeliveryCoordinator.swift',args.ownership_reference),'final class PasteDeliveryCoordinator {')
 coord_body = mutate(coord_body,'static let shared = PasteDeliveryCoordinator()','static var shared = PasteDeliveryCoordinator(pasteboard: syntheticPasteboard, commandPoster: syntheticPoster, settlementDelayNanoseconds: 10_000_000_000)')
 if args.mutation=='clipboard_focus':
-    gate=block(coord_body,'        guard targetIsReady() else {\n            if preserveTranscriptOnClipboard, isOutputValid() {')
+    gate=block(coord_body,'        guard targetIsReady() else {\n            // Match copyBackup admission without acquiring the slot we already own.')
     coord_body=mutate(coord_body,gate,'        // Mutant: omit the post-slot destination gate')
     guard=block(coord_body,'        guard targetIsReady() else {\n            self.finishFailedDelivery(')
     coord_body=mutate(coord_body,guard,'        // Mutant: omit the pre-command destination gate')
@@ -74,6 +80,8 @@ literal=block(read('Sources/Fluid/Services/ASRService+DictationLiteralFormatting
 assessment=read('Sources/Fluid/Services/DeliveryTargetAssessment.swift').replace('import ApplicationServices\n','')
 analytics=block(read('Sources/Fluid/Analytics/AnalyticsEvent.swift'),'enum AnalyticsInsertionPath: String {')
 fixture='import Foundation\nimport CoreFoundation\n'+clipboard_types+'\n'+literal+'\n'+analytics+'\n'+assessment+'\n'
+failure_card=block(read('Sources/Fluid/Views/DeliveryFailureOverlay.swift'),'    enum Kind: Equatable {')
+fixture+='@MainActor final class DeliveryFailureOverlayController {\n'+failure_card+'\n}\n'
 fixture+=(repo/'Tests/Support/TypingNativeTransportFixture.swift').read_text()+'\n'+clipboard_doubles+'\n@MainActor '+coord_body+'\n'
 fixture+='extension PasteDeliveryCoordinator { var fixtureWaiterCount:Int { self.deliveryWaiters.count }; var fixtureHasLease:Bool { self.lease != nil }; var fixtureIsDelivering:Bool { self.isDelivering } }\n'
 fixture+='@MainActor final class TypingService {\n'+'\n'.join(declarations+methods)+'''
@@ -189,6 +197,7 @@ if not args.rewrite_reference:
         wrappers.append('func '+name+'() {'+body+'}')
     fixture+='@MainActor final class RewriteAcceptViewAction { let service: RewriteModeService; let asr=AppServices.shared.asr; var onClose: (() -> Void)?; init(service:RewriteModeService) { self.service=service }\n'+'\n'.join(fields+wrappers)+'\n'+owner+'\n}\n'
 fixture+=(repo/'Tests/TypingFocusIdentityRegression.swift').read_text()
+fixture+='\n'+(repo/'Tests/Support/ClipboardTargetBackupFixtureTests.swift').read_text()
 localization=read('Sources/Fluid/Localization/PichiLocalization.swift')
 fixture+='\n'+localization
 fixture+='\n'+read('Sources/Fluid/Services/DictationTargetPolicy.swift')+'\n'+read('Sources/Fluid/Services/OnboardingDictationOutputPolicy.swift')
@@ -203,5 +212,5 @@ subprocess.run(['xcrun','xcstringstool','compile','Sources/Fluid/Localization/Lo
 binary=bundle/'Contents/MacOS/tests'
 flags=['-D','LEGACY_REWRITE'] if args.rewrite_reference else []
 subprocess.run(['xcrun','swiftc','-swift-version','5','-default-isolation','MainActor','-parse-as-library',*flags,'-module-cache-path',str(output/'ModuleCache'),str(output/'ProductionFocusFixture.swift'),'-o',str(binary)],cwd=repo,check=True)
-run_flags=['--rewrite-only'] if args.rewrite_reference else (['--restored_forwarding'] if args.conditional_reference else (['--'+args.mutation] if args.mutation else []))
+run_flags=['--rewrite-only'] if args.rewrite_reference else (['--partial-direct-only'] if args.direct_reference else (['--clipboard-ownership-only'] if args.ownership_reference else (['--restored_forwarding'] if args.conditional_reference else (['--'+args.mutation] if args.mutation else []))))
 subprocess.run([str(binary),*run_flags],cwd=repo,check=True)

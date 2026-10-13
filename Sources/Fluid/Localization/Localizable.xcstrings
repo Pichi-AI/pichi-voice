@@ -49798,6 +49798,40 @@
           }
         }
       }
+    },
+    "Only part of the text was inserted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only part of the text was inserted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст вставлен частично"
+          }
+        }
+      }
+    },
+    "Check the text field before inserting the full transcript again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the text field before inserting the full transcript again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте текстовое поле перед повторной вставкой полного текста."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

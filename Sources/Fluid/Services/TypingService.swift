@@ -6,6 +6,14 @@ import Foundation
 final class TypingService {
     nonisolated static let synthesizedEventUserData: Int64 = 0x46565353
 
+    /// Native dispatch is not atomic: a later chunk can fail after earlier keys
+    /// were emitted. Only an untouched destination permits a full-text fallback.
+    nonisolated enum DirectDispatchOutcome: Equatable, Sendable {
+        case notDispatched
+        case partiallyDispatched
+        case fullyDispatched
+    }
+
     struct CapturedFocusTarget {
         let pid: pid_t
         let window: AXUIElement?
@@ -543,21 +551,29 @@ final class TypingService {
                 targetIsReady: targetIsReady,
                 onCommandPosted: { dispatchedAt = $0 }
             )
-        } else if await self.insertTextDirectlyOffMain(text, preferredTargetPID: preferredTargetPID, isOutputValid: insertionIsValid) {
-            deliveryPath = .direct
-            await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
-            result = .commandPosted
         } else {
-            deliveryPath = .clipboardFallback
-            verificationBefore = PasteVerifier.capture()
-            self.log("[TypingService] Direct insertion failed; using non-blocking clipboard fallback")
-            result = await PasteDeliveryCoordinator.shared.deliver(
-                text,
-                preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
-                isOutputValid: isOutputValid,
-                targetIsReady: targetIsReady,
-                onCommandPosted: { dispatchedAt = $0 }
-            )
+            let directOutcome = await self.insertTextDirectlyOffMain(text, preferredTargetPID: preferredTargetPID, isOutputValid: insertionIsValid)
+            switch directOutcome {
+            case .fullyDispatched:
+                deliveryPath = .direct
+                await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
+                result = .commandPosted
+            case .partiallyDispatched:
+                deliveryPath = .direct
+                await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
+                result = .recoverableFailure(.partialInsertion)
+            case .notDispatched:
+                deliveryPath = .clipboardFallback
+                verificationBefore = PasteVerifier.capture()
+                self.log("[TypingService] Direct insertion emitted no text; using non-blocking clipboard fallback")
+                result = await PasteDeliveryCoordinator.shared.deliver(
+                    text,
+                    preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+                    isOutputValid: isOutputValid,
+                    targetIsReady: targetIsReady,
+                    onCommandPosted: { dispatchedAt = $0 }
+                )
+            }
         }
 
         guard result != .cancelled, isOutputValid() else { return .cancelled }
@@ -748,6 +764,7 @@ final class TypingService {
             case .targetRestoreFailed: .targetRestoreFailed
             case .noEditableTarget: .noEditableTarget
             case .pasteNotLanded: .pasteNotLanded
+            case .partialInsertion: .partialInsertion
             }
         }
     }
@@ -762,11 +779,11 @@ final class TypingService {
 
     // MARK: - Internal insertion pipeline
 
-    private func insertTextDirectlyOffMain(_ text: String, preferredTargetPID: pid_t?, isOutputValid: @escaping @MainActor () -> Bool) async -> Bool {
+    private func insertTextDirectlyOffMain(_ text: String, preferredTargetPID: pid_t?, isOutputValid: @escaping @MainActor () -> Bool) async -> DirectDispatchOutcome {
         await withCheckedContinuation { continuation in
             Self.directInsertionQueue.async {
                 let valid = DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } }
-                guard valid else { continuation.resume(returning: false); return }
+                guard valid else { continuation.resume(returning: DirectDispatchOutcome.notDispatched); return }
                 continuation.resume(
                     returning: self.insertTextDirectly(text, preferredTargetPID: preferredTargetPID, isOutputValid: {
                         DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } }
@@ -781,20 +798,23 @@ final class TypingService {
         return insert()
     }
 
-    private nonisolated func insertTextDirectly(_ text: String, preferredTargetPID: pid_t?, isOutputValid: () -> Bool) -> Bool {
+    nonisolated static func attemptDirectInsertion(isOutputValid: () -> Bool, insert: () -> DirectDispatchOutcome) -> DirectDispatchOutcome {
+        guard isOutputValid() else { return .notDispatched }
+        return insert()
+    }
+
+    private nonisolated func insertTextDirectly(_ text: String, preferredTargetPID: pid_t?, isOutputValid: () -> Bool) -> DirectDispatchOutcome {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
         if let preferredTargetPID, preferredTargetPID > 0 {
             self.log("[TypingService] Experimental Direct Typing mode: trying preferred PID unicode insertion first")
-            if Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextBulkInstant(text, targetPID: preferredTargetPID, isOutputValid: isOutputValid) }) {
-                self.log("[TypingService] SUCCESS: Preferred PID CGEvent insertion completed")
-                return true
-            }
+            let outcome = Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextBulkInstant(text, targetPID: preferredTargetPID, isOutputValid: isOutputValid) })
+            if outcome != .notDispatched { return outcome }
             self.log("[TypingService] Preferred PID CGEvent insertion failed, continuing fallback pipeline")
         }
 
-        guard isOutputValid() else { return false }
+        guard isOutputValid() else { return .notDispatched }
 
         // Get frontmost app info
         if let frontApp = NSWorkspace.shared.frontmostApplication {
@@ -823,29 +843,24 @@ final class TypingService {
         // This is the most reliable method for Terminals, Electron apps (Discord, VSCode), etc.
         if let focusedPID = focusInfo?.pid {
             self.log("[TypingService] Trying CGEvent insertion targeting focused PID \(focusedPID)")
-            if Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextBulkInstant(text, targetPID: focusedPID, isOutputValid: isOutputValid) }) {
-                self.log("[TypingService] SUCCESS: CGEvent focused-PID insertion completed")
-                return true
-            }
+            let outcome = Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextBulkInstant(text, targetPID: focusedPID, isOutputValid: isOutputValid) })
+            if outcome != .notDispatched { return outcome }
         }
 
         // Secondary: Try Accessibility insertion into the actual focused element
         self.log("[TypingService] Trying Accessibility focused-element insertion")
         if Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextViaAccessibility(text, isOutputValid: isOutputValid) }) {
             self.log("[TypingService] SUCCESS: Accessibility insertion completed")
-            return true
+            return .fullyDispatched
         }
 
         // HID Fallback if PID targeting failed
         if focusInfo?.pid == nil {
             self.log("[TypingService] No focused PID available, trying HID CGEvent insertion")
-            if Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextBulkHIDInstant(text, isOutputValid: isOutputValid) }) {
-                self.log("[TypingService] SUCCESS: CGEvent HID insertion completed")
-                return true
-            }
+            return Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextBulkHIDInstant(text, isOutputValid: isOutputValid) })
         }
 
-        return false
+        return .notDispatched
     }
 
     private static let physicalModifierKeys: [(name: String, code: CGKeyCode)] = [
@@ -991,12 +1006,12 @@ final class TypingService {
         return CFEqual(currentElement, expectedElement)
     }
 
-    private nonisolated func insertTextBulkInstant(_ text: String, targetPID: pid_t, isOutputValid: () -> Bool) -> Bool {
+    private nonisolated func insertTextBulkInstant(_ text: String, targetPID: pid_t, isOutputValid: () -> Bool) -> DirectDispatchOutcome {
         self.log("[TypingService] Starting chunked bulk CGEvent insertion (NO CLIPBOARD) to PID \(targetPID)")
 
         guard targetPID > 0 else {
             self.log("[TypingService] ERROR: Invalid target PID \(targetPID)")
-            return false
+            return .notDispatched
         }
 
         let utf16Array = Array(text.utf16)
@@ -1007,7 +1022,7 @@ final class TypingService {
         }
     }
 
-    private nonisolated func insertTextBulkHIDInstant(_ text: String, isOutputValid: () -> Bool) -> Bool {
+    private nonisolated func insertTextBulkHIDInstant(_ text: String, isOutputValid: () -> Bool) -> DirectDispatchOutcome {
         self.log("[TypingService] Starting chunked bulk CGEvent insertion via HID (NO PID)")
 
         let utf16Array = Array(text.utf16)
@@ -1022,14 +1037,14 @@ final class TypingService {
         destinationDescription: String,
         isOutputValid: () -> Bool,
         post: (CGEvent) -> Void
-    ) -> Bool {
-        guard utf16Array.isEmpty == false else { return true }
+    ) -> DirectDispatchOutcome {
+        guard utf16Array.isEmpty == false else { return .fullyDispatched }
 
-        let chunkCount: Int = utf16Array.withUnsafeBufferPointer { buffer in
-            guard let baseAddress = buffer.baseAddress else { return 0 }
+        var chunkCount = 0
+        let outcome: DirectDispatchOutcome = utf16Array.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return .notDispatched }
 
             var chunkStart = 0
-            var chunkCount = 0
             while chunkStart < buffer.count {
                 let chunkEnd = Self.unicodeChunkEnd(in: utf16Array, start: chunkStart)
                 let chunkLength = chunkEnd - chunkStart
@@ -1038,27 +1053,25 @@ final class TypingService {
                       let keyUp = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
                 else {
                     self.log("[TypingService] ERROR: Failed to create unicode chunk CGEvents")
-                    return -1
+                    return chunkCount == 0 ? .notDispatched : .partiallyDispatched
                 }
 
                 let chunkPointer = baseAddress.advanced(by: chunkStart)
                 keyDown.keyboardSetUnicodeString(stringLength: chunkLength, unicodeString: chunkPointer)
                 keyUp.keyboardSetUnicodeString(stringLength: chunkLength, unicodeString: chunkPointer)
 
-                guard isOutputValid() else { return -1 }
+                guard isOutputValid() else { return chunkCount == 0 ? .notDispatched : .partiallyDispatched }
                 post(keyDown)
                 post(keyUp)
 
                 chunkStart = chunkEnd
                 chunkCount += 1
             }
-            return chunkCount
+            return .fullyDispatched
         }
 
-        guard chunkCount >= 0 else { return false }
-
-        self.log("[TypingService] Posted \(chunkCount) unicode CGEvent chunk(s) to \(destinationDescription) with chunkSize=\(Self.cgEventUnicodeChunkSize) interChunkDelayMs=0")
-        return true
+        self.log("[TypingService] Posted \(chunkCount) unicode CGEvent chunk(s) to \(destinationDescription) outcome=\(outcome) with chunkSize=\(Self.cgEventUnicodeChunkSize) interChunkDelayMs=0")
+        return outcome
     }
 
     private nonisolated static func unicodeChunkEnd(in utf16Array: [UInt16], start: Int) -> Int {

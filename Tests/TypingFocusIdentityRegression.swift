@@ -23,6 +23,8 @@ nonisolated final class SyntheticAXBackend: @unchecked Sendable {
     var onSetFocus: (() -> Void)?
     var allowCGEvents = true
     var onEventConstruct: (() -> Void)?
+    var onNativeEventPost: ((Bool) -> Void)?
+    var allowAXWrites = true
     let system = SyntheticAXElement("system", pid: 0, role: "AXSystemWide")
 }
 nonisolated(unsafe) var syntheticAX = SyntheticAXBackend()
@@ -74,6 +76,7 @@ nonisolated func AXUIElementSetAttributeValue(_ element: AXUIElement, _ attribut
         syntheticAX.onSetFocus?()
         if !syntheticAX.refusesRestore { syntheticAX.focus = element }
     } else if [kAXValueAttribute,kAXSelectedTextAttribute].contains(attribute as String) {
+        guard syntheticAX.allowAXWrites else { return .failure }
         syntheticAX.values[element.id] = value as? String ?? ""
         syntheticAX.insertions.append(element.id)
     }
@@ -512,7 +515,79 @@ nonisolated final class UserDefaults: @unchecked Sendable {
         await waitUntil { exact.hides==1 }
         check(syntheticAX.values["A"]=="exact retry" && exact.failures.isEmpty,"Exact current Retry target keeps its successful PID selection without forcing restoration")
     }
+    static func partialDirectBoundaries() async {
+        let a=SyntheticAXElement("A",pid:42), b=SyntheticAXElement("B",pid:42)
+        let text=String(repeating:"Ж",count:450)
+        reset(a); SettingsStore.shared.textInsertionMode = .standard
+        _ = await PasteDeliveryCoordinator.shared.deliver("held lease",preserveTranscriptOnClipboard:false)
+        syntheticAX.values=[:]; syntheticAX.insertions=[]
+        var chunks=0, releases=0
+        syntheticAX.onNativeEventPost={ down in if down { chunks += 1; if chunks==1 { syntheticAX.focus=b } } else { releases += 1 } }
+        let service=RewriteModeService(); service.rewrittenText=text
+        NotchContentState.shared.recordingTargetContext=context(a)
+        let view=RewriteAcceptViewAction(service:service)
+        var closes=0; view.onClose={ closes += 1 }
+        view.accept(); let accepted=view.acceptanceTask!
+        await waitUntil { chunks==1 }
+        await waitUntil { !service.isAcceptingRewrite || PasteDeliveryCoordinator.shared.fixtureWaiterCount==1 }
+        syntheticAX.focus=a; syntheticAX.onNativeEventPost=nil
+        PasteDeliveryCoordinator.shared.runPendingSettlementForTesting()
+        await accepted.value
+        check(syntheticAX.values["A"]==String(text.prefix(200)),"Partial direct delivery must not paste the whole transcript after prefix; actual A length: \(syntheticAX.values["A"]?.count ?? 0)")
+        check(syntheticAX.values["B"]==nil && syntheticPoster.postCount==1,"Partial dispatch never falls back into clipboard or another field")
+        check(closes==0 && service.rewrittenText==text && AppServices.shared.asr.showError,"Partial output remains a recoverable failure and retains the complete transcript")
+        check(!service.isAcceptingRewrite && MeetingSummaryActivityCoordinator.shared.processing.isEmpty && !PasteDeliveryCoordinator.shared.fixtureIsDelivering,"Partial delivery joins native work and releases action/clipboard ownership")
+        check(chunks==1 && releases==1,"An interrupted chunk still posts its matching key-up cleanup")
+        check(AppServices.shared.asr.errorTitle==TextDeliveryFailure.partialInsertion.userFacingMessage && AppServices.shared.asr.errorMessage==TextDeliveryFailure.userFacingDetail(forMessage:TextDeliveryFailure.partialInsertion.userFacingMessage!),"Partial failure uses its truthful existing shared error contract")
+        reset(a); SettingsStore.shared.textInsertionMode = .standard
+        let next:Any=await service.acceptRewrite("valid next attempt",targetContext:context(a))
+        check(next as? TextDeliveryResult == .commandPosted && syntheticAX.values["A"]=="valid next attempt","A following direct attempt still delivers exactly once")
+        for preferred in [true,false] {
+            reset(a)
+            var posts=0; var denied=false
+            syntheticAX.onNativeEventPost={ down in if down { posts += 1 } }
+            let result:Any=await TypingService().insertTextDirectlyOffMain(text,preferredTargetPID:preferred ? 42:nil,isOutputValid:{
+                if posts>0 && !denied { denied=true; return false }; return true
+            })
+            _ = result
+            check(syntheticAX.values["A"]==String(text.prefix(200)) && posts==1,"Partial preferred/focused PID path cannot fall through to another native strategy when validity returns; actual A length: \(syntheticAX.values["A"]?.count ?? 0)")
+        }
+        reset(.init("A",pid:0)); SettingsStore.shared.textInsertionMode = .standard; syntheticAX.allowAXWrites=false
+        var posts=0; var denied=false
+        syntheticAX.onNativeEventPost={ down in if down { posts += 1 } }
+        let hid=await TypingService().typeOutputPlanInstantly(.plain(text),preferredTargetPID:nil,textReadyAt:nil,isOutputValid:{
+            if posts>0 && !denied { denied=true; return false }; return true
+        })
+        check(syntheticAX.values["A"]==String(text.prefix(200)) && syntheticPoster.postCount==0 && !hid.wasDispatched,"Partial HID output cannot trigger whole-text clipboard fallback")
+        reset(a); SettingsStore.shared.textInsertionMode = .standard
+        syntheticAX.onNativeEventPost={ down in if down { syntheticAX.allowCGEvents=false } }
+        let creationFailure=await TypingService().typeOutputPlanInstantly(.plain(text),preferredTargetPID:42,textReadyAt:nil)
+        check(creationFailure == .recoverableFailure(.partialInsertion) && syntheticAX.values["A"]==String(text.prefix(200)) && syntheticPoster.postCount==0,"A later native event allocation failure preserves partial outcome without AX or clipboard retry")
+        reset(a); SettingsStore.shared.textInsertionMode = .standard; syntheticAX.allowCGEvents=false; syntheticAX.allowAXWrites=false
+        let zero=await TypingService().typeOutputPlanInstantly(.plain(text),preferredTargetPID:42,textReadyAt:nil)
+        check(zero == .commandPosted && syntheticAX.values["A"]==text && syntheticPoster.postCount==1,"A zero-effect failed direct chain retains whole-text clipboard fallback")
+        PasteDeliveryCoordinator.shared.runPendingSettlementForTesting()
+        for (language,title,detail) in [
+            ("ru","Текст вставлен частично","Проверьте текстовое поле перед повторной вставкой полного текста."),
+            ("en","Only part of the text was inserted","Check the text field before inserting the full transcript again."),
+        ] {
+            UserDefaults.standard.set(language,forKey:PichiInterfaceLanguage.defaultsKey)
+            let card=DeliveryFailureOverlayController.Kind(failure:.partialInsertion)
+            check(card != nil && PichiLocalization.text(card!.title)==title,"The actual transient-card partial kind resolves through compiled RU/EN catalog")
+            check(PichiLocalization.text(TextDeliveryFailure.userFacingDetail(forMessage:TextDeliveryFailure.partialInsertion.userFacingMessage!)!)==detail,"Partial recovery copy warns before reinserting the complete transcript")
+        }
+    }
     static func main() async {
+        if CommandLine.arguments.contains("--partial-direct-only") {
+            await partialDirectBoundaries()
+            print("Partial direct regressions: \(checks) checks PASS")
+            return
+        }
+        if CommandLine.arguments.contains("--clipboard-ownership-only") {
+            await ClipboardTargetBackupFixtureTests.run(check:check)
+            print("Clipboard ownership regressions: \(checks) checks PASS")
+            return
+        }
         if CommandLine.arguments.contains("--rewrite-only") {
             await rewriteAcceptance()
             print("Rewrite acceptance: \(checks) checks PASS; actual production bodies, synthetic backend only")
@@ -594,6 +669,8 @@ nonisolated final class UserDefaults: @unchecked Sendable {
         await rewriteAcceptance()
         await clipboardAndDirectBoundaries()
         await restoredCallerBoundaries()
+        await partialDirectBoundaries()
+        await ClipboardTargetBackupFixtureTests.run(check:check)
         #if !LEGACY_REWRITE
         await viewCancellation()
         #endif
