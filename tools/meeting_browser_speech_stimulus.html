@@ -77,16 +77,24 @@
       await receiver.setLocalDescription(await receiver.createAnswer());
       await sender.setRemoteDescription(receiver.localDescription);
       for (const candidate of pendingSender) await sender.addIceCandidate(candidate);
-      await playing;
       // Wait for the local transport before advancing the deterministic speech buffer.
-      if (receiver.connectionState !== 'connected') {
-        await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('WebRTC connection timed out')), 5000);
+      const connected = receiver.connectionState === 'connected' ? Promise.resolve() :
+        new Promise((resolve, reject) => {
           receiver.onconnectionstatechange = () => {
-            if (receiver.connectionState === 'connected') { clearTimeout(timeout); resolve(); }
-            if (receiver.connectionState === 'failed') { clearTimeout(timeout); reject(new Error('WebRTC connection failed')); }
+            if (receiver.connectionState === 'connected') resolve();
+            if (receiver.connectionState === 'failed') reject(new Error('WebRTC connection failed'));
           };
         });
+      let timeout;
+      try {
+        await Promise.race([
+          Promise.all([connected, playing]),
+          new Promise((resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error('WebRTC playback timed out')), 5000);
+          })
+        ]);
+      } finally {
+        clearTimeout(timeout);
       }
       source.onended = () => {
         status.textContent = 'Received WebRTC speech complete.';
