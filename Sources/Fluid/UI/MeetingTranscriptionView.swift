@@ -241,6 +241,7 @@ struct MeetingTranscriptionView: View {
                         onEditSetup: self.openMeetingSettings,
                         isRetrying: self.isRetrying,
                         onCloseSelection: self.closeCanvasAction,
+                        summaryASRService: self.asrService,
                         onOpenIntegrations: self.openMeetingIntegrations
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
@@ -1457,6 +1458,7 @@ struct MeetingTranscriptionCanvas: View {
     var onEditSetup: (() -> Void)? = nil
     let isRetrying: Bool
     let onCloseSelection: (() -> Void)?
+    var summaryASRService: ASRService? = nil
     var onOpenIntegrations: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
@@ -1567,6 +1569,7 @@ struct MeetingTranscriptionCanvas: View {
                         onRenameSession: { title in self.onRenameSession(session.id, title) },
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection,
+                        summaryASRService: self.summaryASRService,
                         onOpenIntegrations: self.onOpenIntegrations
                     )
                 }
