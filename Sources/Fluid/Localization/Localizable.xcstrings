@@ -3319,6 +3319,22 @@
         }
       }
     },
+    "About the model": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About the model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "О модели"
+          }
+        }
+      }
+    },
     "Acc %lld%%": {
       "extractionState": "manual",
       "localizations": {
@@ -6864,6 +6880,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Базовый - без обработки"
+          }
+        }
+      }
+    },
+    "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Battery use and recognition speed depend on the device. Test longer meetings on your iPad."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные встречи на своём iPad."
           }
         }
       }
@@ -13911,6 +13943,22 @@
         }
       }
     },
+    "Download the speaker models in Recording settings before an offline meeting.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the speaker models in Recording settings before an offline meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "До офлайн-встречи загрузите модели определения участников в настройках записи."
+          }
+        }
+      }
+    },
     "Downloaded models": {
       "extractionState": "manual",
       "localizations": {
@@ -17989,6 +18037,22 @@
         }
       }
     },
+    "GigaAM supports Russian. For English or mixed speech, select a multilingual model.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM supports Russian. For English or mixed speech, select a multilingual model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM поддерживает русский язык. Для английской или смешанной речи выберите мультиязычную модель."
+          }
+        }
+      }
+    },
     "Global Hotkey": {
       "extractionState": "manual",
       "localizations": {
@@ -21177,6 +21241,22 @@
         }
       }
     },
+    "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст во время записи обновляется фрагментами. Участник может остаться неопределённым в коротких или одновременных репликах."
+          }
+        }
+      }
+    },
     "Live transcript": {
       "extractionState": "manual",
       "localizations": {
@@ -23426,6 +23506,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ошибочно распознанные слова (условия замены)"
+          }
+        }
+      }
+    },
+    "Mixed Russian and English speech may contain errors or transliteration.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixed Russian and English speech may contain errors or transliteration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При смешанной русской и английской речи возможны ошибки и запись слов буквами другого языка."
           }
         }
       }
@@ -27688,6 +27784,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "Только для Parakeet. Если повторное использование невозможно или завершится ошибкой, выполняется обычное распознавание."
+          }
+        }
+      }
+    },
+    "Parakeet v3 supports 25 languages, including Russian and English.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parakeet v3 supports 25 languages, including Russian and English."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parakeet v3 поддерживает 25 языков, включая русский и английский."
           }
         }
       }
@@ -36285,6 +36397,22 @@
         }
       }
     },
+    "Speaker labels are automatic and can be uncertain in short or overlapping speech.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels are automatic and can be uncertain in short or overlapping speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участники определяются автоматически. Короткие или одновременные реплики могут остаться без точной метки."
+          }
+        }
+      }
+    },
     "Speaker labels are automatic and may not be exact. Click a name to fix it.": {
       "extractionState": "manual",
       "localizations": {
@@ -43815,6 +43943,22 @@
         }
       }
     },
+    "When different people speak in one transcript phrase, speaker labels may remain unknown.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When different people speak in one transcript phrase, speaker labels may remain unknown."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если в одной распознанной фразе говорят разные люди, участник может остаться неопределённым."
+          }
+        }
+      }
+    },
     "When disabled, audio is never written to files, including temporary files. Only the transcript is saved.": {
       "extractionState": "manual",
       "localizations": {
@@ -44000,6 +44144,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "CPU-бэкенд Whisper недоступен на этом устройстве."
+          }
+        }
+      }
+    },
+    "Whisper Tiny is small and fast, with lower recognition accuracy.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny is small and fast, with lower recognition accuracy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny занимает мало места и работает быстро, но точность распознавания ниже."
           }
         }
       }
