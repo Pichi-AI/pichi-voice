@@ -137,7 +137,7 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
 
     func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] {
         try Task.checkCancellation()
-        let began = ContinuousClock.now
+        let began = MeetingPCMRuntimeDiagnostics.begin(.diarize)
         defer { MeetingPCMRuntimeDiagnostics.completed(.diarize, since: began, samples: samples.count) }
         let timeline = try self.diarizer.processComplete(
             samples,
@@ -178,7 +178,7 @@ private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession
     func transcribeWithTimings(
         _ samples: [Float]
     ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
-        let began = ContinuousClock.now
+        let began = MeetingPCMRuntimeDiagnostics.begin(.asrInfer)
         defer { MeetingPCMRuntimeDiagnostics.completed(.asrInfer, since: began, samples: samples.count) }
         return try await self.asrService.transcribeMeetingSamplesWithTimings(samples, provider: self.provider)
     }
@@ -192,7 +192,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private let pcmIdentityState = MeetingPCMIdentityState()
     private let compiledNemotron = MeetingNemotronCompiledModelOwner { source, target in
         #if arch(arm64)
-        let began = ContinuousClock.now
+        let began = MeetingPCMRuntimeDiagnostics.begin(.compile)
         defer { MeetingPCMRuntimeDiagnostics.completed(.compile, since: began) }
         let temporary = try await MLModel.compileModel(at: source)
         // CoreML returns a newly compiled temporary directory. Adopt only this derivative,
@@ -364,7 +364,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     /// Runs in its own phase, so the additional encoder never overlaps ASR or Nemotron residency.
     /// Only short, admitted single-speaker excerpts reach this local model; no audio is uploaded.
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
-        let began = ContinuousClock.now
+        let began = MeetingPCMRuntimeDiagnostics.begin(.voice)
         defer { MeetingPCMRuntimeDiagnostics.completed(.voice, since: began, samples: samples.count) }
         #if arch(arm64)
         guard !samples.isEmpty else { return [] }
@@ -434,7 +434,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         #else
         mlConfiguration.computeUnits = .cpuAndGPU
         #endif
-        let loadBegan = ContinuousClock.now
+        let loadBegan = MeetingPCMRuntimeDiagnostics.begin(.load)
         let models = try await SortformerModels.load(
             config: config,
             mainModelPath: compiledURL,
@@ -461,7 +461,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
     ) async throws -> MeetingParakeetPhaseResult {
         let asrService = await self.asrServiceProvider()
-        let began = ContinuousClock.now
+        let began = MeetingPCMRuntimeDiagnostics.begin(.asrPrepare)
         return try await asrService.withPreparedMeetingASR(
             attemptID: attemptID,
             configuration: configuration
@@ -484,8 +484,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     }
 }
 
-/// Ordinary support logs use the existing rotated FileLogger in Release too. One line per
-/// phase/window contains only phase names, elapsed time and bounded counts, never text,
+/// Ordinary support logs use the existing rotated FileLogger in Release too. Begin/end lines
+/// contain only phase names, elapsed/process CPU time and bounded counts, never text,
 /// error payloads, paths, speaker metadata or audio samples.
 private nonisolated enum MeetingPCMRuntimeDiagnostics {
     nonisolated enum Phase: String, Sendable {
@@ -496,13 +496,30 @@ private nonisolated enum MeetingPCMRuntimeDiagnostics {
         case asrPrepare = "asr.prepare"
         case asrInfer = "asr.infer"
     }
-    static func completed(_ phase: Phase, since began: ContinuousClock.Instant, samples: Int = 0, sourceBytes: Int64 = 0) {
-        let elapsed = began.duration(to: .now).components
+    nonisolated struct Started: Sendable {
+        let wall: ContinuousClock.Instant
+        let cpu: DiagnosticProcessCPUTime?
+    }
+    static func begin(_ phase: Phase) -> Started {
+        let started = Started(wall: .now, cpu: DiagnosticProcessCPUTime.capture())
+        let cpuTotal = started.cpu?.totalMilliseconds.map(String.init) ?? "unavailable"
+        let uptime = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
+        DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
+            "[meeting/pcm] phase=\(phase.rawValue) event=begin uptimeMs=\(uptime) processCpuTotalMs=\(cpuTotal) cpuScope=process"
+        }
+        return started
+    }
+    static func completed(_ phase: Phase, since began: Started, samples: Int = 0, sourceBytes: Int64 = 0) {
+        let nowCPU = DiagnosticProcessCPUTime.capture()
+        let elapsed = began.wall.duration(to: .now).components
         let milliseconds = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+        let cpu = began.cpu.flatMap { nowCPU?.milliseconds(since: $0) }.map(String.init) ?? "unavailable"
+        let cpuTotal = nowCPU?.totalMilliseconds.map(String.init) ?? "unavailable"
+        let uptime = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
         let count = max(0, min(320_000, samples))
         let bytes = max(0, min(1_000_000_000, sourceBytes))
         DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
-            "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes)"
+            "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes) event=end uptimeMs=\(uptime) processCpuMs=\(cpu) processCpuTotalMs=\(cpuTotal) cpuScope=process"
         }
     }
 }
