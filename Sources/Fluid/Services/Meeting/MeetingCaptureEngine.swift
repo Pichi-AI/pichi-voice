@@ -8,22 +8,6 @@ import Foundation
 import IOKit.pwr_mgt
 import ScreenCaptureKit
 
-nonisolated protocol MeetingCaptureControlling: Sendable {
-    /// Any user-facing permission request must complete before the coordinator reserves
-    /// the exclusive ASR meeting lease.
-    func preflightPermissions() async throws
-
-    func start(
-        session: MeetingSession,
-        configuration: MeetingCaptureConfiguration,
-        sessionDirectory: URL,
-        eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
-        liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
-    ) async throws -> MeetingCaptureStartResult
-
-    func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult
-    func shutdownForTermination() async
-}
 
 actor MeetingCaptureEngine: MeetingCaptureControlling {
     private struct ActiveCapture: @unchecked Sendable {
@@ -50,6 +34,13 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = nil
     ) async throws -> MeetingCaptureStartResult {
         try configuration.validate()
+        // The desktop runtime currently persists authoritative PCM chunks. It must refuse the
+        // new strict policy before constructing any writer until a memory consumer is wired.
+        guard configuration.audioStorageMode != .memoryOnly else {
+            throw MeetingCaptureError.captureStartFailed(
+                PichiLocalization.text("In-memory transcription is not available for this attempt.")
+            )
+        }
         guard self.activeCapture == nil, self.startingSessionID == nil, self.stopTask == nil else {
             throw MeetingCaptureError.captureAlreadyActive
         }
@@ -2484,55 +2475,6 @@ private nonisolated enum MeetingCaptureRuntimeError: LocalizedError {
     }
 }
 
-nonisolated enum MeetingCaptureError: LocalizedError {
-    case captureAlreadyActive
-    case noActiveCapture
-    case wrongActiveSession
-    case applicationNotSelected
-    case applicationUnavailable(String)
-    case noCaptureDisplay
-    case microphoneUnavailable
-    case microphonePermissionDenied
-    case screenCapturePermissionDenied(String)
-    case insufficientDiskSpace
-    case captureStartFailed(String)
-    case captureStopFailed(String, partialResult: MeetingCaptureStopResult)
-    case unsupportedAudioFormat
-    case writerFailed(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .captureAlreadyActive:
-            return "Another meeting recording is already active."
-        case .noActiveCapture:
-            return "There is no active meeting recording."
-        case .wrongActiveSession:
-            return "A different meeting recording is active."
-        case .applicationNotSelected:
-            return "Choose the application that contains the online meeting."
-        case let .applicationUnavailable(name):
-            return "\(name) is no longer available to record."
-        case .noCaptureDisplay:
-            return "No display is available for meeting-audio capture."
-        case .microphoneUnavailable:
-            return "The selected microphone is unavailable."
-        case .microphonePermissionDenied:
-            return "Microphone permission is required to record this meeting."
-        case let .screenCapturePermissionDenied(detail):
-            return "Screen & System Audio permission is required. \(detail)"
-        case .insufficientDiskSpace:
-            return "Not enough free space is available for PCM meeting capture. Free space for at least a one-hour recording and processing workspace, then try again."
-        case let .captureStartFailed(detail):
-            return "Meeting recording could not start. \(detail)"
-        case let .captureStopFailed(detail, _):
-            return "Meeting recording could not stop cleanly. \(detail)"
-        case .unsupportedAudioFormat:
-            return "The selected audio source uses an unsupported format."
-        case let .writerFailed(detail):
-            return "Meeting audio could not be saved. \(detail)"
-        }
-    }
-}
 
 nonisolated enum MeetingCaptureSourceCatalog {
     static let preferredFallbackBundleIdentifiers = [
@@ -2630,10 +2572,6 @@ nonisolated enum MeetingCaptureSourceCatalog {
     }
 }
 
-nonisolated struct MeetingMicrophoneCatalogSnapshot: Sendable, Equatable {
-    var identities: [MeetingMicrophoneIdentity]
-    var defaultCoreAudioUID: String?
-}
 
 nonisolated struct MeetingAVCaptureDeviceDescriptor: Equatable, Sendable {
     var uniqueID: String

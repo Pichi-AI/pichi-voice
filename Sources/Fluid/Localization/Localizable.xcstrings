@@ -47263,6 +47263,326 @@
           }
         }
       }
+    },
+    "The microphone supplied an invalid PCM buffer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid PCM buffer."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректный аудиобуфер."
+          }
+        }
+      }
+    },
+    "The microphone supplied a non-finite PCM sample.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied a non-finite PCM sample."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректное значение аудиосигнала."
+          }
+        }
+      }
+    },
+    "The microphone supplied an invalid presentation timestamp.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid presentation timestamp."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректную временную метку."
+          }
+        }
+      }
+    },
+    "The microphone PCM timeline changed unexpectedly.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone PCM timeline changed unexpectedly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона неожиданно изменились."
+          }
+        }
+      }
+    },
+    "Microphone PCM conversion failed. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone PCM conversion failed. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудио микрофона. %@"
+          }
+        }
+      }
+    },
+    "Microphone sample-buffer construction failed (%d).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone sample-buffer construction failed (%d)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать аудиобуфер микрофона (%d)."
+          }
+        }
+      }
+    },
+    "The in-memory audio budget is invalid.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio budget is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный лимит памяти для обработки аудио."
+          }
+        }
+      }
+    },
+    "In-memory transcription requires finite mono 16 kHz PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription requires finite mono 16 kHz PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для распознавания в памяти нужен корректный одноканальный сигнал 16 кГц."
+          }
+        }
+      }
+    },
+    "In-memory transcription could not keep up. Recording stopped and completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up. Recording stopped and completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает за разговором. Запись остановлена, готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "The in-memory microphone timeline changed. Completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory microphone timeline changed. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона изменились. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "The app is shutting down.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app is shutting down."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приложение завершает работу."
+          }
+        }
+      }
+    },
+    "Only in-room microphone capture is available on this platform.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only in-room microphone capture is available on this platform."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом устройстве можно записывать только разговор в одной комнате через микрофон."
+          }
+        }
+      }
+    },
+    "In-memory transcription is not available for this attempt.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription is not available for this attempt."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой встречи распознавание в памяти недоступно."
+          }
+        }
+      }
+    },
+    "The bounded microphone queue is full.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded microphone queue is full."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очередь аудио микрофона заполнена."
+          }
+        }
+      }
+    },
+    "The bounded audio writer rejected microphone PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded audio writer rejected microphone PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось принять аудио микрофона для сохранения."
+          }
+        }
+      }
+    },
+    "In-memory transcription could not keep up with microphone capture.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up with microphone capture."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает обрабатывать аудио микрофона."
+          }
+        }
+      }
+    },
+    "The audio session was interrupted by the operating system.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio session was interrupted by the operating system."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Операционная система прервала запись аудио."
+          }
+        }
+      }
+    },
+    "The microphone audio configuration changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone audio configuration changed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки аудиосигнала микрофона изменились."
+          }
+        }
+      }
+    },
+    "Unsupported source format.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported source format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат аудиосигнала не поддерживается."
+          }
+        }
+      }
+    },
+    "Unknown converter error.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown converter error."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неизвестная ошибка преобразования аудио."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -403,9 +403,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(descriptor.supportedLanguageCodes, ["ru"])
         XCTAssertEqual(PichiMeetingProviderFactory.registeredLanguageCodes(for: registered), ["ru"])
         XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: registered), "ru")
-        // Existing upstream models retain their own provider options and native language
-        // rules rather than being copied into the downstream extension registration.
-        for (modelID, language) in [("parakeet-tdt-v2", "en"), ("parakeet-tdt", "de")] {
+        // Legacy v2 keeps its original default composite. Mobile v3 is an explicit
+        // capability registration backed by that same original provider/runtime.
+        for (modelID, language) in [("parakeet-tdt-v2", "en")] {
             XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: modelID))
             XCTAssertNil(PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID))
             XCTAssertNil(PichiMeetingProviderFactory.defaultLanguageCode(for: modelID))
@@ -414,6 +414,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             ))
             XCTAssertEqual(options.model.id, modelID)
         }
+        XCTAssertEqual(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "parakeet-tdt")?.id, .parakeetV3)
+        XCTAssertTrue(PichiMeetingProviderFactory.registeredLanguageCodes(for: "parakeet-tdt")?.isSuperset(of: ["ru", "en", "auto"]) == true)
+        XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: "parakeet-tdt"), "auto")
         let unregistered = "fixture.unregistered-provider"
         XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: unregistered))
         XCTAssertNil(PichiMeetingProviderFactory.registeredLanguageCodes(for: unregistered))

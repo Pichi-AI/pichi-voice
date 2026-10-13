@@ -195,10 +195,22 @@ nonisolated struct FluidAudioProviderEnhancementOptions {
 
 #if arch(arm64)
 import FluidAudio
+import CoreML
 
 /// TranscriptionProvider implementation using FluidAudio (optimized for Apple Silicon)
 /// This wraps the existing FluidAudio-based ASR for use on Apple Silicon Macs.
 final class FluidAudioProvider: TranscriptionProvider {
+    /// Mobile capture and strict text-only inference keep the same model resident when
+    /// the app backgrounds. Select the documented CPU route at load time, never Metal.
+    static var platformModelConfiguration: MLModelConfiguration? {
+        #if os(iOS)
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuOnly
+        return configuration
+        #else
+        return nil
+        #endif
+    }
     private static let incrementalChunkingThresholdSamples = 240_000
     private static let incrementalAppendBlockSamples = 240_000
 
@@ -306,6 +318,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     /// Opt-in pinned meeting options. When nil (legacy dictation), enhancement switches and
     /// the custom dictionary are still read live from `SettingsStore` at each call site.
     private let meetingOptions: MeetingProviderOptions?
+    private let meetingConfiguration: MeetingFinalProcessingConfiguration?
     /// Explicitly pinned enhancement options for offline/baseline runs. Precedence for each
     /// effective getter: fixed meeting policy, then this, then live `SettingsStore`.
     private let enhancementOptions: FluidAudioProviderEnhancementOptions?
@@ -322,6 +335,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.configureWordBoosting = configureWordBoosting
         self.updateCompactWeights = updateCompactWeights
         self.meetingOptions = nil
+        self.meetingConfiguration = nil
         self.enhancementOptions = enhancementOptions
         self.pronunciationStore = pronunciationStore
     }
@@ -339,6 +353,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.configureWordBoosting = false
         self.updateCompactWeights = false
         self.meetingOptions = options
+        self.meetingConfiguration = configuration
         self.enhancementOptions = nil
         self.pronunciationStore = .shared
     }
@@ -459,7 +474,15 @@ final class FluidAudioProvider: TranscriptionProvider {
         #else
         let cacheDirectory = AppBrand.modelsDirectory
         #endif
-        let modelCacheDirectory = descriptor.cacheDirectory(in: cacheDirectory)
+        let modelCacheDirectory = self.meetingConfiguration?.asrArtifactDirectory
+            ?? descriptor.cacheDirectory(in: cacheDirectory)
+        if let pinnedDirectory = self.meetingConfiguration?.asrArtifactDirectory,
+           !descriptor.artifactsAreComplete(at: pinnedDirectory) {
+            // A frozen external attempt is read-only. Setup owns installation/repair.
+            throw NSError(domain: "FluidAudioProvider", code: -4, userInfo: [
+                NSLocalizedDescriptionKey: "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run.",
+            ])
+        }
         DebugLogger.shared.info(
             "FluidAudioProvider: Starting model preparation for \(selectedModel.displayName) [version=\(modelVersion)]",
             source: "FluidAudioProvider"
@@ -529,10 +552,28 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
 
         let loadStart = Date()
+        if let expected = self.meetingConfiguration?.asrArtifactFingerprint {
+            let verificationDescriptor = descriptor
+            let verification = Task.detached(priority: .userInitiated) {
+                try verificationDescriptor.installedArtifactFingerprint(at: modelCacheDirectory)
+            }
+            let actual = try await withTaskCancellationHandler {
+                try await verification.value
+            } onCancel: { verification.cancel() }
+            guard actual == expected else {
+                throw NSError(domain: "FluidAudioProvider", code: -5, userInfo: [
+                    NSLocalizedDescriptionKey: "The installed meeting model changed after this attempt was scheduled. Start a new processing run.",
+                ])
+            }
+        }
         // Download and load models
         let models: AsrModels
         do {
-            if descriptor.archiveURL != nil {
+            if self.meetingConfiguration?.asrArtifactDirectory != nil {
+                progressRelay.report(.loading)
+                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion,
+                                                         configuration: Self.platformModelConfiguration)
+            } else if descriptor.archiveURL != nil {
                 if installedHash == nil {
                     let release = descriptor
                     let validator: ParakeetArchiveDownloader.StageValidator?
@@ -553,10 +594,12 @@ final class FluidAudioProvider: TranscriptionProvider {
                 }
                 try Task.checkCancellation()
                 progressRelay.report(.loading)
-                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion,
+                                                         configuration: Self.platformModelConfiguration)
             } else {
                 models = try await AsrModels.downloadAndLoad(
                     to: modelCacheDirectory,
+                    configuration: Self.platformModelConfiguration,
                     version: asrModelVersion,
                     progressHandler: fluidAudioProgressHandler
                 )

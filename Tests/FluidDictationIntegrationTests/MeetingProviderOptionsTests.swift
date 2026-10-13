@@ -26,7 +26,7 @@ final class MeetingProviderOptionsTests: XCTestCase {
         let unsupportedModels = [
             "parakeet-tdt-v3",
             "parakeet-tdt-v99",
-            "whisper-tiny",
+            "whisper-base",
             "fluid-parakeet-mini",
             "fluid-parakeet-pico",
             "",
@@ -83,6 +83,32 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertEqual(provider.modelOverride, .parakeetTDT)
         #endif
         XCTAssertNotEqual(configuration.identityFingerprint, MeetingFinalProcessingConfiguration().identityFingerprint)
+    }
+
+    @MainActor
+    func testMultilingualRegisteredMeetingProvidersPinAutomaticLanguageAndDiarizationPolicy() throws {
+        for model: SettingsStore.SpeechModel in [.whisperTiny, .parakeetTDT] {
+            let configuration = PichiMeetingProviderFactory.configuration(asrModel: model.rawValue, languageCode: "auto",
+                                                                         diarizationEnabled: false)
+            XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, model)
+            XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue), "auto")
+            XCTAssertTrue(PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(configuration.diarizationFingerprint))
+            let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+            XCTAssertTrue(descriptor.supportedLanguageCodes.isSuperset(of: ["ru", "en", "auto"]))
+            XCTAssertNotEqual(descriptor.id, .legacyCompatibility)
+            XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "auto", selectedModelID: model.rawValue), descriptor.id)
+            let provider = try PichiMeetingProviderFactory.make(configuration)
+            if model.isWhisperModel {
+                let whisper = try XCTUnwrap(provider as? WhisperProvider)
+                XCTAssertEqual(whisper.modelOverride, .whisperTiny)
+                XCTAssertNil(whisper.resolvedLanguageCode())
+            } else {
+                XCTAssertTrue(provider is FluidAudioProvider)
+            }
+        }
+        XCTAssertThrowsError(try MeetingProviderOptions.resolve(
+            MeetingFinalProcessingConfiguration(asrModel: SettingsStore.SpeechModel.gigaam.rawValue, languageCode: "auto")
+        ))
     }
 
     @MainActor
