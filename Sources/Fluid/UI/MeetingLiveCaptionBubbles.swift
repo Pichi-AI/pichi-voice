@@ -46,6 +46,7 @@ struct MeetingLiveBubbleScrollList: View {
     @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
+    @Namespace private var scrollViewport
 
     private var trailingPartialLength: Int {
         guard let last = self.rows.last, last.isPartial else { return 0 }
@@ -66,17 +67,25 @@ struct MeetingLiveBubbleScrollList: View {
                                 .transition(.opacity)
                         }
                     }
+                    .background {
+                        if #available(iOS 18, macOS 15, *) {
+                            EmptyView()
+                        } else {
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: MeetingCaptionScrollTracking.GeometryKey.self,
+                                    value: .init(contentBottom: geometry.frame(in: .named(self.scrollViewport)).maxY)
+                                )
+                            }
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                        }
+                    }
                 }
                 .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
-                // Wide threshold so a growing partial (one wrapped line ≈ 20pt) can't out-race the
-                // follow-up scrollTo and read as the user scrolling away; only a deliberate
-                // scroll-up (> 80pt) disengages following.
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    let bottomOffset = geometry.contentSize.height - geometry.containerSize.height
-                    return geometry.contentOffset.y >= bottomOffset - 80
-                } action: { _, isPinned in
-                    self.isPinnedToBottom = isPinned
-                }
+                .modifier(MeetingCaptionScrollTracking(
+                    viewport: self.scrollViewport, isPinnedToBottom: self.$isPinnedToBottom
+                ))
                 .onChange(of: self.rows.count) {
                     self.scrollToBottomIfPinned(proxy: proxy)
                 }
@@ -117,6 +126,61 @@ struct MeetingLiveBubbleScrollList: View {
         }
         withAnimation(.easeInOut(duration: 0.2)) {
             proxy.scrollTo(lastID, anchor: .bottom)
+        }
+    }
+}
+
+/// iOS 17 has no scroll-geometry callback. This adapter measures the same scroll viewport
+/// through preferences; rendering, IDs, follow actions and transcript ownership remain shared.
+private struct MeetingCaptionScrollTracking: ViewModifier {
+    let viewport: Namespace.ID
+    @Binding var isPinnedToBottom: Bool
+
+    nonisolated struct Geometry: Equatable, Sendable {
+        var contentBottom: CGFloat? = nil
+        var viewportHeight: CGFloat? = nil
+
+        var isPinnedToBottom: Bool? {
+            guard let contentBottom, let viewportHeight,
+                  contentBottom.isFinite, viewportHeight.isFinite, viewportHeight > 0 else { return nil }
+            // Match the existing wide threshold so one wrapped partial line cannot disengage
+            // follow before scrollTo runs; deliberate upward scrolling still suspends it.
+            return contentBottom <= viewportHeight + 80
+        }
+    }
+
+    struct GeometryKey: PreferenceKey {
+        static let defaultValue = Geometry()
+        static func reduce(value: inout Geometry, nextValue: () -> Geometry) {
+            let next = nextValue()
+            if let bottom = next.contentBottom { value.contentBottom = bottom }
+            if let height = next.viewportHeight { value.viewportHeight = height }
+        }
+    }
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18, macOS 15, *) {
+            content.onScrollGeometryChange(for: Bool.self) { geometry in
+                let bottomOffset = geometry.contentSize.height - geometry.containerSize.height
+                return geometry.contentOffset.y >= bottomOffset - 80
+            } action: { _, isPinned in
+                self.isPinnedToBottom = isPinned
+            }
+        } else {
+            content
+                .coordinateSpace(name: self.viewport)
+                .background {
+                    GeometryReader { geometry in
+                        Color.clear.preference(key: GeometryKey.self, value: .init(viewportHeight: geometry.size.height))
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+                .onPreferenceChange(GeometryKey.self) { geometry in
+                    if let isPinned = geometry.isPinnedToBottom, isPinned != self.isPinnedToBottom {
+                        self.isPinnedToBottom = isPinned
+                    }
+                }
         }
     }
 }
