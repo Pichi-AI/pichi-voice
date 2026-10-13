@@ -522,3 +522,213 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         XCTAssertEqual(report.count, 9)
     }
 }
+
+#if canImport(Darwin)
+import Darwin
+
+/// Explicit performance probe for a staged public GigaAM artifact. It uses the production
+/// buffered recognizer/engine but synthetic PCM and bypasses the admission gate under evaluation.
+/// It provides model throughput/capacity evidence, not microphone or background-recording proof.
+extension MobileRegisteredModelInferenceTests {
+    func testGigaAMSustainedSixtySecondPacedBufferedCaptions() async throws {
+        guard ProcessInfo.processInfo.environment["PICHI_MOBILE_GIGA_SUSTAINED"] == "1" else {
+            throw XCTSkip("Set PICHI_MOBILE_GIGA_SUSTAINED=1 for the bounded sixty-second GigaAM benchmark")
+        }
+        let root = try self.assets()
+        let modelRoot = root.appendingPathComponent("models/\(SettingsStore.SpeechModel.gigaam.rawValue)", isDirectory: true)
+        guard PichiGigaAMModelStore(directory: modelRoot).modelsExistOnDisk() else {
+            throw XCTSkip("Stage the verified public GigaAM artifact before the performance probe; this test does not install missing weights")
+        }
+        let source = try self.pcm("ru", in: root)
+        let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: reportDirectory, withIntermediateDirectories: true)
+        let reportURL = reportDirectory.appendingPathComponent("gigaam-sixty-second-paced-caption-capacity.json")
+        let started = ProcessInfo.processInfo.systemUptime
+        let observations = SustainedGigaObservations()
+        var measurements: [[String: Any]] = []
+        var report: [String: Any] = [
+            "modelID": SettingsStore.SpeechModel.gigaam.rawValue,
+            "fixture": "audio/ru.wav", "sampleRate": 16_000, "packetFrames": 1600,
+            "pacedSeconds": 60, "silenceTailSeconds": 2,
+            "microphone": "synthetic-PCM", "productionAdmissionApplied": false,
+            "productionMemoryPressureMonitorApplied": false,
+            "physicalMemoryBytes": ProcessInfo.processInfo.physicalMemory,
+            "processorCount": ProcessInfo.processInfo.processorCount,
+            "platform": ProcessInfo.processInfo.operatingSystemVersionString,
+            "status": "preparing",
+        ]
+        var memoryReadFailures = 0
+        let sampler = Task { @MainActor in
+            while !Task.isCancelled {
+                if let memory = Self.sustainedGigaMemory() {
+                    let current = observations.snapshot()
+                    measurements.append(["elapsedMilliseconds": Int((ProcessInfo.processInfo.systemUptime - started) * 1000),
+                                         "residentBytes": memory.resident, "physicalFootprintBytes": memory.footprint,
+                                         "thermalState": ProcessInfo.processInfo.thermalState.rawValue,
+                                         "partials": current.partials, "utterances": current.utterances])
+                } else { memoryReadFailures += 1 }
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            }
+        }
+        func saveReport() throws {
+            report["memoryReadFailures"] = memoryReadFailures
+            report["memorySamples"] = measurements
+            report["peakResidentBytes"] = measurements.compactMap { $0["residentBytes"] as? UInt64 }.max() ?? 0
+            report["peakPhysicalFootprintBytes"] = measurements.compactMap { $0["physicalFootprintBytes"] as? UInt64 }.max() ?? 0
+            let current = observations.snapshot()
+            report["partialCount"] = current.partials
+            report["clearedPartialCallbacks"] = current.clears
+            report["utteranceCount"] = current.utterances
+            report["lastCommittedEndSeconds"] = current.lastEnd
+            report["russianAnchor"] = current.russianAnchor
+            report["degradationCount"] = current.failures.count
+            report["degradationReasons"] = current.failures
+            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                .write(to: reportURL, options: .atomic)
+        }
+        var engine: PichiMeetingBufferedTrackEngine?
+        var recognizer: PichiMeetingCaptionRecognizer?
+        do {
+            let configuration = try await self.installedConfiguration(model: .gigaam, assets: root)
+            report["artifactFingerprint"] = configuration.asrArtifactFingerprint ?? "unavailable"
+            report["verifiedPreparationMilliseconds"] = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+            let provider = try PichiMeetingProviderFactory.make(configuration)
+            let preparedRecognizer = PichiMeetingCaptionRecognizer(provider: provider)
+            let buffered = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: preparedRecognizer)
+            engine = buffered; recognizer = preparedRecognizer
+            await buffered.configure(
+                onPartial: { _, _, text, _, _ in observations.partial(text) },
+                onUtterance: { _, _, text, _, end in observations.utterance(text, end: end.seconds) },
+                onDegraded: { _, reason in observations.failure(reason) },
+                onReady: { _ in observations.markReady() })
+            let loading = ProcessInfo.processInfo.systemUptime
+            await buffered.start()
+            let readyDeadline = loading + 60
+            while !observations.snapshot().ready, observations.snapshot().failures.isEmpty,
+                  ProcessInfo.processInfo.systemUptime < readyDeadline {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            guard observations.snapshot().ready else { throw SustainedGigaProbeError.notReady }
+            report["bufferedLoadMilliseconds"] = Int((ProcessInfo.processInfo.systemUptime - loading) * 1000)
+            report["status"] = "feeding"
+            try saveReport()
+            let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000,
+                                                    channels: 1, interleaved: false))
+            let beginFeed = ProcessInfo.processInfo.systemUptime
+            let periodFrames = source.count + 16_000
+            var maximumLateness: Double = 0
+            var lastVoicedEnd = 0.0
+            let signalThreshold: Float = 0.006
+            // Sixty seconds of repeated public speech plus one-second inter-turn pauses, then a
+            // two-second silence tail. Only this small source and one 100ms packet are allocated.
+            for packet in 0..<620 {
+                try Task.checkCancellation()
+                let scheduled = beginFeed + Double(packet) / 10
+                let wait = scheduled - ProcessInfo.processInfo.systemUptime
+                if wait > 0 { try await Task.sleep(for: .seconds(wait)) }
+                maximumLateness = max(maximumLateness, ProcessInfo.processInfo.systemUptime - scheduled)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600))
+                buffer.frameLength = 1600
+                let target = try XCTUnwrap(buffer.floatChannelData?[0])
+                var squareSum: Float = 0
+                for frame in 0..<1600 {
+                    let position = (packet * 1600 + frame) % periodFrames
+                    target[frame] = packet < 600 && position < source.count ? source[position] : 0
+                    squareSum += target[frame] * target[frame]
+                }
+                if (squareSum / 1600).squareRoot() >= signalThreshold { lastVoicedEnd = Double(packet + 1) / 10 }
+                buffered.offer(.init(buffer: buffer, pts: CMTime(value: Int64(packet * 1600), timescale: 16_000),
+                                     duration: CMTime(value: 1600, timescale: 16_000)))
+                if !observations.snapshot().failures.isEmpty { throw SustainedGigaProbeError.degraded }
+            }
+            report["pacedFeedMilliseconds"] = Int((ProcessInfo.processInfo.systemUptime - beginFeed) * 1000)
+            report["maximumPacingLatenessMilliseconds"] = Int(maximumLateness * 1000)
+            report["status"] = "draining"
+            try saveReport()
+            let drainStart = ProcessInfo.processInfo.systemUptime
+            let drainDeadline = drainStart + 20
+            let endpointTolerance = 0.2
+            let minimumLastEnd = max(0, lastVoicedEnd - endpointTolerance)
+            report["generatedLastVoicedEndSeconds"] = lastVoicedEnd
+            report["signalEnergyThreshold"] = signalThreshold
+            report["endpointToleranceSeconds"] = endpointTolerance
+            while observations.snapshot().lastEnd < minimumLastEnd, observations.snapshot().failures.isEmpty,
+                  ProcessInfo.processInfo.systemUptime < drainDeadline {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            report["drainMilliseconds"] = Int((ProcessInfo.processInfo.systemUptime - drainStart) * 1000)
+            await buffered.stop()
+            await preparedRecognizer.unload()
+            let actual = observations.snapshot()
+            let expectedFullTurns = Int(60 * 16_000 / periodFrames)
+            report["expectedFullTurns"] = expectedFullTurns
+            report["minimumAcceptedUtterances"] = max(1, expectedFullTurns - 1)
+            report["minimumAcceptedCommittedEndSeconds"] = minimumLastEnd
+            XCTAssertTrue(actual.failures.isEmpty, "A degradation invalidates admission evidence")
+            XCTAssertTrue(actual.russianAnchor)
+            XCTAssertFalse(measurements.isEmpty, "Capacity evidence requires actual memory samples")
+            XCTAssertEqual(memoryReadFailures, 0, "Missing memory observations invalidate capacity evidence")
+            XCTAssertGreaterThan(actual.partials, 0)
+            XCTAssertGreaterThanOrEqual(actual.utterances, max(1, expectedFullTurns - 1), "Paced turns must not silently disappear")
+            XCTAssertGreaterThanOrEqual(actual.lastEnd, minimumLastEnd, "Recognition must catch up with the end of the paced input")
+            XCTAssertLessThanOrEqual(maximumLateness, 0.5, "Main-actor stalls invalidate real-time pacing evidence")
+            report["status"] = actual.failures.isEmpty && actual.russianAnchor && actual.partials > 0 && actual.lastEnd >= minimumLastEnd
+                && actual.utterances >= max(1, expectedFullTurns - 1) && maximumLateness <= 0.5
+                && !measurements.isEmpty && memoryReadFailures == 0 ? "passed" : "failed"
+            sampler.cancel(); await sampler.value
+            try saveReport()
+        } catch {
+            await engine?.stop()
+            await recognizer?.unload()
+            sampler.cancel(); await sampler.value
+            report["status"] = "error"
+            report["errorType"] = String(describing: type(of: error))
+            try saveReport()
+            throw error
+        }
+    }
+
+    private static func sustainedGigaMemory() -> (resident: UInt64, footprint: UInt64)? {
+        var information = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &information) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return nil }
+        return (information.resident_size, information.phys_footprint)
+    }
+}
+
+private enum SustainedGigaProbeError: Error { case notReady, degraded }
+
+private final nonisolated class SustainedGigaObservations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ready = false
+    private var partials = 0
+    private var clears = 0
+    private var utterances = 0
+    private var lastEnd = 0.0
+    private var russianAnchor = false
+    private var failures: [String] = []
+    func markReady() { lock.withLock { ready = true } }
+    func partial(_ text: String) {
+        lock.withLock {
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { clears += 1; return }
+            partials += 1; anchor(text)
+        }
+    }
+    func utterance(_ text: String, end: Double) { lock.withLock { utterances += 1; lastEnd = max(lastEnd, end); anchor(text) } }
+    func failure(_ reason: String) { lock.withLock { failures.append(reason) } }
+    private func anchor(_ text: String) {
+        let lower = text.lowercased()
+        if lower.contains("документ") || lower.contains("инструкци") { russianAnchor = true }
+    }
+    func snapshot() -> (ready: Bool, partials: Int, clears: Int, utterances: Int, lastEnd: Double, russianAnchor: Bool, failures: [String]) {
+        lock.withLock { (ready, partials, clears, utterances, lastEnd, russianAnchor, failures) }
+    }
+}
+#endif
