@@ -4744,7 +4744,8 @@ struct ContentView: View {
         return OllamaChatAdapter.supports(route.baseURL) ? route : nil
     }
 
-    private func prewarmAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot) {
+    private func prewarmAIDictationIfNeeded(for slot: SettingsStore.DictationShortcutSlot, localOnly: Bool = false) {
+        guard !localOnly || self.appServices.isUIReady else { return }
         let appBundleID = self.asr.isRunningOrStarting ? self.recordingAppInfo?.bundleId : DictationAppSession.shared.appID
         let settings = SettingsStore.shared
         let route = DictationProviderRoute.resolve(
@@ -4753,7 +4754,7 @@ struct ContentView: View {
             appBundleID: appBundleID
         )
         let nativeLocal = OllamaChatAdapter.supports(route.baseURL)
-        self.appServices.refreshLocalAIResidency(for: slot)
+        self.appServices.refreshLocalAIResidency(for: localOnly ? nil : slot)
         if nativeLocal {
             // App-owned work survives window closure and rechecks daemon eviction.
             return
@@ -4784,7 +4785,7 @@ struct ContentView: View {
                 "ContentView: AI dictation prewarm started slot=\(slot.rawValue)",
                 source: "ContentView"
             )
-            await PrivateAIIntegrationService.shared.prewarmDictation()
+            await PrivateAIIntegrationService.shared.prewarmDictation(localOnly: localOnly)
             DebugLogger.shared.debug(
                 "AI dictation prewarm complete slot=\(slot.rawValue)",
                 source: "ContentView"
