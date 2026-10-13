@@ -247,6 +247,13 @@ struct MeetingPrivacyContextTests {
                   "protected ASR text did not appear before attribution")
         let noCheckpoint = try await speechOnly.finish()
         try check(noCheckpoint == nil, "ASR-only observation entered a durable privacy tail")
+        let oversized = MeetingTranscriptPrivacyContext(redactor: redactor)
+        do {
+            _ = try await oversized.previewSpeech(.init(segments: [segment(String(repeating: "документ ", count: 4_500), track: track, start: 0)]))
+            throw Failure.assertion("oversized ASR observation reached provisional display")
+        } catch is MeetingPrivacyPublicationError { }
+        let oversizedTail = try await oversized.finish()
+        try check(oversizedTail == nil, "rejected ASR observation advanced durable state")
         let staged = MeetingTranscriptPrivacyContext(redactor: redactor)
         let early = try await staged.previewSpeech(.init(segments: [original]))
         let canonical = try await staged.redact(.init(segments: [original]))

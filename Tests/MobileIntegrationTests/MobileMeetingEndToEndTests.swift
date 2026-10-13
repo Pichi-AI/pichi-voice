@@ -95,6 +95,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var firstTextSecond: Int?
         var updates = 0
         var previousIDs: Set<UUID> = []
+        var previousPartial: MeetingLivePartial?
         do {
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic strict speech")
             let recording = try await coordinator.startRecording(configuration: configuration)
@@ -115,8 +116,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 if !ids.isEmpty || snapshot.partials.values.contains(where: { !$0.text.isEmpty }) {
                     firstTextSecond = firstTextSecond ?? second
                 }
-                if !ids.subtracting(previousIDs).isEmpty { updates += 1 }
+                let partial = snapshot.partials[.you]
+                if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) { updates += 1 }
                 previousIDs = ids
+                previousPartial = partial
                 print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates)")
             }
             player.stop()
@@ -138,12 +141,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertFalse(payload.includesAudio)
             payload.cleanup()
             print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates)")
-            await services.asr.shutdownForTermination()
+            // This is one service composition, not application termination. Stopping the
+            // coordinator already joins capture/model work; terminating the shared model
+            // residency here would invalidate later tests in this same hosted process.
+            XCTAssertNil(services.asr.activeExclusiveActivity)
+            XCTAssertFalse(services.asr.hasActiveModelPreparation)
+            await coordinator.shutdownForTermination()
             try await privacy.unload()
         } catch {
             player.stop()
             await coordinator.shutdownForTermination()
-            await services.asr.shutdownForTermination()
             try? await privacy.unload()
             throw error
         }

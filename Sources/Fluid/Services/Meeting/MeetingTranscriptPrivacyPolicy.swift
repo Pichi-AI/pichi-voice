@@ -387,6 +387,15 @@ actor MeetingTranscriptPrivacyContext {
         }
         var combined = batch
         combined.segments = pending + batch.segments
+        var remaining = Self.maximumPendingUTF16
+        guard combined.segments.count <= Self.maximumPendingSegments else {
+            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+        }
+        for (index, segment) in combined.segments.enumerated() {
+            let count = segment.text.utf16.count + (index == 0 ? 0 : 1)
+            guard count <= remaining else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+            remaining -= count
+        }
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(combined, using: redactor,
             contextPrefixes: currentTrack.map { [$0: continues ? prefix : ""] } ?? [:],
             provisionalPreviewID: provisionalPreviewID, provisionalSegmentIDs: Set(combined.segments.map(\.id)))
