@@ -402,7 +402,15 @@ nonisolated enum FluidServeMeetings {
         let fields = text.split(separator: ":", omittingEmptySubsequences: false)
         let parts = fields.compactMap { Int($0) }.filter { $0 >= 0 }
         guard !parts.isEmpty, parts.count <= 3, parts.count == fields.count else { return nil }
-        return TimeInterval(parts.reduce(0) { $0 * 60 + $1 })
+        var seconds = 0
+        for part in parts {
+            let multiplied = seconds.multipliedReportingOverflow(by: 60)
+            guard !multiplied.overflow else { return nil }
+            let added = multiplied.partialValue.addingReportingOverflow(part)
+            guard !added.overflow else { return nil }
+            seconds = added.partialValue
+        }
+        return TimeInterval(seconds)
     }
 
     /// `7d`, `24h` or `2026-10-01` as the earliest start time to include.

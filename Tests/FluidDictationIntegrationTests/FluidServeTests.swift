@@ -82,6 +82,13 @@ final class FluidServeTests: XCTestCase {
         XCTAssertNil(FluidServeMeetings.sinceDate(from: "last week", now: now))
     }
 
+    func testClockArgumentsRejectIntegerOverflow() {
+        XCTAssertNil(FluidServeMeetings.seconds(fromClock: "\(Int.max):59"))
+        XCTAssertNil(FluidServeMeetings.seconds(fromClock: "\(Int.max / 60):\(Int.max % 60 + 1)"))
+        XCTAssertEqual(FluidServeMeetings.seconds(fromClock: "\(Int.max)"), TimeInterval(Int.max))
+        XCTAssertEqual(FluidServeMeetings.seconds(fromClock: "\(Int.max / 60):\(Int.max % 60)"), TimeInterval(Int.max))
+    }
+
     // MARK: - Command
 
     func testCommandStaysClosedUntilAccessIsOn() throws {

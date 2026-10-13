@@ -16,6 +16,16 @@ struct FluidServeGroundedSummaryTests {
             precondition(value, message)
             checks += 1
         }
+        let ordinaryClocks: [(String, TimeInterval)] = [("90", 90), ("12:30", 750), ("1:02:03", 3723)]
+        let overflowClocks = ["\(Int.max):59", "\(Int.max / 60):\(Int.max % 60 + 1)"]
+        for (text, expected) in ordinaryClocks {
+            check(FluidServeMeetings.seconds(fromClock: text) == expected, "Ordinary clock semantics are preserved")
+        }
+        check(FluidServeMeetings.seconds(fromClock: "\(Int.max)") == TimeInterval(Int.max), "Largest single clock field remains valid")
+        check(FluidServeMeetings.seconds(fromClock: "\(Int.max / 60):\(Int.max % 60)") == TimeInterval(Int.max), "Largest accumulated clock remains valid")
+        for text in overflowClocks {
+            check(FluidServeMeetings.seconds(fromClock: text) == nil, "Overflowing clock arithmetic is rejected")
+        }
         func time(_ seconds: Int64) -> MeetingMediaTime { .init(value: seconds, timescale: 1) }
         var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic fixture", microphone: .init(captureDeviceID: "fixture", displayName: "Fixture microphone")),
                                      startedAt: Date(timeIntervalSince1970: 1_700_000_000),
@@ -88,7 +98,7 @@ struct FluidServeGroundedSummaryTests {
         try manager.createDirectory(at: tool.deletingLastPathComponent(), withIntermediateDirectories: true)
         try manager.copyItem(at: URL(fileURLWithPath: CommandLine.arguments[1]), to: tool)
         try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": suiteName, "CFBundleDisplayName": "Synthetic voice app"], format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
-        func run(_ arguments: [String]) throws -> (Int32, String) {
+        func run(_ arguments: [String]) throws -> (Int32, String, Process.TerminationReason) {
             let process = Process(); let output = Pipe()
             process.executableURL = tool; process.arguments = arguments
             process.standardOutput = output; process.standardError = output
@@ -97,7 +107,7 @@ struct FluidServeGroundedSummaryTests {
             while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
             if process.isRunning { process.terminate() }
             process.waitUntilExit()
-            return (process.terminationStatus, String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            return (process.terminationStatus, String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), process.terminationReason)
         }
         let capabilities = ModelTemperatureSupport(defaults: defaults)
         let endpoint = "https://gateway.test/TeamA/v1?Scope=AbC"
@@ -125,6 +135,17 @@ struct FluidServeGroundedSummaryTests {
         check(printed.1.contains("Synthetic voice app"), "CLI uses enclosing display name")
         let actual = try run(["meet", "summary", "latest"])
         check(actual.0 == 0 && actual.1.contains("Grounded fixture summary"), "Real helper serves actual grounded artifact")
+        for option in ["--from", "--to"] {
+            for (text, _) in ordinaryClocks {
+                let clock = try run(["meet", "show", "latest", option, text])
+                check(clock.0 == 0 && clock.2 == .exit, "Real helper accepts ordinary clock arguments without a signal")
+            }
+            for text in overflowClocks {
+                let clock = try run(["meet", "show", "latest", option, text])
+                check(clock.0 == 1 && clock.2 == .exit, "Real helper rejects clock overflow with usage exit 1, without a signal")
+                check(clock.1.contains("\(option) takes a time like 12:30.") && clock.1.contains(FluidServeCommand.usage), "Clock overflow reports the existing usage error")
+            }
+        }
         let supportBytes = try Data(contentsOf: supportRoot.appendingPathComponent(directory.lastPathComponent + "/session.json"))
         check(supportBytes == (try Data(contentsOf: directory.appendingPathComponent("session.json"))), "Real helper never rewrites source")
         print("FluidServe grounded summary tests: \(checks) checks passed")
