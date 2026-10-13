@@ -671,6 +671,7 @@
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
 				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+				2E9B00000000000000000004 /* ZeppelinEmbed */,
 			);
 			productName = FluidASRBaselineHost;
 			productReference = A5B000000000000000000005 /* FluidASRBaselineHost.app */;
