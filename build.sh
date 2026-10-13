@@ -202,7 +202,7 @@ except (KeyError, TypeError, ValueError) as error:
         --options runtime --timestamp=none \
         --preserve-metadata=identifier,requirements,flags "${ctranscribe_framework}"
 
-    entitlements_file="$(mktemp -t fluidvoice-entitlements)"
+    entitlements_file="$(mktemp "${TMPDIR:-/tmp}/fluidvoice-entitlements.XXXXXX")"
     if ! codesign --display --entitlements :- "${app_path}" > "${entitlements_file}" 2>/dev/null; then
         rm -f "${entitlements_file}"
         echo "Unable to read existing app entitlements: ${app_path}" >&2

@@ -23,6 +23,28 @@ class SignedBuildProductPathTests(unittest.TestCase):
         self.derived = self.root / "Derived Data"
         self.products = self.derived / "Build" / "Products" / "Debug"
         self.log = self.root / "signing.jsonl"
+        self.temporary_files = self.root / "Temporary Files"
+        self.temporary_files.mkdir()
+        self.mktemp_log = self.root / "mktemp.jsonl"
+        self.system_mktemp = shutil.which("mktemp")
+        self.assertIsNotNone(self.system_mktemp, "Portable signed-build tests require mktemp")
+        # GNU rejects BSD's prefix-only -t invocation. Enforce that contract on every OS,
+        # then use the actual local mktemp for exclusive creation and permission checks.
+        self._executable("mktemp", """#!/usr/bin/env python3
+import json, os, pathlib, re, stat, subprocess, sys
+arguments = sys.argv[1:]
+template = arguments[-1] if arguments else ''
+if not re.search(r'X{3,}$', template):
+    sys.exit("mktemp: too few X's in template " + repr(template))
+result = subprocess.run([os.environ['TEST_SYSTEM_MKTEMP'], *arguments], capture_output=True, text=True)
+if result.returncode == 0:
+    path = pathlib.Path(result.stdout.strip())
+    with open(os.environ['TEST_MKTEMP_LOG'], 'a') as stream:
+        stream.write(json.dumps(dict(path=str(path), mode=stat.S_IMODE(path.stat().st_mode))) + '\\n')
+sys.stdout.write(result.stdout)
+sys.stderr.write(result.stderr)
+sys.exit(result.returncode)
+""")
         self._executable("security", """#!/bin/sh
 printf '%s\\n' '  1) 0123456789012345678901234567890123456789 "Apple Development: Fixture"'
 """)
@@ -40,7 +62,10 @@ import json, os, sys
 with open(os.environ['TEST_SIGNING_LOG'], 'a') as stream:
     stream.write(json.dumps(sys.argv[1:]) + '\\n')
 if '--display' in sys.argv:
+    if os.environ.get('TEST_SIGNING_FAILURE') == 'extract': sys.exit(23)
     print('<?xml version="1.0"?><plist version="1.0"><dict/></plist>')
+elif '--entitlements' in sys.argv and os.environ.get('TEST_SIGNING_FAILURE') == 'resign':
+    sys.exit(24)
 """)
 
     def tearDown(self):
@@ -58,7 +83,7 @@ if '--display' in sys.argv:
             "FULL_PRODUCT_NAME": name,
         }}]
 
-    def _run(self, settings, product=None, profile="public"):
+    def _run(self, settings, product=None, profile="public", signing_failure=""):
         environment = dict(os.environ)
         environment.update({
             "PATH": str(self.bin) + os.pathsep + environment["PATH"],
@@ -67,6 +92,10 @@ if '--display' in sys.argv:
             "TEST_BUILD_SETTINGS": json.dumps(settings),
             "TEST_BUILD_PRODUCT": str(product or self.products / "Pichi Voice Debug.app"),
             "TEST_SIGNING_LOG": str(self.log),
+            "TEST_SYSTEM_MKTEMP": self.system_mktemp,
+            "TEST_MKTEMP_LOG": str(self.mktemp_log),
+            "TEST_SIGNING_FAILURE": signing_failure,
+            "TMPDIR": str(self.temporary_files),
         })
         return subprocess.run(["bash", str(self.root / "build.sh"), profile],
                               cwd=self.root, env=environment, capture_output=True, text=True)
@@ -88,6 +117,34 @@ if '--display' in sys.argv:
                 self.assertEqual(calls[-1], ["--verify", "--deep", "--strict", str(product)])
                 self.assertTrue((product / "Contents/Frameworks/CTranscribe.framework/CTranscribe").is_symlink())
                 self.assertFalse((self.root / "injected").exists(), "Product text must never be evaluated as shell code")
+
+    def test_entitlements_temp_is_private_and_removed_after_signing(self):
+        result = self._run(self._settings())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.mktemp_log.read_text().splitlines()]
+        self.assertEqual(len(calls), 1)
+        path = Path(calls[0]["path"])
+        self.assertEqual(path.parent, self.temporary_files)
+        self.assertEqual(calls[0]["mode"], 0o600)
+        self.assertFalse(path.exists(), "Successful signing must remove extracted entitlements")
+        signing = [json.loads(line) for line in self.log.read_text().splitlines()]
+        app_signing = next(call for call in signing if "--force" in call and "--entitlements" in call)
+        self.assertEqual(app_signing[app_signing.index("--entitlements") + 1], str(path))
+        self.assertEqual(app_signing[app_signing.index("--sign") + 1], "0123456789012345678901234567890123456789")
+        self.assertEqual(app_signing[app_signing.index("--options") + 1], "runtime")
+        self.assertIn("--timestamp=none", app_signing)
+        self.assertIn("--preserve-metadata=identifier,requirements,flags", app_signing)
+        self.assertEqual(signing[-1][:4], ["--verify", "--deep", "--strict", str(self.products / "Pichi Voice Debug.app")])
+
+    def test_entitlements_temp_is_removed_when_extraction_or_resigning_fails(self):
+        for stage in ["extract", "resign"]:
+            with self.subTest(stage=stage):
+                result = self._run(self._settings(), signing_failure=stage)
+                self.assertNotEqual(result.returncode, 0)
+                call = json.loads(self.mktemp_log.read_text().splitlines()[-1])
+                self.assertEqual(call["mode"], 0o600)
+                self.assertFalse(Path(call["path"]).exists(), "Failed signing must remove extracted entitlements")
+                self.assertEqual(list(self.temporary_files.iterdir()), [])
 
     def test_non_application_or_wrong_target_is_rejected(self):
         for target, product_type in [("FluidASRBaselineHost", "com.apple.product-type.application"),
