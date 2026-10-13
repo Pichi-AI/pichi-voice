@@ -74,7 +74,7 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## Reproducible macOS regression
 
-Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 45 current runners, including native export, file-error localization, relative dates, contrast, command localization, Settings owned copy, Local API harness self-tests, diarization artifact comparison self-tests, owned hotkey initialization and pinned upstream sync. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
+Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 46 current runners, including the read-only grounded meeting helper, native export, file-error localization, relative dates, contrast, command localization, Settings owned copy, Local API harness self-tests, diarization artifact comparison self-tests, owned hotkey initialization and pinned upstream sync. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
 
 Full runs require an isolated worktree, macOS and full Xcode. The runner prevents simultaneous standalone runs in one worktree. `--list` lists the names without starting native probes and is portable. Narrow a repeat run with repeated `--only NAME` options:
 

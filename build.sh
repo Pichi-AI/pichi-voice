@@ -230,6 +230,12 @@ except (KeyError, TypeError, ValueError) as error:
     fi
     rm -f "${entitlements_file}"
 
+    # fv-serve is embedded and signed by the Xcode build; fail here rather than ship an app without it.
+    if [ ! -x "${app_path}/Contents/Helpers/fv-serve" ]; then
+        echo "fv-serve is missing from the built app: ${app_path}" >&2
+        exit 1
+    fi
+
     echo "Verifying the signed app..."
     codesign --verify --deep --strict "${app_path}"
 }
