@@ -140,6 +140,27 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["history.list"].firstMatch.waitForExistence(timeout: 5))
     }
 
+    func testReselectingHistoryClosesMeetingDetail() throws {
+        openNavigation("history", title: "History")
+        let meeting = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "history.session.")).firstMatch
+        guard meeting.waitForExistence(timeout: 5) else {
+            throw XCTSkip("Stage the synthetic NavigationMeeting.json in the simulator's meeting store before this test")
+        }
+        meeting.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+        capture("history-detail-opened")
+        openNavigation("meetings", title: "Meetings")
+        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+        openNavigation("history", title: "History")
+        XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5),
+                      "Switching sections preserves the history detail until History is reselected")
+        openNavigation("history", title: "History")
+        XCTAssertTrue(app.descendants(matching: .any)["history.list"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(meeting.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["meeting.transcript"].firstMatch.exists)
+        capture("history-reselected-root")
+    }
+
     func testRussianSettingsAndModelsInDarkAppearance() throws {
         app.terminate()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"]
