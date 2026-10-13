@@ -12,6 +12,7 @@ struct MobileMeetingRoot: View {
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var destination = Destination.meetings
     @StateObject private var historySnapshot: MeetingHistorySnapshot
     private var sessions: [MeetingSession] { historySnapshot.sessions }
@@ -195,12 +196,14 @@ struct MobileMeetingRoot: View {
         } else { start }
     }
 
+    private var compactHeight: Bool { verticalSizeClass == .compact }
+
     private var start: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: theme.metrics.spacing.xl) {
-                Text(PichiLocalization.text("Be in the conversation.")).font(theme.typography.displayTitle)
+            VStack(alignment: .leading, spacing: compactHeight ? theme.metrics.spacing.md : theme.metrics.spacing.xl) {
+                Text(PichiLocalization.text("Be in the conversation.")).font(compactHeight ? theme.typography.title : theme.typography.displayTitle)
                 Text(PichiLocalization.text("Record your meeting. Come back to every word."))
-                    .font(theme.typography.statement).foregroundStyle(theme.palette.secondaryText)
+                    .font(compactHeight ? theme.typography.body : theme.typography.statement).foregroundStyle(theme.palette.secondaryText)
                 VStack(alignment: .leading, spacing: 12) {
                     Text(PichiLocalization.text("No call open.")).font(theme.typography.sectionTitle)
                     Text(PichiLocalization.text("Your mic will record the room."))
@@ -218,11 +221,13 @@ struct MobileMeetingRoot: View {
                             .accessibilityIdentifier("meeting.settings")
                     }
                     if isBusy { ProgressView().accessibilityIdentifier("meeting.preparing") }
-                }.padding(20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
+                }.padding(compactHeight ? 16 : 20).background(theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: theme.metrics.corners.lg))
                 Label(PichiLocalization.text("Stored on this device. Place the microphone where everyone can be heard."), systemImage: "lock")
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-            }.padding(24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
-        }.accessibilityIdentifier("meeting.ready")
+                    .accessibilityIdentifier("meeting.storageNote")
+            }.padding(compactHeight ? 16 : 24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
+        }.safeAreaPadding(.bottom, compactHeight ? 48 : 0)
+            .accessibilityIdentifier("meeting.ready")
     }
 
     private func recording(_ session: MeetingSession) -> some View {

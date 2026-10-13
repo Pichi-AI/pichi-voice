@@ -21,6 +21,13 @@ final class MobileNavigationUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         waitForOrientation(portrait: false)
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+        if app.tabBars.firstMatch.exists {
+            let tabBar = app.tabBars.firstMatch.frame
+            XCTAssertTrue(app.buttons["meeting.start"].frame.intersection(tabBar).isEmpty,
+                          "The floating tab bar must not cover the recording action")
+            XCTAssertTrue(app.staticTexts["meeting.storageNote"].frame.intersection(tabBar).isEmpty,
+                          "The floating tab bar must not cover the storage caption")
+        }
         capture("02-ready-landscape")
         openNavigation("settings", title: "Settings")
         XCTAssertTrue(app.otherElements["settings.root"].exists || app.buttons["settings.privacy"].exists)
