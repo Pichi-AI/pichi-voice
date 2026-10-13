@@ -241,6 +241,21 @@ struct MeetingPrivacyContextTests {
         let track = UUID()
         let benign = "Сегодня обсуждаем применение амоксициллина и переносимость назначенной терапии."
         let original = segment(benign, track: track, start: 0)
+        let speechOnly = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let immediate = try await speechOnly.previewSpeech(.init(segments: [original]))
+        try check(immediate?.text.hasPrefix("Сегодня обсуждаем применение") == true,
+                  "protected ASR text did not appear before attribution")
+        let noCheckpoint = try await speechOnly.finish()
+        try check(noCheckpoint == nil, "ASR-only observation entered a durable privacy tail")
+        let staged = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let early = try await staged.previewSpeech(.init(segments: [original]))
+        let canonical = try await staged.redact(.init(segments: [original]))
+        try check(canonical.segments.isEmpty && canonical.livePreview?.id == early?.id,
+                  "early observation changed durable holdback or preview identity")
+        let canonicalTail = try await staged.finish()
+        let canonicalReference = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: [original]), using: redactor)
+        try check(canonicalTail?.segments == canonicalReference.segments,
+                  "early observation duplicated or changed canonical output")
         let context = MeetingTranscriptPrivacyContext(redactor: redactor)
         let first = try await context.redact(.init(segments: [original]))
         try check(first.segments.isEmpty, "preview released the canonical 32-token tail")

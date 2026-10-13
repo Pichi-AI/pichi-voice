@@ -121,7 +121,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
             player.stop()
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
-            XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 24, "A warm strict pipeline must publish during the meeting")
+            XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
             let completed = try await coordinator.stopAndTranscribe()
             XCTAssertEqual(completed.state, .completed)

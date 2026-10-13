@@ -7,6 +7,9 @@ import Foundation
 protocol MeetingProcessingControlling: AnyObject {
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws
     func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
@@ -23,6 +26,11 @@ extension MeetingProcessingControlling {
         throw MeetingProcessingError.noRecoverableAudio
     }
     func cancelMemoryAudio(sessionID: MeetingSessionID) async {}
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory, checkpoint: checkpoint)
+    }
 }
 
 actor MeetingProcessingSerializationGate {

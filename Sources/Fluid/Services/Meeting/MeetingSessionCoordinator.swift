@@ -566,11 +566,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             if configuration.audioStorageMode == .memoryOnly {
                 self.memoryCheckpointGeneration = generation
                 _ = try await self.processing.prepareMemoryAudio(
-                    session: session, sessionDirectory: sessionDirectory
-                ) { [weak self] batch in
+                    session: session, sessionDirectory: sessionDirectory, checkpoint: { [weak self] batch in
                     guard let self, self.memoryCheckpointGeneration == generation else { throw CancellationError() }
                     try await self.checkpointMemoryTranscript(batch, sessionID: session.id, generation: generation)
-                }
+                }, preview: { [weak self] partial in
+                    guard let self, self.memoryCheckpointGeneration == generation,
+                          self.activeSession?.id == session.id else { throw CancellationError() }
+                    self.liveTranscript = self.liveTranscript.settingPartial(partial, for: .you)
+                    self.liveTranscript.revision += 1
+                    self.liveTranscript.availability = .available
+                })
             }
             captureStartAttempted = true
             let startResult = try await self.capture.start(

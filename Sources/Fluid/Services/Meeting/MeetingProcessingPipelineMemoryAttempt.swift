@@ -8,12 +8,15 @@ final class MeetingMemoryProcessingAttempt {
     let redactor: (any TranscriptTextRedacting)?
     let privacyContext: MeetingTranscriptPrivacyContext?
     let checkpoint: @MainActor (MeetingPCMTranscriptBatch) async throws -> Void
+    let preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?
     var consumer: (any MeetingMemoryAudioConsuming)?
     init(request: MeetingBackendRequest, descriptor: MeetingBackendDescriptor, runtime: any MeetingParakeetNemotronRunning,
          redactor: (any TranscriptTextRedacting)?,
-         checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) {
+         checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+         preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) {
         self.request = request; self.descriptor = descriptor; self.runtime = runtime; self.redactor = redactor; self.checkpoint = checkpoint
         self.privacyContext = redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) }
+        self.preview = preview
     }
 }
 
@@ -40,6 +43,18 @@ extension MeetingProcessingPipeline {
 
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws {
+        try await prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory, checkpoint: checkpoint, preview: nil)
+    }
+
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws {
+        try await prepareMemoryAudioAttempt(session: session, sessionDirectory: sessionDirectory, checkpoint: checkpoint, preview: preview)
+    }
+
+    private func prepareMemoryAudioAttempt(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) async throws {
         guard session.audioStorageMode == .memoryOnly, self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
         let attemptID = UUID()
@@ -104,7 +119,7 @@ extension MeetingProcessingPipeline {
             prepared = true
         }
         try Task.checkCancellation()
-        self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor, runtime: runtime, redactor: redactor, checkpoint: checkpoint)
+        self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor, runtime: runtime, redactor: redactor, checkpoint: checkpoint, preview: preview)
     }
 
     func memoryConsumer(for sessionID: UUID, track: MeetingAudioTrack,
@@ -120,6 +135,28 @@ extension MeetingProcessingPipeline {
         let trackID = track.id
         let privacyContext = attempt.privacyContext
         let checkpoint = attempt.checkpoint
+        let publishPreview = attempt.preview
+        let observeSpeech: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?
+        if let publishPreview {
+            observeSpeech = { speech in
+                var speech = speech
+                speech.sourceTrack = track
+                let partial: MeetingLivePartial?
+                if let privacyContext {
+                    partial = try await privacyContext.previewSpeech(speech)
+                } else {
+                    let ordered = speech.segments.sorted { $0.start < $1.start }
+                    partial = ordered.first.map {
+                        MeetingLivePartial(id: $0.id, text: ordered.map(\.text).joined(separator: " "), start: $0.start.seconds)
+                    }
+                }
+                try Task.checkCancellation()
+                try await publishPreview(partial)
+                DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                    DebugLogger.shared.info("speech_preview visible=\(partial != nil) sourceSegments=\(speech.segments.count)", source: "MeetingMemoryAudio")
+                }
+            }
+        } else { observeSpeech = nil }
         DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
             DebugLogger.shared.info("strict_capture session=\(sessionID) track=\(trackID) backend=\(attempt.descriptor.id.rawValue) model=\(configuration.asrModel) speakers=\(configuration.speakerLabelsEnabled) privacy=\(privacyContext != nil)", source: "MeetingMemoryAudio")
         }
@@ -129,7 +166,7 @@ extension MeetingProcessingPipeline {
                 try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
                     let started = ProcessInfo.processInfo.systemUptime
                     var batch = try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
-                        try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration)
+                        try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration, preview: observeSpeech)
                     }
                     batch.sourceTrack = track
                     let recognized = ProcessInfo.processInfo.systemUptime

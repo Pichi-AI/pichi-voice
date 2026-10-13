@@ -362,6 +362,40 @@ actor MeetingTranscriptPrivacyContext {
     private var lastSafePreview: MeetingLivePartial?
     init(redactor: any TranscriptTextRedacting) { self.redactor = redactor }
 
+    /// Speech can be displayed before expensive attribution, but cannot enter the durable
+    /// tail or checkpoint until that window completes. Use the same frozen redactor/guards.
+    func previewSpeech(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingLivePartial? {
+        guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        isProcessing = true
+        var completed = false
+        defer { if !completed { lastSafePreview = nil }; isProcessing = false }
+        try Task.checkCancellation()
+        let tracks = Set(batch.segments.map(\.sourceTrackID))
+        guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        let ordered = batch.segments.sorted { $0.start < $1.start }
+        let currentTrack = ordered.first?.sourceTrackID ?? batch.sourceTrack?.id
+        let forward = ordered.first.map { first in lastEnd.map { first.start.seconds + 0.001 >= $0.seconds } ?? true } ?? true
+        let continues = currentTrack != nil && currentTrack == trackID && forward
+        if !pending.isEmpty, let first = ordered.first {
+            guard currentTrack == trackID, lastEnd.map({ first.start.seconds + 0.001 >= $0.seconds }) ?? true else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+        }
+        if ordered.isEmpty {
+            completed = true
+            return currentTrack == nil || continues ? lastSafePreview : nil
+        }
+        var combined = batch
+        combined.segments = pending + batch.segments
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(combined, using: redactor,
+            contextPrefixes: currentTrack.map { [$0: continues ? prefix : ""] } ?? [:],
+            provisionalPreviewID: provisionalPreviewID, provisionalSegmentIDs: Set(combined.segments.map(\.id)))
+        try Task.checkCancellation()
+        lastSafePreview = safe.livePreview
+        completed = true
+        return safe.livePreview
+    }
+
     func redact(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingPCMTranscriptBatch {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         isProcessing = true
