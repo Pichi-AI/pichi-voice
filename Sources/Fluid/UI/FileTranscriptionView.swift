@@ -818,7 +818,7 @@ struct FileTranscriptionView: View {
             let ext = url.pathExtension.lowercased()
             guard Self.supportedFileExtensions.contains(ext) else {
                 DispatchQueue.main.async {
-                    self.dropErrorMessage = Self.dropErrorCopy
+                    self.dropErrorMessage = PichiLocalization.text(Self.dropErrorCopy)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         self.dropErrorMessage = nil
                     }

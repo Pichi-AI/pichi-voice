@@ -417,13 +417,13 @@ final class FileTranscriptionService: ObservableObject {
             case let .activityInProgress(msg):
                 return msg
             case let .modelLoadFailed(msg):
-                return "Failed to load ASR models: \(msg)"
+                return PichiLocalization.format("Failed to load ASR models: %@", msg)
             case let .audioConversionFailed(msg):
-                return "Failed to convert audio: \(msg)"
+                return PichiLocalization.format("Failed to convert audio: %@", msg)
             case let .transcriptionFailed(msg):
-                return "Transcription failed: \(msg)"
+                return PichiLocalization.format("Transcription failed: %@", msg)
             case let .fileNotSupported(msg):
-                return "File format not supported: \(msg)"
+                return PichiLocalization.format("File format not supported: %@", msg)
             }
         }
     }
@@ -450,7 +450,7 @@ final class FileTranscriptionService: ObservableObject {
     ///   - fileURL: URL to the audio/video file
     func transcribeFile(_ fileURL: URL) async throws -> TranscriptionResult {
         guard !self.isTranscribing else {
-            throw TranscriptionError.activityInProgress("This file is already being transcribed.")
+            throw TranscriptionError.activityInProgress(PichiLocalization.text("This file is already being transcribed."))
         }
 
         let activityLease: ASRActivityLease
@@ -484,7 +484,7 @@ final class FileTranscriptionService: ObservableObject {
             // Get the current transcription provider (works for both Parakeet and Whisper)
             let provider = self.asrService.fileTranscriptionProvider
             guard provider.isReady else {
-                throw TranscriptionError.modelLoadFailed("Transcription provider not ready")
+                throw TranscriptionError.modelLoadFailed(PichiLocalization.text("Transcription provider not ready"))
             }
 
             // Check file extension
@@ -492,7 +492,8 @@ final class FileTranscriptionService: ObservableObject {
 
             guard Self.supportedFileExtensions.contains(fileExtension) else {
                 throw TranscriptionError
-                    .fileNotSupported("Format .\(fileExtension) not supported. \(Self.supportedFormatsDescription)")
+                    .fileNotSupported(PichiLocalization.format("Format .%@ not supported. %@", fileExtension,
+                                                               PichiLocalization.text(Self.supportedFormatsDescription)))
             }
 
             AnalyticsService.shared.recordUsage(
@@ -595,14 +596,14 @@ final class FileTranscriptionService: ObservableObject {
             do {
                 audioFile = try AVAudioFile(forReading: fileURL)
             } catch {
-                throw TranscriptionError.audioConversionFailed("Could not open audio file: \(error.localizedDescription)")
+                throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not open audio file: %@", error.localizedDescription))
             }
 
             let fileFormat = audioFile.processingFormat
             let totalFrames = AVAudioFrameCount(audioFile.length)
             let fileSampleRate = fileFormat.sampleRate
             guard fileSampleRate > 0 else {
-                throw TranscriptionError.audioConversionFailed("Invalid audio file: sample rate is 0")
+                throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Invalid audio file: sample rate is 0"))
             }
             let resampleRatio = sampleRate / fileSampleRate
 
@@ -618,14 +619,14 @@ final class FileTranscriptionService: ObservableObject {
 
                 // Read chunk from file
                 guard let buffer = AVAudioPCMBuffer(pcmFormat: fileFormat, frameCapacity: framesToRead) else {
-                    throw TranscriptionError.audioConversionFailed("Could not create audio buffer")
+                    throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Could not create audio buffer"))
                 }
 
                 audioFile.framePosition = currentFrame
                 do {
                     try audioFile.read(into: buffer, frameCount: framesToRead)
                 } catch {
-                    throw TranscriptionError.audioConversionFailed("Could not read audio chunk: \(error.localizedDescription)")
+                    throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not read audio chunk: %@", error.localizedDescription))
                 }
 
                 // Convert buffer to 16kHz mono Float32 samples
@@ -636,7 +637,7 @@ final class FileTranscriptionService: ObservableObject {
                         targetSampleRate: sampleRate
                     )
                 } catch {
-                    throw TranscriptionError.audioConversionFailed("Could not resample audio: \(error.localizedDescription)")
+                    throw TranscriptionError.audioConversionFailed(PichiLocalization.format("Could not resample audio: %@", error.localizedDescription))
                 }
 
                 // Keep short files and final tails. The existing ASR minimum is met with
@@ -902,7 +903,7 @@ final class FileTranscriptionService: ObservableObject {
     ) throws -> [Float] {
         let sourceSampleRate = audioFile.processingFormat.sampleRate
         guard sourceSampleRate > 0 else {
-            throw TranscriptionError.audioConversionFailed("Invalid audio file: sample rate is 0")
+            throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Invalid audio file: sample rate is 0"))
         }
         let fileDurationSeconds = Double(audioFile.length) / sourceSampleRate
 
@@ -918,7 +919,7 @@ final class FileTranscriptionService: ObservableObject {
             pcmFormat: audioFile.processingFormat,
             frameCapacity: frameCount
         ) else {
-            throw TranscriptionError.audioConversionFailed("Could not create audio buffer")
+            throw TranscriptionError.audioConversionFailed(PichiLocalization.text("Could not create audio buffer"))
         }
 
         audioFile.framePosition = startFrame

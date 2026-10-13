@@ -47926,6 +47926,240 @@
           }
         }
       }
+    },
+    "Accepted file types: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, and more.": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accepted file types: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, and more."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Допустимые типы файлов: WAV, MP3, M4A, OGG, OPUS, MP4, MOV и другие."
+          }
+        }
+      }
+    },
+    "Could not create audio buffer": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create audio buffer"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать аудиобуфер"
+          }
+        }
+      }
+    },
+    "Could not open audio file: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not open audio file: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось открыть аудиофайл: %@"
+          }
+        }
+      }
+    },
+    "Could not read audio chunk: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read audio chunk: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать фрагмент аудио: %@"
+          }
+        }
+      }
+    },
+    "Could not resample audio: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not resample audio: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось изменить частоту дискретизации аудио: %@"
+          }
+        }
+      }
+    },
+    "Failed to convert audio: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to convert audio: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудио: %@"
+          }
+        }
+      }
+    },
+    "Failed to load ASR models: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to load ASR models: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить модели распознавания речи: %@"
+          }
+        }
+      }
+    },
+    "File format not supported: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File format not supported: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат файла не поддерживается: %@"
+          }
+        }
+      }
+    },
+    "Format .%@ not supported. %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Format .%@ not supported. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат .%@ не поддерживается. %@"
+          }
+        }
+      }
+    },
+    "Invalid audio file: sample rate is 0": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid audio file: sample rate is 0"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный аудиофайл: частота дискретизации равна 0"
+          }
+        }
+      }
+    },
+    "This file is already being transcribed.": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is already being transcribed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот файл уже распознаётся."
+          }
+        }
+      }
+    },
+    "Transcription failed: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription failed: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось распознать речь: %@"
+          }
+        }
+      }
+    },
+    "Transcription provider not ready": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription provider not ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модуль распознавания речи не готов"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

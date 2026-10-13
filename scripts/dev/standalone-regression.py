@@ -207,7 +207,7 @@ SHELL_PROBES = (
     "command_archive_search", "command_cancellation", "command_markdown",
     "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
-    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_export",
+    "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export",
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_typography", "history_decode_recovery", "history_persistence",
     "local_text_model_catalog", "meeting_summary_evidence", "onboarding",
