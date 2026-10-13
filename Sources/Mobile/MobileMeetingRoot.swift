@@ -113,6 +113,7 @@ struct MobileMeetingRoot: View {
             Button(PichiLocalization.text("Delete"), role: .destructive) {
                 guard let candidate = deleteCandidate else { return }
                 run {
+                    playback.stop()
                     try await coordinator.deleteSession(id: candidate.id)
                     if selectedHistory?.id == candidate.id { selectedHistory = nil }
                     await refreshHistory()
@@ -224,7 +225,9 @@ struct MobileMeetingRoot: View {
     }
 
     private func recording(_ session: MeetingSession) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Label(PichiLocalization.text("Recording"), systemImage: "record.circle")
                     .foregroundStyle(theme.palette.accent)
@@ -246,6 +249,7 @@ struct MobileMeetingRoot: View {
             Divider()
             Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
             MeetingLiveBubbleScrollList(rows: MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript), documentStyle: true)
+                .frame(height: max(200, geometry.size.height - 250))
                 .accessibilityIdentifier("meeting.liveTranscript")
             switch coordinator.liveTranscript.availability {
             case .unavailable(let reason), .degraded(let reason):
@@ -253,16 +257,21 @@ struct MobileMeetingRoot: View {
                     .foregroundStyle(theme.palette.secondaryText)
             case .available: EmptyView()
             }
-            Divider()
             Text(PichiLocalization.text("Speaker labels are added after recording."))
                 .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { run { _ = try await coordinator.stopAndTranscribe() } } label: {
                 Label(PichiLocalization.text("Stop & Transcribe"), systemImage: "stop.fill")
                     .frame(maxWidth: .infinity, minHeight: 48)
             }.buttonStyle(.borderedProminent).disabled(isBusy || !coordinator.isRecording)
                 .accessibilityIdentifier("meeting.stop")
-        }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
-            .accessibilityIdentifier("meeting.recording")
+                .padding(.horizontal, 24).padding(.vertical, 12)
+                .background(theme.palette.toolbarBackground)
+        }
+        .accessibilityIdentifier("meeting.recording")
     }
 
     private func processing(_ session: MeetingSession, stage: MeetingProcessingStage) -> some View {
@@ -276,6 +285,16 @@ struct MobileMeetingRoot: View {
         }.padding(24).frame(maxWidth: 840, alignment: .leading).frame(maxWidth: .infinity)
     }
 
+    private func sessionStatus(_ state: MeetingSessionState) -> String {
+        switch state {
+        case .completed: return "Completed"
+        case .failed: return "Failed"
+        case .interrupted: return "Interrupted"
+        case .processing: return "Processing"
+        case .preparing, .recording, .recordingDegraded, .stopping: return "Recording"
+        }
+    }
+
     private func stageTitle(_ stage: MeetingProcessingStage) -> String {
         switch stage {
         case .pending, .saving: return "Saving"
@@ -286,15 +305,31 @@ struct MobileMeetingRoot: View {
     }
 
     private func recovery(_ session: MeetingSession) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(session.title).font(theme.typography.title)
-                if let failure = session.failures.last { Text(failure.message).foregroundStyle(theme.palette.warning) }
-                Button(PichiLocalization.text("Retry transcription")) {
-                    run { _ = try await coordinator.retryProcessing(sessionID: session.id) }
-                }.disabled(isBusy || !coordinator.isQuiescent).accessibilityIdentifier("meeting.retry")
-                if !session.transcriptSegments.isEmpty { transcript(session) }
-            }.padding(24)
+        VStack(alignment: .leading, spacing: 16) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(PichiLocalization.text(session.state == .interrupted
+                        ? "Meeting transcription was interrupted" : "Meeting transcription failed"))
+                        .font(theme.typography.sectionTitle)
+                    if let failure = session.failures.last {
+                        Text(PichiLocalization.text(failure.message)).foregroundStyle(theme.palette.warning)
+                    }
+                    if session.hasRetryableAudio {
+                        Button(PichiLocalization.text("Retry transcription")) {
+                            playback.stop()
+                            run { _ = try await coordinator.retryProcessing(sessionID: session.id); destination = .meetings }
+                        }.disabled(isBusy || !coordinator.isQuiescent).accessibilityIdentifier("meeting.retry")
+                    }
+                    Button(PichiLocalization.text("New Meeting")) { newMeeting() }
+                        .disabled(isBusy || !coordinator.isQuiescent)
+                    if session.transcriptSegments.isEmpty {
+                        Text(session.title).font(theme.typography.title)
+                        Text(PichiLocalization.text("There is no transcript text or saved audio available for this meeting."))
+                            .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
+                    }
+                }.padding(24)
+            }.frame(maxHeight: session.transcriptSegments.isEmpty ? .infinity : 240)
+            if !session.transcriptSegments.isEmpty { transcript(session) }
         }
     }
 
@@ -305,16 +340,29 @@ struct MobileMeetingRoot: View {
                     Button { selectedHistory = nil } label: {
                         Label(PichiLocalization.text("History"), systemImage: "chevron.left").frame(minHeight: 44)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
-                    transcript(session)
+                    if session.state == .failed || session.state == .interrupted { recovery(session) }
+                    else { transcript(session) }
                 }
             } else {
                 List {
-                    ForEach(sessions.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { session in
+                    ForEach(sessions.filter { session in
+                        search.isEmpty || session.title.localizedCaseInsensitiveContains(search)
+                            || session.activeSpeakers.contains { $0.displayName.localizedCaseInsensitiveContains(search) }
+                            || session.capturedApplication?.displayName.localizedCaseInsensitiveContains(search) == true
+                    }) { session in
                         Button { selectedHistory = session } label: {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(session.title).font(theme.typography.bodyStrong)
-                                Text(session.startedAt.formatted(.dateTime.day().month().hour().minute()))
-                                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                                HStack {
+                                    Text(session.startedAt.formatted(.dateTime.day().month().hour().minute()))
+                                    Text(MeetingTranscriptExporter.timestampText(session.duration)).monospacedDigit()
+                                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                                HStack {
+                                    Text(PichiLocalization.text(sessionStatus(session.state)))
+                                    if !session.activeSpeakers.isEmpty {
+                                        Text(session.activeSpeakers.count == 1 ? PichiLocalization.text("1 speaker") : PichiLocalization.format("%lld speakers", Int64(session.activeSpeakers.count)))
+                                    }
+                                }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                         }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
                             .swipeActions { Button(PichiLocalization.text("Delete"), role: .destructive) { deleteCandidate = session } }
@@ -425,6 +473,7 @@ struct MobileMeetingRoot: View {
     }
 
     private func newMeeting() {
+        playback.stop()
         do { try coordinator.resetForNewMeeting(); destination = .meetings } catch { report(error) }
     }
 

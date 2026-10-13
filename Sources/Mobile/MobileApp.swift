@@ -12,15 +12,21 @@ final class AppServices: ObservableObject {
     let transcriptPrivacy: PichiTranscriptPrivacyService
     @Published private(set) var isUIReady = false
 
-    init(store: any MeetingSessionStoring = MeetingSessionStore.shared,
+    init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
-         settings: SettingsStore = .shared,
-         privacy: PichiTranscriptPrivacyService = .init()) {
+         settings: SettingsStore? = nil,
+         privacy: PichiTranscriptPrivacyService? = nil,
+         microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
+        let settings = settings ?? SettingsStore.shared
+        let store = store ?? MeetingSessionStore.shared
+        let privacy = privacy ?? PichiTranscriptPrivacyService()
+        let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
         let asr = ASRService(settings: settings)
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr },
             privacyRedactorProvider: { privacy },
-            prepareDiarizationModel: { _ = try await MeetingDiarizationModelStore.shared.ensureInstalled() })
+            prepareDiarizationModel: { _ = try await MeetingDiarizationModelStore.shared.ensureInstalled(includingVoiceEncoder: true) },
+            prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) })
         let capture = injectedCapture ?? IOSMeetingCaptureEngine(memoryConsumerFactory: { session, _, track, event in
             try await pipeline.memoryConsumer(for: session.id, track: track, eventHandler: event)
         })
@@ -30,20 +36,27 @@ final class AppServices: ObservableObject {
             preferredMicrophoneUID: { settings.meetingRecordingDefaults.microphoneCoreAudioUID },
             settings: settings,
             defaultConfigurationResolver: { mode, title in
-                let microphone = try await IOSMeetingCaptureEngine.defaultMicrophone(
-                    preferredUID: settings.meetingRecordingDefaults.microphoneCoreAudioUID)
+                // Preferences are one immutable request snapshot. Async discovery/preparation
+                // cannot substitute later Settings values into a running meeting.
+                let preferences = settings.meetingRecordingDefaults
                 let modelID = settings.selectedSpeechModel.rawValue
+                let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
+                let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
+                let piiRedactionEnabled = settings.meetingPIIRedactionEnabled
                 let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
-                let language = settings.meetingRecordingDefaults.languageCode.flatMap { supported.contains($0) ? $0 : nil }
+                let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }
                     ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
+                if piiRedactionEnabled, !(await privacy.isReady) { try await privacy.prepare() }
+                let microphone = try await resolveMicrophone(preferences.microphoneCoreAudioUID)
                 return MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
-                    microphone: microphone, timestampDefaultTitle: true)
+                    microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
+                    speakerLabelsEnabled: speakerLabelsEnabled, piiRedactionEnabled: piiRedactionEnabled)
             },
             redactorProvider: { privacy },
             validateRecordingModels: {
                 guard settings.selectedSpeechModel.isInstalled else { throw MeetingProcessingError.modelUnavailable }
-                if settings.meetingPIIRedactionEnabled, !(await privacy.isReady) { try await privacy.prepare() }
             },
+            prepareRecordingDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) },
             validateFrozenRecordingConfiguration: {
                 try PichiMeetingProviderFactory.validateRecordingConfiguration($0, isAppleSilicon: CPUArchitecture.isAppleSilicon)
             }

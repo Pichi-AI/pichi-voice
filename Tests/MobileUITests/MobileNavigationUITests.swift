@@ -1,4 +1,6 @@
 import XCTest
+import UIKit
+import CoreText
 
 final class MobileNavigationUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -12,6 +14,7 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testMVPSettingsAndOrientation() throws {
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 15))
+        XCTAssertGreaterThanOrEqual(app.buttons["meeting.start"].frame.height, 44)
         capture("01-ready-portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
@@ -40,6 +43,28 @@ final class MobileNavigationUITests: XCTestCase {
         openNavigation("meetings", title: "Meetings")
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
         capture("02-current-meeting")
+    }
+
+
+    func testNativeRussianGlyphCoverage() throws {
+        let letters = Array("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя".utf16)
+        let designs: [UIFontDescriptor.SystemDesign] = [.default, .serif, .rounded, .monospaced]
+        let sizes: [CGFloat] = [12, 17, 22, 34]
+        let weights: [UIFont.Weight] = [.regular, .medium, .semibold, .bold]
+        for design in designs {
+            for size in sizes {
+                for weight in weights {
+                    let native = UIFont.systemFont(ofSize: size, weight: weight)
+                    let descriptor = try XCTUnwrap(native.fontDescriptor.withDesign(design))
+                    let font = UIFont(descriptor: descriptor, size: size)
+                    let coreText = CTFontCreateWithName(font.fontName as CFString, size, nil)
+                    var glyphs = Array(repeating: CGGlyph(0), count: letters.count)
+                    XCTAssertTrue(CTFontGetGlyphsForCharacters(coreText, letters, &glyphs, letters.count),
+                        "Direct Russian glyphs missing in \(font.fontName), \(design), \(size), \(weight)")
+                    XCTAssertFalse(glyphs.contains(0))
+                }
+            }
+        }
     }
 
     private func openNavigation(_ identifier: String, title: String) {

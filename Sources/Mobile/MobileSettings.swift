@@ -112,7 +112,7 @@ struct MobileRecordingSettings: View {
                         isPreparing = true
                         Task { @MainActor in
                             defer { isPreparing = false }
-                            do { _ = try await diarization.ensureInstalled() } catch { self.error = error.localizedDescription }
+                            do { _ = try await diarization.ensureInstalled(includingVoiceEncoder: true) } catch { self.error = error.localizedDescription }
                         }
                     }.disabled(isPreparing).accessibilityIdentifier("recording.downloadSpeakerModel")
                     Text(PichiLocalization.text("Speaker labels are added after recording."))
@@ -129,7 +129,10 @@ struct MobileRecordingSettings: View {
         case .idle: Text(PichiLocalization.text("Available after recording"))
         case .checking: ProgressView(PichiLocalization.text("Checking…"))
         case .downloading(let progress): ProgressView(value: progress)
-        case .ready: Label(PichiLocalization.text("Ready · runs after recording"), systemImage: "checkmark.circle.fill")
+        case .ready:
+            if diarization.allSpeakerResourcesReady {
+                Label(PichiLocalization.text("Ready · runs after recording"), systemImage: "checkmark.circle.fill")
+            } else { Text(PichiLocalization.text("Available after recording")) }
         case .failed(let message): Text(message).foregroundStyle(.red)
         }
     }
@@ -139,6 +142,7 @@ private struct MobileVoiceEngineSettings: View {
     @ObservedObject var asr: ASRService
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
+    @Environment(\.theme) private var theme
     @State private var installed: Set<String> = []
     @State private var importing: SettingsStore.SpeechModel?
     @State private var fileImporter = false
@@ -149,13 +153,13 @@ private struct MobileVoiceEngineSettings: View {
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text(model.displayName).font(.headline)
+                            Text(model.displayName).font(theme.typography.sectionTitle)
                             Spacer()
                             if settings.selectedSpeechModel == model { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                         }
-                        Text(PichiLocalization.text(model.cardDescription)).font(.subheadline)
-                        Text(PichiLocalization.text(model.languageSupport)).font(.subheadline).foregroundStyle(.secondary)
-                        Text(model.downloadSize).font(.caption).foregroundStyle(.secondary)
+                        Text(PichiLocalization.text(model.cardDescription)).font(theme.typography.bodySmall)
+                        Text(PichiLocalization.text(model.languageSupport)).font(theme.typography.bodySmall).foregroundStyle(.secondary)
+                        Text(model.downloadSize).font(theme.typography.caption).foregroundStyle(.secondary)
                         if asr.downloadingModelId == model.id {
                             if let progress = asr.downloadProgress { ProgressView(value: progress) } else { ProgressView() }
                             Button(PichiLocalization.text("Cancel")) { asr.cancelModelDownload() }
@@ -212,6 +216,7 @@ private struct MobilePrivacySettings: View {
     let privacy: PichiTranscriptPrivacyService
     let reportError: (Error) -> Void
     @ObservedObject private var settings = SettingsStore.shared
+    @Environment(\.theme) private var theme
     @State private var isPreparing = false
     @State private var progress: Double?
     @State private var preparationTask: Task<Void, Never>?
@@ -222,7 +227,7 @@ private struct MobilePrivacySettings: View {
                 Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
                     .accessibilityIdentifier("privacy.saveAudio")
                 Text(PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(theme.typography.caption).foregroundStyle(.secondary)
                 if settings.meetingSaveAudio {
                     Picker(PichiLocalization.text("Keep recordings"), selection: $settings.meetingAudioRetentionPolicy) {
                         ForEach(MeetingAudioRetentionPolicy.allCases, id: \.rawValue) { policy in
@@ -230,7 +235,7 @@ private struct MobilePrivacySettings: View {
                         }
                     }.accessibilityIdentifier("privacy.retention")
                     Text(PichiLocalization.text("Applies to past meetings too. Transcripts are always kept."))
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(theme.typography.caption).foregroundStyle(.secondary)
                 }
             }
             Section(PichiLocalization.text("Sensitive data")) {
@@ -254,15 +259,15 @@ private struct MobilePrivacySettings: View {
                     Button(PichiLocalization.text("Cancel")) { preparationTask?.cancel() }
                 }
                 Text(PichiLocalization.text("Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."))
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(theme.typography.caption).foregroundStyle(.secondary)
                 if settings.meetingSaveAudio {
                     Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(theme.typography.caption).foregroundStyle(.secondary)
                 }
             }
             Section {
                 Text(PichiLocalization.text("Changes apply to new meetings. Audio retention also applies to existing recordings."))
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(theme.typography.caption).foregroundStyle(.secondary)
             }
         }.navigationTitle(PichiLocalization.text("Privacy")).accessibilityIdentifier("settings.privacy.detail")
     }

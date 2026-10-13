@@ -62,7 +62,7 @@ resource_phase = obj("Mobile Resources", f"isa = PBXResourcesBuildPhase; buildAc
 framework_phase = obj("Mobile Frameworks", f"isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = {arr(framework_builds)}; runOnlyForDeploymentPostprocessing = 0;")
 product_ref = obj("PichiVoiceMobile.app", 'isa = PBXFileReference; explicitFileType = wrapper.application; path = PichiVoiceMobile.app; sourceTree = BUILT_PRODUCTS_DIR;')
 
-def configs(label, test=False):
+def configs(label, test=False, hosted=False):
     config_ids = []
     for name in ("Debug", "Release"):
         settings = {
@@ -70,14 +70,17 @@ def configs(label, test=False):
             "TARGETED_DEVICE_FAMILY":"1,2", "SUPPORTS_MACCATALYST":"NO", "SWIFT_VERSION":"5.0",
             "SWIFT_STRICT_CONCURRENCY":"targeted", "SWIFT_DEFAULT_ACTOR_ISOLATION":"MainActor",
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS":"$(inherited) MOBILE" + (" DEBUG" if name=="Debug" else ""),
-            "PRODUCT_NAME":"$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER":"ai.pichi.voice.mobile" + (".uitests" if test else ""),
+            "PRODUCT_NAME":"$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER":"ai.pichi.voice.mobile" + (".integrationtests" if hosted else ".uitests" if test else ""),
             "ENABLE_TESTABILITY":"YES" if name=="Debug" else "NO",
             "PICHI_PRODUCT_NAME":json.loads((ROOT / "Sources/Fluid/Branding/brand-package.json").read_text())["profile"]["appName"],
             "CODE_SIGN_STYLE":"Automatic", "DEVELOPMENT_TEAM":"", "GENERATE_INFOPLIST_FILE":"YES" if test else "NO",
             "SWIFT_EMIT_LOC_STRINGS":"YES", "SWIFT_OPTIMIZATION_LEVEL":"-Onone" if name=="Debug" else "-O",
             "LD_RUNPATH_SEARCH_PATHS":"$(inherited) @executable_path/Frameworks",
         }
-        if test:
+        if hosted:
+            settings.update(BUNDLE_LOADER="$(TEST_HOST)",
+                TEST_HOST="$(BUILT_PRODUCTS_DIR)/PichiVoiceMobile.app/PichiVoiceMobile")
+        elif test:
             settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="")
         else:
             settings.update(INFOPLIST_FILE="Sources/Mobile/Info.plist", ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
@@ -102,19 +105,34 @@ proxy = obj("Mobile test proxy", f"isa = PBXContainerItemProxy; containerPortal 
 dependency = obj("Mobile test dependency", f"isa = PBXTargetDependency; target = {app_target}; targetProxy = {proxy};")
 test_config = configs("Mobile test", True)
 test_target = obj("PichiVoiceMobileUITests", f'isa = PBXNativeTarget; buildConfigurationList = {test_config}; buildPhases = {arr([test_sources,test_frameworks])}; buildRules = (); dependencies = {arr([dependency])}; name = PichiVoiceMobileUITests; productName = PichiVoiceMobileUITests; productReference = {test_product}; productType = "com.apple.product-type.bundle.ui-testing";')
+integration_builds = []
+integration_paths = list((ROOT / "Tests/MobileIntegrationTests").glob("*.swift"))
+portable_inference_test = ROOT / "Tests/FluidDictationIntegrationTests/MobileRegisteredModelInferenceTests.swift"
+if portable_inference_test.is_file(): integration_paths.append(portable_inference_test)
+for path in sorted(integration_paths):
+    relative = str(path.relative_to(ROOT))
+    ref = obj("Mobile integration file " + relative, f"isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {quoted(relative)}; sourceTree = SOURCE_ROOT;")
+    file_ids.append(ref)
+    integration_builds.append(obj("Mobile integration build " + relative, f"isa = PBXBuildFile; fileRef = {ref};"))
+integration_sources = obj("Mobile integration Sources", f"isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {arr(integration_builds)}; runOnlyForDeploymentPostprocessing = 0;")
+integration_frameworks = obj("Mobile integration Frameworks", "isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;")
+integration_product = obj("PichiVoiceMobileIntegrationTests.xctest", 'isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = PichiVoiceMobileIntegrationTests.xctest; sourceTree = BUILT_PRODUCTS_DIR;')
+integration_config = configs("Mobile integration", True, True)
+integration_target = obj("PichiVoiceMobileIntegrationTests", f'isa = PBXNativeTarget; buildConfigurationList = {integration_config}; buildPhases = {arr([integration_sources,integration_frameworks])}; buildRules = (); dependencies = {arr([dependency])}; name = PichiVoiceMobileIntegrationTests; productName = PichiVoiceMobileIntegrationTests; productReference = {integration_product}; productType = "com.apple.product-type.bundle.unit-test";')
+
 mobile_group = obj("Mobile shared sources", f'isa = PBXGroup; children = {arr(file_ids+[variant])}; name = Mobile; sourceTree = "<group>";')
 
 text = PROJECT.read_text()
 text = re.sub(r"\n/\* Begin Pichi mobile target \*/.*?/\* End Pichi mobile target \*/\n", "\n", text, flags=re.S)
-for identifier in (app_target,test_target,product_ref,test_product,mobile_group):
+for identifier in (app_target,test_target,integration_target,product_ref,test_product,integration_product,mobile_group):
     text = re.sub(r"\n\s*" + identifier + r" /\* Pichi mobile membership \*/,", "", text)
 block = "\n/* Begin Pichi mobile target */\n" + "".join(objects) + "/* End Pichi mobile target */\n"
 text = re.sub(r"(\tobjects = \{\n)\n*", lambda match: match.group(1), text, count=1)
 text = text.replace("\tobjects = {\n", "\tobjects = {\n" + block, 1)
 # This edits only the original main/product groups and project targets lists.
 for original_id, additions, marker in [("7C078D862E3B339200FB7CAC", [mobile_group], "children"),
-                                      ("7C078D902E3B339200FB7CAC", [product_ref,test_product], "children"),
-                                      ("7C078D872E3B339200FB7CAC", [app_target,test_target], "targets")]:
+                                      ("7C078D902E3B339200FB7CAC", [product_ref,test_product,integration_product], "children"),
+                                      ("7C078D872E3B339200FB7CAC", [app_target,test_target,integration_target], "targets")]:
     pattern = r"(" + original_id + r"(?: /\*[^*]*\*/)? = \{.*?" + marker + r" = \()"
     insertion = "".join("\n\t\t\t\t" + identifier + " /* Pichi mobile membership */," for identifier in additions)
     text, count = re.subn(pattern, lambda match: match.group(1)+insertion, text, count=1, flags=re.S)
@@ -124,10 +142,10 @@ PROJECT.write_text(text)
 scheme = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme LastUpgradeVersion="2700" version="1.7">
 <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES"><BuildActionEntries><BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{app_target}" BuildableName="PichiVoiceMobile.app" BlueprintName="PichiVoiceMobile" ReferencedContainer="container:Fluid.xcodeproj"/></BuildActionEntry></BuildActionEntries></BuildAction>
-<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{test_target}" BuildableName="PichiVoiceMobileUITests.xctest" BlueprintName="PichiVoiceMobileUITests" ReferencedContainer="container:Fluid.xcodeproj"/></TestableReference></Testables></TestAction>
+<TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES"><Testables><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{test_target}" BuildableName="PichiVoiceMobileUITests.xctest" BlueprintName="PichiVoiceMobileUITests" ReferencedContainer="container:Fluid.xcodeproj"/></TestableReference><TestableReference skipped="NO"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{integration_target}" BuildableName="PichiVoiceMobileIntegrationTests.xctest" BlueprintName="PichiVoiceMobileIntegrationTests" ReferencedContainer="container:Fluid.xcodeproj"/></TestableReference></Testables></TestAction>
 <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.IDEFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{app_target}" BuildableName="PichiVoiceMobile.app" BlueprintName="PichiVoiceMobile" ReferencedContainer="container:Fluid.xcodeproj"/></BuildableProductRunnable></LaunchAction>
 <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0"><BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{app_target}" BuildableName="PichiVoiceMobile.app" BlueprintName="PichiVoiceMobile" ReferencedContainer="container:Fluid.xcodeproj"/></BuildableProductRunnable></ProfileAction><AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
 </Scheme>
 '''
 (ROOT / "Fluid.xcodeproj/xcshareddata/xcschemes/PichiVoiceMobile.xcscheme").write_text(scheme)
-print(f"Mobile target: {len(sources)} shared and platform Swift files, {len(test_builds)} UI test files")
+print(f"Mobile target: {len(sources)} shared and platform Swift files, {len(test_builds)} UI and {len(integration_builds)} hosted integration test files")
