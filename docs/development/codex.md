@@ -72,6 +72,20 @@ Each cloud task receives its own isolated filesystem. A linked worktree inside t
 
 A green portable check does not replace macOS validation. The initial setup does not compile or launch the unchanged upstream app. Before installing a Pichi-branded build, separate its bundle identity, settings, Keychain entries, and updater from the installed FluidVoice app.
 
+## Reproducible macOS regression
+
+Run `bash scripts/dev/macos.sh regression` in the current task worktree. This uses the existing isolated build and package paths, builds Debug test products, recursively configures every test target, then runs `test-without-building`. It retains the upstream Whisper tiny exclusion. The existing test-host guard receives `FLUIDVOICE_MIC_PHASE1=disabled`, so the normal application UI/audio startup and the Phase 1 microphone probe are disabled. Other hardware, UI and real-model probes remain opt-in through their existing test gates. This command does not establish interactive E2E coverage.
+
+`PICHI_INTERFACE_LANGUAGE` defaults to `en` for upstream assertions, independently of the user's stored language. An explicit caller value is retained. Caller environment variables with prefixes `PICHI_`, `FLUIDVOICE_`, `FLUIDAUDIO_`, `FV_`, and `TEST_`, plus `CI` and `GITHUB_ACTIONS`, are copied to the test host. This preserves existing real-model fixture opt-ins, such as `PICHI_GIGAAM_APP_TEST_MODEL_DIR` and `PICHI_GIGAAM_APP_TEST_AUDIO`. Phase 1 microphone capture remains disabled even if the caller supplies its flag. Fixture paths and test products stay in ignored local storage; never commit private fixtures or the generated plist.
+
+Optional `-only-testing:target/class/test` and `-skip-testing:target/class/test` selectors narrow a repeat run. For example:
+
+```bash
+bash scripts/dev/macos.sh regression -only-testing:FluidDictationIntegrationTests/PichiGigaAMIntegrationTests
+```
+
+Each run prints its artifact directory under `.build/regression/`. It keeps the revision and working-tree state, build/test logs, both `.xcresult` bundles, and the test report's JSON and concise summary. Counts come from `xcresulttool`, including skipped and expected-failure tests. Build failures, test failures, empty/all-skipped runs, and absent or malformed reports return failure. The configured `.xctestrun` stays beside its build products because Xcode resolves `__TESTROOT__` relative to that file. Python 3 and Xcode with `xcresulttool get test-results summary` are required. Do not run concurrent builds in one worktree.
+
 ## Initial verification on October 9, 2026
 
 - Unsigned macOS build passed on Apple Silicon with Xcode 27.0.

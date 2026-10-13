@@ -261,6 +261,7 @@ builds/
 /scripts/dev/*
 !/scripts/dev/*.sh
 !/scripts/dev/check-localization.py
+!/scripts/dev/macos-regression.py
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/
