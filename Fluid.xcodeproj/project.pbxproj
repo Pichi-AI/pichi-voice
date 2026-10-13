@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A13F57000000000000000002 /* WaveformSimulationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13F57000000000000000001 /* WaveformSimulationTests.swift */; };
 		F111E0000000000000000002 /* FillerWordDefaultsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111E0000000000000000001 /* FillerWordDefaultsTests.swift */; };
 		A51A30000000000000000002 /* GigaAMModelStoreDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */; };
 		A51A20000000000000000002 /* S1MiniProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A20000000000000000001 /* S1MiniProviderTests.swift */; };
@@ -193,6 +194,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A13F57000000000000000001 /* WaveformSimulationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformSimulationTests.swift; sourceTree = "<group>"; };
 		F111E0000000000000000001 /* FillerWordDefaultsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FillerWordDefaultsTests.swift; sourceTree = "<group>"; };
 		A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaAMModelStoreDownloadTests.swift; sourceTree = "<group>"; };
 		A51A20000000000000000001 /* S1MiniProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = S1MiniProviderTests.swift; sourceTree = "<group>"; };
@@ -438,6 +440,7 @@
 				D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */,
 				4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */,
 				F111E0000000000000000001 /* FillerWordDefaultsTests.swift */,
+				A13F57000000000000000001 /* WaveformSimulationTests.swift */,
 				91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */,
 				F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */,
 				8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */,
@@ -832,6 +835,7 @@
 				D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */,
 				75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */,
 				F111E0000000000000000002 /* FillerWordDefaultsTests.swift in Sources */,
+				A13F57000000000000000002 /* WaveformSimulationTests.swift in Sources */,
 				24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */,
 				563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */,
 				7EAA9E7C4E4155A44F9CC415 /* UpdateAppReplacementTests.swift in Sources */,
