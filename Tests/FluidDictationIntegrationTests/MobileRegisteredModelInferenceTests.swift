@@ -325,7 +325,12 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                 }
                 XCTAssertTrue(observations.snapshot().ready)
                 let offered = samples + [Float](repeating: 0, count: 16_000)
+                // Live previews describe current audio. Pace the capture fixture instead of
+                // making every prefix obsolete by queueing the complete recording at once.
+                let pacingStart = ProcessInfo.processInfo.systemUptime
                 for start in stride(from: 0, to: offered.count, by: 1600) {
+                    let delay = pacingStart + Double(start) / 16_000 - ProcessInfo.processInfo.systemUptime
+                    if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
                     let end = min(offered.count, start + 1600)
                     let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(end - start)))
                     buffer.frameLength = AVAudioFrameCount(end - start)
