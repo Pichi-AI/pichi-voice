@@ -128,6 +128,14 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
     var isReady: Bool { get async { await runtime.isReady } }
 
     func prepare(progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
+        try Task.checkCancellation()
+        guard !preparing else { throw TextPrivacyResourceError.operationInProgress }
+        // Reusing this pinned resource never owns its weights and cannot unload a meeting's
+        // ready redactor when a later settings preparation is cancelled.
+        if await runtime.isReady {
+            try Task.checkCancellation()
+            return
+        }
         guard !preparing, inferenceCount == 0 else { throw TextPrivacyResourceError.operationInProgress }
         preparing = true
         defer { preparing = false }

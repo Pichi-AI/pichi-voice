@@ -49,6 +49,16 @@ struct TranscriptPrivacyResourceTests {
             try await service.prepare()
             let redacted = try await service.redact("Врач Иван Иванов, email test@example.org.")
             precondition(!redacted.contains("Иванов") && !redacted.contains("test@example.org"))
+            let attemptedAgain = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                try await service.prepare()
+            }
+            do { try await attemptedAgain.value; fatalError("cancelled preparation must report cancellation") }
+            catch { precondition(error is CancellationError) }
+            let retainedReady = await service.isReady
+            precondition(retainedReady, "A cancelled later preparation must preserve the ready meeting resource")
+            let continued = try await service.redact("Иван Иванов, test@example.org")
+            precondition(!continued.contains("Иванов") && !continued.contains("test@example.org"))
             let installed = await model.isInstalled()
             precondition(installed)
             try await service.deleteModel()
