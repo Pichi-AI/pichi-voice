@@ -44,7 +44,8 @@ enum PichiMeetingProviderFactory {
                     "Without diarization, speaker identities remain unknown; microphone/application source tracks remain distinct.",
                 ],
                 analysisSampleRate: 16_000,
-                diarizationDependencies: [.speakerSeparation, .voiceMatching]
+                diarizationDependencies: [.speakerSeparation, .voiceMatching],
+                allowsTranscriptOnlyOnUnsupportedHardware: true
             ),
             defaultLanguageCode: "ru",
             providerFactory: { configuration in
@@ -74,7 +75,8 @@ enum PichiMeetingProviderFactory {
                     "Automatic speaker separation is independent of Whisper and requires an installed Nemotron model.",
                 ],
                 analysisSampleRate: 16_000,
-                diarizationDependencies: [.speakerSeparation, .voiceMatching]
+                diarizationDependencies: [.speakerSeparation, .voiceMatching],
+                allowsTranscriptOnlyOnUnsupportedHardware: true
             ),
             defaultLanguageCode: "auto",
             providerFactory: { try WhisperProvider(meetingConfiguration: $0) },
@@ -109,7 +111,8 @@ enum PichiMeetingProviderFactory {
                     "CPU-only mobile runtime throughput and mixed-language quality require sustained device measurements.",
                 ],
                 analysisSampleRate: 16_000,
-                diarizationDependencies: [.speakerSeparation, .voiceMatching]
+                diarizationDependencies: [.speakerSeparation, .voiceMatching],
+                allowsTranscriptOnlyOnUnsupportedHardware: true
             ),
             defaultLanguageCode: "auto",
             providerFactory: { try FluidAudioProvider(meetingConfiguration: $0) },

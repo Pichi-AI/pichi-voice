@@ -83,3 +83,32 @@ final class MeetingCaptureLanguageAdmissionTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class MeetingSpeakerHardwareAdmissionTests: XCTestCase {
+    func testRetainedTranscriptOnlyFallbackSkipsUnsupportedSpeakerPreparationButStrictModeDoesNot() async throws {
+        struct PreparationMarker: Error {}
+        var preparations = 0
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Pure capability admission cannot load ASR"); return ASRService() },
+            managesModelResidency: false,
+            prepareDiarizationDependencies: { _ in preparations += 1; throw PreparationMarker() },
+            diarizationSupported: { false })
+        let descriptor = MeetingBackendDescriptor(id: .init(rawValue: "synthetic-hardware-fallback"), version: "1", execution: .local,
+            supportedLanguageCodes: ["en"], supportedTrackKinds: [.microphone], supportedFinalPrecisions: [.utterance],
+            resultContract: .canonicalEvidence, knownLimits: [], diarizationDependencies: [.speakerSeparation, .voiceMatching],
+            allowsTranscriptOnlyOnUnsupportedHardware: true)
+        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic", languageCode: "en",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
+        var session = MeetingSession(configuration: configuration, timebase: .init(startedHostTime: 0,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        try await pipeline.prepareSpeakerDependencies(for: descriptor, session: session)
+        XCTAssertEqual(preparations, 0)
+        session.audioStorageMode = .memoryOnly
+        do { try await pipeline.prepareSpeakerDependencies(for: descriptor, session: session); XCTFail("Requested strict speaker processing must not silently degrade") }
+        catch is PreparationMarker { }
+        XCTAssertEqual(preparations, 1)
+        session.speakerLabelsEnabled = false
+        try await pipeline.prepareSpeakerDependencies(for: descriptor, session: session)
+        XCTAssertEqual(preparations, 1)
+    }
+}

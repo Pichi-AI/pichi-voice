@@ -1356,6 +1356,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
+    private let diarizationSupported: @MainActor () -> Bool
     let prepareDiarizationDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
     /// Test seam: runs after the canonical sidecar is written and read-back verified, before the
     /// final cancellation check, so "cancelled after sidecar" is deterministically exercisable.
@@ -1374,6 +1375,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
         prepareDiarizationDependencies: (@MainActor (Set<MeetingDiarizationDependency>) async throws -> Void)? = nil,
+        diarizationSupported: @escaping @MainActor () -> Bool = { CPUArchitecture.isAppleSilicon },
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
@@ -1389,6 +1391,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 modelLocator: MeetingNemotronModelLocator()
             )
         }
+        self.diarizationSupported = diarizationSupported
         self.prepareDiarizationDependencies = prepareDiarizationDependencies ?? { dependencies in
             if !dependencies.isEmpty { try await prepareDiarizationModel() }
         }
@@ -1411,6 +1414,16 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode)
             }
         }
+    }
+
+    func prepareSpeakerDependencies(for descriptor: MeetingBackendDescriptor, session: MeetingSession) async throws {
+        guard session.speakerLabelsEnabled != false else { return }
+        // Retained audio can keep the provider's original transcript-only hardware fallback.
+        // Strict PCM requests must still reject unavailable requested speaker processing.
+        if !self.diarizationSupported(), descriptor.allowsTranscriptOnlyOnUnsupportedHardware,
+           session.audioStorageMode != .memoryOnly { return }
+        try await self.prepareDiarizationDependencies(descriptor.diarizationDependencies)
+        try Task.checkCancellation()
     }
 
     func process(
@@ -1450,8 +1463,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
         let declaredDescriptor = self.backendRegistry.descriptor(for: backendID)
         if session.speakerLabelsEnabled != false, let descriptor = declaredDescriptor {
-            try await self.prepareDiarizationDependencies(descriptor.diarizationDependencies)
-            try Task.checkCancellation()
+            try await self.prepareSpeakerDependencies(for: descriptor, session: session)
         }
 
         // Resolving and planning the backend happens before the serialization lease and before any
@@ -1506,8 +1518,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // Bare custom factories have no declared preflight metadata. Their descriptor is
         // available only after construction, still before planning and any runtime/model call.
         if declaredDescriptor == nil, session.speakerLabelsEnabled != false {
-            try await self.prepareDiarizationDependencies(backend.descriptor.diarizationDependencies)
-            try Task.checkCancellation()
+            try await self.prepareSpeakerDependencies(for: backend.descriptor, session: session)
         }
         let plan = try backend.plan(request)
         if let defect = plan.agreementDefect(with: request, descriptor: backend.descriptor) {

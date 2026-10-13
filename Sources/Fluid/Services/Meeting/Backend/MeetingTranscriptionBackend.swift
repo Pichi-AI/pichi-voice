@@ -71,6 +71,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// analysis manifest; `nil` leaves sample-rate conversion explicitly unknown (plan §3).
     let analysisSampleRate: Double?
     let diarizationDependencies: Set<MeetingDiarizationDependency>
+    let allowsTranscriptOnlyOnUnsupportedHardware: Bool
 
     init(
         id: MeetingBackendID,
@@ -82,7 +83,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         resultContract: MeetingBackendResultContract,
         knownLimits: [String],
         analysisSampleRate: Double? = nil,
-        diarizationDependencies: Set<MeetingDiarizationDependency> = []
+        diarizationDependencies: Set<MeetingDiarizationDependency> = [],
+        allowsTranscriptOnlyOnUnsupportedHardware: Bool = false
     ) {
         self.id = id
         self.version = version
@@ -94,6 +96,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.knownLimits = knownLimits
         self.analysisSampleRate = analysisSampleRate
         self.diarizationDependencies = diarizationDependencies
+        self.allowsTranscriptOnlyOnUnsupportedHardware = allowsTranscriptOnlyOnUnsupportedHardware
     }
 }
 
