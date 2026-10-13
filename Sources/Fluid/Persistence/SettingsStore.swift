@@ -5128,6 +5128,10 @@ final class SettingsStore: ObservableObject {
         /// Installation transport is engine metadata; common screens call the same service API.
         var supportsFolderImport: Bool { self == .gigaam }
 
+        /// A folder import remains optional when the registered engine has a pinned download.
+        var supportsAutomaticDownload: Bool { self != .gigaam || PichiGigaAMModelStore.supportsDefaultDownload }
+        var requiresFolderImport: Bool { self.supportsFolderImport && !self.supportsAutomaticDownload }
+
         /// Trusted localization template. The picker inserts the model name exactly once.
         var importFolderPrompt: String { "Choose the folder containing the %@ model files." }
 
@@ -5171,7 +5175,7 @@ final class SettingsStore: ObservableObject {
 
         var downloadSize: String {
             switch self {
-            case .gigaam: return "Import local model"
+            case .gigaam: return String(format: "~%.1f MiB", Double(PichiGigaAMModelStore.defaultDownloadByteCount) / 1_048_576)
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.downloadSize ?? ""
             case .parakeetRealtime: return "~428.4 MiB"
             case .qwen3Asr: return "~2.0 GiB"
@@ -5192,7 +5196,7 @@ final class SettingsStore: ObservableObject {
 
         var expectedDownloadBytes: Int64 {
             switch self {
-            case .gigaam: return 0
+            case .gigaam: return PichiGigaAMModelStore.defaultDownloadByteCount
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.expectedDownloadBytes ?? 0
             case .parakeetRealtime: return 449_190_189
             case .qwen3Asr: return 2000 * 1024 * 1024
@@ -5325,9 +5329,12 @@ final class SettingsStore: ObservableObject {
             }
         }
 
-        /// Default model for the current architecture
+        /// First-run engine uses the shipped onboarding language's existing route.
         static var defaultModel: SpeechModel {
-            CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase
+            VoiceEngineLanguageCatalog.packagedDefaultSpeechModel(
+                availableModels: self.availableModels,
+                packagedLanguageID: AppBrand.packagedPackage.style?.defaultOnboardingLanguageID
+            ) ?? (CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase)
         }
 
         // MARK: - UI Card Metadata
@@ -5357,7 +5364,7 @@ final class SettingsStore: ObservableObject {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
-            case .gigaam: return "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection."
+            case .gigaam: return "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
@@ -6430,32 +6437,37 @@ extension SettingsStore {
 
     /// Migrates old TranscriptionProviderOption + WhisperModelSize settings to new SpeechModel
     private func migrateToSpeechModel() -> SpeechModel {
-        let oldProvider = self.defaults.string(forKey: Keys.selectedTranscriptionProvider) ?? "auto"
-        let oldWhisperSize = self.defaults.string(forKey: Keys.whisperModelSize) ?? "ggml-base.bin"
+        let oldProvider = self.defaults.string(forKey: Keys.selectedTranscriptionProvider)
+        let oldWhisperSize = self.defaults.string(forKey: Keys.whisperModelSize)
+        let newModel = Self.migratedSpeechModel(legacyProvider: oldProvider, legacyWhisperSize: oldWhisperSize,
+                                               isAppleSilicon: CPUArchitecture.isAppleSilicon,
+                                               freshDefault: SpeechModel.defaultModel)
 
-        let newModel: SpeechModel
+        // Persist only after checking both current and legacy selections.
+        self.defaults.set(newModel.rawValue, forKey: Keys.selectedSpeechModel)
+        DebugLogger.shared.info("Migrated speech model settings: \(oldProvider ?? "unset")/\(oldWhisperSize ?? "unset") -> \(newModel.rawValue)", source: "SettingsStore")
+        return newModel
+    }
 
-        switch oldProvider {
+    /// Keep old installations' explicit automatic/engine selections while applying
+    /// the packaged first-run default only when no speech choice has been saved.
+    static func migratedSpeechModel(legacyProvider: String?, legacyWhisperSize: String?,
+                                    isAppleSilicon: Bool, freshDefault: SpeechModel) -> SpeechModel {
+        guard legacyProvider != nil || legacyWhisperSize != nil else { return freshDefault }
+        switch legacyProvider ?? "auto" {
         case "whisper":
-            // Map old whisper size to new model
-            switch oldWhisperSize {
-            case "ggml-tiny.bin": newModel = .whisperTiny
-            case "ggml-base.bin": newModel = .whisperBase
-            case "ggml-small.bin": newModel = .whisperSmall
-            case "ggml-medium.bin": newModel = .whisperMedium
-            case "ggml-large-v3.bin": newModel = CPUArchitecture.isAppleSilicon ? .whisperLarge : .whisperBase
-            default: newModel = .whisperBase
+            switch legacyWhisperSize ?? "ggml-base.bin" {
+            case "ggml-tiny.bin": return .whisperTiny
+            case "ggml-base.bin": return .whisperBase
+            case "ggml-small.bin": return .whisperSmall
+            case "ggml-medium.bin": return .whisperMedium
+            case "ggml-large-v3.bin": return isAppleSilicon ? .whisperLarge : .whisperBase
+            default: return .whisperBase
             }
         case "fluidAudio":
-            newModel = CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase
-        default: // "auto"
-            newModel = SpeechModel.defaultModel
+            return isAppleSilicon ? .parakeetTDT : .whisperBase
+        default:
+            return isAppleSilicon ? .parakeetTDT : .whisperBase
         }
-
-        // Persist the migrated value
-        self.defaults.set(newModel.rawValue, forKey: Keys.selectedSpeechModel)
-        DebugLogger.shared.info("Migrated speech model settings: \(oldProvider)/\(oldWhisperSize) -> \(newModel.rawValue)", source: "SettingsStore")
-
-        return newModel
     }
 }

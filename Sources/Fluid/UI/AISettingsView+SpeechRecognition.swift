@@ -473,7 +473,7 @@ extension VoiceEngineSettingsView {
                 }
             } else {
                 ZStack(alignment: .trailing) {
-                    if model.supportsFolderImport {
+                    if model.requiresFolderImport {
                         Button("Import model folder") {
                             self.viewModel.importSpeechModel(model)
                         }
@@ -521,6 +521,18 @@ extension VoiceEngineSettingsView {
                     }
                 }
                 .frame(width: model.requiresExternalArtifacts ? 150 : 120, alignment: .trailing)
+            }
+            if model.supportsFolderImport && model.supportsAutomaticDownload {
+                Button {
+                    self.viewModel.importSpeechModel(model)
+                } label: {
+                    Image(systemName: "folder.badge.plus")
+                        .font(self.theme.typography.body)
+                }
+                .buttonStyle(.plain)
+                .help(PichiLocalization.text("Import model folder"))
+                .accessibilityLabel(PichiLocalization.text("Import model folder"))
+                .disabled(self.viewModel.areSpeechModelActionsBlocked)
             }
         }
         .padding(.horizontal, 12)

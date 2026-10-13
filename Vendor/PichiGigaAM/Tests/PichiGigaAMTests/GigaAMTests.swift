@@ -140,8 +140,12 @@ final class GigaAMTests: XCTestCase {
         print("GigaAM \(provider.rawValue) transcript: \(result.text)")
         print("GigaAM audio seconds: \(Double(samples.count) / 16_000), inference seconds: \(result.processingDuration), words: \(result.words.count)")
         let shortEOU = try await runtime.transcribe(Array(samples.prefix(4 * 16_000)))
-        let eou = try XCTUnwrap(shortEOU.endOfUtteranceProbability)
-        XCTAssertTrue((0...1).contains(eou))
+        if installed.descriptor.endOfUtteranceThreshold != nil {
+            let eou = try XCTUnwrap(shortEOU.endOfUtteranceProbability)
+            XCTAssertTrue((0...1).contains(eou))
+        } else {
+            XCTAssertNil(shortEOU.endOfUtteranceProbability)
+        }
         let silent = try await runtime.transcribe([Float](repeating: 0, count: 16_000))
         XCTAssertTrue(silent.text.isEmpty, silent.text)
         let empty = try await runtime.transcribe([])

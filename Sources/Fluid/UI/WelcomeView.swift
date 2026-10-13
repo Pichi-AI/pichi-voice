@@ -1488,7 +1488,7 @@ struct OnboardingFlowView: View {
               !self.isModelPreparationInProgress, self.uninstallingModelRouteID == nil else { return }
 
         let importDirectory: URL?
-        if route.model.supportsFolderImport, !self.isOnboardingModelDownloaded(route.model) {
+        if route.model.requiresFolderImport, !self.isOnboardingModelDownloaded(route.model) {
             guard let directory = SpeechModelImportFolderPicker.chooseFolder(for: route.model) else { return }
             importDirectory = directory
         } else {
@@ -1741,8 +1741,8 @@ struct OnboardingFlowView: View {
             } else {
                 self.onboardingModelActionButton(
                     id: "\(route.id)-download-activate",
-                    title: model.supportsFolderImport ? "Import & Activate" : self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: false, isReady: false),
-                    systemImage: model.supportsFolderImport ? "folder.badge.plus" : "arrow.down.circle.fill",
+                    title: model.requiresFolderImport ? "Import & Activate" : self.onboardingModelActionButtonTitle(isPreparing: false, isDownloaded: false, isReady: false),
+                    systemImage: model.requiresFolderImport ? "folder.badge.plus" : "arrow.down.circle.fill",
                     tone: .primary,
                     width: nil,
                     isDisabled: areModelActionsBlocked

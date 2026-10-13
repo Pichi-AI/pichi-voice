@@ -34,6 +34,37 @@ final class WhisperLanguageSelectionTests: XCTestCase {
     }
 
     @MainActor
+    func testFreshSpeechDefaultUsesPackagedRouteAndAvailableEngineCapabilities() {
+        XCTAssertEqual(SettingsStore.SpeechModel.defaultModel, .gigaam)
+        XCTAssertEqual(VoiceEngineLanguageCatalog.packagedDefaultSpeechModel(
+            availableModels: [.gigaam, .whisperSmall, .parakeetTDTv2], packagedLanguageID: "ru"), .gigaam)
+        XCTAssertEqual(VoiceEngineLanguageCatalog.packagedDefaultSpeechModel(
+            availableModels: [.gigaam, .whisperSmall, .parakeetTDTv2], packagedLanguageID: "en"), .parakeetTDTv2)
+        XCTAssertEqual(VoiceEngineLanguageCatalog.packagedDefaultSpeechModel(
+            availableModels: [.whisperSmall], packagedLanguageID: "ru"), .whisperSmall)
+        XCTAssertNil(VoiceEngineLanguageCatalog.packagedDefaultSpeechModel(availableModels: [], packagedLanguageID: "ru"))
+    }
+
+    @MainActor
+    func testFreshSpeechDefaultDoesNotReplaceLegacySelections() {
+        for isAppleSilicon in [true, false] {
+            let legacyAutomatic: SettingsStore.SpeechModel = isAppleSilicon ? .parakeetTDT : .whisperBase
+            XCTAssertEqual(SettingsStore.migratedSpeechModel(legacyProvider: nil, legacyWhisperSize: nil,
+                isAppleSilicon: isAppleSilicon, freshDefault: .gigaam), .gigaam)
+            for provider in ["auto", "fluidAudio"] {
+                XCTAssertEqual(SettingsStore.migratedSpeechModel(legacyProvider: provider, legacyWhisperSize: nil,
+                    isAppleSilicon: isAppleSilicon, freshDefault: .gigaam), legacyAutomatic)
+            }
+            XCTAssertEqual(SettingsStore.migratedSpeechModel(legacyProvider: "whisper", legacyWhisperSize: "ggml-small.bin",
+                isAppleSilicon: isAppleSilicon, freshDefault: .gigaam), .whisperSmall)
+            XCTAssertEqual(SettingsStore.migratedSpeechModel(legacyProvider: "whisper", legacyWhisperSize: "ggml-large-v3.bin",
+                isAppleSilicon: isAppleSilicon, freshDefault: .gigaam), isAppleSilicon ? .whisperLarge : .whisperBase)
+            XCTAssertEqual(SettingsStore.migratedSpeechModel(legacyProvider: nil, legacyWhisperSize: "ggml-base.bin",
+                isAppleSilicon: isAppleSilicon, freshDefault: .gigaam), legacyAutomatic)
+        }
+    }
+
+    @MainActor
     func testOnboardingBootstrapReplayAndCompletionPreserveExplicitLanguageChoice() throws {
         let suite = "OnboardingLanguagePolicyTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
