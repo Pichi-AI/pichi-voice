@@ -233,8 +233,13 @@ struct MeetingCaptionScrollTracking: ViewModifier {
 
         func followPreference(after previous: Self, currentlyFollowing: Bool,
                               userIsScrolling: Bool, upwardDrag: Bool = false) -> Bool {
-            guard userIsScrolling, !layoutChanged(from: previous), offsetChanged(from: previous),
+            guard userIsScrolling, offsetChanged(from: previous),
                   let nearBottom = isPinnedToBottom else { return currentlyFollowing }
+            // Actual upward movement wins over a simultaneous caption wrap or rotation.
+            // Layout changes alone cannot pause following because no user scroll is active.
+            if let contentHeight, let viewportHeight, contentHeight > viewportHeight + 1,
+               movedTowardEarlierText(from: previous) { return false }
+            guard !layoutChanged(from: previous) else { return currentlyFollowing }
             if upwardDrag {
                 // A finger gesture may belong to the outer recording view or bounce a short
                 // document. Pause only when older text in this viewport actually moves.
