@@ -140,7 +140,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let failure = self.controller.privateAILoadState.failureMessage(for: model.id) {
-                Text(failure).font(self.theme.typography.caption).foregroundStyle(.red).lineLimit(2).help(failure)
+                Text(failure).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red)).lineLimit(2).help(failure)
             } else if active {
                 Text(PichiLocalization.text(inMemory ? "In memory" : "Not in memory · loads when you dictate"))
                     .font(self.theme.typography.caption)

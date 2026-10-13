@@ -3621,7 +3621,7 @@ struct BoostTermRow: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(strength.badgeColor.opacity(0.25)))
-                    .foregroundStyle(strength.badgeColor)
+                    .foregroundStyle(self.theme.palette.readableText(strength.badgeColor))
             }
 
             HStack(spacing: 2) {
@@ -3841,9 +3841,9 @@ struct AddDictionaryEntrySheet: View {
                         if !self.duplicateTriggers.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                 Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                             }
                             .font(.fluidSystem(.caption))
                         }
@@ -4021,9 +4021,9 @@ struct EditDictionaryEntrySheet: View {
                         if !self.duplicateTriggers.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                 Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                             }
                             .font(.fluidSystem(.caption))
                         }

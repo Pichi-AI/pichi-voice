@@ -97,7 +97,7 @@ extension AIEnhancementSettingsView {
                     } else if let setupIssue {
                         Label(setupIssue, systemImage: "exclamationmark.circle")
                             .font(self.theme.typography.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(self.theme.palette.readableText(.red))
                     }
                     ProviderDefaultButton(
                         isCurrent: self.primaryDefaultProviderID == provider.id,
@@ -285,11 +285,11 @@ extension AIEnhancementSettingsView {
     var apiKeyWarningView: some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                 .font(.fluidSystem(size: 16))
             Text("API key required for AI enhancement to work")
                 .font(.fluidSystem(size: 13, weight: .medium))
-                .foregroundStyle(.orange)
+                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
             Spacer()
         }
         .padding(12)
@@ -304,7 +304,7 @@ extension AIEnhancementSettingsView {
             HStack(spacing: 8) {
                 Image(systemName: "lightbulb.fill")
                     .font(.fluidSystem(size: 14))
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                 Text("Quick Start Guide")
                     .font(.fluidSystem(size: 13, weight: .semibold))
             }
@@ -737,7 +737,7 @@ extension AIEnhancementSettingsView {
                     Text(self.viewModel.connectionErrorMessage)
                         .font(.fluidSystem(.caption))
                 }
-                .foregroundStyle(.red)
+                .foregroundStyle(self.theme.palette.readableText(.red))
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
@@ -1303,7 +1303,7 @@ extension AIEnhancementSettingsView {
                         Text(error)
                             .font(.fluidSystem(.caption))
                     }
-                    .foregroundStyle(.red)
+                    .foregroundStyle(self.theme.palette.readableText(.red))
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
@@ -1371,7 +1371,7 @@ extension AIEnhancementSettingsView {
                         .font(self.theme.typography.bodyStrong)
                     }
                     .fluidGlassAction()
-                    .foregroundStyle(.red)
+                    .foregroundStyle(self.theme.palette.readableText(.red))
                     .tint(.red)
                     .disabled(self.viewModel.isSavingProviderCredentials || self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -1384,12 +1384,12 @@ extension AIEnhancementSettingsView {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(.red)
+                .foregroundStyle(self.theme.palette.readableText(.red))
                 .padding(.top, 2)
 
             Text(message)
                 .font(.fluidSystem(size: 11, design: .monospaced))
-                .foregroundStyle(.red.opacity(0.9))
+                .foregroundStyle(self.theme.palette.readableText(.red))
                 .lineLimit(lineLimit)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2596,13 +2596,13 @@ extension AIEnhancementSettingsView {
                 }
             } else if self.viewModel.connectionStatus == .failed {
                 HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).font(.fluidSystem(.caption))
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(self.theme.palette.readableText(.red)).font(.fluidSystem(.caption))
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Connection failed").font(.fluidSystem(.caption)).foregroundStyle(.red)
+                        Text("Connection failed").font(.fluidSystem(.caption)).foregroundStyle(self.theme.palette.readableText(.red))
                         if !self.viewModel.connectionErrorMessage.isEmpty {
                             Text(self.viewModel.connectionErrorMessage)
                                 .font(.fluidSystem(.caption2))
-                                .foregroundStyle(.red.opacity(0.8))
+                                .foregroundStyle(self.theme.palette.readableText(.red))
                                 .lineLimit(1)
                         }
                     }

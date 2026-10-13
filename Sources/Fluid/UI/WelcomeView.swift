@@ -1860,7 +1860,7 @@ struct OnboardingFlowView: View {
             if let badgeText {
                 Label(badgeText, systemImage: "checkmark.seal.fill")
                     .font(self.theme.typography.badge)
-                    .foregroundStyle(Color.green.opacity(0.92))
+                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.success))
                     .labelStyle(.titleAndIcon)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -1882,7 +1882,7 @@ struct OnboardingFlowView: View {
             HStack(spacing: 5) {
                 Image(systemName: icon)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(color)
+                    .foregroundStyle(self.theme.palette.readableText(color))
 
                 Text(PichiLocalization.text(label))
                     .font(self.theme.typography.captionStrong)
@@ -2113,7 +2113,7 @@ struct OnboardingFlowView: View {
                 if isReady {
                     Image(systemName: "checkmark")
                         .font(.fluidSystem(size: 17, weight: .bold))
-                        .foregroundStyle(Color.green.opacity(0.92))
+                        .foregroundStyle(self.theme.palette.readableText(self.theme.palette.success))
                 } else {
                     VStack(spacing: 1) {
                         Image(systemName: systemImage)
@@ -2134,7 +2134,7 @@ struct OnboardingFlowView: View {
 
                 Text(LocalizedStringKey(resolvedStatusTitle))
                     .font(.fluidSystem(size: 10, weight: .bold))
-                    .foregroundStyle(isReady ? Color.green.opacity(0.92) : self.theme.palette.accentText)
+                    .foregroundStyle(isReady ? self.theme.palette.readableText(self.theme.palette.success) : self.theme.palette.accentText)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .background(
@@ -2589,7 +2589,7 @@ private struct OnboardingMicrophoneSetupPanel: View {
 
     private var status: (text: String, color: Color) {
         if let errorMessage, errorMessage.isEmpty == false {
-            return ("Microphone unavailable", Color.orange)
+            return ("Microphone unavailable", self.theme.palette.readableText(self.theme.palette.warning))
         }
         return ("Input level", self.theme.palette.secondaryText)
     }
@@ -2609,7 +2609,7 @@ private struct OnboardingMicrophoneSetupPanel: View {
                 if self.devices.isEmpty {
                     Text("No microphone available")
                         .font(.fluidSystem(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.orange.opacity(0.9))
+                        .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                 } else {
                     FluidDropdownPicker(
                         "Input microphone",

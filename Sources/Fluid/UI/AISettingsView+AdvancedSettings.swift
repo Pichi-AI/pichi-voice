@@ -724,10 +724,10 @@ extension AIEnhancementSettingsView {
                     if isRecording {
                         Image(systemName: "keyboard")
                             .font(.fluidSystem(size: 11, weight: .semibold))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                         Text("Press shortcut…")
                             .font(.fluidSystem(size: 12, weight: .semibold))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                             .lineLimit(1)
                     } else if let shortcut = self.promptEditorShortcutDraft {
                         Image(systemName: "keyboard")
@@ -1914,7 +1914,7 @@ extension AIEnhancementSettingsView {
                                 if !self.promptTest.lastError.isEmpty {
                                     Text(self.promptTest.lastError)
                                         .font(.fluidSystem(.caption2))
-                                        .foregroundStyle(.red)
+                                        .foregroundStyle(self.theme.palette.readableText(.red))
                                         .textSelection(.enabled)
                                 }
 

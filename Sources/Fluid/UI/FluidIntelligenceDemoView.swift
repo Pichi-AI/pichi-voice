@@ -73,7 +73,7 @@ struct FluidIntelligenceDemoView: View {
                     self.textPanel(self.result.isEmpty ? "Example result" : "Your result", text: self.result.isEmpty ? Self.examples[self.selected].expected : self.result, accented: true)
                     Text("Illustrative examples. Run one to see your model’s actual output.")
                         .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                    if !self.error.isEmpty { Text(PichiLocalization.text(self.error)).font(self.theme.typography.bodySmall).foregroundStyle(.red) }
+                    if !self.error.isEmpty { Text(PichiLocalization.text(self.error)).font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.readableText(.red)) }
                 }
                 .id(self.selected)
             }

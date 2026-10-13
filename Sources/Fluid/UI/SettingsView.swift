@@ -691,7 +691,7 @@ struct SettingsView: View {
                                 if self.isRecordingAnyShortcut {
                                     Text("Recording…")
                                         .font(.fluidSystem(.caption).weight(.semibold))
-                                        .foregroundStyle(.orange)
+                                        .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                 } else if !self.hotkeyManagerInitialized {
                                     Text("Initializing…")
                                         .font(.fluidSystem(.caption).weight(.semibold))
@@ -707,10 +707,10 @@ struct SettingsView: View {
                                     if self.isRecordingAnyShortcut {
                                         HStack(spacing: 8) {
                                             Image(systemName: "hand.point.up.left.fill")
-                                                .foregroundStyle(.orange)
+                                                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                             Text("Press your new hotkey combination now…")
                                                 .font(.fluidSystem(.caption))
-                                                .foregroundStyle(.orange)
+                                                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                         }
                                     } else if !self.hotkeyManagerInitialized {
                                         HStack(spacing: 8) {
@@ -2248,7 +2248,7 @@ struct SettingsView: View {
 private extension SettingsView {
     private func shortcutLabel(icon: String, color: Color, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon).foregroundStyle(color).frame(width: 20).padding(.top, 2)
+            Image(systemName: icon).foregroundStyle(self.theme.palette.readableText(color)).frame(width: 20).padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong).foregroundStyle(self.settingsTitleText)
                 Text(PichiLocalization.text(description)).font(self.theme.typography.bodySmall).foregroundStyle(self.settingsSecondaryText)
@@ -2313,7 +2313,7 @@ private extension SettingsView {
     private func shortcutCapturePill() -> some View {
         Text("Press shortcut...")
             .font(.fluidSystem(.caption).weight(.medium))
-            .foregroundStyle(.orange)
+            .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
@@ -2584,7 +2584,7 @@ private extension SettingsView {
                 } label: {
                     Image(systemName: "trash")
                         .font(.fluidSystem(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(nsColor: .systemRed).opacity(0.82))
+                        .foregroundStyle(self.theme.palette.readableText(Color(nsColor: .systemRed)))
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
@@ -2720,10 +2720,10 @@ private extension SettingsView {
     ) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: systemImage)
-                .foregroundStyle(color)
+                .foregroundStyle(self.theme.palette.readableText(color))
             Text(message)
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(color)
+                .foregroundStyle(self.theme.palette.readableText(color))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

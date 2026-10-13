@@ -141,7 +141,7 @@ struct AddProviderSheet<Logo: View>: View {
             .textFieldStyle(.roundedBorder)
             if self.saveFailed {
                 Text("Couldn’t save this provider. Check Keychain access and try again.")
-                    .font(self.theme.typography.caption).foregroundStyle(.red)
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red))
             }
             Spacer()
             HStack {
@@ -206,7 +206,7 @@ struct AddProviderSheet<Logo: View>: View {
                 : "Load models with the reload button, or use + to enter a model ID."))
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if let error = self.modelFetchError {
-                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(.red)
+                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red))
                     .textSelection(.enabled)
             }
         }

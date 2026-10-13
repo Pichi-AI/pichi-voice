@@ -134,7 +134,7 @@ struct DictionaryAudioInspectionView: View {
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             if let error = self.playback.error {
-                Text(error).font(self.theme.typography.caption).foregroundStyle(.red)
+                Text(error).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red))
             }
         }
         .disabled(self.recordingBusy)

@@ -162,7 +162,7 @@ struct StatsHighlightsView: View {
                 .rotationEffect(.degrees(-90))
             Image(systemName: icon)
                 .font(self.theme.typography.titleIcon)
-                .foregroundStyle(color)
+                .foregroundStyle(self.theme.palette.readableText(color))
         }
         .frame(width: 58, height: 58)
         .padding(3)
@@ -326,7 +326,7 @@ struct StatsHighlightsView: View {
         ThemedCard(style: .standard, padding: 20, hoverEffect: false) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Image(systemName: icon).font(self.theme.typography.titleIcon).foregroundStyle(color)
+                    Image(systemName: icon).font(self.theme.typography.titleIcon).foregroundStyle(self.theme.palette.readableText(color))
                     Spacer()
                     Text("PERSONAL BEST").font(self.theme.typography.badge).foregroundStyle(self.theme.palette.secondaryText)
                 }

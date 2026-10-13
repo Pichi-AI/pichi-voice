@@ -753,7 +753,7 @@ struct FileTranscriptionView: View {
     private func errorCard(error: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.red)
+                .foregroundColor(self.theme.palette.readableText(.red))
 
             Text(error)
                 .font(self.theme.typography.bodySmall)
@@ -781,7 +781,7 @@ struct FileTranscriptionView: View {
     private func dropErrorCard(message: String) -> some View {
         HStack {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundColor(.red)
+                .foregroundColor(self.theme.palette.readableText(.red))
 
             Text(message)
                 .font(self.theme.typography.bodySmall)

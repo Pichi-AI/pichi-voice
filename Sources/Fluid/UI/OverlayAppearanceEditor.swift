@@ -134,7 +134,7 @@ struct OverlayAppearanceEditor: View {
                                     if self.settings.overlayTint == tint {
                                         Image(systemName: "checkmark")
                                             .font(.fluidSystem(size: 11, weight: .bold))
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(AppTheme.Palette.contrastingInk(on: tint.color))
                                     }
                                 }
                                 .padding(3)
@@ -206,7 +206,7 @@ struct OverlayAppearanceEditor: View {
             HStack(spacing: 7) {
                 Image(systemName: symbol)
                     .font(.fluidSystem(size: 12, weight: .semibold))
-                    .foregroundStyle(selected ? (value == 1 ? Color.orange : Color.indigo) : self.theme.palette.secondaryText)
+                    .foregroundStyle(selected ? self.theme.palette.readableText(value == 1 ? Color.orange : Color.indigo) : self.theme.palette.secondaryText)
                 Text(PichiLocalization.text(value == 1 ? "backdrop.light" : "backdrop.dark", defaultValue: title))
                     .font(.fluidSystem(size: 12, weight: .semibold))
             }

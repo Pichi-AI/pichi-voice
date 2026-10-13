@@ -156,7 +156,7 @@ extension VoiceEngineSettingsView {
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(Capsule().fill(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent.opacity(0.2) : .orange.opacity(0.2)))
-                                    .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accentText : .orange)
+                                    .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accentText : self.theme.palette.readableText(self.theme.palette.warning))
                             }
 
                             Spacer()
@@ -225,10 +225,10 @@ extension VoiceEngineSettingsView {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                             Text(PichiLocalization.text(memoryWarning))
                                 .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -303,7 +303,7 @@ extension VoiceEngineSettingsView {
                         HStack(spacing: 4) {
                             Image(systemName: "bolt.fill")
                                 .font(.fluidSystem(size: 11))
-                                .foregroundStyle(.yellow)
+                                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                             Text("Speed \(Int(model.speedPercent * 100))%")
                                 .font(self.theme.typography.bodyStrong)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
@@ -477,7 +477,7 @@ extension VoiceEngineSettingsView {
                             } label: {
                                 Image(systemName: "trash")
                                     .font(.fluidSystem(size: 15))
-                                    .foregroundStyle(.red.opacity(0.7))
+                                    .foregroundStyle(self.theme.palette.readableText(.red))
                             }
                             .buttonStyle(.plain)
                             .disabled(self.viewModel.areSpeechModelActionsBlocked)
@@ -799,7 +799,7 @@ extension VoiceEngineSettingsView {
                         Text("Delete")
                     }
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(self.theme.palette.readableText(.red))
                 }
                 .buttonStyle(.plain)
             } else if self.viewModel.asr.modelsExistOnDisk {
@@ -814,7 +814,7 @@ extension VoiceEngineSettingsView {
                         Text("Delete")
                     }
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(self.theme.palette.readableText(.red))
                 }
                 .buttonStyle(.plain)
             } else {

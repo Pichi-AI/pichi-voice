@@ -82,7 +82,7 @@ struct DictionaryMatchDiagnosticsView: View {
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
             if let error = self.error {
-                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(.red)
+                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red))
             }
             if let report = self.report, report.inspection != nil {
                 Divider()

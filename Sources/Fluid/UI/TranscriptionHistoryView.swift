@@ -312,7 +312,7 @@ struct TranscriptionHistoryView: View {
                             }
                             if entry.aiProcessingError != nil {
                                 Image(systemName: "exclamationmark.triangle")
-                                    .foregroundStyle(.orange).help(entry.aiProcessingError ?? "")
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning)).help(entry.aiProcessingError ?? "")
                             }
                             Spacer(minLength: 0)
                             if self.settings.showHistoryPerformanceMetrics, let speed = entry.aiTokensPerSecond {
@@ -574,7 +574,7 @@ struct TranscriptionHistoryView: View {
                             Text(error).font(self.theme.typography.caption).textSelection(.enabled)
                         }
                     } icon: {
-                        Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                        Image(systemName: "exclamationmark.triangle").foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -828,7 +828,7 @@ private struct TranscriptionFeedbackReportSheet: View {
             if let errorMessage {
                 Text(errorMessage)
                     .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(self.theme.palette.readableText(.red))
                     .fixedSize(horizontal: false, vertical: true)
             }
 
