@@ -11,6 +11,18 @@ task_test_dir=$(mktemp -d /tmp/fluidvoice-command-cancellation.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
 # Reuse the brand schema without admitting the production disk/defaults store.
 sed '/^nonisolated final class BrandPackageStore:/,$d' Sources/Fluid/Branding/BrandPackage.swift > "$task_test_dir/BrandPackageTypes.swift"
+# Relaunch uses the real store initializer and persisted bytes, without saving or switching chats.
+cp Sources/Fluid/Persistence/ChatHistoryStore.swift "$task_test_dir/ChatHistoryStore.swift"
+cat >> "$task_test_dir/ChatHistoryStore.swift" <<'SWIFT'
+
+extension ChatHistoryStore {
+    func reloadFromPersistenceForTests() {
+        let restored = ChatHistoryStore(defaults: self.defaults)
+        self.sessions = restored.sessions
+        self.currentChatID = restored.currentChatID
+    }
+}
+SWIFT
 # Include the actual voice continuation and notch submit methods to cover their await boundaries.
 python3 - "$task_test_dir/CommandUI.swift" <<'PYCODE'
 from pathlib import Path
@@ -32,7 +44,7 @@ xcrun swiftc -parse-as-library \
     Tests/Support/StandaloneBrandPackageStore.swift \
     Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Services/CommandModeService.swift \
-    Sources/Fluid/Persistence/ChatHistoryStore.swift \
+    "$task_test_dir/ChatHistoryStore.swift" \
     Sources/Fluid/Persistence/PersistedHistory.swift \
     Tests/CommandCancellationTests.swift \
     "$task_test_dir/CommandUI.swift" \

@@ -467,15 +467,27 @@ final class CommandModeService: ObservableObject {
 
     /// Cancel pending command
     func cancelPendingCommand() {
-        self.pendingCommand = nil
-        self.pendingVoiceCommandCancellation = nil
+        guard !self.isProcessing, let pending = self.pendingCommand else { return }
+        if let proposal = self.conversationHistory.lastIndex(where: {
+            $0.role == .assistant && $0.toolCall?.id == pending.id
+        }) {
+            // This proposal was never dispatched, so there is no tool result to pair with it.
+            // Retain the user's request and any actual completions before the proposal.
+            self.discardUndispatchedMessages(from: proposal)
+        }
         self.conversationHistory.append(Message(
             role: .assistant,
-            content: "Command cancelled.",
+            content: PichiLocalization.text("Command cancelled."),
             stepType: .failure
         ))
-        self.isProcessing = false
-        self.currentStep = nil
+        // Persist before releasing approval ownership or allowing a chat switch.
+        self.saveCurrentChat()
+        self.resetChatTransientState()
+        self.syncToNotchState()
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.setCommandProcessing(false)
+            NotchContentState.shared.updateCommandStreamingText("")
+        }
     }
 
     /// Escape invalidates the voice owner before canceling its deferred confirmation.

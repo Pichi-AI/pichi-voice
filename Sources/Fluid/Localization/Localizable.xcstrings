@@ -47586,6 +47586,23 @@
           }
         }
       }
+    },
+    "Command cancelled.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command cancelled."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Команда отменена."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

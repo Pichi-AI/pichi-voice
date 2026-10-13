@@ -259,6 +259,10 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         await self.cancelRenderDelay()
         await self.validRecursiveToolRequestStillWorks()
         await self.validFollowUpAndConfirmationStillWork()
+        await self.explicitCancellationSurvivesSameChatRestart(afterCompletedTool: false, voice: false)
+        await self.explicitCancellationSurvivesSameChatRestart(afterCompletedTool: true, voice: false)
+        await self.explicitCancellationSurvivesSameChatRestart(afterCompletedTool: false, voice: true)
+        await self.explicitCancellationIsAnIdlePendingOperation()
         await self.cancelVoiceConfirmation(cancelThroughEscape: true)
         await self.cancelVoiceConfirmation(cancelThroughEscape: false)
         await self.cancelVoiceConfirmationAfterCompletedTool()
@@ -459,6 +463,92 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
 
     static var destructiveResponse: LLMClient.Response {
         .init(content: "Confirm removal", thinking: nil, toolCalls: [.init(id: "pending-voice", command: "rm -rf fake")])
+    }
+
+    static var harmlessPendingResponse: LLMClient.Response {
+        .init(content: "Proposed harmless printf", thinking: nil,
+              toolCalls: [.init(id: "cancel-probe", command: "printf 'E2E cancel' # rm -f classifier-only probe")])
+    }
+
+    static func explicitCancellationSurvivesSameChatRestart(afterCompletedTool: Bool, voice: Bool) async {
+        let service = self.fixture()
+        SettingsStore.shared.commandModeConfirmBeforeExecute = true
+        LLMClient.shared.delay = false
+        LLMClient.shared.responses = afterCompletedTool ? [.tool, self.harmlessPendingResponse] : [self.harmlessPendingResponse]
+        var valid = true
+        if voice {
+            await service.processUserCommand("Cancel this deferred harmless tool", isOutputValid: { valid })
+        } else {
+            await service.processUserCommand("Cancel this deferred harmless tool")
+        }
+        let chatID = service.currentChatID
+        self.check(service.pendingCommand?.id == "cancel-probe" && !service.isProcessing, "Fixture must reach the real pending approval boundary")
+        let executed = TerminalService.executed
+        service.cancelPendingCommand()
+        self.check(TerminalService.executed == executed, "Explicit cancellation must never dispatch the deferred command")
+
+        // Reconstruct directly from persisted defaults before any switch or new request.
+        let persisted = ChatHistoryStore(defaults: .standard)
+        self.check(persisted.currentChatID == chatID, "Cancellation must retain the exact active chat")
+        self.check(persisted.currentSession?.messages.last?.content == PichiLocalization.text("Command cancelled.") &&
+                   persisted.currentSession?.messages.last?.stepType == .failure,
+                   "Explicit cancellation must survive immediate restart without a chat switch or new request")
+
+        let expectedRoles: [CommandModeService.Message.Role] = afterCompletedTool ? [.user, .assistant, .tool, .assistant] : [.user, .assistant]
+        self.check(service.conversationHistory.map(\.role) == expectedRoles, "Only the undispatched tool proposal may be removed; user intent and completed evidence stay")
+        self.check(service.conversationHistory.allSatisfy { $0.toolCall?.id != "cancel-probe" }, "Explicit cancellation must not leave an orphan pending tool call")
+        self.check(service.pendingCommand == nil && service.currentStep == nil && !service.isProcessing, "Cancellation must release transient approval state")
+        valid = false
+        self.check(!service.cancelInvalidPendingCommand(), "A retired voice owner must not later discard the explicit cancellation")
+
+        ChatHistoryStore.shared.reloadFromPersistenceForTests()
+        let restored = CommandModeService()
+        self.check(restored.currentChatID == chatID && restored.conversationHistory.map(\.content) == service.conversationHistory.map(\.content),
+                   "A fresh service must restore cancellation in the same selected chat")
+        self.check(restored.conversationHistory.map(\.role) == expectedRoles && restored.pendingCommand == nil,
+                   "Relaunch must preserve completed tool pairing without reviving an executable approval")
+        let beforeRepeat = UserDefaults.standard.writes
+        let messages = restored.conversationHistory
+        restored.cancelPendingCommand()
+        restored.cancelPendingCommand()
+        self.check(restored.conversationHistory == messages && UserDefaults.standard.writes == beforeRepeat,
+                   "Nil or repeated cancellation must not create phantom failures or persistence writes")
+
+        LLMClient.shared.responses = [.done]
+        await restored.processUserCommand("Next harmless request after restart")
+        let wire = LLMClient.shared.configs.last!.messages
+        let calls = wire.filter { $0["tool_calls"] != nil }
+        let results = wire.filter { $0["role"] as? String == "tool" }
+        self.check(calls.count == (afterCompletedTool ? 1 : 0) && results.count == calls.count,
+                   "The next actual model request must have complete tool pairs and no cancelled tool call")
+        if afterCompletedTool {
+            let call = (calls[0]["tool_calls"] as? [[String: Any]])?.first
+            self.check(call?["id"] as? String == "tool" && results[0]["tool_call_id"] as? String == "tool",
+                       "The retained wire result must stay paired with the actually completed tool")
+        }
+        self.check(TerminalService.executed == executed, "Restart or a later request must not execute the cancelled command")
+    }
+
+    static func explicitCancellationIsAnIdlePendingOperation() async {
+        let service = self.fixture()
+        let idleMessages = service.conversationHistory
+        let idleWrites = UserDefaults.standard.writes
+        service.cancelPendingCommand()
+        self.check(service.conversationHistory == idleMessages && UserDefaults.standard.writes == idleWrites,
+                   "Cancellation without pending approval must be a no-op")
+        SettingsStore.shared.commandModeConfirmBeforeExecute = true
+        LLMClient.shared.delay = false
+        LLMClient.shared.responses = [self.harmlessPendingResponse]
+        await service.processUserCommand("Harmless approval fixture")
+        let messages = service.conversationHistory
+        let writes = UserDefaults.standard.writes
+        service.isProcessing = true
+        service.cancelPendingCommand()
+        self.check(service.pendingCommand?.id == "cancel-probe" && service.conversationHistory == messages && UserDefaults.standard.writes == writes,
+                   "Cancellation must not mutate a processing owner")
+        service.isProcessing = false
+        service.cancelPendingCommand()
+        self.check(service.pendingCommand == nil && TerminalService.executed.isEmpty, "Idle pending cancellation must remain retryable after processing")
     }
 
     static func cancelVoiceConfirmation(cancelThroughEscape: Bool) async {
