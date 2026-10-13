@@ -2509,9 +2509,9 @@ nonisolated enum MeetingCaptureError: LocalizedError {
         case .wrongActiveSession:
             return "A different meeting recording is active."
         case .applicationNotSelected:
-            return "Choose the application that contains the online meeting."
+            return PichiLocalization.text("Choose the application that contains the online meeting.")
         case let .applicationUnavailable(name):
-            return "\(name) is no longer available to record."
+            return PichiLocalization.format("%@ is no longer available to record.", name)
         case .noCaptureDisplay:
             return "No display is available for meeting-audio capture."
         case .microphoneUnavailable:
@@ -2540,6 +2540,36 @@ nonisolated enum MeetingCaptureSourceCatalog {
         "com.google.Chrome",
         "com.microsoft.teams2",
     ]
+
+    /// Recording admission preserves the selected process, including the detected window.
+    /// Only an explicit in-room choice may omit application audio.
+    static func resolveRecordingApplication(
+        mode: MeetingCaptureMode,
+        usesAutomaticApplication: Bool,
+        selectedApplication: MeetingApplicationIdentity?,
+        automaticTarget: MeetingAutoDetector.ResolvedTarget?,
+        applications: [MeetingApplicationIdentity]
+    ) throws -> MeetingApplicationIdentity? {
+        guard mode == .onlineCall else { return nil }
+        if usesAutomaticApplication {
+            guard let automaticTarget else { throw MeetingCaptureError.applicationNotSelected }
+            guard var match = applications.first(where: {
+                $0.bundleIdentifier == automaticTarget.bundleIdentifier && $0.processID == automaticTarget.pid
+            }) else {
+                throw MeetingCaptureError.applicationUnavailable(automaticTarget.bundleIdentifier)
+            }
+            match.windowID = automaticTarget.windowID
+            return match
+        }
+        guard let selectedApplication else { throw MeetingCaptureError.applicationNotSelected }
+        guard var match = applications.first(where: {
+            $0.bundleIdentifier == selectedApplication.bundleIdentifier && $0.processID == selectedApplication.processID
+        }) else {
+            throw MeetingCaptureError.applicationUnavailable(selectedApplication.displayName)
+        }
+        match.windowID = selectedApplication.windowID
+        return match
+    }
 
     /// Manual setup keeps Zoom/Chrome/Teams fallback. Auto-detect must capture the
     /// detected app or fail — never a different meeting.

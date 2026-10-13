@@ -1,6 +1,57 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "No call was detected. Choose its app under Change, or choose In person for microphone-only recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No call was detected. Choose its app under Change, or choose In person for microphone-only recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звонок не обнаружен. Выберите его приложение в меню «Изменить» или вариант «В одной комнате» для записи только микрофона."
+          }
+        }
+      }
+    },
+    "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранное приложение встречи недоступно. Откройте его и обновите источники или выберите другое приложение в меню «Изменить»."
+          }
+        }
+      }
+    },
+    "Choose the application that contains the online meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the application that contains the online meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите приложение, в котором проходит онлайн-встреча."
+          }
+        }
+      }
+    },
     "Hold Space to Mute": {
       "extractionState": "manual",
       "localizations": {

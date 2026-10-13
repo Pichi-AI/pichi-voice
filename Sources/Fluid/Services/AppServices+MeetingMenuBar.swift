@@ -4,10 +4,13 @@ extension AppServices {
     /// Starts the same coordinator used by FluidMeet without posting a navigation request.
     func startMeetingRecordingFromMenuBar() async throws {
         let defaults = SettingsStore.shared.meetingRecordingDefaults
-        let target = defaults.mode == .onlineCall ? self.meetingAutomaticTarget : nil
+        let target = defaults.mode == .onlineCall && defaults.usesAutomaticApplication ? self.meetingAutomaticTarget : nil
+        if defaults.mode == .onlineCall, defaults.usesAutomaticApplication, target == nil {
+            throw MeetingCaptureError.applicationNotSelected
+        }
         let preferredInputUID = SettingsStore.shared.preferredInputDeviceUID
         let microphones = await MeetingCaptureSourceCatalog.microphoneSnapshot()
-        let applications = try await target == nil ? [] : MeetingCaptureSourceCatalog.availableApplications()
+        let applications = try await defaults.mode == .onlineCall ? MeetingCaptureSourceCatalog.availableApplications() : []
         try Task.checkCancellation()
         // Never capture a replacement app when detection changed during source discovery.
         if let target, target != self.meetingAutomaticTarget {
@@ -43,20 +46,20 @@ extension AppServices {
             throw MeetingCaptureError.microphoneUnavailable
         }
         microphone.role = .unknown
-        var application: MeetingApplicationIdentity?
-        if defaults.mode == .onlineCall, let target {
-            guard var match = applications.first(where: {
-                $0.bundleIdentifier == target.bundleIdentifier && $0.processID == target.pid
-            }) else {
-                throw MeetingCaptureError.applicationUnavailable(target.bundleIdentifier)
-            }
-            match.windowID = target.windowID
-            application = match
+        let selectedApplication = defaults.savedApplication(in: applications)
+        if defaults.mode == .onlineCall, !defaults.usesAutomaticApplication, selectedApplication == nil {
+            throw MeetingCaptureError.applicationUnavailable(defaults.applicationDisplayName ?? defaults.applicationBundleIdentifier ?? "")
         }
-        let mode: MeetingCaptureMode = application == nil ? .inRoom : .onlineCall
+        let application = try MeetingCaptureSourceCatalog.resolveRecordingApplication(
+            mode: defaults.mode,
+            usesAutomaticApplication: defaults.usesAutomaticApplication,
+            selectedApplication: selectedApplication,
+            automaticTarget: target,
+            applications: applications
+        )
         return MeetingCaptureConfiguration(
-            mode: mode,
-            title: MeetingTranscriptionSetupDraft.defaultTitle(mode: mode, applicationDisplayName: application?.displayName),
+            mode: defaults.mode,
+            title: MeetingTranscriptionSetupDraft.defaultTitle(mode: defaults.mode, applicationDisplayName: application?.displayName),
             languageCode: defaults.languageCode ?? "en",
             platform: application.map { MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName) },
             application: application,

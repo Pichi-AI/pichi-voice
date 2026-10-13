@@ -151,6 +151,11 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
         microphoneRole: .unknown
     )
 
+    /// A saved bundle is an explicit source; nil means follow the detected call.
+    var usesAutomaticApplication: Bool {
+        !self.isConfigured || self.applicationBundleIdentifier == nil
+    }
+
     func savedApplication(in identities: [MeetingApplicationIdentity]) -> MeetingApplicationIdentity? {
         guard self.isConfigured, let applicationBundleIdentifier else { return nil }
         return identities.first(where: { $0.bundleIdentifier == applicationBundleIdentifier })

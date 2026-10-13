@@ -319,9 +319,8 @@ struct MeetingRecordingSettingsSheet: View {
     private var applicationSelection: Binding<String?> {
         Binding(
             get: { self.draft.usesAutomaticApplication ? nil : self.draft.selectedApplicationID },
-            set: {
-                self.draft.usesAutomaticApplication = $0 == nil
-                self.draft.selectedApplicationID = $0
+            set: { id in
+                self.draft.chooseApplication(self.applications.first { $0.id == id }?.identity)
             }
         )
     }

@@ -58,17 +58,43 @@ def main() -> None:
         "private func applyPendingBackupSetupRefresh()",
         "private func finishRestoredMeetingSettingsIfPending()",
     ))
+    models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
+    model_declarations = "\n".join(declaration(models, marker) for marker in (
+        "nonisolated enum MeetingCaptureMode:",
+        "nonisolated enum MeetingMicrophoneRole:",
+        "nonisolated struct MeetingRecordingDefaults:",
+        "nonisolated struct MeetingApplicationIdentity:",
+        "nonisolated struct MeetingMicrophoneIdentity:",
+    ))
+    application_option = declaration(source, "nonisolated struct MeetingApplicationOption:")
+    capture = (ROOT / "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift").read_text()
+    application_resolver = declaration(capture, "static func resolveRecordingApplication(")
+    recording_start = declaration(source, "private func startRecording()")
     swift = r'''
 import Foundation
-
-enum MeetingCaptureMode { case onlineCall, inRoom }
-struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall }
+''' + model_declarations + "\n" + application_option + r'''
+enum MeetingAutoDetector {
+    struct ResolvedTarget { let bundleIdentifier: String; let pid: Int32; let windowID: UInt32? }
+}
+enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
+enum MeetingCaptureSourceCatalog {
+''' + application_resolver + r'''
+}
+enum PichiLocalization {
+    static func text(_ value: String) -> String { value }
+    static func format(_ value: String, _ argument: String) -> String { String(format: value, argument) }
+}
+enum PichiMeetingProviderFactory {
+    static func defaultLanguageCode(for value: String) -> String? { "en" }
+}
 final class SettingsStore {
     static let shared = SettingsStore()
-    var meetingRecordingDefaults = Defaults()
+    var meetingRecordingDefaults = MeetingRecordingDefaults.unconfigured
+    var selectedSpeechModel = Model()
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
     var meetingAudioRetentionPolicy = 7
+    struct Model { let rawValue = "synthetic" }
 }
 struct Identity { let id: String }
 struct Option { let identity: Identity }
@@ -120,7 +146,9 @@ func check(_ ok: Bool, _ message: String) {
     if !ok { fatalError(message) }
 }
 func restored(_ language: String = "fr", _ mode: MeetingCaptureMode = .inRoom) {
-    SettingsStore.shared.meetingRecordingDefaults = Defaults(languageCode: language, mode: mode)
+    var defaults = MeetingRecordingDefaults.unconfigured
+    defaults.languageCode = language; defaults.mode = mode
+    SettingsStore.shared.meetingRecordingDefaults = defaults
 }
 func fresh() -> Harness {
     restored("en", .onlineCall)
@@ -129,8 +157,37 @@ func fresh() -> Harness {
     SettingsStore.shared.meetingAudioRetentionPolicy = 7
     return Harness()
 }
+@MainActor final class StartCoordinator {
+    var calls = 0
+    var continuation: CheckedContinuation<Void, Never>?
+    func startRecording(configuration: StartConfiguration) async throws {
+        calls += 1
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func finish() { continuation?.resume(); continuation = nil }
+}
+struct StartConfiguration { let microphone: MeetingMicrophoneIdentity }
+struct StartReadiness {
+    let activityReady = true, storageReady = true, microphoneReady = true, meetingAudioReady = true
+    let blockingMessage: String? = nil
+}
+@MainActor final class StartHarness {
+    let settings = SettingsStore.shared
+    let coordinator = StartCoordinator()
+    let readiness = StartReadiness()
+    let captureConfiguration: StartConfiguration? = StartConfiguration(microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic"))
+    let applications = [MeetingApplicationOption(identity: MeetingApplicationIdentity(bundleIdentifier: "manual.app", processID: 42, displayName: "Manual App"))]
+    var setupDraft = MeetingTranscriptionSetupDraft()
+    var isStarting = false, pendingBackupSetupRefresh = false
+    var actionErrorMessage: String?
+    init() { setupDraft.chooseApplication(applications[0].identity) }
+    func waitForStart() async { while coordinator.continuation == nil { await Task.yield() } }
+    func finish() async { coordinator.finish(); while isStarting { await Task.yield() } }
+''' + recording_start + r'''
+    func start() { startRecording() }
+}
 @main enum Tests {
- static func main() {
+ @MainActor static func main() async {
     // Reproduce pre-fix: real production draft is a value snapshot, not a settings binding.
     let baseline = fresh()
     restored()
@@ -195,6 +252,21 @@ func fresh() -> Harness {
     restored(); missing.notifyRestore()
     check(missing.setupDraft.selectedMicrophoneID == nil && missing.setupDraft.selectedApplicationID == nil, "missing cached sources stay unselected")
     check(missing.hardwareQueries == 0 && !missing.pendingBackupSetupRefresh, "missing sources do not create a permanent pending restore")
+
+    for superseded in 0..<3 {
+        SettingsStore.shared.meetingRecordingDefaults = .unconfigured
+        let start = StartHarness()
+        start.start(); await start.waitForStart()
+        if superseded > 0 { restored("fr", .inRoom) }
+        if superseded == 1 { start.pendingBackupSetupRefresh = true }
+        await start.finish()
+        let saved = SettingsStore.shared.meetingRecordingDefaults
+        if superseded == 0 {
+            check(saved.mode == .onlineCall && saved.applicationBundleIdentifier == "manual.app", "successful quick Change/Start persists manual source")
+        } else {
+            check(saved.mode == .inRoom && saved.languageCode == "fr" && saved.applicationBundleIdentifier == nil, "backup or another window's settings during start supersede older frozen defaults")
+        }
+    }
     print("PASS: \(assertions) production-handler assertions")
  }
 }

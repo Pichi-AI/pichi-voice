@@ -28,6 +28,8 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var mode: MeetingCaptureMode = .onlineCall
     var title: String = Self.defaultTitle(mode: .onlineCall, applicationDisplayName: nil)
     var selectedApplicationID: String?
+    /// Stable intent survives source refreshes; the process ID is resolved before admission.
+    var selectedApplicationBundleIdentifier: String?
     var usesAutomaticApplication = true
     var selectedMicrophoneID: String?
     /// Once true, the default title stops following the selected application/mode.
@@ -37,16 +39,93 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var browserDetectionEnabled: Bool
 
     init(settings: SettingsStore = .shared) {
-        let defaults = settings.meetingRecordingDefaults
-        self.autoDetectEnabled = settings.meetingAutoDetectEnabled
-        self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
+        self.init(
+            defaults: settings.meetingRecordingDefaults,
+            autoDetectEnabled: settings.meetingAutoDetectEnabled,
+            browserDetectionEnabled: settings.meetingAutoDetectBrowserEnabled,
+            fallbackLanguageCode: PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "ru"
+        )
+    }
+
+    init(
+        defaults: MeetingRecordingDefaults,
+        autoDetectEnabled: Bool,
+        browserDetectionEnabled: Bool,
+        fallbackLanguageCode: String
+    ) {
+        self.autoDetectEnabled = autoDetectEnabled
+        self.browserDetectionEnabled = browserDetectionEnabled
         self.languageCode = defaults.languageCode
-            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "ru"
+            ?? fallbackLanguageCode
         self.mode = defaults.mode
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
+        self.usesAutomaticApplication = defaults.usesAutomaticApplication
+        self.selectedApplicationBundleIdentifier = defaults.usesAutomaticApplication ? nil : defaults.applicationBundleIdentifier
         self.selectedApplicationID = nil
         // Left unset here: selectPreferredMicrophone decides once identities load.
         self.selectedMicrophoneID = nil
+    }
+
+    mutating func chooseApplication(_ application: MeetingApplicationIdentity?) {
+        self.usesAutomaticApplication = application == nil
+        self.selectedApplicationID = application.map { MeetingApplicationOption(identity: $0).id }
+        self.selectedApplicationBundleIdentifier = application?.bundleIdentifier
+    }
+
+    mutating func refreshApplicationSelection(
+        from identities: [MeetingApplicationIdentity],
+        automaticTarget: MeetingAutoDetector.ResolvedTarget?
+    ) {
+        let options = identities.map(MeetingApplicationOption.init)
+        if self.usesAutomaticApplication {
+            self.selectedApplicationID = options.first {
+                $0.identity.bundleIdentifier == automaticTarget?.bundleIdentifier && $0.identity.processID == automaticTarget?.pid
+            }?.id
+        } else if !options.contains(where: { $0.id == self.selectedApplicationID }) {
+            self.selectedApplicationID = options.first {
+                $0.identity.bundleIdentifier == self.selectedApplicationBundleIdentifier
+            }?.id
+        }
+    }
+
+    func resolvedRecordingApplication(
+        from identities: [MeetingApplicationIdentity],
+        automaticTarget: MeetingAutoDetector.ResolvedTarget?
+    ) throws -> MeetingApplicationIdentity? {
+        let selected = identities.first { MeetingApplicationOption(identity: $0).id == self.selectedApplicationID }
+        if self.mode == .onlineCall, self.usesAutomaticApplication {
+            guard let selected, let automaticTarget,
+                  selected.bundleIdentifier == automaticTarget.bundleIdentifier,
+                  selected.processID == automaticTarget.pid else { throw MeetingCaptureError.applicationNotSelected }
+        }
+        return try MeetingCaptureSourceCatalog.resolveRecordingApplication(
+            mode: self.mode,
+            usesAutomaticApplication: self.usesAutomaticApplication,
+            selectedApplication: selected,
+            automaticTarget: automaticTarget,
+            applications: identities
+        )
+    }
+
+    func recordingDefaults(
+        microphone: MeetingMicrophoneIdentity,
+        applications: [MeetingApplicationIdentity]
+    ) throws -> MeetingRecordingDefaults {
+        let application = applications.first { MeetingApplicationOption(identity: $0).id == self.selectedApplicationID }
+        if self.mode == .onlineCall, !self.usesAutomaticApplication, application == nil {
+            throw MeetingCaptureError.applicationNotSelected
+        }
+        let savedApplication = self.mode == .onlineCall && !self.usesAutomaticApplication ? application : nil
+        return MeetingRecordingDefaults(
+            isConfigured: true,
+            mode: self.mode,
+            applicationBundleIdentifier: savedApplication?.bundleIdentifier,
+            applicationDisplayName: savedApplication?.displayName,
+            microphoneCaptureDeviceID: microphone.captureDeviceID,
+            microphoneCoreAudioUID: microphone.coreAudioUID,
+            microphoneRole: .unknown,
+            languageCode: self.languageCode
+        )
     }
 
     static func defaultTitle(mode: MeetingCaptureMode, applicationDisplayName: String?) -> String {
@@ -510,20 +589,18 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    /// True only when an actual app will be captured; otherwise recording is mic-only.
-    private var capturesMeetingAudio: Bool {
-        guard self.setupDraft.mode == .onlineCall, let id = self.setupDraft.selectedApplicationID else { return false }
-        return self.applications.contains { $0.id == id }
-    }
-
     private var effectiveCaptureMode: MeetingCaptureMode {
-        self.capturesMeetingAudio ? .onlineCall : .inRoom
+        self.setupDraft.mode
     }
 
     private var readiness: MeetingSetupReadiness {
         let microphoneStatus = self.cachedMicrophoneStatus
         let microphoneReady = microphoneStatus == .authorized
-        let meetingAudioReady = !self.capturesMeetingAudio || self.cachedScreenCaptureAccess
+        let applicationResolved = (try? self.setupDraft.resolvedRecordingApplication(
+            from: self.applications.map(\.identity),
+            automaticTarget: self.appServices.meetingAutomaticTarget
+        )) != nil
+        let meetingAudioReady = self.setupDraft.mode == .inRoom || (applicationResolved && self.cachedScreenCaptureAccess)
         let modelReady = self.cachedModelReady
         let conflictingActivity = self.asrService.activeExclusiveActivity
         let activityReady = conflictingActivity == nil
@@ -553,8 +630,12 @@ struct MeetingTranscriptionView: View {
             blockingMessage = PichiLocalization.text("Allow microphone access, then refresh sources.")
         } else if self.microphones.isEmpty {
             blockingMessage = PichiLocalization.text("Connect a microphone, then refresh sources.")
-        } else if !meetingAudioReady {
+        } else if self.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess {
             blockingMessage = PichiLocalization.text("Allow Screen & System Audio access, then refresh sources.")
+        } else if self.setupDraft.mode == .onlineCall && !applicationResolved {
+            blockingMessage = self.setupDraft.usesAutomaticApplication
+                ? PichiLocalization.text("No call was detected. Choose its app under Change, or choose In person for microphone-only recording.")
+                : PichiLocalization.text("The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change.")
         } else if !self.cachedStorageReady {
             let trackCount = MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode)
             blockingMessage = PichiLocalization.format("Free at least %@ of storage before recording.", MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount))
@@ -567,7 +648,8 @@ struct MeetingTranscriptionView: View {
 
         return MeetingSetupReadiness(
             isCheckingSources: self.isRefreshingSources,
-            meetingAudioStatus: meetingAudioReady ? PichiLocalization.text("Ready") : PichiLocalization.text("Access required"),
+            meetingAudioStatus: meetingAudioReady ? PichiLocalization.text("Ready")
+                : (self.cachedScreenCaptureAccess ? PichiLocalization.text("Source unavailable") : PichiLocalization.text("Access required")),
             meetingAudioReady: meetingAudioReady,
             microphoneStatus: microphoneStatusText,
             microphoneReady: microphoneReady && !self.microphones.isEmpty,
@@ -708,21 +790,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func selectPreferredApplication(from identities: [MeetingApplicationIdentity]) {
-        let options = identities.map(MeetingApplicationOption.init)
-        if self.setupDraft.usesAutomaticApplication {
-            let target = self.appServices.meetingAutomaticTarget
-            self.setupDraft.selectedApplicationID = options.first {
-                $0.identity.bundleIdentifier == target?.bundleIdentifier && $0.identity.processID == target?.pid
-            }?.id
-            return
-        }
-        if let selectedID = setupDraft.selectedApplicationID,
-           options.contains(where: { $0.id == selectedID })
-        {
-            return
-        }
-
-        self.setupDraft.selectedApplicationID = nil
+        self.setupDraft.refreshApplicationSelection(from: identities, automaticTarget: self.appServices.meetingAutomaticTarget)
     }
 
     private func startRecording() {
@@ -732,18 +800,27 @@ struct MeetingTranscriptionView: View {
               readiness.storageReady,
               readiness.microphoneReady,
               readiness.meetingAudioReady,
-              let configuration = self.captureConfiguration
+              let configuration = self.captureConfiguration,
+              let recordingDefaults = try? self.setupDraft.recordingDefaults(
+                  microphone: configuration.microphone,
+                  applications: self.applications.map(\.identity)
+              )
         else {
             self.actionErrorMessage = readiness.blockingMessage.map(PichiLocalization.text) ?? PichiLocalization.text("Finish meeting setup before recording.")
             return
         }
         self.isStarting = true
         self.actionErrorMessage = nil
+        let defaultsBeforeStart = self.settings.meetingRecordingDefaults
 
         Task {
             defer { self.isStarting = false }
             do {
                 _ = try await self.coordinator.startRecording(configuration: configuration)
+                // A restore or another window's settings change supersedes this older start.
+                if !self.pendingBackupSetupRefresh, self.settings.meetingRecordingDefaults == defaultsBeforeStart {
+                    self.settings.meetingRecordingDefaults = recordingDefaults
+                }
             } catch {
                 self.actionErrorMessage = error.localizedDescription
             }
@@ -761,22 +838,16 @@ struct MeetingTranscriptionView: View {
         var microphone = microphoneOption.identity
         microphone.role = .unknown
 
-        // No resolved app means a mic-only recording, never a refusal to record.
-        let applicationOption = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
-        var application = self.setupDraft.mode == .onlineCall ? applicationOption?.identity : nil
-        if application != nil, self.setupDraft.usesAutomaticApplication {
-            if let target = self.appServices.meetingAutomaticTarget,
-               application?.bundleIdentifier == target.bundleIdentifier,
-               application?.processID == target.pid
-            {
-                application?.windowID = target.windowID
-            } else {
-                application = nil
-            }
-        }
+        let application: MeetingApplicationIdentity?
+        do {
+            application = try self.setupDraft.resolvedRecordingApplication(
+                from: self.applications.map(\.identity),
+                automaticTarget: self.appServices.meetingAutomaticTarget
+            )
+        } catch { return nil }
 
         return MeetingCaptureConfiguration(
-            mode: application == nil ? .inRoom : .onlineCall,
+            mode: self.setupDraft.mode,
             title: title,
             languageCode: self.setupDraft.languageCode,
             platform: application.map {
@@ -1150,7 +1221,6 @@ struct MeetingTranscriptionView: View {
         do {
             try self.coordinator.resetForNewMeeting()
             self.selectedHistorySessionID = nil
-            self.setupDraft.usesAutomaticApplication = true
             self.selectPreferredApplication(from: self.applications.map(\.identity))
             self.resetDraftTitleToDefault()
             self.actionErrorMessage = nil
@@ -1239,26 +1309,17 @@ struct MeetingTranscriptionView: View {
             return
         }
 
-        // Automatic is session-scoped and never rewrites the user's legacy saved source.
-        // Source availability is checked again when recording starts.
+        // Persist explicit intent by stable bundle; Automatic clears the saved manual source.
         let settings = SettingsStore.shared
-        let previousDefaults = settings.meetingRecordingDefaults
-        let application = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
-        if self.setupDraft.mode == .onlineCall, !self.setupDraft.usesAutomaticApplication, application == nil {
+        do {
+            settings.meetingRecordingDefaults = try self.setupDraft.recordingDefaults(
+                microphone: microphone.identity,
+                applications: self.applications.map(\.identity)
+            )
+        } catch {
             self.actionErrorMessage = PichiLocalization.text("Choose an available audio source or Automatic before saving.")
             return
         }
-
-        settings.meetingRecordingDefaults = MeetingRecordingDefaults(
-            isConfigured: true,
-            mode: self.setupDraft.mode,
-            applicationBundleIdentifier: previousDefaults.applicationBundleIdentifier,
-            applicationDisplayName: previousDefaults.applicationDisplayName,
-            microphoneCaptureDeviceID: microphone.identity.captureDeviceID,
-            microphoneCoreAudioUID: microphone.identity.coreAudioUID,
-            microphoneRole: .unknown,
-            languageCode: self.setupDraft.languageCode
-        )
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
@@ -2133,15 +2194,15 @@ private struct MeetingSetupCanvas: View {
         if let app = resolvedApplication { return PichiLocalization.format("%@ and your mic will be recorded.", app.identity.displayName) }
         if self.draft.mode == .inRoom { return PichiLocalization.text("Your mic will record the room.") }
         if self.readiness.showScreenRecordingSettingsAction {
-            return PichiLocalization.text("Your mic will record the room. Allow Screen & System Audio access to capture meeting apps too.")
+            return PichiLocalization.text("Allow Screen & System Audio access, then refresh sources.")
         }
-        if self.applications.isEmpty { return PichiLocalization.text("Your mic will record the room. No meeting apps are available to capture yet.") }
-        return PichiLocalization.text("Your mic will record the room. If a call is running, pick its app under Change.")
+        return PichiLocalization.text("Choose the application that contains the online meeting.")
     }
 
     private var sourceLabel: String {
         if let app = resolvedApplication { return app.identity.displayName }
-        return self.draft.mode == .inRoom ? PichiLocalization.text("In person") : PichiLocalization.text("Automatic")
+        if self.draft.mode == .inRoom { return PichiLocalization.text("In person") }
+        return PichiLocalization.text(self.draft.usesAutomaticApplication ? "Automatic" : "Source unavailable")
     }
 
     private var meetingApplications: [MeetingApplicationOption] {
@@ -2226,8 +2287,7 @@ private struct MeetingSetupCanvas: View {
                 selected: self.draft.mode == .onlineCall && self.draft.usesAutomaticApplication
             ) {
                 self.draft.mode = .onlineCall
-                self.draft.usesAutomaticApplication = true
-                self.draft.selectedApplicationID = nil
+                self.draft.chooseApplication(nil)
             }
             if !self.meetingApplications.isEmpty {
                 Divider()
@@ -2267,8 +2327,7 @@ private struct MeetingSetupCanvas: View {
         let selected = self.draft.mode == .onlineCall && !self.draft.usesAutomaticApplication && self.draft.selectedApplicationID == option.id
         return self.sourceEntry(option.identity.displayName, systemImage: "app", selected: selected) {
             self.draft.mode = .onlineCall
-            self.draft.usesAutomaticApplication = false
-            self.draft.selectedApplicationID = option.id
+            self.draft.chooseApplication(option.identity)
         }
     }
 
