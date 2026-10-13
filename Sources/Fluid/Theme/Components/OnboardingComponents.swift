@@ -121,7 +121,11 @@ struct FluidOnboardingLandingBackdrop: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(self.theme.palette.cardBorder, lineWidth: 1)
+                .strokeBorder(
+                    RadialGradient(colors: [self.theme.palette.accentText.opacity(0.45), self.theme.palette.cardBorder],
+                                   center: self.glowCenter, startRadius: 0, endRadius: 620),
+                    lineWidth: 1
+                )
         }
         .ignoresSafeArea()
     }
