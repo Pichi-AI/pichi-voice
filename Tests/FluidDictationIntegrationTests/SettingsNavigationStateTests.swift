@@ -224,7 +224,8 @@ final class SettingsNavigationStateTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.close() }
-        let field = try XCTUnwrap(try await self.waitForSearch(in: host, placeholder: "Search", query: state.query))
+        let found = try await self.waitForSearch(in: host, placeholder: "Search", query: state.query)
+        let field = try XCTUnwrap(found)
         XCTAssertTrue(window.makeFirstResponder(field))
         let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
         editor.setSelectedRange(NSRange(location: 2, length: 3))
