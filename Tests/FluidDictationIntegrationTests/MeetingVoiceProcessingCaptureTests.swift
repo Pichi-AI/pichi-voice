@@ -1082,3 +1082,82 @@ final class MeetingVoiceProcessingCaptureTests: XCTestCase {
         XCTAssertEqual(selection.role, .unknown)
     }
 }
+
+final class MeetingScreenCaptureRecoveryTests: XCTestCase {
+    func testTransientFailuresRemainRetryableWhenApplicationsAndCaptureServiceRestart() {
+        let codes: [SCStreamError.Code] = [
+            .failedToStart, .failedApplicationConnectionInvalid, .failedApplicationConnectionInterrupted,
+            .failedNoMatchingApplicationContext, .internalError, .noWindowList, .noDisplayList,
+            .noCaptureSource, .failedToStartAudioCapture, .failedToStartMicrophoneCapture, .systemStoppedStream,
+        ]
+        for code in codes {
+            XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.shouldRetry(NSError(domain: SCStreamErrorDomain, code: code.rawValue)))
+        }
+        XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.shouldRetry(MeetingCaptureError.applicationUnavailable("Fixture")))
+        XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.shouldRetry(MeetingCaptureError.noCaptureDisplay))
+    }
+
+    func testExplicitUserStopRevokedPermissionAndInvalidConfigurationAreTerminal() {
+        let codes: [SCStreamError.Code] = [.userStopped, .userDeclined, .missingEntitlements, .invalidParameter, .attemptToStartStreamState]
+        for code in codes {
+            XCTAssertFalse(MeetingScreenCaptureRecoveryPolicy.shouldRetry(NSError(domain: SCStreamErrorDomain, code: code.rawValue)))
+        }
+        XCTAssertFalse(MeetingScreenCaptureRecoveryPolicy.shouldRetry(NSError(domain: SCStreamErrorDomain, code: -9999)))
+        XCTAssertFalse(MeetingScreenCaptureRecoveryPolicy.shouldRetry(NSError(domain: "Fixture", code: -3804)))
+        XCTAssertFalse(MeetingScreenCaptureRecoveryPolicy.shouldRetry(MeetingCaptureError.screenCapturePermissionDenied("Denied")))
+        XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.isPermissionFailure(NSError(domain: SCStreamErrorDomain, code: SCStreamError.Code.userDeclined.rawValue)))
+        XCTAssertFalse(MeetingScreenCaptureRecoveryPolicy.isPermissionFailure(NSError(domain: SCStreamErrorDomain, code: SCStreamError.Code.internalError.rawValue)))
+    }
+
+    func testRecoveryContinuesAfterFourthAttemptWithBoundedBackoffAndState() {
+        var backoff = MeetingCaptureRecoveryBackoff()
+        XCTAssertEqual((0..<6).map { _ in backoff.nextDelayNanoseconds() }, [500_000_000, 1_000_000_000, 2_000_000_000, 4_000_000_000, 5_000_000_000, 5_000_000_000])
+        for _ in 0..<10_000 { XCTAssertEqual(backoff.nextDelayNanoseconds(), 5_000_000_000) }
+    }
+
+    func testStopCancelsWaitingRecoveryWithoutStartingAnotherAttempt() async {
+        let startedWaiting = expectation(description: "Waiting to recover")
+        let task = Task { () -> Bool in
+            var backoff = MeetingCaptureRecoveryBackoff()
+            for _ in 0..<10 { _ = backoff.nextDelayNanoseconds() }
+            startedWaiting.fulfill()
+            do {
+                try await backoff.waitForRetry()
+                return true
+            } catch is CancellationError {
+                return false
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+                return true
+            }
+        }
+        await fulfillment(of: [startedWaiting], timeout: 1)
+        task.cancel()
+        let startedAnotherAttempt = await task.value
+        XCTAssertFalse(startedAnotherAttempt)
+    }
+
+    func testFailedRetirementCannotAuthorizeAnotherProducer() {
+        XCTAssertFalse(MeetingScreenCaptureRecoveryPolicy.mayReplaceRetiredCandidate(stopSucceeded: false, didStopReceived: false))
+        XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.mayReplaceRetiredCandidate(stopSucceeded: true, didStopReceived: false))
+        XCTAssertTrue(MeetingScreenCaptureRecoveryPolicy.mayReplaceRetiredCandidate(stopSucceeded: false, didStopReceived: true))
+    }
+
+    func testOnlyLiveOwnedProducerCanAdmitSamplesIncludingSilence() {
+        for stopping in [false, true] {
+            for rebuilding in [false, true] {
+                for stopped in [false, true] {
+                    for ownsProducer in [false, true] {
+                        XCTAssertEqual(MeetingScreenCaptureRecoveryPolicy.mayAdmitSample(
+                            stopping: stopping,
+                            rebuilding: rebuilding,
+                            producerStopped: stopped,
+                            ownsCurrentProducer: ownsProducer
+                        ), !stopping && !rebuilding && !stopped && ownsProducer)
+                    }
+                }
+            }
+        }
+        // Admission deliberately has no amplitude or elapsed-silence input. Zero PCM is valid.
+    }
+}

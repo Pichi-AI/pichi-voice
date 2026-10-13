@@ -75,7 +75,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         let runtime: any MeetingCaptureRuntime
         switch configuration.mode {
         case .onlineCall:
-            guard let application = configuration.application,
+            guard let audioSource = configuration.applicationAudioSource,
                   let applicationWriter = writersByKind[.applicationAudio],
                   let microphoneWriter = writersByKind[.microphone]
             else { throw MeetingCaptureError.applicationNotSelected }
@@ -124,7 +124,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                     )]
                 }
                 runtime = try await ScreenCaptureMeetingRuntime.make(
-                    application: application,
+                    audioSource: audioSource,
                     microphone: configuration.microphone,
                     includeMicrophone: true,
                     microphoneEchoProtection: .unprotected,
@@ -135,7 +135,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
                 )
             case .voiceProcessing:
                 runtime = try await VoiceProcessingMeetingRuntime.make(
-                    application: application,
+                    audioSource: audioSource,
                     microphone: configuration.microphone,
                     applicationWriter: applicationWriter,
                     microphoneWriter: microphoneWriter,
@@ -308,12 +308,22 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         configuration: MeetingCaptureConfiguration
     ) -> [MeetingAudioTrack] {
         var tracks: [MeetingAudioTrack] = []
-        if let application = configuration.application {
+        if let audioSource = configuration.applicationAudioSource {
+            let identifier: String
+            let displayName: String
+            switch audioSource {
+            case let .application(application):
+                identifier = application.bundleIdentifier
+                displayName = application.displayName
+            case .systemAudio:
+                identifier = "system-audio"
+                displayName = PichiLocalization.text("System audio")
+            }
             tracks.append(MeetingAudioTrack(
                 id: UUID(),
                 kind: .applicationAudio,
-                sourceIdentifier: application.bundleIdentifier,
-                sourceDisplayName: application.displayName,
+                sourceIdentifier: identifier,
+                sourceDisplayName: displayName,
                 format: nil,
                 timebase: session.timebase,
                 health: .waiting,
@@ -577,10 +587,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         let scope: MeetingCaptureScope
     }
 
-    /// Delays before each of the (up to 3) rebuild attempts following an unexpected stream stop.
-    private static let rebuildDelays: [TimeInterval] = [0.5, 1.0, 2.0]
-
-    private let application: MeetingApplicationIdentity
+    private let audioSource: MeetingApplicationAudioSource
     private let requestedMicrophone: MeetingMicrophoneIdentity
     /// Immutable for the runtime's lifetime: a rebuild never drops/adds the mic.
     private let includeMicrophone: Bool
@@ -621,6 +628,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private var currentStreamStopped = false
     private var pendingStream: SCStream?
     private var pendingStreamFailed = false
+    private var pendingStreamFailure: Error?
     private var outputRouteListener: MeetingOutputRouteListener?
     /// Sticky: once a required CoreAudio listener is gone, later route observations are unreliable
     /// for the rest of the session, so admission and AEC stay fail-closed.
@@ -634,6 +642,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private var captureStarted = false
     private var routeSafetyPersistenceFailed = false
     private let rebuildGroup = DispatchGroup()
+    private var rebuildTask: Task<Void, Never>?
     private let routeProtectionTasks = MeetingAsyncTaskChain()
 
     var captureScope: MeetingCaptureScope? {
@@ -643,7 +652,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     private init(
         stream: SCStream,
         scope: MeetingCaptureScope,
-        application: MeetingApplicationIdentity,
+        audioSource: MeetingApplicationAudioSource,
         requestedMicrophone: MeetingMicrophoneIdentity,
         activeMicrophone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool,
@@ -655,7 +664,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     ) {
         self.stream = stream
         self.scope = scope
-        self.application = application
+        self.audioSource = audioSource
         self.requestedMicrophone = requestedMicrophone
         self.activeMicrophone = activeMicrophone
         self.includeMicrophone = includeMicrophone
@@ -674,7 +683,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     static func make(
-        application: MeetingApplicationIdentity,
+        audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool = true,
         microphoneEchoProtection: MeetingMicrophoneEchoProtection = .unprotected,
@@ -690,7 +699,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             ? try MeetingAVCaptureMicrophoneResolver.resolve(electedMicrophone)
             : electedMicrophone
         let built = try await Self.buildStream(
-            application: application,
+            audioSource: audioSource,
             microphone: resolvedMicrophone,
             includeMicrophone: includeMicrophone
         )
@@ -706,7 +715,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         let runtime = ScreenCaptureMeetingRuntime(
             stream: built.stream,
             scope: built.scope,
-            application: application,
+            audioSource: audioSource,
             requestedMicrophone: microphone,
             activeMicrophone: resolvedMicrophone,
             includeMicrophone: includeMicrophone,
@@ -725,7 +734,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     /// Resolves the shareable content, filter, configuration and stream. Re-invoked both for the
     /// initial `make` and for every rebuild attempt after an unexpected stream stop.
     private static func buildStream(
-        application: MeetingApplicationIdentity,
+        audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
         includeMicrophone: Bool
     ) async throws -> BuiltStream {
@@ -733,30 +742,42 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         do {
             content = try await SCShareableContent.current
         } catch {
-            throw MeetingCaptureError.screenCapturePermissionDenied(error.localizedDescription)
+            // Preserve service failures for retry classification; only an actual declined grant
+            // is a permission error. Rebuilds must not prompt or override a user's revocation.
+            if MeetingScreenCaptureRecoveryPolicy.isPermissionFailure(error) {
+                throw MeetingCaptureError.screenCapturePermissionDenied(error.localizedDescription)
+            }
+            throw error
         }
-        let byProcessID = application.processID.flatMap { processID in
-            content.applications.first(where: { $0.processID == processID })
-        }
-        // The saved PID goes stale when the app relaunches; the bundle match keeps rebuilds working.
-        guard let runningApplication = byProcessID ?? content.applications.first(where: {
-            $0.bundleIdentifier == application.bundleIdentifier
-        }) else {
-            throw MeetingCaptureError.applicationUnavailable(application.displayName)
-        }
-
         let filter: SCContentFilter
         let scope: MeetingCaptureScope
-        if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
-            filter = SCContentFilter(desktopIndependentWindow: window)
-            scope = .window
-        } else {
-            let display = application.displayID.flatMap { displayID in
-                content.displays.first(where: { $0.displayID == displayID })
-            } ?? content.displays.first
-            guard let display else { throw MeetingCaptureError.noCaptureDisplay }
-            filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
-            scope = .display
+        switch audioSource {
+        case .systemAudio:
+            guard let display = content.displays.first else { throw MeetingCaptureError.noCaptureDisplay }
+            filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+            scope = .systemAudio
+        case let .application(application):
+            let byProcessID = application.processID.flatMap { processID in
+                content.applications.first(where: { $0.processID == processID && $0.bundleIdentifier == application.bundleIdentifier })
+            }
+            // The saved PID goes stale when the app relaunches; the bundle match keeps rebuilds working.
+            guard let runningApplication = byProcessID ?? content.applications.first(where: {
+                $0.bundleIdentifier == application.bundleIdentifier
+            }) else {
+                throw MeetingCaptureError.applicationUnavailable(application.displayName)
+            }
+
+            if let window = Self.selectWindow(for: runningApplication, in: content, preferredWindowID: application.windowID) {
+                filter = SCContentFilter(desktopIndependentWindow: window)
+                scope = .window
+            } else {
+                let display = application.displayID.flatMap { displayID in
+                    content.displays.first(where: { $0.displayID == displayID })
+                } ?? content.displays.first
+                guard let display else { throw MeetingCaptureError.noCaptureDisplay }
+                filter = SCContentFilter(display: display, including: [runningApplication], exceptingWindows: [])
+                scope = .display
+            }
         }
 
         let configuration = SCStreamConfiguration()
@@ -940,6 +961,17 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
                 continuation.resume()
             }
         }
+        if let pending = self.stateLock.withLock({ self.pendingStream }) {
+            let result = await Self.stopStream(pending)
+            switch result {
+            case .success:
+                self.stateLock.withLock {
+                    if self.pendingStream === pending { self.pendingStream = nil }
+                }
+            case let .failure(detail):
+                stopFailure = stopFailure ?? detail
+            }
+        }
         var stoppedPipeline: MeetingAECPipeline?
         self.performOnCallbackQueueSynchronously {
             stoppedPipeline = self.stateLock.withLock { () -> MeetingAECPipeline? in
@@ -964,7 +996,10 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     private func markStopping() {
-        self.stateLock.withLock { self.stopping = true }
+        self.stateLock.withLock {
+            self.stopping = true
+            self.rebuildTask?.cancel()
+        }
     }
 
     private func performOnCallbackQueueSynchronously(_ operation: () -> Void) {
@@ -982,7 +1017,12 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     ) {
         let callbackState = self.stateLock.withLock {
             () -> (MeetingAECActivationState, MeetingAECPipeline?, MeetingAECStreamToken)? in
-            guard !self.stopping, stream === self.stream else { return nil }
+            guard MeetingScreenCaptureRecoveryPolicy.mayAdmitSample(
+                stopping: self.stopping,
+                rebuilding: self.rebuilding,
+                producerStopped: self.currentStreamStopped,
+                ownsCurrentProducer: stream === self.stream
+            ) else { return nil }
             let identity = UInt64(UInt(bitPattern: Unmanaged.passUnretained(stream).toOpaque()))
             return (
                 self.aecActivation.state,
@@ -1302,6 +1342,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         switch scope {
         case .window: diagnosticScope = .selectedApplicationWindow
         case .display: diagnosticScope = .selectedApplicationDisplay
+        case .systemAudio: return // This diagnostic attests a selected-app filter only.
         }
         let provenance = MeetingSCKPairedDiagnosticProvenance(
             scope: diagnosticScope,
@@ -1327,7 +1368,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     private func emitPairedDiagnosticReportIfNeeded() {
-        guard self.pairedDiagnosticCollector.enabled else { return }
+        guard case .application = self.audioSource, self.pairedDiagnosticCollector.enabled else { return }
         let shouldEmit = self.stateLock.withLock { () -> Bool in
             guard !self.pairedDiagnosticReportEmitted else { return false }
             self.pairedDiagnosticReportEmitted = true
@@ -1589,7 +1630,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         do {
             resolved = try MeetingAVCaptureMicrophoneResolver.resolve(microphone)
             built = try await Self.buildStream(
-                application: self.application,
+                audioSource: self.audioSource,
                 microphone: resolved,
                 includeMicrophone: self.includeMicrophone
             )
@@ -1613,6 +1654,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             else { return false }
             self.pendingStream = built.stream
             self.pendingStreamFailed = false
+            self.pendingStreamFailure = nil
             return true
         }
         guard candidateRegistered else { return .superseded }
@@ -1704,6 +1746,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         let rebuildOwner = self.stateLock.withLock { () -> UInt64? in
             if stoppedStream === self.pendingStream {
                 self.pendingStreamFailed = true
+                self.pendingStreamFailure = error
                 return nil
             }
             guard !self.stopping, !self.rebuilding, stoppedStream === self.stream else { return nil }
@@ -1715,7 +1758,12 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         guard let rebuildOwner else { return }
         self.invalidateAECForStreamRebuild()
         self.eventHandler(.interrupted(kind: .sourceLost, trackID: nil, detail: error.localizedDescription))
-        self.runRebuildLoop(triggeringError: error, stoppedStream: stoppedStream, owner: rebuildOwner)
+        guard MeetingScreenCaptureRecoveryPolicy.shouldRetry(error) else {
+            self.reportRebuildFailure(error, owner: rebuildOwner)
+            self.rebuildGroup.leave()
+            return
+        }
+        self.runRebuildLoop(stoppedStream: stoppedStream, owner: rebuildOwner)
     }
 
     private func invalidateAECForStreamRebuild() {
@@ -1755,116 +1803,165 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         }
     }
 
-    /// Attempts up to `rebuildDelays.count` rebuilds of the stream, checking `stopping` before and
-    /// after each delay so a concurrent user-initiated `stop()` aborts the loop promptly. On success
-    /// the stream reference is swapped under the lock and writers keep running untouched (they rotate
-    /// chunks on the PTS gap on their own). On exhaustion this reports the terminal failure exactly as
-    /// the non-recoverable path did before this change.
-    private func runRebuildLoop(triggeringError: Error, stoppedStream: SCStream, owner: UInt64) {
+    /// Keeps the logical session and writers alive while a transiently stopped producer is absent.
+    /// Stop cancels the owned delay, then joins this flight through rebuildGroup. A new stream is
+    /// never published while the old stream or a different rebuild owns producer admission.
+    private func runRebuildLoop(stoppedStream: SCStream, owner: UInt64) {
         let rebuildGroup = self.rebuildGroup
-        Task { [weak self] in
-            defer {
-                if let self {
-                    self.stateLock.withLock { _ = self.endRebuildLocked(owner) }
+        self.stateLock.withLock {
+            let task = Task { [weak self] in
+                defer {
+                    if let self {
+                        self.stateLock.withLock {
+                            if self.rebuildOwner == owner {
+                                _ = self.endRebuildLocked(owner)
+                                self.rebuildTask = nil
+                            }
+                        }
+                    }
+                    rebuildGroup.leave()
                 }
-                rebuildGroup.leave()
-            }
-            guard let self else { return }
-            var lastError = triggeringError
-            for delay in Self.rebuildDelays {
-                let mayContinue = self.stateLock.withLock {
-                    !self.stopping && self.rebuildOwner == owner
-                }
-                guard mayContinue else { return }
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                guard self.stateLock.withLock({ !self.stopping && self.rebuildOwner == owner }) else { return }
-
-                do {
-                    let microphone = self.stateLock.withLock { self.activeMicrophone }
-                    let built = try await Self.buildStream(
-                        application: self.application, microphone: microphone, includeMicrophone: self.includeMicrophone
-                    )
+                guard let self else { return }
+                var backoff = MeetingCaptureRecoveryBackoff()
+                while true {
+                    let mayContinue = self.stateLock.withLock {
+                        !self.stopping && self.rebuildOwner == owner
+                    }
+                    guard mayContinue else { return }
+                    do { try await backoff.waitForRetry() } catch { return }
                     guard self.stateLock.withLock({ !self.stopping && self.rebuildOwner == owner }) else { return }
-                    built.delegateProxy.owner = self
-                    try self.attachOutputs(to: built.stream)
-                    let candidateRegistered = self.stateLock.withLock { () -> Bool in
-                        guard !self.stopping,
-                              self.rebuildOwner == owner,
-                              self.stream === stoppedStream
-                        else { return false }
-                        self.pendingStream = built.stream
-                        self.pendingStreamFailed = false
-                        return true
-                    }
-                    guard candidateRegistered else { return }
-                    try await built.stream.startCapture()
 
-                    let publication = self.stateLock.withLock { () -> MeetingCaptureStreamPublication in
-                        let decision = MeetingCaptureOwnershipGate.mayPublishReplacement(
-                            authorizedRevision: self.outputRouteRevision,
-                            currentRevision: self.outputRouteRevision,
-                            stopping: self.stopping,
-                            candidateFailed: self.pendingStreamFailed,
-                            ownsExpectedOldStream: self.stream === stoppedStream && self.rebuildOwner == owner,
-                            ownsPendingCandidate: self.pendingStream === built.stream
+                    var candidate: SCStream?
+                    do {
+                        let microphone = self.stateLock.withLock { self.activeMicrophone }
+                        let built = try await Self.buildStream(
+                            audioSource: self.audioSource, microphone: microphone, includeMicrophone: self.includeMicrophone
                         )
-                        guard decision == .commit else {
-                            if self.pendingStream === built.stream { self.pendingStream = nil }
-                            return decision
+                        guard self.stateLock.withLock({ !self.stopping && self.rebuildOwner == owner }) else { return }
+                        built.delegateProxy.owner = self
+                        try self.attachOutputs(to: built.stream)
+                        let candidateRegistered = self.stateLock.withLock { () -> Bool in
+                            guard !self.stopping,
+                                  self.rebuildOwner == owner,
+                                  self.stream === stoppedStream
+                            else { return false }
+                            self.pendingStream = built.stream
+                            self.pendingStreamFailed = false
+                            self.pendingStreamFailure = nil
+                            return true
                         }
-                        self.stream = built.stream
-                        self.currentStreamStopped = false
-                        self.streamGeneration &+= 1
-                        self.scope = built.scope
-                        self.delegateProxy = built.delegateProxy
-                        self.pendingStream = nil
-                        _ = self.endRebuildLocked(owner)
-                        return .commit
-                    }
-                    guard publication == .commit else {
-                        try? await built.stream.stopCapture()
-                        if publication == .superseded { return }
-                        continue
-                    }
-                    let committedOwnership = self.stateLock.withLock { self.currentStreamOwnershipLocked() }
-                    let shouldRearmAEC = self.stateLock.withLock {
-                        self.routeDisposition == .supportedSpeaker
-                            && !self.stopping
-                            && !self.rebuilding
-                            && !self.currentStreamStopped
-                            && self.currentStreamOwnershipLocked() == committedOwnership
-                    }
-                    if shouldRearmAEC {
-                        do {
-                            try await self.installAECForSupportedSpeaker(revision: committedOwnership.routeRevision)
-                        } catch {
-                            self.eventHandler(.interrupted(
-                                kind: .microphoneChanged,
-                                trackID: self.microphoneWriter.trackID,
-                                detail: "Speaker-route AEC could not restart after stream recovery; microphone remains unprotected."
-                            ))
+                        guard candidateRegistered else { return }
+                        candidate = built.stream
+                        try await built.stream.startCapture()
+
+                        var publication = MeetingCaptureStreamPublication.superseded
+                        self.performOnCallbackQueueSynchronously {
+                            publication = self.stateLock.withLock { () -> MeetingCaptureStreamPublication in
+                                let decision = MeetingCaptureOwnershipGate.mayPublishReplacement(
+                                    authorizedRevision: self.outputRouteRevision,
+                                    currentRevision: self.outputRouteRevision,
+                                    stopping: self.stopping,
+                                    candidateFailed: self.pendingStreamFailed,
+                                    ownsExpectedOldStream: self.stream === stoppedStream && self.rebuildOwner == owner,
+                                    ownsPendingCandidate: self.pendingStream === built.stream
+                                )
+                                guard decision == .commit else {
+                                    return decision
+                                }
+                                self.stream = built.stream
+                                self.currentStreamStopped = false
+                                self.streamGeneration &+= 1
+                                self.scope = built.scope
+                                self.delegateProxy = built.delegateProxy
+                                self.pendingStream = nil
+                                _ = self.endRebuildLocked(owner)
+                                return .commit
+                            }
+                        }
+                        guard publication == .commit else {
+                            let candidateFailure = self.stateLock.withLock { self.pendingStreamFailure }
+                            if let retirementFailure = await self.retireRecoveryCandidate(built.stream) {
+                                self.reportRebuildFailure(retirementFailure, owner: owner)
+                                return
+                            }
+                            if publication == .superseded { return }
+                            if let failure = candidateFailure,
+                               !MeetingScreenCaptureRecoveryPolicy.shouldRetry(failure) {
+                                self.reportRebuildFailure(failure, owner: owner)
+                                return
+                            }
+                            continue
+                        }
+                        let committedOwnership = self.stateLock.withLock { self.currentStreamOwnershipLocked() }
+                        let shouldRearmAEC = self.stateLock.withLock {
+                            self.routeDisposition == .supportedSpeaker
+                                && !self.stopping
+                                && !self.rebuilding
+                                && !self.currentStreamStopped
+                                && self.currentStreamOwnershipLocked() == committedOwnership
+                        }
+                        if shouldRearmAEC {
+                            do {
+                                try await self.installAECForSupportedSpeaker(revision: committedOwnership.routeRevision)
+                            } catch {
+                                self.eventHandler(.interrupted(
+                                    kind: .microphoneChanged,
+                                    trackID: self.microphoneWriter.trackID,
+                                    detail: "Speaker-route AEC could not restart after stream recovery; microphone remains unprotected."
+                                ))
+                            }
+                        }
+                        let stillRecovered = self.stateLock.withLock {
+                            !self.stopping
+                                && !self.rebuilding
+                                && !self.currentStreamStopped
+                                && self.currentStreamOwnershipLocked() == committedOwnership
+                        }
+                        if stillRecovered {
+                            self.eventHandler(.interrupted(kind: .sourceRecovered, trackID: nil, detail: nil))
+                        }
+                        return
+                    } catch {
+                        // A start failure may still have allocated a producer. Retire it before
+                        // another attempt, retaining pending ownership until stop completes.
+                        if let candidate, let retirementFailure = await self.retireRecoveryCandidate(candidate) {
+                            self.reportRebuildFailure(retirementFailure, owner: owner)
+                            return
+                        }
+                        guard MeetingScreenCaptureRecoveryPolicy.shouldRetry(error) else {
+                            self.reportRebuildFailure(error, owner: owner)
+                            return
                         }
                     }
-                    let stillRecovered = self.stateLock.withLock {
-                        !self.stopping
-                            && !self.rebuilding
-                            && !self.currentStreamStopped
-                            && self.currentStreamOwnershipLocked() == committedOwnership
-                    }
-                    if stillRecovered {
-                        self.eventHandler(.interrupted(kind: .sourceRecovered, trackID: nil, detail: nil))
-                    }
-                    return
-                } catch {
-                    self.stateLock.withLock {
-                        if self.pendingStream != nil { self.pendingStream = nil }
-                    }
-                    lastError = error
-                    continue
                 }
             }
-            self.reportRebuildExhausted(triggeringError: lastError, owner: owner)
+            self.rebuildTask = task
+            if self.stopping || self.rebuildOwner != owner { task.cancel() }
         }
+    }
+
+    /// Failed start is not proof that no native producer exists. Require either its didStop
+    /// callback or a joined successful stop before the next attempt can allocate another one.
+    private func retireRecoveryCandidate(_ candidate: SCStream) async -> Error? {
+        let alreadyStopped = self.stateLock.withLock {
+            self.pendingStream === candidate && self.pendingStreamFailed
+        }
+        if !alreadyStopped {
+            do {
+                try await candidate.stopCapture()
+            } catch {
+                let stoppedDuringRetirement = self.stateLock.withLock {
+                    self.pendingStream === candidate && self.pendingStreamFailed
+                }
+                guard MeetingScreenCaptureRecoveryPolicy.mayReplaceRetiredCandidate(
+                    stopSucceeded: false, didStopReceived: stoppedDuringRetirement
+                ) else { return error }
+            }
+        }
+        self.stateLock.withLock {
+            if self.pendingStream === candidate { self.pendingStream = nil }
+        }
+        return nil
     }
 
     /// Keeps only committers that still have writer completions outstanding. Route churn cannot
@@ -1876,7 +1973,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
         }
     }
 
-    private func reportRebuildExhausted(triggeringError: Error, owner: UInt64) {
+    private func reportRebuildFailure(_ triggeringError: Error, owner: UInt64) {
         let shouldReport = self.stateLock.withLock { () -> Bool in
             guard self.rebuildOwner == owner else { return false }
             _ = self.endRebuildLocked(owner)
@@ -4044,7 +4141,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         case failed(String)
     }
 
-    private let application: MeetingApplicationIdentity
+    private let audioSource: MeetingApplicationAudioSource
     private let originalMicrophone: MeetingMicrophoneIdentity
     private let applicationWriter: MeetingAudioChunkWriter
     private let microphoneWriter: MeetingAudioChunkWriter
@@ -4087,14 +4184,14 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     }
 
     private init(
-        application: MeetingApplicationIdentity,
+        audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) {
-        self.application = application
+        self.audioSource = audioSource
         self.originalMicrophone = microphone
         self.applicationWriter = applicationWriter
         self.microphoneWriter = microphoneWriter
@@ -4109,7 +4206,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     #endif
 
     static func make(
-        application: MeetingApplicationIdentity,
+        audioSource: MeetingApplicationAudioSource,
         microphone: MeetingMicrophoneIdentity,
         applicationWriter: MeetingAudioChunkWriter,
         microphoneWriter: MeetingAudioChunkWriter,
@@ -4117,7 +4214,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) async throws -> VoiceProcessingMeetingRuntime {
         VoiceProcessingMeetingRuntime(
-            application: application,
+            audioSource: audioSource,
             microphone: microphone,
             applicationWriter: applicationWriter,
             microphoneWriter: microphoneWriter,
@@ -4177,7 +4274,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 )]
             }
             let fallback = try await ScreenCaptureMeetingRuntime.make(
-                application: self.application,
+                audioSource: self.audioSource,
                 microphone: self.originalMicrophone,
                 includeMicrophone: true,
                 microphoneEchoProtection: fallbackProtection,
@@ -4225,7 +4322,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
         }
 
         let appOnly = try await ScreenCaptureMeetingRuntime.make(
-            application: self.application,
+            audioSource: self.audioSource,
             microphone: self.originalMicrophone,
             includeMicrophone: false,
             applicationWriter: self.applicationWriter,
