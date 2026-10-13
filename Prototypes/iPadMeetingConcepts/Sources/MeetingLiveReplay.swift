@@ -207,7 +207,7 @@ struct PrototypeLiveTranscriptView: View {
                     .frame(minHeight: 120, maxHeight: .infinity)
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text(Copy.text(replay.delivery == .buffered ? "buffered_demo" : replay.hasPartial ? "live_partial" : "live_committed"))
+                Text(Copy.text(rows.isEmpty ? "live_demo_empty" : replay.delivery == .buffered ? "buffered_demo" : replay.hasPartial ? "live_partial" : "live_committed"))
                     .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: compact ? 12 : 16) {

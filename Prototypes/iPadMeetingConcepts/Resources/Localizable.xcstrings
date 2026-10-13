@@ -1751,6 +1751,23 @@
           }
         }
       }
+    },
+    "live_demo_empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interface demo. The microphone is not recorded."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Демонстрация интерфейса. Микрофон не записывается."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
