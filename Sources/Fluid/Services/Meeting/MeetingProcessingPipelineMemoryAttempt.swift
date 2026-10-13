@@ -89,9 +89,11 @@ extension MeetingProcessingPipeline {
         // Validate/prepare the pinned provider before microphone admission. All ownership is
         // returned before capture, then each bounded window takes the same shared resource gate.
         let service = self.asrServiceProvider()
-        try await service.withMeetingModelResidency(attemptID: request.attemptID, acceptsCompletedCancellation: { _ in false }) {
-            try await runtime.preparePCMResources(attemptID: request.attemptID, configuration: configuration)
-            _ = try await runtime.withPreparedASR(attemptID: request.attemptID, configuration: configuration) { _ in MeetingParakeetPhaseResult() }
+        try await DebugLogger.$pipelineID.withValue(request.attemptID.uuidString) {
+            try await service.withMeetingModelResidency(attemptID: request.attemptID, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.preparePCMResources(attemptID: request.attemptID, configuration: configuration)
+                _ = try await runtime.withPreparedASR(attemptID: request.attemptID, configuration: configuration) { _ in MeetingParakeetPhaseResult() }
+            }
         }
         try Task.checkCancellation()
         self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor, runtime: runtime, redactor: redactor, checkpoint: checkpoint)

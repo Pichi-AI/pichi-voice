@@ -7,7 +7,7 @@ extension MeetingProcessingPipeline {
     /// coordinator or model installer. Selection, residency, canonical assembly and storage are
     /// owned by the injected operations that the pipeline freezes before capture starts.
     nonisolated static func makeMemoryAudioConsumer(
-        chunkSeconds: Double = 8,
+        chunkSeconds: Double = 12,
         maximumPendingSeconds: Double = 24,
         recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,

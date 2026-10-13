@@ -228,6 +228,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
             let locator = self.modelLocator
             _ = try await self.compiledNemotron.compiledModel(for: located) { try locator.recheck($0) }
+            // Open the actual CPU prediction plan before microphone admission. Keeping the
+            // same compiled derivative makes subsequent model loads warm, without retaining
+            // weights across ASR/voice phases or spending the PCM backlog on a cold CoreML load.
+            _ = try await self.withNemotronDiarization(artifact: located) { _ in MeetingNemotronPhaseResult() }
         } else { artifact = nil }
         try Task.checkCancellation()
         try self.pcmIdentityState.pin(attemptID: attemptID, configuration: configuration.identityFingerprint, artifact: artifact)
