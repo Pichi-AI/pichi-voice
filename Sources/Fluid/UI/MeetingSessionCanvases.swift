@@ -444,7 +444,7 @@ struct MeetingResultCanvas: View {
         let activeSpeakers = self.session.activeSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
         let rows = self.rows(for: visibleSegments)
         // One scroller preserves a readable document at short window heights.
-        ScrollView {
+        let document = ScrollView {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
@@ -523,7 +523,8 @@ struct MeetingResultCanvas: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
-        .id(self.session.id)
+        // Separate the document and modifier chains to bound SwiftUI type checking.
+        let lifecycle = document.id(self.session.id)
         .sheet(item: self.$pendingEditedSegment) { segment in
             MeetingTranscriptTextEditor(
                 text: segment.text,
@@ -552,7 +553,7 @@ struct MeetingResultCanvas: View {
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
             self.copied = false
         }
-        .alert(
+        let speakerRenaming = lifecycle.alert(
             "Rename Speaker",
             isPresented: Binding(
                 get: { self.pendingRenameSpeaker != nil },
@@ -570,7 +571,7 @@ struct MeetingResultCanvas: View {
         } message: {
             Text("Enter a new name for this speaker.")
         }
-        .alert(
+        speakerRenaming.alert(
             "Name Unknown Speaker",
             isPresented: Binding(
                 get: { self.pendingNameUnknownSegmentID != nil },
