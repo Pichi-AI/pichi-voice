@@ -187,6 +187,13 @@ final nonisolated class MeetingCapturePCMConverter {
     }
 
     static func sampleBuffer(buffer: AVAudioPCMBuffer, presentationTime: CMTime) throws -> CMSampleBuffer {
+        guard buffer.format.commonFormat == .pcmFormatFloat32, buffer.format.sampleRate == Self.sampleRate,
+              buffer.format.channelCount == 1, buffer.frameLength > 0, buffer.frameLength <= 65_536,
+              presentationTime.isNumeric, presentationTime >= .zero,
+              let samples = buffer.floatChannelData?[0] else { throw MeetingCapturePCMError.invalidBuffer }
+        guard (0..<Int(buffer.frameLength)).allSatisfy({ samples[$0].isFinite }) else {
+            throw MeetingCapturePCMError.nonFiniteSample
+        }
         var description: CMAudioFormatDescription?
         let formatStatus = CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault,
                                                         asbd: buffer.format.streamDescription,

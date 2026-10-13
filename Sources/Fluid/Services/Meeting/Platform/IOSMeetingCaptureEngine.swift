@@ -7,7 +7,7 @@ import Foundation
 /// another application's presentation audio is never represented as a system-audio track.
 actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     typealias MemoryConsumerFactory = @MainActor @Sendable (
-        MeetingSession, MeetingCaptureConfiguration, @escaping @Sendable (MeetingCaptureEvent) -> Void
+        MeetingSession, MeetingCaptureConfiguration, MeetingAudioTrack, @escaping @Sendable (MeetingCaptureEvent) -> Void
     ) async throws -> any MeetingMemoryAudioConsuming
 
     private struct Capture: Sendable {
@@ -83,7 +83,7 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
                 throw MeetingCaptureError.captureStartFailed("In-memory transcription is not available for this attempt.")
             }
             writer = nil
-            memoryConsumer = try await memoryConsumerFactory(session, configuration, eventHandler)
+            memoryConsumer = try await memoryConsumerFactory(session, configuration, track, eventHandler)
         }
         let runtime = try IOSMeetingMicrophoneRuntime(trackID: track.id, microphone: configuration.microphone,
                                                      writer: writer, memoryConsumer: memoryConsumer,
