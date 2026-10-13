@@ -5117,9 +5117,14 @@ final class SettingsStore: ObservableObject {
             ParakeetSpeechModelCatalog.descriptor(forModelID: self.rawValue)
         }
 
+        var libraryMetadata: SpeechModelLibraryMetadata? {
+            guard self == .gigaam else { return nil }
+            return PichiGigaAMModelStore.preferredLibraryMetadata
+        }
+
         /// Relative product ratings for display and sorting, not benchmark accuracy.
         var hasPerformanceRatings: Bool {
-            if self == .gigaam { return false }
+            if self.libraryMetadata != nil { return true }
             guard let descriptor = self.parakeetDescriptor else { return true }
             return descriptor.performanceRatings != nil
         }
@@ -5174,7 +5179,7 @@ final class SettingsStore: ObservableObject {
 
         var downloadSize: String {
             switch self {
-            case .gigaam: return "Import local model"
+            case .gigaam: return self.libraryMetadata?.size ?? "Import local model"
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.downloadSize ?? ""
             case .parakeetRealtime: return "~428.4 MiB"
             case .qwen3Asr: return "~2.0 GiB"
@@ -5360,7 +5365,7 @@ final class SettingsStore: ObservableObject {
         /// One-line description for the card UI
         var cardDescription: String {
             switch self {
-            case .gigaam: return "Local Russian recognition with our optimized GigaAM model and end-of-utterance detection."
+            case .gigaam: return "Local Russian speech recognition on Apple Silicon and Intel CPUs."
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
                 return self.parakeetDescriptor?.cardDescription ?? ""
             case .parakeetRealtime:
@@ -5442,7 +5447,7 @@ final class SettingsStore: ObservableObject {
         /// Speed rating (1-5, higher is faster)
         var speedRating: Int {
             switch self {
-            case .gigaam: return 0
+            case .gigaam: return self.libraryMetadata?.performanceRatings.speedRating ?? 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedRating ?? 0
             case .parakeetRealtime: return 5
             case .qwen3Asr: return 3
@@ -5463,7 +5468,7 @@ final class SettingsStore: ObservableObject {
         /// Accuracy rating (1-5, higher is more accurate)
         var accuracyRating: Int {
             switch self {
-            case .gigaam: return 0
+            case .gigaam: return self.libraryMetadata?.performanceRatings.accuracyRating ?? 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyRating ?? 0
             case .parakeetRealtime: return 4
             case .qwen3Asr: return 4
@@ -5484,7 +5489,7 @@ final class SettingsStore: ObservableObject {
         /// Exact speed percentage (0.0 - 1.0) for the liquid bars
         var speedPercent: Double {
             switch self {
-            case .gigaam: return 0
+            case .gigaam: return self.libraryMetadata?.performanceRatings.speedPercent ?? 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedPercent ?? 0
             case .parakeetRealtime: return 1.0
             case .qwen3Asr: return 0.45
@@ -5505,7 +5510,7 @@ final class SettingsStore: ObservableObject {
         /// Exact accuracy percentage (0.0 - 1.0) for the liquid bars
         var accuracyPercent: Double {
             switch self {
-            case .gigaam: return 0
+            case .gigaam: return self.libraryMetadata?.performanceRatings.accuracyPercent ?? 0
             case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyPercent ?? 0
             case .parakeetRealtime: return 0.75
             case .qwen3Asr: return 0.90
@@ -6217,6 +6222,8 @@ extension SettingsStore {
 extension SettingsStore.SpeechModel {
     var supportedLanguageCodes: String? {
         switch self {
+        case .gigaam:
+            return "RU"
         case .parakeetTDT:
             return "BG, HR, CS, DA, NL, EN, ET, FI, FR, DE, EL, HU, IT, LV, LT, MT, PL, PT, RO, SK, SL, ES, SV, RU, UK"
         case .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
@@ -6234,6 +6241,8 @@ extension SettingsStore.SpeechModel {
 
     var supportedLanguageNames: String? {
         switch self {
+        case .gigaam:
+            return "Russian"
         case .parakeetTDT:
             return """
             Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian

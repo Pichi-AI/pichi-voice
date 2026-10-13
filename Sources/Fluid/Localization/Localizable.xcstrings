@@ -68,8 +68,7 @@
           }
         }
       }
-    }
-,
+    },
     "Invalid local model timeout.": {
       "extractionState": "manual",
       "localizations": {
@@ -222,8 +221,7 @@
           }
         }
       }
-    }
-,
+    },
     "Completed later": {
       "extractionState": "manual",
       "localizations": {
@@ -46343,6 +46341,176 @@
           "stringUnit": {
             "state": "translated",
             "value": "Откройте настройки и проверьте доступ к микрофону."
+          }
+        }
+      }
+    },
+    "4 GB+ RAM recommended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "4 GB+ RAM recommended"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуется от 4 GB RAM"
+          }
+        }
+      }
+    },
+    "Apple Silicon / Intel CPU": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Silicon / Intel CPU"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU Apple Silicon / Intel"
+          }
+        }
+      }
+    },
+    "Local Russian speech recognition on Apple Silicon and Intel CPUs.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Russian speech recognition on Apple Silicon and Intel CPUs."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальное распознавание русской речи на процессорах Apple Silicon и Intel."
+          }
+        }
+      }
+    },
+    "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пунктуация, заглавные буквы и нормализация текста. Оптимизация FP16 и обученный модуль определения конца фразы."
+          }
+        }
+      }
+    },
+    "Recommended system RAM, not measured model memory usage. The size above is disk space.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommended system RAM, not measured model memory usage. The size above is disk space."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуемый объём оперативной памяти системы. Потребление памяти моделью не измерено. Размер выше относится к месту на диске."
+          }
+        }
+      }
+    },
+    "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание русского языка с оптимизацией FP16 и обученным модулем определения конца фразы. Этот посимвольный вариант не добавляет пунктуацию и заглавные буквы."
+          }
+        }
+      }
+    },
+    "~428.8 MiB": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~428.8 MiB"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~428,8 MiB"
+          }
+        }
+      }
+    },
+    "~435.2 MiB": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~435.2 MiB"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "~435,2 MiB"
+          }
+        }
+      }
+    },
+    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Замер скорости: 8,48 секунды синтетической русской речи обработаны за 0,97 секунды на CPU Apple M4 Max, без учёта загрузки модели. Разработчик сообщает среднюю долю ошибок в словах WER 12,0% для базовой GigaAM v3 E2E CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
+          }
+        }
+      }
+    },
+    "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки модели, а не измеренный процент правильно распознанных слов. Скорость на CPU для этого варианта не измерена. Разработчик сообщает среднюю долю ошибок в словах WER 9,1% для базовой GigaAM v3 CTC по десяти наборам данных. Чем ниже WER, тем лучше. Оптимизированный вариант на этих наборах не оценивался."
           }
         }
       }

@@ -4,6 +4,17 @@ import Foundation
 import FluidAudio
 #endif
 
+/// Descriptive measurements explain the library's relative product ratings.
+/// A background installation scan can replace the default with the imported export's metadata.
+nonisolated struct SpeechModelLibraryMetadata: Equatable, Sendable {
+    let size: String
+    let processor: String
+    let recommendedMemory: String
+    let features: String
+    let performanceRatings: SpeechModelPerformanceRatings
+    let performanceExplanation: String
+}
+
 /// UI reads immutable IDs. Only an event-triggered worker inspects downloaded files.
 @MainActor
 final class SpeechModelInstallationSnapshot: ObservableObject {
@@ -35,12 +46,14 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         let updateAvailableIDs: Set<String>
         let installedArchiveHashes: [String: String]
         let installedManifestHashes: [String: String]
+        let libraryMetadata: [String: SpeechModelLibraryMetadata]
 
-        init(installedIDs: Set<String>, updateAvailableIDs: Set<String> = [], installedArchiveHashes: [String: String] = [:], installedManifestHashes: [String: String] = [:]) {
+        init(installedIDs: Set<String>, updateAvailableIDs: Set<String> = [], installedArchiveHashes: [String: String] = [:], installedManifestHashes: [String: String] = [:], libraryMetadata: [String: SpeechModelLibraryMetadata] = [:]) {
             self.installedIDs = installedIDs
             self.updateAvailableIDs = updateAvailableIDs
             self.installedArchiveHashes = installedArchiveHashes
             self.installedManifestHashes = installedManifestHashes
+            self.libraryMetadata = libraryMetadata
         }
     }
 
@@ -57,6 +70,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
     var updateAvailableIDs: Set<String> { self.value.result.updateAvailableIDs }
     var installedArchiveHashes: [String: String] { self.value.result.installedArchiveHashes }
     var installedManifestHashes: [String: String] { self.value.result.installedManifestHashes }
+    var libraryMetadata: [String: SpeechModelLibraryMetadata] { self.value.result.libraryMetadata }
     var latestDescriptors: [String: ParakeetSpeechModelCatalog.Descriptor] { self.value.latestDescriptors }
     var state: State { self.value.state }
     var isChecking: Bool { self.state == .checking }
@@ -199,6 +213,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
         var updates: Set<String> = []
         var hashes: [String: String] = [:]
         var manifests: [String: String] = [:]
+        var metadata: [String: SpeechModelLibraryMetadata] = [:]
         let fm = FileManager.default
         let caches: URL? = cachesDirectory ?? AppBrand.cachesDirectory
         let models: URL? = modelsDirectory ?? AppBrand.modelsDirectory
@@ -207,7 +222,9 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             let exists: Bool
             switch probe.kind {
             case .gigaam:
-                exists = PichiGigaAMModelStore.shared.modelsExistOnDisk()
+                let imported = try? PichiGigaAMModelStore.shared.installedModel()
+                exists = imported != nil
+                metadata[probe.modelID] = imported?.descriptor.libraryMetadata
             case .builtIn:
                 exists = true
             case let .parakeet(descriptor):
@@ -258,6 +275,6 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
             if exists { installed.insert(probe.modelID) }
         }
         try Task.checkCancellation()
-        return ScanResult(installedIDs: installed, updateAvailableIDs: updates, installedArchiveHashes: hashes, installedManifestHashes: manifests)
+        return ScanResult(installedIDs: installed, updateAvailableIDs: updates, installedArchiveHashes: hashes, installedManifestHashes: manifests, libraryMetadata: metadata)
     }
 }

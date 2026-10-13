@@ -1,10 +1,31 @@
 import Foundation
 import PichiGigaAM
 
+extension GigaAMModelDescriptor {
+    /// The E2E tokenizer identifies formatted exports; older character exports do not
+    /// inherit their punctuation claims or the measured v5 CPU speed.
+    nonisolated var libraryMetadata: SpeechModelLibraryMetadata {
+        let formatted = self.vocabularyFile != nil
+        return SpeechModelLibraryMetadata(
+            size: formatted ? "~435.2 MiB" : "~428.8 MiB",
+            processor: "Apple Silicon / Intel CPU",
+            recommendedMemory: "4 GB+ RAM recommended",
+            features: formatted
+                ? "Punctuation, capitalization and text normalization. FP16 optimization and a trained end-of-utterance head."
+                : "Russian recognition with FP16 optimization and a trained end-of-utterance head. This character export does not add punctuation or capitalization.",
+            performanceRatings: .init(speedRating: 4, accuracyRating: 4, speedPercent: 0.90, accuracyPercent: 0.90),
+            performanceExplanation: self.id == "gigaam-v3-e2e-eou-v5"
+                ? "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. Reference speed: 8.48 seconds of synthetic Russian speech processed in 0.97 seconds on an Apple M4 Max CPU, excluding model loading. The publisher reports average WER of 12.0% for the base GigaAM v3 E2E CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+                : "Relative library ratings for Russian: speed 90%, accuracy 90%. These are product scores, not measured transcription accuracy. CPU speed has not been benchmarked for this export. The publisher reports average WER of 9.1% for the base GigaAM v3 CTC across ten datasets. Lower WER is better. The optimized export has not been evaluated on those datasets."
+        )
+    }
+}
+
 /// Local, hash-verified optimized GigaAM exports. Import copies only model artifacts
 /// into our storage; private recordings, dictionaries and training data stay outside it.
 final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     static let shared = PichiGigaAMModelStore()
+    static var preferredLibraryMetadata: SpeechModelLibraryMetadata? { GigaAMModelCatalog.models.first?.libraryMetadata }
     private static let directoryPreferenceKey = "pichiGigaAMModelDirectory"
     private let overriddenDirectory: URL?
 

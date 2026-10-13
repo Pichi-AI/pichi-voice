@@ -137,6 +137,7 @@ extension VoiceEngineSettingsView {
     /// Stats panel showing speed/accuracy bars that animate when model changes
     var modelStatsPanel: some View {
         let model = self.viewModel.previewSpeechModel
+        let metadata = self.viewModel.speechModelLibraryMetadata(model)
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 20) {
@@ -172,6 +173,13 @@ extension VoiceEngineSettingsView {
                                 .foregroundStyle(self.voiceEngineSecondaryText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+
+                        if let metadata {
+                            Text(PichiLocalization.text(metadata.features))
+                                .font(self.theme.typography.bodySmall)
+                                .foregroundStyle(self.voiceEngineSecondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
                     HStack(spacing: 8) {
@@ -179,8 +187,8 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
 
-                        if model.requiresAppleSilicon {
-                            Text("Apple Silicon")
+                        if let processor = metadata?.processor ?? (model.requiresAppleSilicon ? "Apple Silicon" : nil) {
+                            Text(PichiLocalization.text(processor))
                                 .font(self.theme.typography.bodySmallStrong)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -203,6 +211,13 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                             .foregroundStyle(self.voiceEngineSecondaryText)
                             .lineLimit(2)
+                    }
+
+                    if let metadata {
+                        Label(PichiLocalization.text(metadata.recommendedMemory), systemImage: "memorychip")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.voiceEngineSecondaryText)
+                            .help("Recommended system RAM, not measured model memory usage. The size above is disk space.")
                     }
 
                     // Memory warning for large models
@@ -248,7 +263,7 @@ extension VoiceEngineSettingsView {
                         )
                     }
                     .frame(width: 140, alignment: .center)
-                    .help("Relative ratings for comparing models, not measured transcription accuracy.")
+                    .help(metadata.map { PichiLocalization.text($0.performanceExplanation) } ?? PichiLocalization.text("Relative ratings for comparing models, not measured transcription accuracy."))
                     .animation(.spring(response: 0.5, dampingFraction: 0.7), value: model.id)
                 } else {
                     self.unratedModelLabel.frame(width: 140, alignment: .center)
@@ -312,6 +327,7 @@ extension VoiceEngineSettingsView {
                             .foregroundStyle(self.voiceEngineSecondaryText)
                     }
                 }
+                .help(self.viewModel.speechModelLibraryMetadata(model).map { PichiLocalization.text($0.performanceExplanation) } ?? PichiLocalization.text("Relative ratings for comparing models, not measured transcription accuracy."))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
