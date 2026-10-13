@@ -98,16 +98,19 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
             XCTAssertTrue(player.play())
             print("[PHYSICAL_MEETING_E2E] synthetic_speech_started")
-            var previousRevision = services.meetingSessionCoordinator.liveTranscript.revision
+            var previousSnapshot = services.meetingSessionCoordinator.liveTranscript
+            var previousBackground = false
             for _ in 0..<25 {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
                 let isBackground = UIApplication.shared.applicationState == .background
                 let snapshot = services.meetingSessionCoordinator.liveTranscript
-                if isBackground, snapshot.revision > previousRevision,
-                   (!snapshot.utterances.isEmpty || snapshot.partials.values.contains(where: { !$0.text.isEmpty })) {
+                let previousIDs = Set(previousSnapshot.utterances.map(\.id))
+                let newSpeech = snapshot.utterances.contains { !previousIDs.contains($0.id) && !$0.text.isEmpty }
+                if isBackground, previousBackground, snapshot.revision > previousSnapshot.revision, newSpeech {
                     backgroundTextUpdates += 1
                 }
-                previousRevision = snapshot.revision
+                previousSnapshot = snapshot
+                previousBackground = isBackground
                 backgroundObserved = backgroundObserved || isBackground
             }
             player.stop()
@@ -115,7 +118,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertFalse(live.utterances.isEmpty && live.partials.values.allSatisfy { $0.text.isEmpty }, "Actual microphone speech must appear before recording stops")
             if ProcessInfo.processInfo.environment["PICHI_PHYSICAL_MEETING_BACKGROUND"] == "1" {
                 XCTAssertTrue(backgroundObserved, "The host app must actually enter the background during speech recognition")
-                XCTAssertGreaterThan(backgroundTextUpdates, 0, "Actual filtered live text must advance while the host app is backgrounded")
+                XCTAssertGreaterThan(backgroundTextUpdates, 0, "A new nonempty filtered utterance must be committed between actual background observations")
             }
             let completed = try await services.meetingSessionCoordinator.stopAndTranscribe()
             XCTAssertEqual(completed.state, .completed)
