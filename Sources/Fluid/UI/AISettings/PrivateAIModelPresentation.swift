@@ -15,10 +15,10 @@ enum PrivateAIUpcomingModel: String, CaseIterable, Identifiable {
 }
 
 /// Customer-facing copy only. Registry IDs, downloads, and runtime settings remain authoritative.
-struct PrivateAIModelPresentation {
+struct PrivateAIModelPresentation: Codable, Hashable, Sendable {
     let summary: String
     let useCase: String
-    var language: String = "On-device"
+    var language: String? = "On-device"
     // Illustrative design-preview values, not measured benchmark scores.
     var intelligence: Int?
     var speed: Int?

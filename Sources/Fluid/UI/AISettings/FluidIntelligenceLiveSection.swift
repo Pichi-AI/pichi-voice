@@ -63,9 +63,9 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
         .padding(20)
         .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: AppTheme.Metrics.Showcase.cardRadius))
         .task {
-            let recommendation = await PrivateAIHardwareRecommendation.current()
+            let recommendation = await PrivateAIProviderFeature.shared.recommendedModelID()
             guard !Task.isCancelled else { return }
-            self.recommendedModelID = recommendation.model.rawValue
+            self.recommendedModelID = recommendation
         }
         .task(id: self.readIdentity) {
             self.snapshots = [:]
@@ -150,7 +150,7 @@ struct FluidIntelligenceLiveSection<Management: View>: View {
                 if active {
                     Label("Active", systemImage: "checkmark.circle.fill")
                         .font(self.theme.typography.bodyStrong)
-                        .foregroundStyle(Color.fluidGreen)
+                        .foregroundStyle(self.theme.palette.primaryText)
                         .frame(minWidth: 76, minHeight: 24)
                         .accessibilityLabel(PichiLocalization.text("Active model"))
                 } else {

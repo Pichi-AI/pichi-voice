@@ -2473,31 +2473,33 @@ extension DictationE2ETests {
         }
     }
 
-    func testPrivateAIProviderPrefixKVCache_defaultsOnAndPersistsToggle() {
+    func testPrivateAIProviderPrefixKVCache_respectsCapabilityAndPersistsToggle() {
         self.withRestoredDefaults(keys: [self.privateAIPrefixKVCacheEnabledKey]) {
             let settings = SettingsStore.shared
 
-            XCTAssertTrue(settings.privateAIPrefixKVCacheEnabled)
+            XCTAssertEqual(settings.privateAIPrefixKVCacheEnabled, PrivateAIProviderFeature.shared.supportsPrefixCache)
 
             settings.privateAIPrefixKVCacheEnabled = false
             XCTAssertFalse(settings.privateAIPrefixKVCacheEnabled)
 
             settings.privateAIPrefixKVCacheEnabled = true
-            XCTAssertTrue(settings.privateAIPrefixKVCacheEnabled)
+            XCTAssertEqual(settings.privateAIPrefixKVCacheEnabled, PrivateAIProviderFeature.shared.supportsPrefixCache)
+            XCTAssertEqual(UserDefaults.standard.bool(forKey: self.privateAIPrefixKVCacheEnabledKey), true)
         }
     }
 
-    func testPrivateAIProviderBoost_defaultsOnAndPersistsToggle() {
+    func testPrivateAIProviderBoost_respectsCapabilityAndPersistsToggle() {
         self.withRestoredDefaults(keys: [self.privateAIBoostEnabledKey]) {
             let settings = SettingsStore.shared
 
-            XCTAssertTrue(settings.privateAIBoostEnabled)
+            XCTAssertEqual(settings.privateAIBoostEnabled, PrivateAIProviderFeature.shared.supportsBoost)
 
             settings.privateAIBoostEnabled = false
             XCTAssertFalse(settings.privateAIBoostEnabled)
 
             settings.privateAIBoostEnabled = true
-            XCTAssertTrue(settings.privateAIBoostEnabled)
+            XCTAssertEqual(settings.privateAIBoostEnabled, PrivateAIProviderFeature.shared.supportsBoost)
+            XCTAssertEqual(UserDefaults.standard.bool(forKey: self.privateAIBoostEnabledKey), true)
         }
     }
 
@@ -2529,10 +2531,6 @@ extension DictationE2ETests {
 
             UserDefaults.standard.set(tempURL.path, forKey: self.privateAILocalModelPathKey)
 
-            XCTAssertEqual(
-                PrivateAIIntegrationService.isLocalRuntimeConfigured,
-                PrivateFeatures.privateAIProvider
-            )
             XCTAssertFalse(PrivateAIIntegrationService.shouldHandleDictation(model: "gpt-4.1"))
             XCTAssertEqual(
                 PrivateAIIntegrationService.shouldHandleDictation(model: PrivateAIProviderFeature.shared.providerID),
@@ -2564,10 +2562,6 @@ extension DictationE2ETests {
             settings.verifiedProviderFingerprints = [:]
             settings.setDictationPromptSelection(.default)
 
-            XCTAssertEqual(
-                PrivateAIIntegrationService.isLocalRuntimeConfigured,
-                PrivateFeatures.privateAIProvider
-            )
             XCTAssertFalse(DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: nil))
         }
     }

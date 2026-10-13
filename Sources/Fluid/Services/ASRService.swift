@@ -1026,33 +1026,33 @@ final class ASRService: ObservableObject {
 
     /// Returns a user-friendly status message for model loading state
     var modelStatusMessage: String {
-        if self.isAsrReady { return "Model ready" }
-        if self.isCancellingModelPreparation { return "Cancelling model preparation..." }
-        if self.isCancellingModelDownload { return "Cancelling model download..." }
+        if self.isAsrReady { return PichiLocalization.text("Model ready") }
+        if self.isCancellingModelPreparation { return PichiLocalization.text("Cancelling model preparation...") }
+        if self.isCancellingModelDownload { return PichiLocalization.text("Cancelling model download...") }
         if self.downloadingModelId != nil || self.isDownloadingModel || self.isLoadingModel {
             return self.modelPreparationStatusText
         }
-        if self.modelsExistOnDisk { return "Model cached, needs loading" }
-        return "Model not downloaded"
+        if self.modelsExistOnDisk { return PichiLocalization.text("Model cached, needs loading") }
+        return PichiLocalization.text("Model not downloaded")
     }
 
     var modelPreparationStatusText: String {
         switch self.modelPreparationPhase {
         case .preparingDownload:
-            return "Preparing download..."
+            return PichiLocalization.text("Preparing download...")
         case .downloading:
             if let progress = self.downloadProgress {
-                return "Downloading \(Int(progress * 100))%"
+                return PichiLocalization.format("Downloading %@%%", String(Int(progress * 100)))
             }
-            return "Downloading model..."
+            return PichiLocalization.text("Downloading model...")
         case .optimizing:
-            return "Optimizing model..."
+            return PichiLocalization.text("Optimizing model...")
         case .loading:
-            return "Loading voice engine..."
+            return PichiLocalization.text("Loading voice engine...")
         case nil:
-            if self.isDownloadingModel { return "Preparing model..." }
-            if self.isLoadingModel { return "Loading voice engine..." }
-            return "Preparing model..."
+            if self.isDownloadingModel { return PichiLocalization.text("Preparing model...") }
+            if self.isLoadingModel { return PichiLocalization.text("Loading voice engine...") }
+            return PichiLocalization.text("Preparing model...")
         }
     }
 

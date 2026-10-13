@@ -4,12 +4,87 @@ import PichiGigaAM
 import XCTest
 
 final class PichiGigaAMIntegrationTests: XCTestCase {
+    /// Opt-in synthetic audio through the real shared download, file-ASR and cleanup APIs.
+    @MainActor
+    func testSyntheticRussianGigaAMAndS1DefaultPipelineWhenEnabled() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let modelDirectory = environment["PICHI_GIGAAM_CHAIN_MODEL_DIR"],
+              let audioPath = environment["PICHI_GIGAAM_CHAIN_AUDIO"],
+              let cleanupModel = environment["PICHI_S1_MINI_MODEL_PATH"] else {
+            throw XCTSkip("Set isolated GigaAM, S1-mini and synthetic audio paths for the native pipeline.")
+        }
+        let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let keys = ["SelectedSpeechModel", "FileTranscriptionSpeakerLabelsEnabled", "CustomDictionaryEntries",
+                    "S1MiniSelectedModelID", "S1MiniLocalModelPath", "SelectedModelByProvider",
+                    "VerifiedPrivateAIModelFingerprints", "SelectedDictationPromptID", "DictationPromptOff",
+                    "PrivateAIProviderContextTokenLimit", "HasUsedFluidIntelligence"]
+        let originals = Dictionary(uniqueKeysWithValues: keys.map { ($0, defaults.object(forKey: $0)) })
+        defer {
+            for key in keys {
+                if let value = originals[key] ?? nil { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+            PrivateAIIntegrationService.invalidateInstalledModelCache()
+        }
+        settings.selectedSpeechModel = .gigaam
+        settings.fileTranscriptionSpeakerLabelsEnabled = false
+        settings.customDictionaryEntries = []
+        settings.privateAIContextTokenLimit = 4096
+        let store = PichiGigaAMModelStore(directory: URL(fileURLWithPath: modelDirectory, isDirectory: true))
+        let provider = PichiGigaAMProvider(modelStore: store)
+        let asr = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        asr.modelProvidersForTesting[.gigaam] = provider
+        func cleanup() async {
+            await PrivateAIIntegrationService.shared.unloadCachedRuntime(reason: "synthetic pipeline complete")
+            await asr.shutdownForTermination()
+            await provider.unloadModel()
+        }
+        do {
+            try await asr.downloadModel(.gigaam, progressHandler: nil)
+            XCTAssertTrue(provider.isReady)
+            let artifact = try store.installedModel()
+            XCTAssertEqual(artifact.descriptor, GigaAMModelCatalog.downloadableModel)
+            XCTAssertNil(artifact.descriptor.endOfUtteranceThreshold)
+            let raw = try await FileTranscriptionService(asrService: asr).transcribeFile(URL(fileURLWithPath: audioPath))
+            XCTAssertFalse(raw.text.isEmpty)
+
+            let feature = PrivateAIProviderFeature.shared
+            let model = PrivateAIModelRegistry.defaultModel
+            defaults.set(cleanupModel, forKey: feature.localModelPathDefaultsKey)
+            defaults.set(model.id, forKey: feature.selectedModelDefaultsKey)
+            settings.selectedModelByProvider[feature.providerID] = model.id
+            PrivateAIIntegrationService.invalidateInstalledModelCache()
+            let ready = try await PrivateAIIntegrationService.shared.verifyModel(model)
+            XCTAssertEqual(ready.state, .ready)
+            settings.verifiedPrivateAIModelFingerprints[model.id] = PrivateAIProviderFeature.verificationFingerprint(for: model.id)
+            settings.setDictationPromptSelection(.privateAI)
+            XCTAssertTrue(DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: nil))
+            let polished = try await DictationPostProcessingService.shared.process(raw.text)
+            XCTAssertEqual(polished.providerID, feature.providerID)
+            XCTAssertEqual(polished.model, model.id)
+            XCTAssertTrue(polished.text.lowercased().contains("четверг"))
+            XCTAssertFalse(polished.text.lowercased().contains("пятниц"))
+            XCTAssertFalse(polished.text.contains("<think>"))
+            let evidence = "GigaAM: \(raw.text)\nS1-mini: \(polished.text)"
+            print("Synthetic GigaAM + S1-mini pipeline:\n\(evidence)")
+            let attachment = XCTAttachment(string: evidence)
+            attachment.name = "Synthetic Russian native pipeline"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+            await cleanup()
+        } catch {
+            await cleanup()
+            throw error
+        }
+    }
+
     @MainActor
     func testImportedExportControlsLibraryCapabilitiesAndMeasurementProvenance() throws {
         let model = SettingsStore.SpeechModel.gigaam
         let preferred = try XCTUnwrap(GigaAMModelCatalog.models.first)
-        let metadata = try XCTUnwrap(model.libraryMetadata)
-        XCTAssertEqual(metadata, preferred.libraryMetadata)
+        let metadata = preferred.libraryMetadata
+        XCTAssertEqual(model.libraryMetadata, GigaAMModelCatalog.downloadableModel.libraryMetadata)
         XCTAssertEqual(model.supportedLanguageCodes, "RU")
         XCTAssertEqual(model.supportedLanguageNames, "Russian")
         XCTAssertTrue(metadata.features.contains("Punctuation"))
@@ -24,7 +99,7 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
         XCTAssertEqual(model.accuracyRating, metadata.performanceRatings.accuracyRating)
         XCTAssertTrue(metadata.performanceExplanation.contains("not measured transcription accuracy"))
 
-        for descriptor in GigaAMModelCatalog.models.dropFirst() {
+        for descriptor in GigaAMModelCatalog.models.dropFirst() where descriptor.downloadBaseURL == nil {
             let older = descriptor.libraryMetadata
             XCTAssertNotEqual(older.size, metadata.size)
             XCTAssertTrue(older.features.contains("does not add punctuation or capitalization"))
@@ -32,6 +107,20 @@ final class PichiGigaAMIntegrationTests: XCTestCase {
             XCTAssertTrue(older.performanceExplanation.contains("9.1%"))
             XCTAssertTrue(older.performanceExplanation.contains("has not been benchmarked"))
         }
+    }
+
+    @MainActor
+    func testPublicDownloadMetadataDoesNotInheritPrivateExportCapabilities() {
+        let descriptor = GigaAMModelCatalog.downloadableModel
+        let metadata = descriptor.libraryMetadata
+        XCTAssertEqual(metadata.size, "~214.5 MiB")
+        XCTAssertTrue(metadata.features.contains("INT8"))
+        XCTAssertTrue(metadata.features.contains("Punctuation"))
+        XCTAssertFalse(metadata.features.contains("FP16"))
+        XCTAssertFalse(metadata.features.contains("end-of-utterance"))
+        XCTAssertNil(descriptor.endOfUtteranceThreshold)
+        XCTAssertFalse(metadata.performanceExplanation.contains("0.97 seconds"))
+        XCTAssertTrue(metadata.performanceExplanation.contains("not measured transcription accuracy"))
     }
 
     @MainActor

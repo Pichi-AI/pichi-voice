@@ -208,8 +208,9 @@ actor PrivateAIIntegrationService {
             throw MeetingModelResidencyError.busy
         }
         try await Self.modelActivity(modelID: model.id) {
-            await Self.provider.unloadCachedRuntime(reason: reason)
-            try Self.removeInstalledModel(model)
+            try await Self.provider.withUnloadedRuntime(reason: reason) {
+                try Self.removeInstalledModel(model)
+            }
         }
     }
 

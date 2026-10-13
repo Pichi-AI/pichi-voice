@@ -9,14 +9,21 @@ public struct GigaAMModelDescriptor: Sendable, Equatable {
     public let vocabularyFile: String?
     public let vocabularySHA256: String?
     public let endOfUtteranceThreshold: Float?
+    public let downloadBaseURL: URL?
+    public let modelByteCount: Int64?
+    public let vocabularyByteCount: Int64?
 
-    public init(id: String, modelFile: String, modelSHA256: String, vocabularyFile: String?, vocabularySHA256: String?, endOfUtteranceThreshold: Float?) {
+    public init(id: String, modelFile: String, modelSHA256: String, vocabularyFile: String?, vocabularySHA256: String?, endOfUtteranceThreshold: Float?,
+                downloadBaseURL: URL? = nil, modelByteCount: Int64? = nil, vocabularyByteCount: Int64? = nil) {
         self.id = id
         self.modelFile = modelFile
         self.modelSHA256 = modelSHA256
         self.vocabularyFile = vocabularyFile
         self.vocabularySHA256 = vocabularySHA256
         self.endOfUtteranceThreshold = endOfUtteranceThreshold
+        self.downloadBaseURL = downloadBaseURL
+        self.modelByteCount = modelByteCount
+        self.vocabularyByteCount = vocabularyByteCount
     }
 
     /// Stable content identity for resumable jobs, independent of local paths.
@@ -61,6 +68,20 @@ public struct GigaAMModelDescriptor: Sendable, Equatable {
 public enum GigaAMModelCatalog {
     private static let e2eVocabularyHash = "142de7570b3de5b3035ce111a89c228e80e6085273731d944093ddf24fa539cd"
 
+    /// Compact public export of ai-sage/GigaAM-v3, pinned to immutable repository content.
+    /// It uses the same native frontend and CTC vocabulary, without the private EOU head.
+    public static let downloadableModel = GigaAMModelDescriptor(
+        id: "gigaam-v3-e2e-ctc-int8",
+        modelFile: "v3_e2e_ctc.int8.onnx",
+        modelSHA256: "2e3fcb7a7b66030336fd10c2fcfb033bd1dc7e1bf238fe5cfd83b1d0cfc9d28e",
+        vocabularyFile: "v3_e2e_ctc_vocab.txt",
+        vocabularySHA256: e2eVocabularyHash,
+        endOfUtteranceThreshold: nil,
+        downloadBaseURL: URL(string: "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/322c3b29492673eb7d0b434bfa9dfb8653e34d02/")!,
+        modelByteCount: 224_893_347,
+        vocabularyByteCount: 2_007
+    )
+
     /// Prefer the latest optimized e2e export, then the compatible char exports.
     public static let models: [GigaAMModelDescriptor] = [
         GigaAMModelDescriptor(
@@ -87,6 +108,7 @@ public enum GigaAMModelCatalog {
             vocabularySHA256: nil,
             endOfUtteranceThreshold: 0.5
         ),
+        downloadableModel,
     ]
 
     public static func discover(in directory: URL) -> (descriptor: GigaAMModelDescriptor, directory: URL)? {

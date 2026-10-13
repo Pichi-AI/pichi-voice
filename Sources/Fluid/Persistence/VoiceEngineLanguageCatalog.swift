@@ -91,6 +91,17 @@ enum VoiceEngineLanguageCatalog {
         return VoiceEngineLanguage(id: language.id, displayName: language.displayName, aliases: language.aliases, isPopular: true)
     }
 
+    /// Fresh speech selection follows the shipped language and its existing route order.
+    /// Imported appearance packages do not change the distribution's engine default.
+    static func packagedDefaultSpeechModel(
+        availableModels: [SettingsStore.SpeechModel], packagedLanguageID: String?
+    ) -> SettingsStore.SpeechModel? {
+        let languages = self.availableDefinitions(availableModels: availableModels)
+        guard let language = self.resolveDefaultLanguage(in: languages, configuredLanguageID: nil,
+                                                        packagedLanguageID: packagedLanguageID) else { return nil }
+        return self.routes(for: language, availableModels: availableModels).first?.model
+    }
+
     private static func availableDefinitions(availableModels: [SettingsStore.SpeechModel]) -> [VoiceEngineLanguage] {
         self.languageDefinitions.filter { !Self.routes(for: $0, availableModels: availableModels).isEmpty }
     }
