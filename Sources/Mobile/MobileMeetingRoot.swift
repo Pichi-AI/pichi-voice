@@ -20,11 +20,13 @@ struct MobileMeetingRoot: View {
     @State private var isBusy = false
     @State private var error: String?
     @State private var showError = false
+    @State private var showMicrophoneSettings = false
     @State private var showRecordingSettings = false
     @State private var microphoneSnapshot = MeetingMicrophoneCatalogSnapshot(identities: [], defaultCoreAudioUID: nil)
     @State private var edit: MeetingEditDraft?
     @State private var deleteCandidate: MeetingSession?
     @State private var share: MeetingSharePayload?
+    @StateObject private var playback = MeetingSegmentPlayback()
 
 
     init(coordinator: MeetingSessionCoordinator, asr: ASRService, store: any MeetingSessionStoring,
@@ -67,6 +69,12 @@ struct MobileMeetingRoot: View {
         .foregroundStyle(theme.palette.primaryText)
         .background(theme.palette.windowBackground)
         .alert(PichiLocalization.text("Error"), isPresented: $showError) {
+            if showMicrophoneSettings {
+                Button(PichiLocalization.text("Open Settings")) {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                }
+            }
             Button(PichiLocalization.text("OK"), role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
         .sheet(isPresented: $showRecordingSettings) {
@@ -116,7 +124,12 @@ struct MobileMeetingRoot: View {
             await refreshHistory()
             await refreshMicrophones()
         }
-        .onChange(of: coordinator.state) { _, _ in Task { await refreshHistory() } }
+        .onChange(of: coordinator.state) { _, state in
+            if coordinator.isRecording { playback.stop() }
+            Task { await refreshHistory() }
+        }
+        .onChange(of: destination) { _, _ in playback.stop() }
+        .onChange(of: selectedHistory?.id) { _, _ in playback.stop() }
         .onChange(of: settings.meetingAudioRetentionPolicy) { _, _ in
             Task { await coordinator.sweepExpiredAudio(); await refreshHistory() }
         }
@@ -319,15 +332,22 @@ struct MobileMeetingRoot: View {
                     Text(PichiLocalization.text("In-room meeting"))
                 }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 HStack {
-                    Button { UIPasteboard.general.string = MeetingTranscriptExporter.text(for: session) } label: {
+                    Button { copyTranscript(session) } label: {
                         Label(PichiLocalization.text("Copy"), systemImage: "doc.on.doc").frame(minHeight: 44)
                     }.accessibilityIdentifier("transcript.copy")
                     Menu {
                         Button(PichiLocalization.text("Export as Text")) { exportTranscript(session, json: false) }
                         Button(PichiLocalization.text("Export as JSON")) { exportTranscript(session, json: true) }
                         if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
+                            if session.hasRetryableAudio {
+                                Button(PichiLocalization.text("Retry transcription")) {
+                                    playback.stop()
+                                    run { _ = try await coordinator.retryProcessing(sessionID: session.id) }
+                                }.disabled(!coordinator.isQuiescent)
+                            }
                             Button(PichiLocalization.text("Export Audio")) { exportAudio(session) }
                             Button(PichiLocalization.text("Delete Audio"), role: .destructive) {
+                                playback.stop()
                                 run {
                                     let updated = try await coordinator.deleteAudio(sessionID: session.id)
                                     if selectedHistory?.id == updated.id { selectedHistory = updated }
@@ -361,6 +381,9 @@ struct MobileMeetingRoot: View {
                         }.frame(minHeight: 44)
                     }
                 }
+                if let message = playback.errorMessage {
+                    Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
+                }
                 ForEach(session.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start < $1.start }) { segment in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -369,11 +392,21 @@ struct MobileMeetingRoot: View {
                                 speakerNames: Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) }),
                                 language: PichiLocalization.language)).foregroundStyle(theme.palette.secondaryText)
                             Spacer()
+                            if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
+                                Button { playback.toggle(sessionID: session.id, segmentID: segment.id) } label: {
+                                    Image(systemName: playback.activeSegmentID == segment.id ? "pause.fill" : "play.fill")
+                                        .frame(minWidth: 44, minHeight: 44)
+                                }.disabled(!coordinator.isQuiescent).accessibilityLabel(PichiLocalization.text("Audio"))
+                                    .accessibilityIdentifier("transcript.audio.\(segment.id)")
+                            }
                             Button { edit = MeetingEditDraft(session: session, kind: .segment(segment), text: segment.text) } label: {
                                 Image(systemName: "pencil").frame(minWidth: 44, minHeight: 44)
                             }.accessibilityLabel(PichiLocalization.text("Edit"))
                         }.font(theme.typography.caption)
                         Text(segment.text).font(theme.typography.body).textSelection(.enabled)
+                        if playback.activeSegmentID == segment.id {
+                            MeetingSegmentAudioPlayer(playback: playback, isLoading: playback.isLoading)
+                        }
                     }.accessibilityElement(children: .contain).accessibilityIdentifier("transcript.segment.\(segment.id)")
                 }
             }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
@@ -383,16 +416,8 @@ struct MobileMeetingRoot: View {
     private func beginMeeting() {
         run {
             await refreshMicrophones()
-            let prefs = settings.meetingRecordingDefaults
-            guard let microphone = prefs.savedMicrophone(in: microphoneSnapshot.identities)
-                ?? microphoneSnapshot.identities.first(where: { $0.coreAudioUID == microphoneSnapshot.defaultCoreAudioUID })
-                ?? microphoneSnapshot.identities.first else { throw MeetingModelValidationError.missingMicrophone }
-            let selectedModelID = settings.selectedSpeechModel.rawValue
-            let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) ?? []
-            let language = prefs.languageCode.flatMap { supported.contains($0) ? $0 : nil }
-                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: selectedModelID) ?? "auto"
-            let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: PichiLocalization.text("In-room meeting"),
-                languageCode: language, microphone: microphone, timestampDefaultTitle: true)
+            let configuration = try await coordinator.defaultConfiguration(mode: .inRoom,
+                title: PichiLocalization.text("In-room meeting"))
             _ = try await coordinator.startRecording(configuration: configuration)
         }
     }
@@ -410,7 +435,14 @@ struct MobileMeetingRoot: View {
         }
     }
 
-    private func report(_ failure: Error) { error = failure.localizedDescription; showError = true }
+    private func report(_ failure: Error) {
+        showMicrophoneSettings = false
+        if let captureError = failure as? MeetingCaptureError, case .microphonePermissionDenied = captureError {
+            showMicrophoneSettings = true
+        }
+        error = PichiLocalization.text(failure.localizedDescription)
+        showError = true
+    }
     private func refreshHistory() async {
         await historySnapshot.refresh()
         if let message = historySnapshot.errorMessage { error = message; showError = true; return }
@@ -420,11 +452,27 @@ struct MobileMeetingRoot: View {
         do { microphoneSnapshot = try await microphones() } catch { report(error) }
     }
 
+    private func copyTranscript(_ session: MeetingSession) {
+        run {
+            let output: MeetingSession
+            if settings.meetingPIIRedactionEnabled {
+                if !(await privacy.isReady) { try await privacy.prepare() }
+                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: session, using: privacy)
+            } else { output = session }
+            UIPasteboard.general.string = MeetingTranscriptExporter.text(for: output)
+        }
+    }
+
     private func exportTranscript(_ session: MeetingSession, json: Bool) {
         run {
             guard let fresh = try await store.load(id: session.id) else { throw CocoaError(.fileNoSuchFile) }
-            let data = json ? try MeetingTranscriptExporter.json(for: fresh) : Data(MeetingTranscriptExporter.text(for: fresh).utf8)
-            share = try MeetingSharePayload.transcript(data: data, title: fresh.title, fileExtension: json ? "json" : "txt")
+            let output: MeetingSession
+            if settings.meetingPIIRedactionEnabled {
+                if !(await privacy.isReady) { try await privacy.prepare() }
+                output = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: fresh, using: privacy)
+            } else { output = fresh }
+            let data = json ? try MeetingTranscriptExporter.json(for: output) : Data(MeetingTranscriptExporter.text(for: output).utf8)
+            share = try MeetingSharePayload.transcript(data: data, title: output.title, fileExtension: json ? "json" : "txt")
         }
     }
 

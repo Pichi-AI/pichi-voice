@@ -129,7 +129,7 @@ struct FluidGlassControlGroup<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        if #available(macOS 26, *), !self.reduceTransparency {
+        if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
             GlassEffectContainer(spacing: 8) { self.content() }
         } else {
             self.content()
@@ -149,7 +149,7 @@ private struct FluidGlassActionModifier: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if self.quiet, !self.prominent {
             content.buttonStyle(FluidQuietActionStyle(circular: self.circular, tone: self.tone, spacious: self.spacious))
-        } else if #available(macOS 26, *), !self.reduceTransparency {
+        } else if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
             if self.prominent {
                 content.buttonStyle(.glassProminent).tint(self.tone ?? self.theme.palette.accent)
                     .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
@@ -206,7 +206,7 @@ private struct FluidGlassMenuActionModifier: ViewModifier {
             .buttonStyle(FluidGlassMenuActionStyle())
             .fixedSize(horizontal: true, vertical: false)
         // Stationary glass: native menu tracking swallows the release that interactive glass waits for.
-        if #available(macOS 26, *), !self.reduceTransparency {
+        if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
             menu.glassEffect(.regular, in: .capsule)
         } else {
             menu

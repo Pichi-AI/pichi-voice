@@ -47941,6 +47941,128 @@
         }
       }
     },
+<<<<<<< HEAD
+=======
+    "Whisper CPU backend is unavailable on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper CPU backend is unavailable on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU-бэкенд Whisper недоступен на этом устройстве."
+          }
+        }
+      }
+    },
+    "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+          }
+        }
+      }
+    },
+    "This Whisper artifact does not support automatic Russian and English recognition.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Whisper artifact does not support automatic Russian and English recognition."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель Whisper не поддерживает автоматическое распознавание русского и английского языков."
+          }
+        }
+      }
+    },
+    "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The installed meeting model changed after this attempt was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The meeting PCM window is outside the bounded inference contract.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting PCM window is outside the bounded inference contract."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
+          }
+        }
+      }
+    },
+    "Another PCM window still owns the meeting inference runtime.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another PCM window still owns the meeting inference runtime."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
+          }
+        }
+      }
+    },
+>>>>>>> 75bdfd5f (Add universal mobile target and compose existing meeting owners)
     "The selected meeting runtime does not support in-memory audio.": {
       "extractionState": "manual",
       "localizations": {
@@ -47953,6 +48075,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
+<<<<<<< HEAD
             "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
           }
         }
@@ -48022,6 +48145,9 @@
           "stringUnit": {
             "state": "translated",
             "value": "Удаление чувствительных данных остановлено. Запись прервана."
+=======
+            "value": "Выбранный модуль распознавания встреч не поддерживает обработку аудио только в памяти."
+>>>>>>> 75bdfd5f (Add universal mobile target and compose existing meeting owners)
           }
         }
       }

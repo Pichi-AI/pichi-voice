@@ -45,4 +45,3 @@ final class MeetingHistorySnapshot: ObservableObject {
         await task.value
     }
 }
-

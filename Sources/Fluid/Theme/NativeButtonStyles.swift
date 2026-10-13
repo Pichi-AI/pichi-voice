@@ -79,7 +79,7 @@ extension View {
         case .accent:
             self.buttonStyle(AccentButtonStyle(compact: size.accentCompact))
         case .destructive:
-            self.buttonStyle(AccentButtonStyle(compact: size.accentCompact, tone: Color(nsColor: .systemRed)))
+            self.buttonStyle(AccentButtonStyle(compact: size.accentCompact, tone: Color.red))
         case .inline:
             self.buttonStyle(InlineButtonStyle())
         }
@@ -221,8 +221,8 @@ struct PremiumButtonStyle: ButtonStyle {
             if self.isRecording {
                 return LinearGradient(
                     colors: [
-                        Color(nsColor: .systemRed),
-                        Color(nsColor: .systemRed).opacity(0.8),
+                        Color.red,
+                        Color.red.opacity(0.8),
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -256,7 +256,7 @@ struct PremiumButtonStyle: ButtonStyle {
                         )
                 )
                 .shadow(
-                    color: (self.isRecording ? Color(nsColor: .systemRed) : self.theme.palette.accent)
+                    color: (self.isRecording ? Color.red : self.theme.palette.accent)
                         .opacity(self.isHovered ? 0.45 : 0.25),
                     radius: self.isHovered ? self.theme.metrics.elevatedCardShadow.radius : max(self.theme.metrics.cardShadow.radius - 2, 2),
                     x: 0,

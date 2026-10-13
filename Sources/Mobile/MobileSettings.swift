@@ -154,6 +154,7 @@ private struct MobileVoiceEngineSettings: View {
                             if settings.selectedSpeechModel == model { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                         }
                         Text(PichiLocalization.text(model.cardDescription)).font(.subheadline)
+                        Text(PichiLocalization.text(model.languageSupport)).font(.subheadline).foregroundStyle(.secondary)
                         Text(model.downloadSize).font(.caption).foregroundStyle(.secondary)
                         if asr.downloadingModelId == model.id {
                             if let progress = asr.downloadProgress { ProgressView(value: progress) } else { ProgressView() }

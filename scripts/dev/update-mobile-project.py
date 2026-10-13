@@ -68,10 +68,11 @@ def configs(label, test=False):
         settings = {
             "SDKROOT":"iphoneos", "SUPPORTED_PLATFORMS":"iphoneos iphonesimulator", "IPHONEOS_DEPLOYMENT_TARGET":"18.0",
             "TARGETED_DEVICE_FAMILY":"1,2", "SUPPORTS_MACCATALYST":"NO", "SWIFT_VERSION":"5.0",
-            "SWIFT_STRICT_CONCURRENCY":"targeted", "SWIFT_DEFAULT_ACTOR_ISOLATION":"nonisolated",
+            "SWIFT_STRICT_CONCURRENCY":"targeted", "SWIFT_DEFAULT_ACTOR_ISOLATION":"MainActor",
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS":"$(inherited) MOBILE" + (" DEBUG" if name=="Debug" else ""),
             "PRODUCT_NAME":"$(TARGET_NAME)", "PRODUCT_BUNDLE_IDENTIFIER":"ai.pichi.voice.mobile" + (".uitests" if test else ""),
             "ENABLE_TESTABILITY":"YES" if name=="Debug" else "NO",
+            "PICHI_PRODUCT_NAME":json.loads((ROOT / "Sources/Fluid/Branding/brand-package.json").read_text())["profile"]["appName"],
             "CODE_SIGN_STYLE":"Automatic", "DEVELOPMENT_TEAM":"", "GENERATE_INFOPLIST_FILE":"YES" if test else "NO",
             "SWIFT_EMIT_LOC_STRINGS":"YES", "SWIFT_OPTIMIZATION_LEVEL":"-Onone" if name=="Debug" else "-O",
             "LD_RUNPATH_SEARCH_PATHS":"$(inherited) @executable_path/Frameworks",
