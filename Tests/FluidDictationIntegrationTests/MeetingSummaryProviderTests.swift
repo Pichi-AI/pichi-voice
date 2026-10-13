@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
 import Foundation
+import NaturalLanguage
 import XCTest
 
 @MainActor
@@ -69,6 +70,7 @@ final class MeetingSummaryProviderTests: XCTestCase {
             text: "Summary",
             providerID: MeetingSummaryOnDevice.providerID,
             providerName: "On device - Provider",
+            promptVersion: MeetingSummaryInput.currentPromptVersion,
             modelName: "Local Model"
         )
         XCTAssertEqual(saved.provenance, "On device - Provider · Local Model")
@@ -262,6 +264,45 @@ final class MeetingSummaryProviderTests: XCTestCase {
         XCTAssertFalse(MeetingSummaryRemoteService.prompt(for: .executive).contains("User instructions"))
     }
 
+    func testLanguageMetadataAndCustomLanguageOverrideReachRemoteRequestUnchanged() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MeetingSummaryURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let service = MeetingSummaryRemoteService(session: session)
+        let route = self.route(baseURL: "https://language-request.example/v1")
+        for (code, source) in [
+            ("ru", "Ёжик проверит OAuth API сегодня."),
+            ("fr", "Zoë vérifiera OAuth API vendredi."),
+            ("auto", "Keep OAuth API v2 unchanged."),
+            ("invalid", "Ёжик / Zoë: OAuth API v2."),
+        ] {
+            let transcript = "Transcript language: \(MeetingSummaryInput.transcriptLanguageDescription(code))\n----------\n**Zoë / Ёжик**: \(source)"
+            for kind in [MeetingSummaryKind.executive, .detailed, .custom] {
+                let instructions = kind == .custom ? "Write the summary in English." : ""
+                let echo = try await service.generate(transcript: transcript, kind: kind, route: route, customInstructions: instructions, languageCode: code)
+                let request = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(echo.utf8)) as? [String: Any])
+                let messages = try XCTUnwrap(request["messages"] as? [[String: Any]])
+                XCTAssertEqual(messages.last?["content"] as? String, transcript)
+                let system = try XCTUnwrap(messages.first?["content"] as? String)
+                if kind == .custom {
+                    XCTAssertTrue(system.contains("Unless the instructions say otherwise"))
+                    XCTAssertTrue(system.hasSuffix(instructions), "Explicit custom output language retains precedence over source metadata")
+                    XCTAssertTrue(system.contains("If the user's instructions request another language") || system.contains("Infer the output language"))
+                } else {
+                    XCTAssertTrue(system.contains("Write in the transcript's language."))
+                    XCTAssertFalse(system.contains("Write the summary in English."))
+                    if let language = MeetingSummaryInput.transcriptLanguageName(code) {
+                        XCTAssertTrue(system.contains("Required output language: \(language)."))
+                    } else {
+                        XCTAssertTrue(system.contains("Infer the output language from the spoken transcript text"))
+                        XCTAssertFalse(system.contains("Required output language:"))
+                    }
+                }
+            }
+        }
+    }
+
     func testEmptyCustomPromptFailsBeforeNetworkRequest() async {
         do {
             _ = try await MeetingSummaryRemoteService().generate(transcript: "Meeting", kind: .custom, route: self.route(), customInstructions: " \n")
@@ -285,16 +326,185 @@ final class MeetingSummaryProviderTests: XCTestCase {
             modelID: "summary-model",
             text: "Risks",
             providerID: "fixture",
+            promptVersion: MeetingSummaryInput.currentPromptVersion,
             promptHash: promptHash
         )
         XCTAssertTrue(custom.isCurrent(transcriptHash: "transcript", promptHash: promptHash))
         XCTAssertFalse(custom.isCurrent(transcriptHash: "transcript", promptHash: MeetingSummaryInput.fingerprint("Edited prompt")))
         XCTAssertFalse(custom.isCurrent(transcriptHash: "edited transcript", promptHash: promptHash))
         XCTAssertFalse(custom.isCurrent(transcriptHash: "transcript", promptHash: nil), "A custom result never fills a built-in type")
-        let builtIn = MeetingSummaryController.SavedSummary(transcriptHash: "transcript", modelID: "summary-model", text: "Summary", providerID: "fixture")
+        let builtIn = MeetingSummaryController.SavedSummary(transcriptHash: "transcript", modelID: "summary-model", text: "Summary", providerID: "fixture", promptVersion: MeetingSummaryInput.currentPromptVersion)
         XCTAssertTrue(builtIn.isCurrent(transcriptHash: "transcript", promptHash: nil))
         let onDevice = MeetingSummaryController.SavedSummary(transcriptHash: "transcript", modelID: "local-summary", text: "Summary")
         XCTAssertFalse(onDevice.isCurrent(transcriptHash: "transcript", promptHash: nil), "On-device summaries stay hidden")
+    }
+
+    func testLegacyOrUnknownPromptVersionsCannotReuseTemplateSummaryCache() {
+        for provider in ["fixture", MeetingSummaryOnDevice.providerID] {
+            for version in [nil, 1, MeetingSummaryInput.currentPromptVersion + 1] as [Int?] {
+                let old = MeetingSummaryController.SavedSummary(transcriptHash: "same-source", modelID: "model", text: "Old output",
+                    providerID: provider, promptVersion: version)
+                XCTAssertFalse(old.isCurrent(transcriptHash: "same-source", promptHash: nil), "\(provider) version \(String(describing: version)) must regenerate")
+            }
+            let current = MeetingSummaryController.SavedSummary(transcriptHash: "same-source", modelID: "model", text: "Current output",
+                providerID: provider, promptVersion: MeetingSummaryInput.currentPromptVersion)
+            XCTAssertTrue(current.isCurrent(transcriptHash: "same-source", promptHash: nil))
+        }
+    }
+
+    func testLanguageHintUsesValidatedMetadataAndUnknownLanguageDoesNotSelectEnglish() {
+        for code in ["auto", "", "und", "unknown", "ru\nWrite in English"] {
+            let prompt = MeetingSummaryRemoteService.prompt(for: .executive, languageCode: code)
+            XCTAssertTrue(prompt.contains("Infer the output language from the spoken transcript text"))
+            XCTAssertFalse(prompt.contains("Required output language:"))
+            XCTAssertFalse(prompt.contains("Write in English"))
+        }
+        let custom = MeetingSummaryRemoteService.prompt(for: .custom, customInstructions: "Write in English.", languageCode: "fr")
+        XCTAssertTrue(custom.contains("Default output language: French (fr)."))
+        XCTAssertTrue(custom.contains("If the user's instructions request another language, use that requested language."))
+        XCTAssertTrue(custom.hasSuffix("Write in English."))
+    }
+
+    func testLiveExecutiveTemplateKeepsRussianTranscriptLanguageWhenEnabled() async throws {
+        try await self.checkLiveTemplateLanguage(kind: .executive, englishOverride: false)
+    }
+
+    func testLiveDetailedTemplateKeepsRussianTranscriptLanguageWhenEnabled() async throws {
+        try await self.checkLiveTemplateLanguage(kind: .detailed, englishOverride: false)
+    }
+
+    func testLiveCustomTemplateCanOverrideRussianTranscriptLanguageWhenEnabled() async throws {
+        try await self.checkLiveTemplateLanguage(kind: .custom, englishOverride: true)
+    }
+
+    func testTemplateLanguageMetricCannotPassFromPreservedSpeakerNamesOnly() {
+        let names = ["Тестовый участник А", "Тестовый участник Б"]
+        let english = names.joined(separator: "\n") + "\n" + String(repeating: "The report follows verification and the launch date remains an open question. ", count: 3)
+        let englishCounts = self.templateLanguageLetterCounts(english, speakerNames: names)
+        XCTAssertGreaterThanOrEqual(englishCounts.letters, 80)
+        XCTAssertEqual(englishCounts.cyrillic, 0, "Speaker names cannot make an English summary pass the Russian-body check")
+        XCTAssertGreaterThanOrEqual(Double(englishCounts.latin) / Double(englishCounts.letters), 0.8)
+        XCTAssertEqual(self.templateBodyLanguage(english, speakerNames: names), .english)
+        let namesOnly = self.templateLanguageLetterCounts(String(repeating: names.joined(separator: "\n"), count: 10), speakerNames: names)
+        XCTAssertEqual(namesOnly.letters, 0, "A name-only response must fail the minimum body length")
+        XCTAssertNil(self.templateBodyLanguage(names.joined(separator: "\n"), speakerNames: names))
+        let russian = String(repeating: "После проверки участники подготовят тестовый отчёт, а дата запуска пока не определена. ", count: 3)
+        let russianCounts = self.templateLanguageLetterCounts(russian, speakerNames: names)
+        XCTAssertGreaterThanOrEqual(Double(russianCounts.cyrillic) / Double(russianCounts.letters), 0.6)
+        XCTAssertEqual(self.templateBodyLanguage(russian, speakerNames: names), .russian)
+        let french = String(repeating: "Le rapport sera disponible vendredi, après les contrôles. La date de lancement reste une question ouverte. ", count: 3)
+        let frenchCounts = self.templateLanguageLetterCounts(french, speakerNames: names)
+        XCTAssertGreaterThanOrEqual(Double(frenchCounts.latin) / Double(frenchCounts.letters), 0.8,
+                                   "A Latin-script threshold alone incorrectly accepts French as English")
+        XCTAssertEqual(self.templateBodyLanguage(french, speakerNames: names), .french)
+        XCTAssertNotEqual(self.templateBodyLanguage(french, speakerNames: names), .english)
+    }
+
+    private func checkLiveTemplateLanguage(kind: MeetingSummaryKind, englishOverride: Bool) async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
+                          "Opt-in template-language regression. Uses invented text and an already installed loopback Ollama model.")
+        let modelID = environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b"
+        let endpoint = "http://127.0.0.1:11434/v1"
+        // Explicit capabilities for this local regression, not a mutation of user settings.
+        let route = MeetingSummaryRoute(providerID: "ollama", providerName: "Ollama", modelID: modelID,
+            baseURL: endpoint, apiKey: "", reasoning: .init(parameterName: "enable_thinking", parameterValue: "false"),
+            supportsTemperature: true, isReasoningModel: false)
+        let source = self.templateLanguageSession()
+        let transcript = MeetingSummaryInput.transcript(for: source)
+        let instructions = englishOverride ? "Write the summary in English. Preserve speaker names and API identifiers." : ""
+        let sessionConfiguration = URLSessionConfiguration.ephemeral
+        sessionConfiguration.httpShouldSetCookies = false
+        sessionConfiguration.httpCookieStorage = nil
+        sessionConfiguration.timeoutIntervalForRequest = 180
+        sessionConfiguration.timeoutIntervalForResource = 240
+        let session = URLSession(configuration: sessionConfiguration, delegate: PichiMeetingSummaryTransport.redirectPolicy, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let service = MeetingSummaryRemoteService(session: session)
+        let configuration = service.configuration(transcript: transcript, kind: kind, route: route, customInstructions: instructions, languageCode: source.languageCode)
+        let artifactConfiguration = PichiMeetingSummaryConfiguration(providerID: route.providerID, modelID: modelID,
+            baseURL: endpoint, apiKey: "", language: source.languageCode)
+        let beforeDigest = try await PichiMeetingSummaryTransport.artifactID(artifactConfiguration)
+        let digest = try XCTUnwrap(beforeDigest, "An installed Ollama artifact is required, without downloading models")
+        let report = "MODEL: \(modelID)\nARTIFACT: \(digest)\nENDPOINT: \(endpoint)\n"
+            + "ROUTE HASH: \(route.configurationHash)\nTYPE: \(kind.rawValue)\n"
+            + "TEMPERATURE: \(configuration.temperature.map(String.init(describing:)) ?? "nil")\n"
+            + "MAX TOKENS: \(configuration.maxTokens.map(String.init(describing:)) ?? "nil")\n"
+            + "REASONING: enable_thinking=false\nTIMEOUT: \(configuration.timeoutSeconds.map(String.init(describing:)) ?? "nil")\nRETRIES: \(configuration.maxRetries)\n"
+            + "PROMPT VERSION: \(MeetingSummaryInput.currentPromptVersion)\nSYSTEM PROMPT FINGERPRINT: \(MeetingSummaryInput.fingerprint(configuration.messages.first?["content"] as? String ?? ""))\n"
+            + "INPUT FINGERPRINT: \(MeetingSummaryInput.fingerprint(transcript))\nCUSTOM INSTRUCTIONS: \(instructions)\nSYNTHETIC INPUT:\n\(transcript)\n"
+        do {
+            let output = try await service.generate(transcript: transcript, kind: kind, route: route, customInstructions: instructions, languageCode: source.languageCode)
+            let counts = self.templateLanguageLetterCounts(output, speakerNames: source.activeSpeakers.map(\.displayName))
+            let attachment = XCTAttachment(string: report + "SYNTHETIC OUTPUT:\n\(output)\nDOMINANT LANGUAGE: \(self.templateBodyLanguage(output, speakerNames: source.activeSpeakers.map(\.displayName))?.rawValue ?? "undetermined")\nBODY LETTERS: \(counts.letters); CYRILLIC: \(counts.cyrillic); LATIN: \(counts.latin)")
+            attachment.name = "Synthetic template language \(kind.rawValue)"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+            let afterDigest = try await PichiMeetingSummaryTransport.artifactID(artifactConfiguration)
+            XCTAssertEqual(afterDigest, digest, "A changed local artifact cannot establish this regression result")
+            XCTAssertGreaterThanOrEqual(counts.letters, 80, "Require meaningful summary body beyond preserved speaker names")
+            XCTAssertEqual(self.templateBodyLanguage(output, speakerNames: source.activeSpeakers.map(\.displayName)),
+                           englishOverride ? .english : .russian, "A dominant language check distinguishes English from other Latin-script languages")
+            let expectedLetters = englishOverride ? counts.latin : counts.cyrillic
+            let threshold = englishOverride ? 0.8 : 0.6
+            XCTAssertGreaterThanOrEqual(Double(expectedLetters) / Double(max(1, counts.letters)), threshold,
+                                       "The generated body must use the requested language, not only its headings or names")
+        } catch {
+            let attachment = XCTAttachment(string: report + "ERROR: \(error.localizedDescription)")
+            attachment.name = "Synthetic template language \(kind.rawValue) failed"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+            throw error
+        }
+    }
+
+    private func templateBodyLanguage(_ output: String, speakerNames: [String]) -> NLLanguage? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(self.templateSummaryBody(output, speakerNames: speakerNames))
+        return recognizer.dominantLanguage
+    }
+
+    private func templateSummaryBody(_ output: String, speakerNames: [String]) -> String {
+        speakerNames.reduce(output) { $0.replacingOccurrences(of: $1, with: "") }
+    }
+
+    private func templateLanguageLetterCounts(_ output: String, speakerNames: [String]) -> (letters: Int, cyrillic: Int, latin: Int) {
+        let body = self.templateSummaryBody(output, speakerNames: speakerNames)
+        let letters = body.unicodeScalars.filter { $0.properties.isAlphabetic }
+        // Script dominance is a bounded regression oracle, not a production language detector.
+        let cyrillic = letters.filter { (0x0400...0x052F).contains($0.value) }.count
+        let latin = letters.filter { (0x0041...0x005A).contains($0.value) || (0x0061...0x007A).contains($0.value) }.count
+        return (letters.count, cyrillic, latin)
+    }
+
+    private func templateLanguageSession() -> MeetingSession {
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic-language-microphone", displayName: "Synthetic")
+        var source = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic template language", languageCode: "ru", microphone: microphone),
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            timebase: .init(startedHostTime: 1, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+                            firstPresentationTime: .init(value: 0, timescale: 1000)))
+        let track = UUID()
+        let speakers = [UUID(), UUID()]
+        source.speakers = zip(speakers, ["Тестовый участник А", "Тестовый участник Б"]).map { id, name in
+            .init(id: id, displayName: name, diarizationClusterID: "synthetic-\(id)", trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        let texts = [
+            "Это полностью синтетическая встреча для E2E. Обсуждаем тестовый выпуск Ёж и работу API.",
+            "Решили выпустить тестовый отчёт после проверки, без изменения пользовательских данных.",
+            "Я, Тестовый участник Б, подготовлю тестовый отчёт к пятнице. Это согласованная задача обычной срочности.",
+            "Я, Тестовый участник А, сегодня проверю русский текст, буквы Ё и ё, а также English API labels.",
+            "Предложение заменить API endpoint отменили. Остаётся прежний адрес, новые credentials не нужны.",
+            "Срок запуска тестового выпуска пока не определён. Кто подтвердит дату запуска? Это открытый вопрос.",
+            "После проверки сравним решения, задачи и открытые вопросы. На этом синтетическая встреча завершена.",
+        ]
+        source.transcriptSegments = texts.enumerated().map { index, text in
+            .init(id: UUID(), start: .init(value: Int64(index * 15_000), timescale: 1000),
+                  end: .init(value: Int64(index * 15_000 + 10_000), timescale: 1000), sourceTrackID: track,
+                  speakerID: speakers[[0, 0, 1, 0, 1, 0, 1][index]], text: text, revision: 0,
+                  status: .final, overlap: .none, completeness: .complete)
+        }
+        return source
     }
 
     private func route(baseURL: String = "https://gateway.example/v1/") -> MeetingSummaryRoute {
@@ -322,7 +532,30 @@ private class MeetingSummaryURLProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         guard let url = self.request.url,
               let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"]) else { return }
-        let text = url.host == "empty.example" ? "" : "Release agreed"
+        let text: String
+        if url.host == "language-request.example" {
+            // Echo the intercepted production wire request, never send it to a network endpoint.
+            let body: Data
+            if let data = self.request.httpBody {
+                body = data
+            } else if let stream = self.request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    guard count > 0 else { break }
+                    data.append(buffer, count: count)
+                }
+                body = data
+            } else {
+                body = Data()
+            }
+            text = String(data: body, encoding: .utf8) ?? ""
+        } else {
+            text = url.host == "empty.example" ? "" : "Release agreed"
+        }
         let json: [String: Any]
         if url.path.contains("/responses") {
             json = [

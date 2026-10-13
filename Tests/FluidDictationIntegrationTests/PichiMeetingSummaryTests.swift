@@ -1234,7 +1234,26 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
     }
 
-    // Only the two public synthetic opt-in fixtures use this trace helper. Never
+    func testLiveSeparateCommitmentsKeepLiteralDeadlinesAndRelevantCitationsWhenEnabled() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
+                          "Opt-in semantic regression. Uses invented text and an already installed local Ollama model.")
+        let modelID = environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b"
+        var configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: modelID,
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru")
+        configuration.execution = .extended
+        configuration.execution.reasoningParameter = "enable_thinking"
+        configuration.execution.reasoningValue = "false"
+        let session = self.separateCommitmentsSession()
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await self.generateLiveSyntheticSummary(session: session, configuration: configuration)
+        let issues = self.separateCommitmentIssues(result, session: session)
+        XCTAssertTrue(issues.isEmpty, issues.joined(separator: "\n"))
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
+    // Only public synthetic opt-in fixtures use this trace helper. Never
     // attach a saved session's speech or dump API credentials/provider options.
     private func generateLiveSyntheticSummary(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration) async throws -> PichiMeetingSummaryDocument {
         let trace = LiveSyntheticSummaryTrace()
@@ -1244,11 +1263,18 @@ final class PichiMeetingSummaryTests: XCTestCase {
             resolveArtifact: { try await PichiMeetingSummaryTransport.artifactID($0) }
         )
         do {
-            let result = try await generator.generate(session: session, configuration: configuration)
+            let generation = try await generator.generateWithProvenance(session: session, configuration: configuration)
+            let result = generation.document
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let document = String(decoding: try encoder.encode(result), as: UTF8.self)
-            self.attachLiveSyntheticSummaryTrace(await trace.report() + "\nFINAL DOCUMENT:\n" + document, modelID: configuration.modelID)
+            let provenance = "ENDPOINT: \(generation.configuration.baseURL)\n"
+                + "EXECUTION: \(generation.configuration.execution.identity)\n"
+                + "ARTIFACT ID: \(generation.configuration.modelArtifactID ?? "unavailable")\n"
+                + "INFERENCE ALIAS: \(generation.configuration.inferenceModelID ?? generation.configuration.modelID)\n"
+                + "INPUT FINGERPRINT: \(PichiMeetingSummaryInput.fingerprint(session))\n"
+            self.attachLiveSyntheticSummaryTrace(provenance + (await trace.report()) + "\nFINAL DOCUMENT:\n" + document,
+                                                 modelID: configuration.modelID)
             return result
         } catch {
             self.attachLiveSyntheticSummaryTrace(await trace.report() + "\nERROR:\n" + error.localizedDescription, modelID: configuration.modelID)
@@ -1270,7 +1296,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let stage = (config.messages.first?["content"] as? String ?? "").split(separator: "\n").first.map(String.init) ?? ""
             let input = config.messages.last?["content"] as? String ?? ""
             let response = try await PichiMeetingSummaryTransport.complete(config)
-            self.entries.append("STAGE: \(stage)\nSYNTHETIC INPUT:\n\(input)\nRAW OUTPUT:\n\(response)")
+            self.entries.append("STAGE: \(stage)\nINFERENCE MODEL: \(config.model)\nSYNTHETIC INPUT:\n\(input)\nRAW OUTPUT:\n\(response)")
             return response
         }
 
@@ -2113,6 +2139,68 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.turns(for: session).count, 3)
     }
 
+    func testSupportReviewRepairsSeparateCommitmentStatusDeadlineAndCrossTaskEvidence() async throws {
+        // Reproduces the three semantic defects observed in the synthetic native
+        // qwen3.5:4b result. Scripted correction proves pipeline wiring, not model quality.
+        let session = self.separateCommitmentsSession()
+        let corrected = self.separateCommitmentsDocument(session)
+        var candidate = corrected
+        candidate.actions[0].status = .requested
+        candidate.actions[0].deadline = nil
+        candidate.actions[1].evidence.append(corrected.actions[0].evidence[0])
+        XCTAssertNoThrow(try candidate.validated(against: PichiMeetingSummaryInput.turns(for: session)),
+                         "Literal quote membership does not establish speech act, completeness or citation relevance")
+        XCTAssertEqual(self.separateCommitmentIssues(candidate, session: session),
+                       ["A commitment must be agreed", "A deadline must be literal сегодня", "B evidence must support only B's report task"])
+        let transport = SupportReviewTransport(responses: [try self.json(candidate), try self.json(corrected)])
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.actions, corrected.actions)
+        XCTAssertTrue(self.separateCommitmentIssues(result, session: session).isEmpty)
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2, "Repair uses the existing extraction and one support review")
+        let input = try XCTUnwrap(requests.last?.messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        let sources = try ModelSource.catalog(from: fields)
+        XCTAssertEqual(sources.map(\.text), session.transcriptSegments.map(\.text))
+        XCTAssertEqual(sources.map(\.speaker), ["Тестовый участник А", "Тестовый участник А", "Тестовый участник Б",
+                                               "Тестовый участник А", "Тестовый участник Б", "Тестовый участник А", "Тестовый участник Б"])
+        let reviewedCandidate = try XCTUnwrap(fields["candidate"] as? [String: Any])
+        let actions = try XCTUnwrap(reviewedCandidate["actions"] as? [[String: Any]])
+        XCTAssertEqual(actions.first?["status"] as? String, "requested")
+        XCTAssertNil(actions.first?["deadline"], "The uncorrected candidate omitted A's stated deadline")
+        XCTAssertEqual((actions.last?["evidence"] as? [[String: Any]])?.count, 2,
+                       "The reviewer receives the actual faulty candidate, including its irrelevant citation")
+    }
+
+    func testSeparateCommitmentOracleAcceptsParaphrasedProseButRejectsReactivatedProposalAndFalseAnswer() {
+        let session = self.separateCommitmentsSession()
+        var document = self.separateCommitmentsDocument(session)
+        // Only owners/deadlines must be verbatim. Prose may paraphrase the same
+        // facts; lexical checks cannot establish semantic entailment.
+        func replacingText(_ item: PichiMeetingSummaryItem, _ text: String) -> PichiMeetingSummaryItem {
+            .init(text: text, evidence: item.evidence, owner: item.owner, deadline: item.deadline,
+                  title: item.title, status: item.status, urgency: item.urgency)
+        }
+        document.summary[1] = replacingText(document.summary[1], "От замены API endpoint отказались; старый адрес сохранён.")
+        document.decisions[0] = replacingText(document.decisions[0], "Отчёт можно выпустить после проверки.")
+        document.actions[0] = replacingText(document.actions[0], "Проверить локализацию и English API labels.")
+        document.actions[1] = replacingText(document.actions[1], "Подготовить результаты встречи в документе.")
+        document.openQuestions[0] = replacingText(document.openQuestions[0], "Когда запустим тестовый выпуск?")
+        XCTAssertNoThrow(try document.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        XCTAssertTrue(self.separateCommitmentIssues(document, session: session).isEmpty)
+        var activeReplacement = document.summary[1]
+        activeReplacement.title = "Заменить API endpoint"
+        activeReplacement.status = .proposed
+        activeReplacement.urgency = .unspecified
+        document.actions.append(activeReplacement)
+        document.openQuestions[0].resolved = true
+        XCTAssertEqual(self.separateCommitmentIssues(document, session: session),
+                       ["The cancelled endpoint replacement must not become active work", "The launch-date question must remain unanswered"])
+    }
+
     func testSupportReviewRecoversSeparateDecisionAndAssignedTaskFromRecapOnlyCandidate() async throws {
         let evidence: [[String: Any]] = [["sourceIndex": 0]]
         let recap: [[String: Any]] = [["text": "Иван подготовит отчёт к пятнице. Решили оставить текущую цену.", "evidence": evidence]]
@@ -2836,6 +2924,96 @@ final class PichiMeetingSummaryTests: XCTestCase {
                                             sourceTrackID: trackID, speakerID: speakerID, text: self.turns[0].text,
                                             revision: 0, status: .final, overlap: .none, completeness: .complete)]
         return session
+    }
+
+    /// Exact invented speech from the native E2E fixture, without app history,
+    /// persistence IDs, audio or a golden answer in any model-facing prompt.
+    private func separateCommitmentsSession() -> MeetingSession {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        let speakerA = UUID()
+        let speakerB = UUID()
+        session.speakers = [(speakerA, "Тестовый участник А"), (speakerB, "Тестовый участник Б")].map { id, name in
+            .init(id: id, displayName: name, diarizationClusterID: "synthetic-\(name)",
+                  trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        let texts = [
+            "Это полностью синтетическая встреча для E2E. Обсуждаем тестовый выпуск Ёж и работу API.",
+            "Решили выпустить тестовый отчёт после проверки, без изменения пользовательских данных.",
+            "Я, Тестовый участник Б, подготовлю тестовый отчёт к пятнице. Это согласованная задача обычной срочности.",
+            "Я, Тестовый участник А, сегодня проверю русский текст, буквы Ё и ё, а также English API labels.",
+            "Предложение заменить API endpoint отменили. Остаётся прежний адрес, новые credentials не нужны.",
+            "Срок запуска тестового выпуска пока не определён. Кто подтвердит дату запуска? Это открытый вопрос.",
+            "После проверки сравним решения, задачи и открытые вопросы. На этом синтетическая встреча завершена.",
+        ]
+        session.transcriptSegments = texts.enumerated().map { index, text in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 15_000), timescale: 1000)
+            segment.end = .init(value: Int64(index * 15_000 + 10_000), timescale: 1000)
+            segment.speakerID = [speakerA, speakerA, speakerB, speakerA, speakerB, speakerA, speakerB][index]
+            segment.text = text
+            return segment
+        }
+        return session
+    }
+
+    private func separateCommitmentsDocument(_ session: MeetingSession) -> PichiMeetingSummaryDocument {
+        func item(_ text: String, _ index: Int) -> PichiMeetingSummaryItem {
+            let segment = session.transcriptSegments[index]
+            return .init(text: text, evidence: [.init(segmentID: segment.id, quote: segment.text)])
+        }
+        var a = item("Проверить русский текст, Ё и ё и English API labels.", 3)
+        a.title = "Проверить текст"
+        a.owner = "Тестовый участник А"
+        a.deadline = "сегодня"
+        a.status = .agreed
+        a.urgency = .unspecified
+        var b = item("Подготовить тестовый отчёт.", 2)
+        b.title = "Подготовить отчёт"
+        b.owner = "Тестовый участник Б"
+        b.deadline = "к пятнице"
+        b.status = .agreed
+        b.urgency = .normal
+        return .init(summary: [item("Синтетический выпуск Ёж и API.", 0), item("Замену API endpoint отменили; прежний адрес остаётся.", 4)],
+                     decisions: [item("Выпустить тестовый отчёт после проверки без изменения пользовательских данных.", 1)],
+                     actions: [a, b], openQuestions: [item("Кто подтвердит дату запуска?", 5)])
+    }
+
+    /// Fixture-specific semantic oracle. It deliberately adds no heuristic to the
+    /// production validator and never gives expected answers to real inference.
+    private func separateCommitmentIssues(_ document: PichiMeetingSummaryDocument, session: MeetingSession) -> [String] {
+        var issues: [String] = []
+        func check(_ condition: Bool, _ message: String) { if !condition { issues.append(message) } }
+        let aTasks = document.actions.filter { $0.owner == "Тестовый участник А" }
+        let bTasks = document.actions.filter { $0.owner == "Тестовый участник Б" }
+        check(aTasks.count == 1, "Retain exactly one A text-check commitment")
+        check(bTasks.count == 1, "Retain exactly one B report commitment")
+        if let a = aTasks.first {
+            check(a.status == .agreed, "A commitment must be agreed")
+            check(a.deadline == "сегодня", "A deadline must be literal сегодня")
+            check(a.urgency == .unspecified, "A's today deadline does not imply urgency")
+            check(a.superseded != true, "A's uncompleted commitment remains current")
+            check(Set(a.evidence.map(\.segmentID)) == Set([session.transcriptSegments[3].id]), "A evidence must support only A's text-check task")
+        }
+        if let b = bTasks.first {
+            check(b.status == .agreed, "B commitment must be agreed")
+            check(b.deadline == "к пятнице", "B deadline must be literal к пятнице")
+            check(b.urgency == .normal, "B explicitly stated normal urgency")
+            check(b.superseded != true, "B's uncompleted commitment remains current")
+            check(Set(b.evidence.map(\.segmentID)) == Set([session.transcriptSegments[2].id]), "B evidence must support only B's report task")
+        }
+        check(document.decisions.contains { $0.evidence.contains { $0.segmentID == session.transcriptSegments[1].id }
+            && $0.superseded != true }, "Retain the report-release decision")
+        let cancellation = document.allItems.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[4].id } }
+        check(!cancellation.isEmpty,
+              "Retain the explicit endpoint-proposal cancellation")
+        check(document.actions.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[4].id } }.allSatisfy {
+            $0.status == .cancelled || $0.superseded == true
+        }, "The cancelled endpoint replacement must not become active work")
+        check(document.openQuestions.contains { $0.evidence.contains { $0.segmentID == session.transcriptSegments[5].id }
+            && $0.resolved != true }, "The launch-date question must remain unanswered")
+        return issues
     }
 
     private func completionSession() -> MeetingSession {
