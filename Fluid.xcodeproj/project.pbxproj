@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A51A30000000000000000002 /* GigaAMModelStoreDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */; };
 		A51A20000000000000000002 /* S1MiniProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A20000000000000000001 /* S1MiniProviderTests.swift */; };
 		A51A10000000000000000003 /* NativeTextInference in Frameworks */ = {isa = PBXBuildFile; productRef = A51A10000000000000000002 /* NativeTextInference */; };
 		A51A10000000000000000004 /* NativeTextInference in Frameworks */ = {isa = PBXBuildFile; productRef = A51A10000000000000000002 /* NativeTextInference */; };
@@ -188,6 +189,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaAMModelStoreDownloadTests.swift; sourceTree = "<group>"; };
 		A51A20000000000000000001 /* S1MiniProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = S1MiniProviderTests.swift; sourceTree = "<group>"; };
 		FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryLifetimeTests.swift; sourceTree = "<group>"; };
 		EAA200000000000000000001 /* CloudTextProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudTextProviderTests.swift; sourceTree = "<group>"; };
@@ -457,6 +459,7 @@
 				D1A600000000000000000201 /* SpeakerTurnMergingTests.swift */,
 				C1C410000000000000000001 /* PichiGigaAMIntegrationTests.swift */,
 				A51A20000000000000000001 /* S1MiniProviderTests.swift */,
+				A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */,
 				D1A700000000000000000001 /* MeetingExistingAudioReplayTests.swift */,
 				F1BD00000000000000000001 /* StripThinkingTagsTests.swift */,
 				D1A600000000000000000203 /* MeetingWindowSelectorTests.swift */,
@@ -857,6 +860,7 @@
 				AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */,
 				C1C410000000000000000002 /* PichiGigaAMIntegrationTests.swift in Sources */,
 				A51A20000000000000000002 /* S1MiniProviderTests.swift in Sources */,
+				A51A30000000000000000002 /* GigaAMModelStoreDownloadTests.swift in Sources */,
 				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
 				FD1100000000000000000002 /* PichiMeetingSummaryLifetimeTests.swift in Sources */,
 				F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */,

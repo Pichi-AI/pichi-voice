@@ -66,12 +66,12 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     /// stores. Complete local imports keep their priority.
     func ensureInstalled(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
         try Task.checkCancellation()
-        if let installed = GigaAMModelCatalog.discover(in: self.directory) { return installed }
-        guard self.overriddenDirectory != nil || self.directory.standardizedFileURL == Self.defaultDirectory.standardizedFileURL else {
-            throw GigaAMError.missingModels(self.directory)
+        let destinationRoot = self.directory.standardizedFileURL
+        if let installed = GigaAMModelCatalog.discover(in: destinationRoot) { return installed }
+        guard self.overriddenDirectory != nil || destinationRoot.path == Self.defaultDirectory.standardizedFileURL.path else {
+            throw GigaAMError.missingModels(destinationRoot)
         }
         let descriptor = self.downloadDescriptor
-        let destinationRoot = self.directory.standardizedFileURL
         let relay = ModelPreparationProgressRelay(progressHandler)
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
@@ -190,10 +190,12 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
 
     /// Never remove an externally configured source directory.
     func removeOwnedModels() throws {
+        let directory = self.directory.standardizedFileURL
         guard self.overriddenDirectory == nil,
-              self.directory.standardizedFileURL == Self.defaultDirectory.standardizedFileURL else { return }
+              directory.path == Self.defaultDirectory.standardizedFileURL.path else { return }
+        try Self.validateOwnedDirectory(directory)
         for descriptor in GigaAMModelCatalog.models {
-            let path = self.directory.appendingPathComponent(descriptor.id, isDirectory: true)
+            let path = directory.appendingPathComponent(descriptor.id, isDirectory: true)
             if FileManager.default.fileExists(atPath: path.path) { try FileManager.default.removeItem(at: path) }
         }
     }

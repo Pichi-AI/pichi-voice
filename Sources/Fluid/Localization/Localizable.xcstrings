@@ -46854,6 +46854,23 @@
           }
         }
       }
+    },
+    "Local Russian recognition with GigaAM. Download the compact model or import a verified local export.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Локальное распознавание русской речи с GigaAM. Скачайте компактную модель или импортируйте проверенный локальный экспорт."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

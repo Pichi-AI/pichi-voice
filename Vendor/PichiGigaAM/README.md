@@ -1,24 +1,27 @@
 # Pichi GigaAM native runtime
 
-This narrow Swift package runs Pichi's existing optimized GigaAM v3 ONNX exports on macOS. It uses Microsoft's pinned ONNX Runtime 1.24.2 package, whose macOS binary contains both arm64 and x86_64. No Python installation, cloud inference or separate STT server is needed.
+This narrow Swift package runs local GigaAM v3 ONNX exports on macOS, including the compact public INT8 export and Pichi's existing optimized exports. It uses Microsoft's pinned ONNX Runtime 1.24.2 package, whose macOS binary contains both arm64 and x86_64. No Python installation, cloud inference or separate STT server is needed.
 
 The default execution provider is CPU. The CoreML diagnostic option was tested and failed for the current dynamic-shape attention graph. It is not enabled by the app; its package API is retained only for export-compatibility experiments. Apple Silicon CPU inference has been verified on a synthetic Russian sample. Rosetta checks are compatibility evidence, not native Intel performance measurements.
 
 ## Models and installation
 
-`GigaAMModelCatalog` records SHA-256 checksums for the existing exports, in preference order:
+`GigaAMModelCatalog` records SHA-256 checksums for existing imports and the pinned public download. Existing complete imports retain their preference:
 
 | Export | Decoder | EOU threshold |
 | --- | --- | --- |
 | `v3_e2e_ctc_eou_v5.fp16.onnx` | BPE with punctuation, digits and Latin | 0.48 |
 | `v3_ctc_eou_v3.fp16.onnx` | Russian characters | 0.44 |
 | `v3_ctc_eou.fp16.onnx` | Russian characters | 0.5 |
+| `v3_e2e_ctc.int8.onnx` | BPE with punctuation, digits and Latin | No EOU head |
 
 The e2e export also needs `v3_e2e_ctc_vocab.txt` from the same model folder. The app's folder import copies and verifies these model files into its isolated Application Support namespace. It does not import other files from the source folder. `PICHI_GIGAAM_MODEL_DIR` can point development and tests to an existing local folder. The folder can contain the model directly or a subfolder named after its catalog ID.
 
 Meeting jobs can pin `installedModelFingerprint()` (export ID, model checksum, vocabulary checksum and frontend revision). `PichiGigaAMProvider(expectedModelFingerprint:)` rejects an installed export that differs from the scheduled one. The fingerprint contains no local path.
 
-The optimized weights include a private Pichi EOU head. Their download and distribution destination has not been published, so the app requires a verified local import and does not invent a public download URL. No weights, recordings or private training data are included in this package or Git.
+The default download is the community ONNX export from [istupakov/gigaam-v3-onnx](https://huggingface.co/istupakov/gigaam-v3-onnx), pinned to revision `322c3b29492673eb7d0b434bfa9dfb8653e34d02`. Its model has 224,893,347 bytes and SHA-256 `2e3fcb7a7b66030336fd10c2fcfb033bd1dc7e1bf238fe5cfd83b1d0cfc9d28e`; its 2,007-byte vocabulary uses the same hash as existing e2e imports. It derives from the official GigaAM v3 model and uses its MIT license, preserved in the app's Notices. It has no Pichi EOU head. The existing provider prepares missing files through the shared progressive downloader, validates size and checksums, atomically publishes a complete directory and then loads the native session. Onboarding and Settings share this preparation operation.
+
+Pichi's optimized EOU weights retain their verified local import path; their distribution destination is still unpublished. No weights, recordings or private training data are included in this package or Git.
 
 ## Inference contract
 
