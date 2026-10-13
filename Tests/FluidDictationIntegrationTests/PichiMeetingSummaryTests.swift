@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import CryptoKit
 import Foundation
 import XCTest
 
@@ -2161,6 +2162,15 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
         let requests = await transport.requests
         XCTAssertEqual(requests.count, 2, "Repair uses the existing extraction and one support review")
+        let prompt = try XCTUnwrap(requests.last?.messages.first?["content"] as? String)
+        XCTAssertTrue(prompt.contains("explicit unconditional first-person undertaking"))
+        XCTAssertTrue(prompt.contains("commitment with status agreed"))
+        XCTAssertTrue(prompt.contains("needs no separate acceptance or word of agreement"))
+        XCTAssertTrue(prompt.contains("Determine owner independently from acceptance status"))
+        XCTAssertTrue(prompt.contains("Preserve EVERY explicitly stated deadline"))
+        XCTAssertTrue(prompt.contains("including relative deadlines, prepositions and grammatical case"))
+        XCTAssertTrue(prompt.contains("Check EVERY citation separately"))
+        XCTAssertTrue(prompt.contains("another participant's different task even when another citation supports the item"))
         let input = try XCTUnwrap(requests.last?.messages.last?["content"] as? String)
         let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
         let sources = try ModelSource.catalog(from: fields)
@@ -2757,6 +2767,17 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertNotEqual(first.cacheIdentity, second.cacheIdentity)
         XCTAssertEqual(first.baseCacheIdentity, second.baseCacheIdentity)
         XCTAssertEqual(first.cacheIdentity.count, 64)
+    }
+
+    func testCommitmentReviewRevisionInvalidatesPriorPromptCacheIdentity() throws {
+        let configuration = self.configuration()
+        let priorPayload: [String: Any] = ["version": 19, "provider": configuration.providerID,
+            "model": configuration.modelID, "endpoint": configuration.baseURL, "language": configuration.language,
+            "execution": configuration.execution.identity, "connection": configuration.connectionOptions]
+        let priorData = try JSONSerialization.data(withJSONObject: priorPayload, options: [.sortedKeys])
+        let priorIdentity = SHA256.hash(data: priorData).map { String(format: "%02x", $0) }.joined()
+        XCTAssertNotEqual(configuration.baseCacheIdentity, priorIdentity,
+                          "A summary from the previous review prompt cannot be treated as current without regeneration")
     }
 
     @MainActor
