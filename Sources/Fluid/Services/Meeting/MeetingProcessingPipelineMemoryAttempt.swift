@@ -90,10 +90,18 @@ extension MeetingProcessingPipeline {
         // returned before capture, then each bounded window takes the same shared resource gate.
         let service = self.asrServiceProvider()
         try await DebugLogger.$pipelineID.withValue(request.attemptID.uuidString) {
+            let started = ProcessInfo.processInfo.systemUptime
+            var prepared = false
+            DebugLogger.shared.info("prepare_started session=\(session.id) backend=\(backendID.rawValue) model=\(configuration.asrModel)", source: "MeetingMemoryAudio")
+            defer {
+                let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1000)
+                DebugLogger.shared.info("prepare_finished success=\(prepared) elapsedMs=\(elapsed)", source: "MeetingMemoryAudio")
+            }
             try await service.withMeetingModelResidency(attemptID: request.attemptID, acceptsCompletedCancellation: { _ in false }) {
                 try await runtime.preparePCMResources(attemptID: request.attemptID, configuration: configuration)
                 _ = try await runtime.withPreparedASR(attemptID: request.attemptID, configuration: configuration) { _ in MeetingParakeetPhaseResult() }
             }
+            prepared = true
         }
         try Task.checkCancellation()
         self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor, runtime: runtime, redactor: redactor, checkpoint: checkpoint)
