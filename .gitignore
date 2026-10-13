@@ -264,6 +264,7 @@ builds/
 !/scripts/dev/macos-regression.py
 !/scripts/dev/asr-baseline-inputs.py
 !/scripts/dev/standalone-regression.py
+!/scripts/dev/local-api-live.py
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/

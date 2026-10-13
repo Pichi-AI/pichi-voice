@@ -74,7 +74,7 @@ A green portable check does not replace macOS validation. The initial setup does
 
 ## Reproducible macOS regression
 
-Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 39 current runners, including the native export, relative-date, contrast, command localization and Settings owned-copy probes. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
+Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 40 current runners, including the native export, relative-date, contrast, command localization, Settings owned-copy and Local API harness self-test probes. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
 
 Full runs require an isolated worktree, macOS and full Xcode. The runner prevents simultaneous standalone runs in one worktree. `--list` lists the names without starting native probes and is portable. Narrow a repeat run with repeated `--only NAME` options:
 
@@ -88,6 +88,24 @@ Each probe owns a separate process session. INT and TERM trigger bounded TERM/KI
 The update prompt probe can activate test UI. It is recorded as `SKIP` by default and runs only with the explicit `--include-ui` flag. Selecting it with `--only update_prompt` does not implicitly enable UI. Skipped probes are never counted as passes, and an all-skipped run returns failure.
 
 Every started suite keeps `summary.json`, `summary.txt` and one combined stdout/stderr log per selected probe under a unique ignored `.build/standalone-regression/` directory. Reports include the exact revision, dirty/clean state, interpreter, argv, exit code, duration and PASS/FAIL/SKIP accounting. Any failed probe, missing script, launch error or interrupted run returns nonzero. These counts describe standalone probes, not the assertions reported inside each probe or full application XCTest coverage. Setup errors stop before starting the suite. Verify runner behavior portably with `python3 -S Tests/test_standalone_regression.py`.
+
+The registered `local_api_live_harness` probe runs portable harness self-tests with fake sockets and synthetic metadata. It performs no live HTTP or application inference. The separate [local-api-live.py](../../scripts/dev/local-api-live.py) command defaults to `DRY_RUN`; only `--run-live` permits requests against a caller-selected, already running frozen app:
+
+```bash
+python3 -S scripts/dev/local-api-live.py --run-live \
+  --endpoint http://127.0.0.1:47733 \
+  --app-pid "$pichi_frozen_pid" --app-bundle "$pichi_frozen_bundle" \
+  --bundle-id "$pichi_frozen_bundle_id" \
+  --synthetic-audio "$pichi_synthetic_wav" --timeout 120 \
+  --expect-provider "$pichi_expected_provider" \
+  --expect-text-contains "$pichi_synthetic_phrase"
+```
+
+Supply absolute paths. `--synthetic-audio` is an explicit attestation that the regular PCM WAV contains only synthetic speech, never a personal recording. The file must be 1-2 channels, 8-48 kHz, at most 30 seconds and 16 MiB. The optional provider and phrase expectations compare in memory without rewriting model output; omit them for provider-neutral shape checks. The harness does not launch the app, enable its API, change preferences, select/download models or grant permissions. Enable and validate the API through the authorized frozen-app UI workflow first.
+
+Before every request and after its response, the harness verifies the supplied PID's native executable path and exclusive ownership of the TCP listener; bundle metadata must match the explicit bundle identifier, and health must match its version. Only literal loopback addresses are accepted, without DNS, proxies, credentials or redirects. The ten cases cover socket health, unknown route, method error, malformed HTTP/JSON, invalid Content-Length, missing/invalid audio and one path-based transcription. Successful transcription requires nonempty text/provider, finite confidence, and a sample count matching the caller's fixture. No history, meeting, dictionary or postprocess route is accessed. There is no public HTTP cancellation route; existing lease/connection tests cover that internal contract separately.
+
+Non-inference requests have a total deadline of at most 5 seconds; transcription defaults to 120 seconds and cannot exceed 180. Headers are limited to 8 KiB and response bodies to 64 KiB. The first failure stops later requests. Empty, incomplete, failed or skipped runs cannot report live success. A private directory under ignored `.build/local-api-live-*/` retains a compact `summary.json` with case/status/counts and fixed failure codes. It excludes request/response bodies, transcripts, expected phrases, fixture/bundle paths, error descriptions and credentials. A safe default run and a passing harness self-test do not prove live API E2E.
 
 The separate `FluidASRBaseline` scheme has an explicit fixture staging contract and keeps Xcode user script sandboxing enabled. Its default declarations copy only the tracked public placeholder. To bundle an authorized local fixture directory, prepare private input/output filelists and a manifest under the current worktree's ignored `.build/asr-baseline-inputs/`:
 
