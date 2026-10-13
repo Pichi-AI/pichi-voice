@@ -252,16 +252,31 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
             localModelPath: path, usesStablePromptPrefixKVCache: false, usesFluid1Boost: false, contextTokenLimit: 4096
         )
         let context = PrivateAIIntegrationService.AppContext(appName: "Synthetic test", bundleID: "test.s1-mini", windowTitle: "", appVersion: nil)
-        let inputs = [
-            "so um i need to like send the the report by uh friday no wait make that thursday",
-            "ну эээ я хочу отправить отчёт в пятницу нет лучше в четверг Ёжик живёт у ёлки"
+        let cases: [(input: String, required: [String], forbidden: [String])] = [
+            ("so um i need to like send the the report by uh friday no wait make that thursday",
+             [#"\bthursday\b"#, #"\breport\b"#], [#"\bfriday\b"#]),
+            ("ну эээ я хочу отправить отчёт в пятницу нет лучше в четверг Ёжик живёт у ёлки",
+             ["четверг", "отч[её]т", "[её]жик", "[её]лк"], ["пятниц"]),
+            ("um do not approve invoice 48217 for 73 dollars",
+             [#"\b(?:do not|don['’]t)\b"#, #"\b48217\b"#, #"\b73\b"#], []),
+            ("ну не отправляй счёт 48217 на 73 рубля",
+             ["не отправляй", #"\b48217\b"#, #"\b73\b"#], []),
         ]
         do {
-            for input in inputs {
+            for fixture in cases {
+                let input = fixture.input
                 let result = try await provider.enhanceDictation(input, runtime: runtime, context: context, maxOutputTokens: 256)
                 XCTAssertFalse(result.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 XCTAssertFalse(result.outputText.contains("<think>"))
                 XCTAssertFalse(result.outputText.contains("<|im_start|>"))
+                for pattern in fixture.required {
+                    XCTAssertNotNil(result.outputText.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
+                                    "Cleanup lost required meaning or literal data: \(pattern)")
+                }
+                for pattern in fixture.forbidden {
+                    XCTAssertNil(result.outputText.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
+                                 "Cleanup retained the superseded value: \(pattern)")
+                }
                 print("S1-mini synthetic input: \(input)\nS1-mini synthetic output: \(result.outputText)")
                 #if !S1_MINI_STANDALONE_TESTS
                 let attachment = XCTAttachment(string: "INPUT:\n\(input)\nOUTPUT:\n\(result.outputText)")
