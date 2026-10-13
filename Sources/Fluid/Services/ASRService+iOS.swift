@@ -29,6 +29,10 @@ final class ASRService: ObservableObject {
     private var residentModelID: String?
     private var modelOperation: Task<Void, Error>?
     private var operationID: UUID?
+    private var residentReleaseTask: Task<Void, Never>?
+    #if DEBUG
+    var modelProvidersForTesting: [SettingsStore.SpeechModel: any TranscriptionProvider] = [:]
+    #endif
 
     private lazy var preparationOwner = MeetingASRPreparationOwner(
         isActiveLease: { [weak self] in self?.activityLease == $0 },
@@ -36,10 +40,7 @@ final class ASRService: ObservableObject {
         retireDictationResources: { [weak self] lease in
             guard let self, self.activityLease == lease else { throw CancellationError() }
             await self.executor.cancelAndAwaitPending()
-            await self.residentProvider?.releaseResidency()
-            self.residentProvider = nil
-            self.residentModelID = nil
-            self.isAsrReady = false
+            await self.releaseResidentProvider()
         },
         makeProvider: { try PichiMeetingProviderFactory.make($0) },
         prepareProvider: { provider, _, progress in
@@ -64,9 +65,19 @@ final class ASRService: ObservableObject {
         return residentProvider
     }
 
-    func modelIsInstalled(_ model: SettingsStore.SpeechModel) async throws -> Bool { model.isInstalled }
+    func modelIsInstalled(_ model: SettingsStore.SpeechModel) async throws -> Bool { self.installedModelExists(model) }
+
+    private func installedModelExists(_ model: SettingsStore.SpeechModel) -> Bool {
+        #if DEBUG
+        if let injected = self.modelProvidersForTesting[model] { return injected.modelsExistOnDisk() }
+        #endif
+        return model.isInstalled
+    }
 
     private func provider(for model: SettingsStore.SpeechModel) throws -> any TranscriptionProvider {
+        #if DEBUG
+        if let injected = self.modelProvidersForTesting[model] { return injected }
+        #endif
         guard let language = PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue) else {
             throw MeetingModelResidencyError.unsupportedProvider
         }
@@ -84,10 +95,7 @@ final class ASRService: ObservableObject {
         await self.scope.cancelAndWait()
         if let token = self.preparationOwner.currentClaimToken { await self.preparationOwner.release(token) }
         await self.executor.cancelAndAwaitPending()
-        await self.residentProvider?.releaseResidency()
-        self.residentProvider = nil
-        self.residentModelID = nil
-        self.isAsrReady = false
+        await self.releaseResidentProvider()
         self.activityLease = nil
         self.activeExclusiveActivity = nil
         self.deferredRelease = nil
@@ -119,10 +127,7 @@ final class ASRService: ObservableObject {
         guard self.activityLease == lease, lease.activity == .meeting, self.modelOperation == nil else {
             throw MeetingASRPreparationError.invalidActivityLease
         }
-        await self.residentProvider?.releaseResidency()
-        self.residentProvider = nil
-        self.residentModelID = nil
-        self.isAsrReady = false
+        await self.releaseResidentProvider()
         try Task.checkCancellation()
     }
 
@@ -135,22 +140,85 @@ final class ASRService: ObservableObject {
     }
 
     func downloadModel(_ model: SettingsStore.SpeechModel, progressHandler: ((Double) -> Void)? = nil) async throws {
-        let lease = try self.acquireExclusiveActivity(.modelMaintenance)
-        defer { self.releaseExclusiveActivity(lease) }
+        try await self.prepareModel(model, retainingProvider: false, progressHandler: progressHandler)
+    }
+
+    /// First recording uses the same installation/preparation owner as the model settings.
+    /// Selection is a value snapshot; an intervening change cannot silently start another model.
+    func prepareSelectedModelForRecording() async throws {
+        try Task.checkCancellation()
+        guard !self.isTerminating else { throw MeetingModelResidencyError.terminating }
+        let model = self.settings.selectedSpeechModel
+        if !self.installedModelExists(model) {
+            try await self.downloadModel(model)
+        } else {
+            try await self.prepareModel(model, retainingProvider: false, expectedSelection: model)
+        }
+        try Task.checkCancellation()
+        guard !self.isTerminating, self.settings.selectedSpeechModel == model else { throw CancellationError() }
+        guard self.installedModelExists(model) else { throw MeetingProcessingError.modelUnavailable }
+    }
+
+    /// One operation owns installation and readiness, including retirement and joined cleanup.
+    /// A restoration can borrow its existing meeting lease only inside the residency owner's
+    /// exact grant. Ordinary calls must acquire their own maintenance lease before model work.
+    private func prepareModel(_ model: SettingsStore.SpeechModel, retainingProvider: Bool,
+                              expectedSelection: SettingsStore.SpeechModel? = nil,
+                              progressHandler: ((Double) -> Void)? = nil) async throws {
+        try Task.checkCancellation()
+        guard !self.isTerminating else { throw MeetingModelResidencyError.terminating }
+        guard self.modelOperation == nil, !self.preparationOwner.isClaimed, !self.preparationOwner.isDraining else {
+            throw MeetingModelResidencyError.busy
+        }
+        let lease: ASRActivityLease
+        let ownsLease: Bool
+        if retainingProvider, let existing = self.activityLease, existing.activity == .meeting,
+           MeetingModelContext.grant != nil {
+            lease = existing
+            ownsLease = false
+        } else {
+            lease = try self.acquireExclusiveActivity(.modelMaintenance)
+            ownsLease = true
+        }
+        defer { if ownsLease { self.releaseExclusiveActivity(lease) } }
         let admission = try self.residency.beginOperation(owner: "speech", modelID: model.id)
         defer { self.residency.endOperation(admission) }
         let provider = try self.provider(for: model)
         let id = UUID()
         self.operationID = id
         self.downloadingModelId = model.id
-        let task = Task { @MainActor in
-            try await SpeechModelPreparationOperation.prepare(provider: provider) { [weak self] update in
-                Task { @MainActor in
-                    guard let self, self.operationID == id else { return }
-                    self.modelPreparationPhase = update.phase
-                    self.downloadProgress = update.fractionCompleted
-                    if let progress = update.fractionCompleted { progressHandler?(progress) }
+        self.downloadProgress = nil
+        self.modelPreparationPhase = .preparingDownload
+        let task = Task { @MainActor [self] in
+            var ownsProvider = true
+            do {
+                try self.recheckModelOperation(id: id, lease: lease, expectedSelection: expectedSelection)
+                await self.executor.cancelAndAwaitPending()
+                await self.releaseResidentProvider()
+                try self.recheckModelOperation(id: id, lease: lease, expectedSelection: expectedSelection)
+                try await SpeechModelPreparationOperation.prepare(provider: provider) { [weak self] update in
+                    Task { @MainActor in
+                        guard let self, self.operationID == id, !self.isTerminating,
+                              self.modelOperation?.isCancelled == false else { return }
+                        self.modelPreparationPhase = update.phase
+                        self.downloadProgress = update.fractionCompleted
+                        if let progress = update.fractionCompleted { progressHandler?(progress) }
+                    }
                 }
+                try self.recheckModelOperation(id: id, lease: lease, expectedSelection: expectedSelection)
+                guard provider.isReady, provider.modelsExistOnDisk() else { throw MeetingProcessingError.modelUnavailable }
+                ownsProvider = false
+                if retainingProvider {
+                    self.residentProvider = provider
+                    self.residentModelID = model.id
+                    self.isAsrReady = true
+                } else {
+                    await Task { @MainActor in await provider.releaseResidency() }.value
+                    try self.recheckModelOperation(id: id, lease: lease, expectedSelection: expectedSelection)
+                }
+            } catch {
+                if ownsProvider { await Task { @MainActor in await provider.releaseResidency() }.value }
+                throw error
             }
         }
         self.modelOperation = task
@@ -161,29 +229,47 @@ final class ASRService: ObservableObject {
                 self.downloadingModelId = nil
                 self.modelPreparationPhase = nil
                 self.downloadProgress = nil
-                self.modelsExistOnDisk = self.settings.selectedSpeechModel.isInstalled
+                self.modelsExistOnDisk = self.installedModelExists(self.settings.selectedSpeechModel)
             }
         }
         do {
             try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
-            await provider.releaseResidency()
+            try self.recheckModelOperation(id: id, lease: lease, expectedSelection: expectedSelection)
         } catch {
-            await provider.releaseResidency()
+            if retainingProvider, self.operationID == id { await self.releaseResidentProvider() }
             throw error
         }
     }
 
-    func activateModel(_ model: SettingsStore.SpeechModel) async throws {
-        guard self.activityLease == nil, self.modelOperation == nil, !self.residency.isExclusive else { throw MeetingModelResidencyError.busy }
-        guard model.isInstalled else { throw MeetingProcessingError.modelUnavailable }
-        let lease = try self.acquireExclusiveActivity(.modelMaintenance)
-        defer { self.releaseExclusiveActivity(lease) }
-        await self.residentProvider?.releaseResidency()
+    private func recheckModelOperation(id: UUID, lease: ASRActivityLease,
+                                       expectedSelection: SettingsStore.SpeechModel?) throws {
         try Task.checkCancellation()
-        guard self.activityLease == lease else { throw CancellationError() }
+        guard !self.isTerminating, self.operationID == id, self.activityLease == lease,
+              expectedSelection == nil || self.settings.selectedSpeechModel == expectedSelection else { throw CancellationError() }
+    }
+
+    /// Clear published references before suspension, with one joined drain for all callers.
+    private func releaseResidentProvider() async {
+        if let task = self.residentReleaseTask { await task.value; return }
+        let provider = self.residentProvider
         self.residentProvider = nil
         self.residentModelID = nil
         self.isAsrReady = false
+        guard let provider else { return }
+        let task = Task { @MainActor in await provider.releaseResidency() }
+        self.residentReleaseTask = task
+        await task.value
+        self.residentReleaseTask = nil
+    }
+
+    func activateModel(_ model: SettingsStore.SpeechModel) async throws {
+        guard self.activityLease == nil, self.modelOperation == nil, !self.residency.isExclusive else { throw MeetingModelResidencyError.busy }
+        guard self.installedModelExists(model) else { throw MeetingProcessingError.modelUnavailable }
+        let lease = try self.acquireExclusiveActivity(.modelMaintenance)
+        defer { self.releaseExclusiveActivity(lease) }
+        await self.releaseResidentProvider()
+        try Task.checkCancellation()
+        guard self.activityLease == lease else { throw CancellationError() }
         self.settings.selectedSpeechModel = model
         if let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue) {
             self.settings.meetingTranscriptionBackendID = descriptor.id
@@ -217,17 +303,16 @@ final class ASRService: ObservableObject {
         if self.residentModelID == model.id {
             self.residentProvider = nil; self.residentModelID = nil; self.isAsrReady = false
         }
-        self.modelsExistOnDisk = self.settings.selectedSpeechModel.isInstalled
+        self.modelsExistOnDisk = self.installedModelExists(self.settings.selectedSpeechModel)
     }
 
     func ensureAsrReady() async throws {
+        try Task.checkCancellation()
+        guard !self.isTerminating else { throw MeetingModelResidencyError.terminating }
         let model = self.settings.selectedSpeechModel
-        if self.residentModelID == model.id, self.residentProvider?.isReady == true { return }
-        guard model.isInstalled else { throw MeetingProcessingError.modelUnavailable }
-        let provider = try self.provider(for: model)
-        do { try await SpeechModelPreparationOperation.prepare(provider: provider, progress: { _ in }) }
-        catch { await provider.releaseResidency(); throw error }
-        self.residentProvider = provider; self.residentModelID = model.id; self.isAsrReady = true
+        if self.residentModelID == model.id, self.residentProvider?.isReady == true,
+           self.modelOperation == nil, !self.residency.isExclusive, self.activityLease == nil { return }
+        try await self.prepareModel(model, retainingProvider: true, expectedSelection: model)
     }
 
     func meetingResidencyParticipant() -> MeetingModelParticipant {
@@ -236,10 +321,10 @@ final class ASRService: ObservableObject {
             return self.residentModelID.map { MeetingResidentModel(id: $0, configuration: $0) }
         }, suspend: { [weak self] in
             await self?.executor.cancelAndAwaitPending()
-            await self?.residentProvider?.releaseResidency()
-            self?.residentProvider = nil; self?.residentModelID = nil; self?.isAsrReady = false
+            await self?.releaseResidentProvider()
         }, restore: { [weak self] model in
-            guard let self, self.settings.selectedSpeechModel.id == model.id, self.settings.selectedSpeechModel.isInstalled else { return }
+            guard let self, self.settings.selectedSpeechModel.id == model.id,
+                  self.installedModelExists(self.settings.selectedSpeechModel) else { return }
             try await self.ensureAsrReady()
         })
     }
