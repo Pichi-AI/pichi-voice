@@ -480,42 +480,17 @@ struct CustomDictionaryView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     ForEach(self.drawerEntries) { entry in
-                        HStack(alignment: .center, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.replacement).font(self.theme.typography.bodyStrong)
-                                Text(entry.triggers.joined(separator: ", "))
-                                    .font(self.theme.typography.caption)
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                                    .lineLimit(3)
-                                Button("Test word") {
-                                    self.wizardSavedWord = entry.replacement
-                                    self.wizardStep = .saved
-                                    self.isWordDrawerPresented = false
-                                }.fluidGlassAction()
-                                    .disabled(self.asr.isRunning || self.isTrainingStarting || self.isTrainingProcessing)
-                                    .accessibilityLabel("Test \(entry.replacement)")
-                            }
-                            Spacer()
-                            Button { self.editingEntry = entry } label: {
-                                FluidPencilShape()
-                                    .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
-                                    .frame(width: 20, height: 20)
-                                    .frame(width: 22, height: 22)
-                                    .contentShape(Rectangle())
-                            }
-                            .fluidGlassAction(circular: true)
-                            .help("Edit word")
-                            .accessibilityLabel("Edit \(entry.replacement)")
-                            Button(role: .destructive) { self.drawerDeletion = entry } label: {
-                                Image(systemName: "trash")
-                                    .font(.fluidSystem(size: 15, weight: .regular))
-                                    .frame(width: 22, height: 22)
-                                    .contentShape(Rectangle())
-                            }
-                            .fluidGlassAction(circular: true)
-                            .help("Delete word")
-                            .accessibilityLabel("Delete \(entry.replacement)")
-                        }
+                        DictionaryDrawerEntryRow(
+                            entry: entry,
+                            isTestDisabled: self.asr.isRunning || self.isTrainingStarting || self.isTrainingProcessing,
+                            onTest: {
+                                self.wizardSavedWord = entry.replacement
+                                self.wizardStep = .saved
+                                self.isWordDrawerPresented = false
+                            },
+                            onEdit: { self.editingEntry = entry },
+                            onDelete: { self.drawerDeletion = entry }
+                        )
                         .contextMenu {
                             Button("Edit…") { self.editingEntry = entry }
                             Button("Remove word", role: .destructive) { self.drawerDeletion = entry }
