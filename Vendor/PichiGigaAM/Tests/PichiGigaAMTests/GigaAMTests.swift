@@ -4,6 +4,19 @@ import XCTest
 @testable import PichiGigaAM
 
 final class GigaAMTests: XCTestCase {
+    func testCompactPublicExportPinsCompleteArtifactsAndOptionalEOU() {
+        let descriptor = GigaAMModelCatalog.downloadableModel
+        XCTAssertEqual(descriptor.modelFile, "v3_e2e_ctc.int8.onnx")
+        XCTAssertEqual(descriptor.modelByteCount, 224_893_347)
+        XCTAssertEqual(descriptor.vocabularyByteCount, 2_007)
+        XCTAssertEqual(descriptor.modelSHA256, "2e3fcb7a7b66030336fd10c2fcfb033bd1dc7e1bf238fe5cfd83b1d0cfc9d28e")
+        XCTAssertEqual(descriptor.vocabularySHA256, "142de7570b3de5b3035ce111a89c228e80e6085273731d944093ddf24fa539cd")
+        XCTAssertEqual(descriptor.downloadBaseURL?.scheme, "https")
+        XCTAssertTrue(descriptor.downloadBaseURL!.path.contains("322c3b29492673eb7d0b434bfa9dfb8653e34d02"))
+        XCTAssertNil(descriptor.endOfUtteranceThreshold, "The public conversion has no private endpoint head")
+        XCTAssertEqual(GigaAMModelCatalog.models.last, descriptor)
+    }
+
     func testSilenceFrontendShapeAndFloor() throws {
         let frontend = try GigaAMFrontend()
         let output = frontend.features([Float](repeating: 0, count: 16_000))

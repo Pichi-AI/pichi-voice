@@ -17,7 +17,7 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     private let download: Download
 
     init(directory: URL? = nil, downloadDescriptor: GigaAMModelDescriptor = GigaAMModelCatalog.downloadableModel,
-         download: @escaping Download = Self.downloadArtifact) {
+         download: @escaping Download = PichiGigaAMModelStore.downloadArtifact) {
         self.overriddenDirectory = directory
         self.downloadDescriptor = downloadDescriptor
         self.download = download
@@ -61,8 +61,9 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
         try self.installedModel().descriptor.fingerprint
     }
 
-    /// Initial preparation downloads only the registered public export. Explicit external
-    /// model directories remain read-only, and complete local imports keep their priority.
+    /// Initial preparation downloads only the registered public export. User-configured
+    /// external directories remain read-only; injected destinations are isolated test/owned
+    /// stores. Complete local imports keep their priority.
     func ensureInstalled(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
         try Task.checkCancellation()
         if let installed = GigaAMModelCatalog.discover(in: self.directory) { return installed }
@@ -129,7 +130,9 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     }
 
     private static func validateOwnedDirectory(_ directory: URL) throws {
-        guard directory.resolvingSymlinksInPath().standardizedFileURL == directory.standardizedFileURL else {
+        // Foundation drops a nonexistent directory's trailing slash when resolving it.
+        // Compare filesystem paths so a new catalog target is still a valid destination.
+        guard directory.resolvingSymlinksInPath().standardizedFileURL.path == directory.standardizedFileURL.path else {
             throw GigaAMError.incompatibleModel
         }
     }
@@ -233,7 +236,6 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         self.lifecycleGeneration += 1
         let generation = self.lifecycleGeneration
         self.runtime = runtime
-        progressHandler?(.loading)
         let task = Task {
             let model = if self.expectedModelFingerprint != nil {
                 try self.modelStore.installedModel()
