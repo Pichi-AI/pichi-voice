@@ -445,7 +445,7 @@ struct CommandModeView: View {
                         Image(systemName: self.ownsASRRecording ? "mic.fill" : "mic")
                             .font(.fluidSystem(size: 20))
                             .frame(width: 24, height: 24)
-                            .foregroundStyle(self.ownsASRRecording ? Color.red : self.theme.palette.secondaryText)
+                            .foregroundStyle(self.ownsASRRecording ? self.theme.palette.readableText(.red) : self.theme.palette.secondaryText)
                     }
                     .fluidGlassAction(circular: true, quiet: true)
                     .disabled(self.isSubmissionPending || self.service.isProcessing || self.service.pendingCommand != nil || self.isASRStartPending || self.isASRStopPending || (self.asr.isRunning && !self.ownsASRRecording))
@@ -457,7 +457,6 @@ struct CommandModeView: View {
                         Image(systemName: self.ownsASRRecording ? "stop.fill" : "arrow.up")
                             .font(.fluidSystem(size: 17, weight: .semibold))
                             .frame(width: 24, height: 24)
-                            .foregroundStyle(self.theme.palette.foreground(on: self.theme.palette.primaryText))
                     }
                     .fluidGlassAction(prominent: true, circular: true, tone: self.theme.palette.primaryText)
                     .disabled(self.ownsASRRecording ? self.isASRStopPending : !self.canSubmitCommand)

@@ -220,12 +220,12 @@ extension AIEnhancementSettingsView {
                             .font(.fluidSystem(.caption))
                             .fontWeight(.medium)
                     }
-                    .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.accentText : self.theme.palette.secondaryText)
+                    .foregroundStyle(self.viewModel.showHelp ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(
                         Capsule()
-                            .fill(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.12) : self.theme.palette.cardBackground.opacity(0.8))
+                            .fill(self.theme.palette.elevatedCardBackground)
                             .overlay(
                                 Capsule()
                                     .stroke(self.viewModel.showHelp ? self.theme.palette.accent.opacity(0.3) : self.theme.palette.cardBorder.opacity(0.4), lineWidth: 1)
@@ -321,7 +321,7 @@ extension AIEnhancementSettingsView {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(self.theme.palette.accent.opacity(0.06))
+                .fill(self.theme.palette.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(self.theme.palette.accent.opacity(0.2), lineWidth: 1)
@@ -334,11 +334,11 @@ extension AIEnhancementSettingsView {
         HStack(alignment: .center, spacing: 10) {
             ZStack {
                 Circle()
-                    .fill(self.theme.palette.accent.opacity(0.15))
+                    .fill(self.theme.palette.elevatedCardBackground)
                     .frame(width: 22, height: 22)
                 Text(number)
                     .font(.fluidSystem(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(self.theme.palette.accentText)
+                    .foregroundStyle(self.theme.palette.primaryText)
             }
             Image(systemName: icon)
                 .font(.fluidSystem(size: 11))

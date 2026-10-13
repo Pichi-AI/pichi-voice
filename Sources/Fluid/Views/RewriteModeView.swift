@@ -230,7 +230,7 @@ struct RewriteModeView: View {
                 Button(action: self.toggleRecording) {
                     Image(systemName: self.asr.isRunning ? "stop.circle.fill" : "mic.circle.fill")
                         .font(.fluidSystem(.title2))
-                        .foregroundStyle(self.asr.isRunning ? Color.red : self.theme.palette.accentText)
+                        .foregroundStyle(self.asr.isRunning ? self.theme.palette.readableText(.red) : self.theme.palette.accentText)
                 }
                 .buttonStyle(.plain)
 

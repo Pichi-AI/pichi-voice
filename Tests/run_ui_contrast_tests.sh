@@ -59,6 +59,20 @@ assert 'Button(role: role, action: action)' in glass, 'Native Button must retain
 foreground_lines = [line.strip() for line in secondary.splitlines() if line.strip().startswith('let foreground = ')]
 assert len(foreground_lines) == 1
 secondary_foreground = foreground_lines[0].replace('configuration.role', 'self.role')
+command_file = 'Sources/Fluid/Views/CommandModeView.swift'
+command_glyph = snippet(command_file,
+    '                        Image(systemName: self.ownsASRRecording ? "stop.fill" : "arrow.up")',
+    '                    }\n                    .fluidGlassAction(prominent: true')
+command_style = '.fluidGlassAction(prominent: true, circular: true, tone: self.theme.palette.primaryText)'
+assert command_style in Path(command_file).read_text()
+config_file = 'Sources/Fluid/UI/AISettingsView+AIConfiguration.swift'
+help_action = snippet(config_file,
+    '                Button(action: { self.viewModel.showHelp.toggle() })',
+    '                .buttonStyle(.plain)') + '                .buttonStyle(.plain)\n'
+help_method = snippet(config_file, '    func helpStep(', '    var providerStepContent:')
+help_number = help_method[help_method.index('            ZStack {'):help_method.index('            Image(systemName: icon)')]
+words = snippet('Sources/Fluid/UI/StatsShareCard.swift',
+    '            Text(self.content.totalWords.formatted())', '            Text("words dictated")')
 def fallback(control):
     assert control.count('.fluidGlassAction(prominent: true)') == 1
     return control.replace('.fluidGlassAction(prominent: true)', '.buttonStyle(AccentButtonStyle())')
@@ -87,6 +101,22 @@ Path(sys.argv[1]).write_text('import SwiftUI\n'
     '    private func onClose(_ destination: Int) {}\n'
     '    var body: some View {\n' + explore + '\n    }\n}\n')
 with Path(sys.argv[1]).open('a') as output:
+    output.write('struct ProductionCommandGlyphFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n'
+        '    private let ownsASRRecording = false\n'
+        '    var body: some View {\n        Button {} label: {\n' + command_glyph + '\n        }\n'
+        '        ' + command_style + '\n        .disabled(true)\n    }\n}\n')
+    output.write('struct ProductionHelpActionFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n'
+        '    private struct Model { var showHelp = true }; @State private var viewModel = Model()\n'
+        '    var body: some View {\n' + help_action + '\n    }\n}\n')
+    output.write('struct ProductionHelpNumberFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n    private let number = "3"\n'
+        '    var body: some View {\n' + help_number + '\n    }\n}\n')
+    output.write('struct ProductionWordMetricFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n'
+        '    private struct Content { let totalWords = 12345 }; private let content = Content()\n'
+        '    var body: some View {\n' + words + '\n    }\n}\n')
     output.write('struct CopyToastFixture: View {\n'
         '    @Environment(\\.theme) private var theme\n'
         '    var body: some View {\n' + toast + '\n    }\n}\n')

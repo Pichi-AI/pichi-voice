@@ -121,9 +121,7 @@ struct StatsShareCard: View {
             Text(self.content.totalWords.formatted())
                 .font(.fluidSystem(size: 76, weight: .bold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(
-                    LinearGradient(colors: [self.theme.palette.primaryText, self.theme.palette.accentText], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
+                .foregroundStyle(self.theme.palette.primaryText)
             Text("words dictated")
                 .font(.fluidSystem(size: 17, weight: .semibold))
                 .foregroundStyle(self.theme.palette.primaryText)

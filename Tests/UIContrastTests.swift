@@ -143,6 +143,7 @@ struct UIContrastTests {
         let savedPaleAccent = "#A98CFF"
         var checks = 0
         var actionChecks = 0
+        var reviewChecks = 0
         for (name, path) in packages {
             let package = try BrandPackage.decode(Data(contentsOf: URL(fileURLWithPath: path)))
             for scheme: ColorScheme in [.light, .dark] {
@@ -249,6 +250,10 @@ struct UIContrastTests {
                                 actionChecks += 1
                             }
                             let disabledBackground = self.components(theme.palette.elevatedCardBackground)
+                            try self.verify(ProductionCommandGlyphFixture(), name: "disabled-command-glyph-\(suffix)",
+                                theme: theme, scheme: scheme, textBackground: disabledBackground, directory: directory,
+                                expectedForeground: theme.palette.secondaryText, requiredContrast: 3)
+                            reviewChecks += 1
                             for (controlName, control) in [
                                 ("glass", AnyView(Button("Continue") {}.fluidGlassAction(prominent: true, tone: theme.palette.accent).disabled(true))),
                                 ("fallback", AnyView(Button("Continue") {}.buttonStyle(AccentButtonStyle(tone: theme.palette.accent)).disabled(true))),
@@ -284,6 +289,29 @@ struct UIContrastTests {
         }
         print("Actual delete, active badge and metric foreground: \(checks) native rendering checks passed")
         print("Actual fallback actions, toast and preserved semantic ink: \(actionChecks) rendering checks passed")
+        for (name, background, ink, accent) in [("gray-accent", "#FFFFFF", "#000000", "#949494"),
+                                                ("opposite-inks", "#606060", "#FFFFFF", "#000000")] {
+            let backgrounds: Set<String> = ["windowBackground", "contentBackground", "sidebarBackground",
+                                           "cardBackground", "elevatedCardBackground", "toolbarBackground"]
+            let colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, backgrounds.contains($0) ? background : ink) })
+            let profile = BrandProfile(appName: "Contrast", meetingName: "Meet", assistantName: "AI", tagline: "Synthetic fixture",
+                                       accentLight: accent, accentDark: accent, website: "https://example.invalid", support: "https://example.invalid")
+            let palette = BrandPalette(colors: colors)
+            let package = try BrandPackage.decode(BrandPackage(profile: profile, theme: BrandTheme(light: palette, dark: palette)).encoded())
+            for scheme: ColorScheme in [.light, .dark] {
+                let theme = AppTheme.adaptive(accent: Color(hex: accent)!, colorScheme: scheme, package: package)
+                let suffix = "\(name)-\(scheme == .dark ? "dark" : "light")"
+                for (controlName, control) in [("help", AnyView(ProductionHelpActionFixture())),
+                                               ("number", AnyView(ProductionHelpNumberFixture())),
+                                               ("words", AnyView(ProductionWordMetricFixture()))] {
+                    try self.verify(control, name: "review-\(controlName)-\(suffix)", theme: theme, scheme: scheme,
+                        textBackground: self.components(theme.palette.cardBackground), directory: directory,
+                        expectedForeground: theme.palette.primaryText)
+                    reviewChecks += 1
+                }
+            }
+        }
+        print("Production disabled command glyph, Help and word metric: \(reviewChecks) review regression rendering checks passed")
         self.verifyConstruction()
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
