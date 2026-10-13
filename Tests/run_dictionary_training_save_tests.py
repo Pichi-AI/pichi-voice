@@ -28,6 +28,12 @@ entry_start = settings.rfind('\n', 0, settings.index('struct CustomDictionaryEnt
 entry = settings[entry_start:settings.index('    var vocabularyBoostingEnabled:')]
 swift = r'''
 import Foundation
+// The production localizer can read preferences, but this control-flow probe must not.
+nonisolated final class UserDefaults: @unchecked Sendable {
+    static let standard = UserDefaults()
+    func string(forKey key: String) -> String? { nil }
+    func set(_ value: Any?, forKey key: String) { fatalError("Unexpected preference write") }
+}
 final class SettingsStore: @unchecked Sendable {
     static let shared = SettingsStore()
     var customDictionaryEntries: [CustomDictionaryEntry] = []
@@ -348,7 +354,11 @@ actor SnapshotReader {
 with tempfile.TemporaryDirectory(prefix="fluidvoice-dictionary-regression-") as directory:
     root = Path(directory)
     (root / 'dictionary-proof.swift').write_text(swift)
-    subprocess.run(['xcrun', 'swiftc', '-parse-as-library', str(root/'dictionary-proof.swift'), '-o', str(root/'dictionary-proof')], check=True, timeout=60)
+    subprocess.run([
+        'xcrun', 'swiftc', '-parse-as-library',
+        str(repo/'Sources/Fluid/Localization/PichiLocalization.swift'),
+        str(root/'dictionary-proof.swift'), '-o', str(root/'dictionary-proof'),
+    ], check=True, timeout=60)
     subprocess.run([str(root/'dictionary-proof')], check=True, timeout=60)
     (root / 'dictionary-isolation.swift').write_text(isolation_swift)
     subprocess.run([

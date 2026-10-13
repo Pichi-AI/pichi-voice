@@ -105,6 +105,7 @@ enum AnalyticsInsertionOutcome: String {
     case targetRestoreFailed = "target_restore_failed"
     case noEditableTarget = "no_editable_target"
     case pasteNotLanded = "paste_not_landed"
+    case partialInsertion = "partial_insertion"
 }
 
 nonisolated struct AnalyticsModelDescriptor: Equatable, Sendable {

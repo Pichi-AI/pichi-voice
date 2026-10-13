@@ -75,7 +75,7 @@ extension AIEnhancementSettingsView {
                 Spacer()
                 Button("Add Provider", systemImage: "plus") { self.showingAddProviderSheet = true }
                     .fluidGlassAction()
-                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                    .disabled(self.viewModel.isSavingProviderCredentials || self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
             }
             ForEach(self.viewModel.cachedAddedProviderItems) { provider in
                 let item = ProviderItem(id: provider.id, name: provider.name, isBuiltIn: provider.isBuiltIn)
@@ -111,7 +111,7 @@ extension AIEnhancementSettingsView {
                         self.managedExternalProviderID = provider.id
                     }
                     .fluidGlassAction()
-                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                    .disabled(self.viewModel.isSavingProviderCredentials || self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
                 }
                 .padding(self.theme.metrics.spacing.lg)
                 .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous))
@@ -131,9 +131,13 @@ extension AIEnhancementSettingsView {
     }
 
     private func closeExternalProviderManager() {
+        Task { await self.closeExternalProviderManagerAfterSaving() }
+    }
+
+    private func closeExternalProviderManagerAfterSaving() async {
         guard !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
         if let providerID = self.managedExternalProviderID,
-           !self.viewModel.saveManagedProviderBeforeClosing(providerID)
+           !(await self.viewModel.saveManagedProviderBeforeClosing(providerID))
         { return }
         self.viewModel.clearEditProviderDraft()
         self.viewModel.showingAddModel = false
@@ -148,7 +152,7 @@ extension AIEnhancementSettingsView {
             title: self.viewModel.cachedProviderItems.first(where: { $0.id == self.managedExternalProviderID })?.name ?? "Provider",
             subtitle: "Connection and models.",
             symbol: "network",
-            dismissDisabled: self.viewModel.isFetchingModels || self.viewModel.isTestingConnection,
+            dismissDisabled: self.viewModel.isSavingProviderCredentials || self.viewModel.isFetchingModels || self.viewModel.isTestingConnection,
             height: 520,
             close: self.closeExternalProviderManager
         ) {
@@ -156,7 +160,7 @@ extension AIEnhancementSettingsView {
                 let item = ProviderItem(id: provider.id, name: provider.name, isBuiltIn: provider.isBuiltIn)
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.lg) {
                     self.providerDetailsSection(for: item, managementLayout: true)
-                        .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                        .disabled(self.viewModel.isSavingProviderCredentials || self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
                 }
             }
         }
@@ -164,11 +168,13 @@ extension AIEnhancementSettingsView {
         .alert("Remove provider?", isPresented: self.$showingRemoveProviderConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
-                guard self.viewModel.selectedProviderID == self.managedExternalProviderID,
-                      self.viewModel.deleteCurrentProvider()
-                else { return }
-                self.expandedProviderID = nil
-                self.closeExternalProviderManager()
+                Task {
+                    guard self.viewModel.selectedProviderID == self.managedExternalProviderID,
+                          await self.viewModel.deleteCurrentProvider()
+                    else { return }
+                    self.expandedProviderID = nil
+                    await self.closeExternalProviderManagerAfterSaving()
+                }
             }
         } message: {
             Text("This removes its saved API key and model setup, and clears any default or prompt assignments using it. Your prompts and shortcuts are kept. You can add the provider again later.")
@@ -1156,6 +1162,9 @@ extension AIEnhancementSettingsView {
                     Text(PichiLocalization.text(CloudTextProvider.descriptor(for: item.id)?.credentialTitle ?? "API Key"))
                         .font(.fluidSystem(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
+                    if let message = self.viewModel.providerCredentialStatusMessage {
+                        Text(message).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    }
                     HStack(alignment: .center, spacing: 8) {
                         SecureField("Enter API key", text: apiKeyBinding)
                             .textFieldStyle(.plain)
@@ -1166,7 +1175,7 @@ extension AIEnhancementSettingsView {
                             .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
                             .overlay(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm).strokeBorder(self.theme.palette.cardBorder))
                             .onTapGesture {
-                                self.viewModel.ensureKeychainAccessForAPIKeyEdit()
+                                Task { await self.viewModel.ensureKeychainAccessForAPIKeyEdit() }
                             }
                         if let websiteInfo = ModelRepository.shared.providerWebsiteURL(for: item.id),
                            let url = URL(string: websiteInfo.url)
@@ -1349,8 +1358,10 @@ extension AIEnhancementSettingsView {
                     Button(role: .destructive) {
                         if managementLayout {
                             self.showingRemoveProviderConfirmation = true
-                        } else if self.viewModel.deleteCurrentProvider() {
-                            self.expandedProviderID = nil
+                        } else {
+                            Task {
+                                if await self.viewModel.deleteCurrentProvider() { self.expandedProviderID = nil }
+                            }
                         }
                     } label: {
                         HStack(spacing: 6) {
@@ -1362,7 +1373,7 @@ extension AIEnhancementSettingsView {
                     .fluidGlassAction()
                     .foregroundStyle(.red)
                     .tint(.red)
-                    .disabled(self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
+                    .disabled(self.viewModel.isSavingProviderCredentials || self.viewModel.isFetchingModels || self.viewModel.isTestingConnection)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
@@ -1819,6 +1830,10 @@ extension AIEnhancementSettingsView {
     }
 
     private func makePrimaryDefaultProvider(_ providerID: String, isPrivateAI: Bool) {
+        Task { await self.makePrimaryDefaultProviderAfterSaving(providerID, isPrivateAI: isPrivateAI) }
+    }
+
+    private func makePrimaryDefaultProviderAfterSaving(_ providerID: String, isPrivateAI: Bool) async {
         guard providerID != self.primaryDefaultProviderID,
               !self.viewModel.isFetchingModels, !self.viewModel.isTestingConnection else { return }
         if isPrivateAI {
@@ -1828,7 +1843,7 @@ extension AIEnhancementSettingsView {
         }
 
         guard self.viewModel.canUseProviderWithoutVerification(providerID),
-              self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
+              await self.viewModel.saveManagedProviderAPIKeyIfNeeded(providerID) else { return }
         self.activateProvider(providerID)
 
         var defaultConfiguration = self.settings.dictationPromptConfiguration(for: .default)
@@ -2178,13 +2193,16 @@ extension AIEnhancementSettingsView {
                             .font(.fluidSystem(size: 12, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
+                    if let message = self.viewModel.providerCredentialStatusMessage {
+                        Text(message).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    }
                     HStack(alignment: .center, spacing: 8) {
                         SecureField("Enter API key", text: apiKeyBinding)
                             .textFieldStyle(.roundedBorder)
                             .font(.fluidSystem(size: 13))
                             .frame(maxWidth: 200)
                             .onTapGesture {
-                                self.viewModel.ensureKeychainAccessForAPIKeyEdit()
+                                Task { await self.viewModel.ensureKeychainAccessForAPIKeyEdit() }
                             }
                         if let websiteInfo = ModelRepository.shared.providerWebsiteURL(for: self.viewModel.selectedProviderID),
                            let url = URL(string: websiteInfo.url)
@@ -2212,11 +2230,13 @@ extension AIEnhancementSettingsView {
 
             HStack(spacing: 10) {
                 Button(action: {
-                    guard self.viewModel.saveEditedProviderAPIKey() else { return }
-                    if !isBuiltIn {
-                        self.viewModel.saveEditedProvider()
-                    } else {
-                        self.viewModel.clearEditProviderDraft()
+                    Task {
+                        guard await self.viewModel.saveEditedProviderAPIKey() else { return }
+                        if !isBuiltIn {
+                            self.viewModel.saveEditedProvider()
+                        } else {
+                            self.viewModel.clearEditProviderDraft()
+                        }
                     }
                 }) {
                     HStack(spacing: 6) {
@@ -2247,9 +2267,11 @@ extension AIEnhancementSettingsView {
 
                 if !isBuiltIn {
                     Button(role: .destructive) {
-                        guard self.viewModel.deleteCurrentProvider() else { return }
-                        self.viewModel.clearEditProviderDraft()
-                        self.expandedProviderID = nil
+                        Task {
+                            guard await self.viewModel.deleteCurrentProvider() else { return }
+                            self.viewModel.clearEditProviderDraft()
+                            self.expandedProviderID = nil
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "trash")
@@ -2602,7 +2624,7 @@ extension AIEnhancementSettingsView {
 
     var apiKeyManagementRow: some View {
         HStack(spacing: 8) {
-            Button(action: { self.viewModel.handleAPIKeyButtonTapped() }) {
+            Button(action: { Task { await self.viewModel.handleAPIKeyButtonTapped() } }) {
                 Label("Add or Modify API Key", systemImage: "key.fill")
                     .labelStyle(.titleAndIcon).font(.fluidSystem(.caption))
             }
@@ -2629,21 +2651,25 @@ extension AIEnhancementSettingsView {
             SecureField("API Key (optional for local endpoints)", text: self.$viewModel.newProviderApiKey)
                 .textFieldStyle(.roundedBorder).frame(width: 300)
                 .onTapGesture {
-                    self.viewModel.ensureKeychainAccessForAPIKeyEdit()
+                    Task { await self.viewModel.ensureKeychainAccessForAPIKeyEdit() }
                 }
             HStack(spacing: 12) {
                 Button("Cancel") { self.viewModel.showAPIKeyEditor = false }
                     .fluidButton(.compact, size: .compact)
                     .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
                 Button("OK") {
-                    let trimmedKey = self.viewModel.newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-                    self.viewModel.updateProviderAPIKey(trimmedKey, for: self.viewModel.selectedProviderID)
-                    guard self.viewModel.saveProviderAPIKeys() else { return }
-                    if self.viewModel.connectionStatus != .unknown {
-                        self.viewModel.connectionStatus = .unknown
-                        self.viewModel.connectionErrorMessage = ""
+                    Task {
+                        guard !self.viewModel.isSavingProviderCredentials else { return }
+                        let providerID = self.viewModel.selectedProviderID
+                        let trimmedKey = self.viewModel.newProviderApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                        self.viewModel.updateProviderAPIKey(trimmedKey, for: providerID)
+                        guard await self.viewModel.saveProviderAPIKeys(), self.viewModel.selectedProviderID == providerID else { return }
+                        if self.viewModel.connectionStatus != .unknown {
+                            self.viewModel.connectionStatus = .unknown
+                            self.viewModel.connectionErrorMessage = ""
+                        }
+                        self.viewModel.showAPIKeyEditor = false
                     }
-                    self.viewModel.showAPIKeyEditor = false
                 }
                 .fluidButton(.glass, size: .compact)
                 .frame(minWidth: AISettingsLayout.actionMinWidth, minHeight: AISettingsLayout.controlHeight)
@@ -2653,6 +2679,8 @@ extension AIEnhancementSettingsView {
         }
         .padding()
         .frame(minWidth: 350, minHeight: 150)
+        .disabled(self.viewModel.isSavingProviderCredentials)
+        .interactiveDismissDisabled(self.viewModel.isSavingProviderCredentials)
     }
 
     var addProviderSection: some View {
@@ -2693,7 +2721,7 @@ extension AIEnhancementSettingsView {
                         .textFieldStyle(.roundedBorder)
                         .font(.fluidSystem(size: 13))
                         .onTapGesture {
-                            self.viewModel.ensureKeychainAccessForAPIKeyEdit()
+                            Task { await self.viewModel.ensureKeychainAccessForAPIKeyEdit() }
                         }
                 }
             }
@@ -2739,6 +2767,6 @@ extension AIEnhancementSettingsView {
     }
 
     func saveNewProvider() {
-        self.viewModel.saveNewProvider()
+        Task { await self.viewModel.saveNewProvider() }
     }
 }

@@ -363,20 +363,24 @@ struct CommandCodeBlock: View {
 
 struct CommandCopyButton: View {
     let text: String
+    /// A trusted interface key. The copied payload remains verbatim user content.
     let label: String
+    @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @State private var copied = false
 
     var body: some View {
+        let localizedLabel = PichiLocalization.text(self.copied ? "Copied" : self.label, locale: self.interfaceLocale)
         Button {
             self.copied = ClipboardService.copyToClipboard(self.text)
         } label: {
             Image(systemName: self.copied ? "checkmark" : "doc.on.doc")
                 .font(.fluidSystem(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
         .fluidGlassAction(circular: true)
-        .help(self.copied ? "Copied" : self.label)
-        .accessibilityLabel(self.copied ? "Copied" : self.label)
+        .help(localizedLabel)
+        .accessibilityLabel(localizedLabel)
         .task(id: self.copied) {
             guard self.copied else { return }
             do { try await Task.sleep(for: .seconds(1.5)) } catch { return }

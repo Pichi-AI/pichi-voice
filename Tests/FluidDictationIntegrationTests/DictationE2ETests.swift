@@ -2454,8 +2454,8 @@ extension DictationE2ETests {
         }
     }
 
-    func testCreatingAndDeletingProviderDraftPreservesDefaultProvider() {
-        self.withProviderSettingsRestored {
+    func testCreatingAndDeletingProviderDraftPreservesDefaultProvider() async {
+        await self.withProviderSettingsRestoredAsync {
             let settings = SettingsStore.shared
             settings.selectedProviderID = "openai"
             let viewModel = AIEnhancementSettingsViewModel(
@@ -2467,7 +2467,7 @@ extension DictationE2ETests {
             XCTAssertNotNil(viewModel.createDraftProvider(named: "Draft"))
             XCTAssertEqual(settings.selectedProviderID, "openai")
 
-            viewModel.deleteCurrentProvider()
+            await viewModel.deleteCurrentProvider()
             XCTAssertEqual(viewModel.selectedProviderID, "openai")
             XCTAssertEqual(settings.selectedProviderID, "openai")
         }
@@ -2882,6 +2882,22 @@ extension DictationE2ETests {
             ],
             run: run
         )
+    }
+
+    private func withProviderSettingsRestoredAsync(run: () async -> Void) async {
+        let keys = [self.savedProvidersKey, self.selectedProviderIDKey,
+                    self.availableModelsByProviderKey, self.selectedModelByProviderKey]
+        let defaults = UserDefaults.standard
+        let snapshot = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
+            defaults.object(forKey: key).map { (key, $0) }
+        })
+        defer {
+            for key in keys {
+                if let value = snapshot[key] { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
+        await run()
     }
 
     private func withProviderSettingsRestored(run: () -> Void) {

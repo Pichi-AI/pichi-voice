@@ -40,8 +40,8 @@ extension AIEnhancementSettingsViewModel {
 
     /// Saves credentials first. Failure keeps the form open and creates no provider/model record.
     /// Does not select a provider, change shortcuts, fetch models, or start a network request.
-    func addProvider(_ draft: ProviderSetupDraft) -> Bool {
-        guard draft.isValid, !self.isTestingConnection, !self.isFetchingModels else { return false }
+    func addProvider(_ draft: ProviderSetupDraft) async -> Bool {
+        guard draft.isValid, !self.isSavingProviderCredentials, !self.isTestingConnection, !self.isFetchingModels else { return false }
         let builtIn = !draft.providerID.isEmpty && ModelRepository.shared.isBuiltIn(draft.providerID)
         guard draft.providerID.isEmpty || builtIn else { return false }
         guard !builtIn || !self.cachedAddedProviderItems.contains(where: { $0.id == draft.providerID }) else { return false }
@@ -53,7 +53,7 @@ extension AIEnhancementSettingsViewModel {
         let apiKey = draft.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !apiKey.isEmpty {
             self.updateProviderAPIKey(apiKey, for: id)
-            guard self.saveProviderAPIKeys(invalidating: id) else {
+            guard await self.saveProviderAPIKeys(invalidating: id) else {
                 self.providerAPIKeys = previousKeys
                 self.refreshProviderItems()
                 return false

@@ -41,6 +41,7 @@ final class SettingsStore: ObservableObject {
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
     private let defaults = UserDefaults.standard
     private let keychain = KeychainService.shared
+    private var providerCredentialCleanupNeedsPersistence = false
     private(set) var launchAtStartupEnabled = false
     private(set) var launchAtStartupErrorMessage: String?
     private(set) var launchAtStartupStatusMessage =
@@ -49,8 +50,6 @@ final class SettingsStore: ObservableObject {
     private init() {
         self.migrateTranscriptionStartSoundIfNeeded()
         self.ensureDebugLoggingDefaults()
-        self.migrateProviderAPIKeysIfNeeded()
-        self.scrubSavedProviderAPIKeys()
         self.migrateExplicitDictationPromptsIfNeeded()
         self.migrateDictationPromptProfilesIfNeeded()
         self.migrateLegacyDictationAIPreferenceIfNeeded()
@@ -62,7 +61,11 @@ final class SettingsStore: ObservableObject {
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
         Self.migrateTextInsertionModeToReliablePasteIfNeeded(defaults: self.defaults)
+        Self.migrateFillerWordDefaultsIfNeeded(defaults: self.defaults)
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
+        // Do not dispatch while shared initialization owns its once token. Provider
+        // canonicalization may consult ModelRepository/SettingsStore again.
+        DispatchQueue.main.async { self.refreshProviderAPIKeys() }
     }
 
     static func clampPrivateAIContextTokenLimit(_ value: Int) -> Int {
@@ -1476,6 +1479,10 @@ final class SettingsStore: ObservableObject {
             self.apiKey = apiKey
             self.models = models
         }
+
+        nonisolated func redactingAPIKey() -> Self {
+            Self(id: self.id, name: self.name, baseURL: self.baseURL, models: self.models)
+        }
     }
 
     var enableAIProcessing: Bool {
@@ -1595,27 +1602,55 @@ final class SettingsStore: ObservableObject {
     }
 
     var providerAPIKeys: [String: String] {
-        get { (try? self.keychain.fetchAllKeys()) ?? [:] }
-        set {
-            objectWillChange.send()
-            do {
-                _ = try self.saveProviderAPIKeys(newValue)
-            } catch {
-                self.logProviderAPIKeyPersistenceFailure(error)
-            }
-        }
+        self.keychain.cachedKeys ?? [:]
     }
 
+    /// Cache-only admission snapshot. Display values may outlive a failed refresh.
+    var loadedProviderAPIKeys: [String: String]? { self.keychain.loadedKeys }
+
+    var providerAPIKeyReadiness: KeychainService.Readiness { self.keychain.readiness }
+
+    @MainActor
+    func loadProviderAPIKeysForUserAction() async throws -> [String: String] {
+        defer { self.objectWillChange.send() }
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        let keys = try await self.keychain.loadForUserAction(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { keys in
+            await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+        }
+        return keys
+    }
+
+    @MainActor
     @discardableResult
-    func saveProviderAPIKeys(_ values: [String: String]) throws -> [String: String] {
-        let trimmed = self.sanitizeAPIKeys(values)
-        try self.keychain.storeAllKeys(trimmed)
-        return try self.keychain.fetchAllKeys()
+    func saveProviderAPIKeys(
+        _ values: [String: String], replacing knownValues: [String: String], removing providerIDs: [String] = []
+    ) async throws -> [String: String] {
+        defer { self.objectWillChange.send() }
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        let result = try await self.keychain.saveForUserAction(
+            self.sanitizeAPIKeys(values), replacing: self.sanitizeAPIKeys(knownValues),
+            removing: providerIDs, migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs
+        ) { migratedKeys in
+            await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: migratedKeys)
+        }
+        return result.keys
+    }
+
+    /// Startup and activation are cache-only on main and coalesce on the owned
+    /// worker. Authentication prompts are reserved for explicit credential actions.
+    func refreshProviderAPIKeys() {
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        self.keychain.loadInBackground(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { result in
+            if case let .success(keys) = result {
+                _ = await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+            }
+            self.objectWillChange.send()
+        }
     }
 
     /// Securely retrieve API key for a provider, handling custom prefix logic
     func getAPIKey(for providerID: String) -> String? {
-        let keys = self.providerAPIKeys
+        guard let keys = self.keychain.loadedKeys else { return nil }
         // Try exact match first
         if let key = keys[providerID] { return key }
 
@@ -1978,6 +2013,27 @@ final class SettingsStore: ObservableObject {
         }
     }
 
+    /// Lets the bundled `fv-serve` command read saved meetings. Off until the user turns it on;
+    /// the command reads this same key from the app's preferences.
+    var fluidServeMeetingAccessEnabled: Bool {
+        get { self.defaults.bool(forKey: FluidServeMeetings.accessDefaultsKey) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: FluidServeMeetings.accessDefaultsKey)
+        }
+    }
+
+    /// Set when the user copied the skill instructions for an agent FluidVoice cannot see (Cursor,
+    /// Gemini and others). It keeps meetings shared after the Claude Code and Codex skills are removed,
+    /// until the user stops it.
+    var fluidServeOtherAgentsShared: Bool {
+        get { self.defaults.bool(forKey: "FluidServeOtherAgentsShared") }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: "FluidServeOtherAgentsShared")
+        }
+    }
+
     /// Skips clearly silent recordings up to four seconds before invoking ASR.
     /// Opt-in so quiet speech keeps the existing transcription behavior by default.
     var skipSilentRecordingsEnabled: Bool {
@@ -2110,9 +2166,14 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
+    /// Opt-in browser-tab meeting auto-detection. An absent preference keeps the
+    /// prior behavior: no foreground URL inspection until the user enables it.
     var meetingAutoDetectBrowserEnabled: Bool {
-        get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
+        get {
+            let value = self.defaults.object(forKey: Keys.meetingAutoDetectBrowserEnabled)
+            if value == nil { return false }
+            return self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled)
+        }
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.meetingAutoDetectBrowserEnabled)
@@ -3411,10 +3472,13 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Whether the model rejects the `temperature` parameter.
-    /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6 and older still accept it).
-    func isTemperatureUnsupported(_ model: String) -> Bool {
+    /// Order: reasoning models, then support learned from `/models` metadata or a past
+    /// HTTP 400 (`ModelTemperatureSupport`), then a version check for Anthropic models that
+    /// have deprecated temperature (Opus 4.7+, every Claude 5 model, Fable/Mythos - Sonnet 4.6
+    /// and older still accept it).
+    func isTemperatureUnsupported(_ model: String, baseURL: String, support: ModelTemperatureSupport = .shared) -> Bool {
         if self.isReasoningModel(model) { return true }
+        if let supported = support.isSupported(model, baseURL: baseURL) { return !supported }
         // Normalize version separators so dotted IDs (e.g. OpenRouter's
         // anthropic/claude-opus-4.8) match the hyphenated forms below.
         let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")
@@ -3618,7 +3682,7 @@ final class SettingsStore: ObservableObject {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
             selectedModelByProvider: self.selectedModelByProvider,
-            savedProviders: self.savedProviders,
+            savedProviders: self.savedProviders.map { $0.redactingAPIKey() },
             modelReasoningConfigs: self.modelReasoningConfigs,
             privateAIPrefixKVCacheEnabled: self.privateAIPrefixKVCacheEnabled,
             privateAIBoostEnabled: self.privateAIBoostEnabled,
@@ -3996,35 +4060,98 @@ final class SettingsStore: ObservableObject {
         self.defaults.removeObject(forKey: Keys.enableTranscriptionSounds)
     }
 
-    private func migrateProviderAPIKeysIfNeeded() {
-        self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+    private struct ProviderCredentialMigrationSnapshot: Sendable {
+        let legacyDefaults: [String: String]?
+        let savedProviderBytes: Data?
+        let keys: [String: String]
+        let canonicalProviderIDs: [String: String]
+    }
 
-        var merged = (try? self.keychain.fetchAllKeys()) ?? [:]
-        var didMutate = false
-
-        if let legacyDefaults = defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String],
-           legacyDefaults.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyDefaults)) { _, new in new }
-            didMutate = true
+    /// Called on main after init, before dispatch; workers never consult mutable
+    /// preferences or ModelRepository while SettingsStore.shared is initializing.
+    private func providerCredentialMigrationSnapshot() -> ProviderCredentialMigrationSnapshot {
+        let legacy = self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]
+        let savedBytes = self.defaults.data(forKey: Keys.savedProviders)
+        var mapping = Dictionary(uniqueKeysWithValues: ModelRepository.builtInProviderIDs.map { ($0, self.canonicalProviderKey(for: $0)) })
+        var keys: [String: String] = [:]
+        for (id, key) in self.sanitizeAPIKeys(legacy ?? [:]) {
+            let canonical = self.canonicalProviderKey(for: id)
+            mapping[id] = canonical
+            mapping[canonical] = canonical
+            keys[canonical] = key
         }
-        self.defaults.removeObject(forKey: Keys.providerAPIKeys)
-
-        if let legacyKeychain = try? keychain.legacyProviderEntries(),
-           legacyKeychain.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyKeychain)) { _, new in new }
-            didMutate = true
-            try? self.keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
-        }
-
-        if didMutate {
-            do {
-                _ = try self.saveProviderAPIKeys(merged)
-            } catch {
-                self.logProviderAPIKeyPersistenceFailure(error)
+        if let savedBytes, let providers = try? JSONDecoder().decode([SavedProvider].self, from: savedBytes) {
+            for provider in providers {
+                let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                let canonical = self.canonicalProviderKey(for: provider.id)
+                mapping[provider.id] = canonical
+                mapping[canonical] = canonical
+                if !key.isEmpty { keys[canonical] = key }
             }
         }
+        return ProviderCredentialMigrationSnapshot(legacyDefaults: legacy, savedProviderBytes: savedBytes, keys: keys, canonicalProviderIDs: mapping)
+    }
+
+    @MainActor
+    private func acknowledgeProviderCredentialMigration(
+        _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
+    ) async -> Bool {
+        guard self.completeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys) else { return false }
+        guard self.providerCredentialCleanupNeedsPersistence else { return true }
+        let preferences = self.defaults
+        // Unlike ordinary preference edits, this one-time credential cleanup
+        // must join pending persistence before a later Keychain mutation commits.
+        guard await self.keychain.confirmLegacyCleanup({ preferences.synchronize() }) else { return false }
+        self.providerCredentialCleanupNeedsPersistence = false
+        // Recheck without mutating: a source reintroduced during the wait must
+        // remain intact and require a fresh acknowledged migration.
+        return self.providerCredentialSourcesAreClear()
+    }
+
+    private func completeProviderCredentialMigration(
+        _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
+    ) -> Bool {
+        // Compare original values so an in-flight migration cannot clear a newer
+        // edit. Each source is removed only after its own secret was verified.
+        if let legacy = snapshot.legacyDefaults,
+           self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] == legacy,
+           self.sanitizeAPIKeys(legacy).allSatisfy({ verifiedKeys[self.canonicalProviderKey(for: $0.key)] == $0.value })
+        {
+            if !self.sanitizeAPIKeys(legacy).isEmpty { self.providerCredentialCleanupNeedsPersistence = true }
+            self.defaults.removeObject(forKey: Keys.providerAPIKeys)
+            self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+        }
+        if let bytes = snapshot.savedProviderBytes,
+           self.defaults.data(forKey: Keys.savedProviders) == bytes,
+           var providers = try? JSONDecoder().decode([SavedProvider].self, from: bytes)
+        {
+            var changed = false
+            for index in providers.indices {
+                let provider = providers[index]
+                let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty, verifiedKeys[self.canonicalProviderKey(for: provider.id)] == key else { continue }
+                providers[index] = provider.redactingAPIKey()
+                changed = true
+            }
+            if changed, let sanitized = try? JSONEncoder().encode(providers) {
+                self.providerCredentialCleanupNeedsPersistence = true
+                self.defaults.set(sanitized, forKey: Keys.savedProviders)
+            }
+        }
+        return self.providerCredentialSourcesAreClear()
+    }
+
+    private func providerCredentialSourcesAreClear() -> Bool {
+        // A changed/new plaintext source is not an acknowledgment. Keep the
+        // user edit unapplied so a restart cannot resurrect the previous secret.
+        let remainingDefaults = self.sanitizeAPIKeys(self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] ?? [:])
+        guard remainingDefaults.isEmpty else { return false }
+        if let data = self.defaults.data(forKey: Keys.savedProviders),
+           let providers = try? JSONDecoder().decode([SavedProvider].self, from: data)
+        {
+            return providers.allSatisfy { $0.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        return self.defaults.data(forKey: Keys.savedProviders) == nil
     }
 
     static func customPromptBody(_ text: String, mode: PromptMode) -> String {
@@ -4290,46 +4417,6 @@ final class SettingsStore: ObservableObject {
         NotificationCenter.default.post(name: NSNotification.Name("OverlayOffsetChanged"), object: nil)
     }
 
-    private func scrubSavedProviderAPIKeys() {
-        guard let data = defaults.data(forKey: Keys.savedProviders),
-              var decoded = try? JSONDecoder().decode([SavedProvider].self, from: data) else { return }
-
-        var didModify = false
-        for index in decoded.indices {
-            let provider = decoded[index]
-            let trimmed = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.isEmpty == false else { continue }
-
-            let keyID = self.canonicalProviderKey(for: provider.id)
-            do {
-                try self.keychain.storeKey(trimmed, for: keyID)
-                didModify = true
-            } catch {
-                DebugLogger.shared
-                    .error(
-                        "Failed to migrate API key for \(provider.name): \(error.localizedDescription)",
-                        source: "SettingsStore"
-                    )
-            }
-
-            decoded[index] = SavedProvider(
-                id: provider.id,
-                name: provider.name,
-                baseURL: provider.baseURL,
-                apiKey: "",
-                models: provider.models
-            )
-        }
-
-        if didModify,
-           let encoded = try? JSONEncoder().encode(decoded)
-        {
-            self.defaults.set(encoded, forKey: Keys.savedProviders)
-        }
-
-        // No need to track migrated IDs; consolidated storage keeps them together.
-    }
-
     private func canonicalProviderKey(for providerID: String) -> String {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
@@ -4583,7 +4670,7 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Filler Words
 
-    static let defaultFillerWords = [
+    private static let legacyDefaultFillerWords = [
         "um",
         "uh",
         "er",
@@ -4602,6 +4689,44 @@ final class SettingsStore: ObservableObject {
         "urm",
         "ugh",
     ]
+
+    // Include hesitation sounds in both languages regardless of the interface language.
+    // Words such as "ну", "это" and "типа", and the unit "мм", must remain opt-in.
+    // Keep the first multilingual preset unchanged as the second migration's snapshot.
+    private static let initialMultilingualDefaultFillerWords = SettingsStore.legacyDefaultFillerWords + [
+        "э",
+        "ээ",
+        "эээ",
+        "э-э",
+        "э-э-э",
+        "эм",
+        "эмм",
+        "эммм",
+        "ммм",
+        "м-м",
+        "м-м-м",
+        "хм",
+        "хмм",
+    ]
+
+    static let defaultFillerWords = SettingsStore.initialMultilingualDefaultFillerWords + ["э-мм"]
+
+    static func migrateFillerWordDefaultsIfNeeded(defaults: UserDefaults) {
+        if !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV1) {
+            // Upgrade only the unchanged old defaults. An empty or customized list is intentional.
+            if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.legacyDefaultFillerWords {
+                defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
+            }
+            defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV1)
+        }
+
+        guard !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV2) else { return }
+        // Existing installations may already have completed the first migration.
+        if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.initialMultilingualDefaultFillerWords {
+            defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
+        }
+        defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV2)
+    }
 
     var fillerWords: [String] {
         get {
@@ -6017,6 +6142,8 @@ private extension SettingsStore {
 
         // Filler Words
         static let fillerWords = "FillerWords"
+        static let fillerWordDefaultsMigrationV1 = "FillerWordDefaultsMigrationV1"
+        static let fillerWordDefaultsMigrationV2 = "FillerWordDefaultsMigrationV2"
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
         static let autoConvertPunctuationEnabled = "AutoConvertPunctuationEnabled"
         static let literalDictationFormattingEnabled = "LiteralDictationFormattingEnabled"

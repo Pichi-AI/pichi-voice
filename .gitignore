@@ -248,6 +248,7 @@ builds/
 /docs/*
 !/docs/development/
 /docs/development/*
+!/docs/development/upstream-1.6.12-beta1-20261013.md
 !/docs/development/codex.md
 !/docs/development/upstream.md
 !/docs/development/branding.md
@@ -261,8 +262,13 @@ builds/
 /scripts/dev/*
 !/scripts/dev/*.sh
 !/scripts/dev/check-localization.py
+!/scripts/dev/check-diarization-repeatability.py
 !/scripts/dev/check-xcode-build-settings.py
 !/docs/development/upstream-sync-1.6.11.md
+!/scripts/dev/macos-regression.py
+!/scripts/dev/asr-baseline-inputs.py
+!/scripts/dev/standalone-regression.py
+!/scripts/dev/local-api-live.py
 
 # Keep future public history free of personal data and local model artifacts
 /private_assets/

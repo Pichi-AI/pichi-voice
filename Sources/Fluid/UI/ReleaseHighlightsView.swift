@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ReleaseHighlightsView: View {
     let canExplore: Bool
+    let version: String
     let content: ReleaseHighlightsContent
     let onClose: (ReleaseHighlightsContent.Destination?) -> Void
     @Environment(\.theme) private var theme
@@ -10,7 +11,7 @@ struct ReleaseHighlightsView: View {
         VStack(alignment: .leading, spacing: 28) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(AppBrand.format("FLUIDVOICE %@", self.content.release))
+                    Text(AppBrand.format("FLUIDVOICE %@", self.version))
                         .font(self.theme.typography.captionStrong)
                         .tracking(2)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -34,6 +35,12 @@ struct ReleaseHighlightsView: View {
                 ForEach(self.content.features) { feature in
                     self.feature(feature)
                 }
+            }
+            if let notice = self.content.officialSiteNotice {
+                Text(.init(PichiLocalization.text(notice)))
+                    .font(self.theme.typography.body)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text("Always here in Help → What’s new.")
                 .font(self.theme.typography.caption)
@@ -72,7 +79,7 @@ struct ReleaseHighlightsView: View {
                 .frame(minHeight: 68, alignment: .topLeading)
             FluidGlassControlGroup {
                 Button(PichiLocalization.text(feature.action), systemImage: "arrow.up.right") { self.onClose(feature.destination) }
-                    .fluidGlassAction()
+                    .fluidGlassAction(prominent: true)
                     .disabled(!self.canExplore)
             }
             .padding(.top, 18)

@@ -470,7 +470,7 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         let visibleFailures: [TextDeliveryFailure] = [
             .accessibilityNotTrusted, .noEditableTarget, .pasteNotLanded,
             .clipboardSnapshotFailed, .clipboardWriteFailed,
-            .pasteCommandFailed, .targetUnavailable, .targetRestoreFailed,
+            .pasteCommandFailed, .targetUnavailable, .targetRestoreFailed, .partialInsertion,
         ]
         for failure in visibleFailures {
             XCTAssertNotNil(failure.userFacingMessage, "Silent failure: \(failure)")
@@ -478,6 +478,7 @@ final class PasteDeliveryCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(DeliveryFailureOverlayController.Kind(failure: .accessibilityNotTrusted)?.offersAccessibilitySettings, true)
         XCTAssertEqual(DeliveryFailureOverlayController.Kind(failure: .pasteCommandFailed), .deliveryFailed)
+        XCTAssertEqual(DeliveryFailureOverlayController.Kind(failure: .partialInsertion)?.title, TextDeliveryFailure.partialInsertion.userFacingMessage)
     }
 
     func testHiddenOverlayFailuresUseTheTransientCard() {

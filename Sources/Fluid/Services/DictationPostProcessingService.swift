@@ -1,5 +1,7 @@
 import Foundation
 
+/// An operational route. Credentials come from an authoritative loaded snapshot;
+/// cached UI presentation must never authorize a request or a stopped dictation.
 struct DictationProviderRoute: Equatable {
     let providerID: String
     let providerKey: String
@@ -27,7 +29,8 @@ struct DictationProviderRoute: Equatable {
     static func resolve(
         settings: SettingsStore,
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
-        appBundleID: String? = nil
+        appBundleID: String? = nil,
+        credentialSnapshot: [String: String]? = nil
     ) -> Self {
         let selectedProviderID: String
         let configuredModel: String?
@@ -64,12 +67,12 @@ struct DictationProviderRoute: Equatable {
             configuredModel = nil
         }
 
-        return self.build(settings: settings, selectedProviderID: selectedProviderID, configuredModel: configuredModel)
+        return self.build(settings: settings, selectedProviderID: selectedProviderID, configuredModel: configuredModel, credentialSnapshot: credentialSnapshot)
     }
 
-    private static func build(settings: SettingsStore, selectedProviderID: String, configuredModel: String?) -> Self {
+    private static func build(settings: SettingsStore, selectedProviderID: String, configuredModel: String?, credentialSnapshot: [String: String]? = nil) -> Self {
         let selectedModels = settings.selectedModelByProvider
-        let providerKeys = settings.providerAPIKeys
+        let providerKeys = credentialSnapshot ?? settings.loadedProviderAPIKeys ?? [:]
 
         if let saved = settings.savedProviders.first(where: { $0.id == selectedProviderID }) {
             let key = "custom:\(saved.id)"
@@ -152,7 +155,7 @@ struct DictationProviderRoute: Equatable {
     static func resolve(settings: SettingsStore, providerID: String, model: String) -> Self {
         let trimmedProviderID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let providerKeys = settings.providerAPIKeys
+        let providerKeys = settings.loadedProviderAPIKeys ?? [:]
         if let saved = settings.savedProviders.first(where: { $0.id == trimmedProviderID }) {
             let key = "custom:\(saved.id)"
             return Self(
@@ -198,15 +201,16 @@ struct DictationProviderRoute: Equatable {
 
     static func resolveForPostProcessing(
         settings: SettingsStore,
-        dictationSlot: SettingsStore.DictationShortcutSlot
+        dictationSlot: SettingsStore.DictationShortcutSlot,
+        credentialSnapshot: [String: String]? = nil
     ) -> Self {
         if settings.dictationPromptSelection(for: dictationSlot) == .privateAI {
             return self.privateAIRoute(settings: settings)
         }
         if settings.promptRoutingScope(for: .dictate) == .selectedAppsOnly {
-            return self.resolve(settings: settings)
+            return self.resolve(settings: settings, credentialSnapshot: credentialSnapshot)
         }
-        return self.resolve(settings: settings, dictationSlot: dictationSlot)
+        return self.resolve(settings: settings, dictationSlot: dictationSlot, credentialSnapshot: credentialSnapshot)
     }
 }
 
@@ -268,7 +272,7 @@ final class DictationPostProcessingService {
         let model: String
     }
 
-    func process(_ inputText: String, dictationSlot: SettingsStore.DictationShortcutSlot = .primary) async throws -> Result {
+    func process(_ inputText: String, dictationSlot: SettingsStore.DictationShortcutSlot = .primary, client: LLMClient = .shared) async throws -> Result {
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             throw MeetingModelResidencyError.busy
         }
@@ -280,9 +284,11 @@ final class DictationPostProcessingService {
         }
 
         let settings = SettingsStore.shared
+        let credentialSnapshot = settings.loadedProviderAPIKeys ?? [:]
         let resolved = DictationProviderRoute.resolveForPostProcessing(
             settings: settings,
-            dictationSlot: dictationSlot
+            dictationSlot: dictationSlot,
+            credentialSnapshot: credentialSnapshot
         )
         guard !resolved.providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AIProcessingError.noVerifiedProvider
@@ -331,6 +337,12 @@ final class DictationPostProcessingService {
             )
         }
 
+        // The Local API does not pass through the UI gate. Bind admission to
+        // the exact current credential snapshot already frozen in this route.
+        guard DictationAIPostProcessingGate.isProviderConfigured(route: resolved, settings: settings) else {
+            throw AIProcessingError.noVerifiedProvider
+        }
+
         let promptText = settings.effectiveDictationSystemPrompt(for: dictationSlot, appBundleID: nil)
         let request = DictationPromptRequest(promptText: promptText, transcript: trimmed)
 
@@ -357,14 +369,14 @@ final class DictationPostProcessingService {
             apiKey: resolved.apiKey,
             streaming: false,
             tools: [],
-            temperature: settings.isTemperatureUnsupported(resolved.model) ? nil : 0.2,
+            temperature: settings.isTemperatureUnsupported(resolved.model, baseURL: resolved.baseURL) ? nil : 0.2,
             extraParameters: extraParams
         )
         config.providerOptions = resolved.connectionOptions
         config.timeoutSeconds = 120
         Self.configureInteractiveLocalRequest(&config)
 
-        let response = try await LLMClient.shared.call(config)
+        let response = try await client.call(config)
         guard !response.content.isEmpty else {
             throw AIProcessingError.emptyResponse
         }

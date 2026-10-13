@@ -55,10 +55,13 @@ enum DictationAIPostProcessingGate {
         return self.isProviderConfigured(route: route, settings: settings)
     }
 
-    private static func isProviderConfigured(route: DictationProviderRoute, settings: SettingsStore) -> Bool {
+    static func isProviderConfigured(route: DictationProviderRoute, settings: SettingsStore) -> Bool {
         let providerID = route.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = route.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !providerID.isEmpty, !model.isEmpty else { return false }
+        if route.usesPrivateAI {
+            return self.isPrivateProviderConfigured(settings: settings)
+        }
         guard let storedFingerprint = settings.verifiedProviderFingerprints[route.providerKey] else { return false }
 
         let baseURL = route.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)

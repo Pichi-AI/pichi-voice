@@ -5,10 +5,9 @@ struct DictationMutedIndicator: View {
     var compact = false
 
     var body: some View {
-        // The recording surfaces use dark glass in either application theme.
+        // Recording surfaces use dark glass in either application theme.
         let overlayTheme = AppTheme.adaptive(accent: self.theme.palette.accent, colorScheme: .dark)
-        // An opaque theme surface keeps the small icon readable over clear glass
-        // and a bright desktop without changing the overlay's transparency.
+        // Keep the icon legible over clear glass and a bright desktop.
         let mutedIcon = Image(systemName: "mic.slash.fill")
             .padding(self.theme.metrics.spacing.xs)
             .background(overlayTheme.palette.cardBackground, in: Circle())
@@ -22,7 +21,7 @@ struct DictationMutedIndicator: View {
             .fixedSize()
             mutedIcon.fixedSize()
         }
-        .font(self.theme.typography.bodySmallStrong)
+        .font(self.theme.typography.captionStrong)
         .foregroundStyle(overlayTheme.palette.warning)
         .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .ignore)

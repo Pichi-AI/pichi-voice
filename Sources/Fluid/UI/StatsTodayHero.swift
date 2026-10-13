@@ -64,7 +64,7 @@ struct StatsTodayHero: View {
                 Text("\(self.streak)")
                     .font(self.theme.typography.displayTitle)
                     .monospacedDigit()
-                Text("day streak")
+                Text(PichiLocalization.formattedStreakUnit(days: self.streak))
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(.secondary)
             }

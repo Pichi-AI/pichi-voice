@@ -103,7 +103,11 @@ extension SettingsStore {
 
     /// Build on presentation/catalog events, not while rendering rows. Credentials use the existing process cache.
     func commandModeModelCatalog() -> [CommandModelOption] {
-        let apiKeys = self.providerAPIKeys
+        self.commandModeModelCatalog(apiKeys: self.providerAPIKeys)
+    }
+
+    /// Admission supplies the same immutable credential snapshot used by its request.
+    func commandModeModelCatalog(apiKeys: [String: String]) -> [CommandModelOption] {
         let providers = ModelRepository.shared.builtInProvidersList() + self.savedProviders.map { (id: $0.id, name: $0.name) }
         var seenProviders = Set<String>()
         var options: [CommandModelOption] = []
@@ -126,6 +130,32 @@ extension SettingsStore {
             }
         }
         return options
+    }
+
+    struct VerifiedChatModelConfiguration {
+        let option: CommandModelOption
+        let baseURL: String
+        let apiKey: String
+        let connectionOptions: [String: String]
+    }
+
+    /// UI display cache is not admission evidence. Both inference callers bind
+    /// verification and request values to one current, cache-only snapshot.
+    @MainActor
+    func verifiedChatModelConfiguration(providerID: String, modelID: String) -> VerifiedChatModelConfiguration? {
+        let apiKeys = self.loadedProviderAPIKeys ?? [:]
+        let key = ModelRepository.shared.providerKey(for: providerID)
+        // Unknown credentials may match only an explicitly verified empty-key
+        // fingerprint. A previously verified stored key cannot authorize them.
+        guard let option = self.commandModeModelCatalog(apiKeys: apiKeys).first(where: {
+            ModelRepository.shared.providerKey(for: $0.providerID) == key && $0.modelID == modelID
+        }) else { return nil }
+        return VerifiedChatModelConfiguration(
+            option: option,
+            baseURL: self.commandModeProviderBaseURL(for: option.providerID),
+            apiKey: apiKeys[option.providerID] ?? apiKeys[ModelRepository.shared.providerKey(for: option.providerID)] ?? "",
+            connectionOptions: self.providerConnectionOptions[option.providerID] ?? [:]
+        )
     }
 
     /// A chooser selection is local to Command Mode; global and Edit Mode routes stay unchanged.

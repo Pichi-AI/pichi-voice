@@ -26,8 +26,7 @@ struct FileTranscriptionView: View {
 
     @State private var showingFilePicker = false
     @State private var showingExportDialog = false
-    @State private var exportResult: TranscriptionResult?
-    @State private var exportFormat: ExportFormat = .text
+    @State private var exportDocument: TranscriptionDocument?
     @State private var showingCopyConfirmation = false
     @State private var isDropTargeted = false
     @State private var dropErrorMessage: String?
@@ -40,7 +39,6 @@ struct FileTranscriptionView: View {
 
     private struct RowMetadata {
         let preview: String
-        let relativeDate: String
         let fullDate: String
     }
 
@@ -61,7 +59,7 @@ struct FileTranscriptionView: View {
         return entries.first { $0.id == self.fileHistoryStore.selectedEntryID } ?? entries.first
     }
 
-    enum ExportFormat: String, CaseIterable {
+    nonisolated enum ExportFormat: String, CaseIterable, Sendable {
         case text = "Text (.txt)"
         case json = "JSON (.json)"
 
@@ -119,8 +117,8 @@ struct FileTranscriptionView: View {
                     .font(self.theme.typography.caption)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(self.theme.palette.accent.opacity(0.9))
-                    .foregroundColor(.white)
+                    .background(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentForeground)
                     .cornerRadius(8)
                     .padding()
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -128,13 +126,9 @@ struct FileTranscriptionView: View {
         }
         .fileExporter(
             isPresented: self.$showingExportDialog,
-            document: TranscriptionDocument(
-                result: self.exportResult ?? TranscriptionResult(text: "", confidence: 0, duration: 0, processingTime: 0, fileName: "transcript"),
-                format: self.exportFormat,
-                service: self.transcriptionService
-            ),
-            contentType: self.exportFormat == .text ? .plainText : .json,
-            defaultFilename: "\((self.exportResult?.fileName).map { "\($0)_transcript" } ?? "transcript").\(self.exportFormat.fileExtension)"
+            document: self.exportDocument,
+            contentType: self.exportDocument?.format == .json ? .json : .plainText,
+            defaultFilename: self.exportDocument?.defaultFilename
         ) { exportCompletion in
             switch exportCompletion {
             case .success:
@@ -142,7 +136,7 @@ struct FileTranscriptionView: View {
             case let .failure(error):
                 DebugLogger.shared.error("Export failed: \(error)", source: "FileTranscriptionView")
             }
-            self.exportResult = nil
+            self.exportDocument = nil
         }
         .onReceive(self.fileHistoryStore.$entries) { entries in
             self.rowMetadata = Dictionary(entries.map { entry in
@@ -596,7 +590,7 @@ struct FileTranscriptionView: View {
                         .font(self.theme.typography.bodySmallStrong)
                         .lineLimit(2)
                         .truncationMode(.middle)
-                    Text(self.rowMetadata[entry.id]?.relativeDate ?? "")
+                    FileTranscriptRelativeDateLabel(entry: entry, locale: self.interfaceLocale)
                         .font(self.theme.typography.captionSmall)
                         .foregroundStyle(self.theme.palette.secondaryText)
                     Text(self.rowMetadata[entry.id]?.preview ?? "")
@@ -681,9 +675,12 @@ struct FileTranscriptionView: View {
                         Menu {
                             ForEach(ExportFormat.allCases, id: \.self) { format in
                                 Button(PichiLocalization.text(format.rawValue)) {
-                                    self.exportFormat = format
-                                    self.exportResult = entry.toTranscriptionResult()
-                                    self.showingExportDialog = true
+                                    do {
+                                        self.exportDocument = try TranscriptionDocument(entry: entry, format: format)
+                                        self.showingExportDialog = true
+                                    } catch {
+                                        DebugLogger.shared.error("Export failed: \(error)", source: "FileTranscriptionView")
+                                    }
                                 }
                             }
                         } label: {
@@ -692,9 +689,8 @@ struct FileTranscriptionView: View {
                         .fluidGlassAction()
                         Button(role: .destructive) { self.pendingDeleteEntry = entry } label: {
                             Label("Delete", systemImage: "trash")
-                                .foregroundStyle(.red)
                         }
-                        .fluidGlassAction()
+                        .buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight, foreground: self.theme.palette.primaryText))
                         .help(PichiLocalization.text("Delete transcript"))
                         .accessibilityLabel(PichiLocalization.text("Delete transcript"))
                         Spacer(minLength: 0)
@@ -746,12 +742,8 @@ struct FileTranscriptionView: View {
     }
 
     private func metadata(for entry: FileTranscriptionEntry) -> RowMetadata {
-        let relative = RelativeDateTimeFormatter()
-        relative.unitsStyle = .abbreviated
-        relative.locale = self.interfaceLocale
         return RowMetadata(
             preview: entry.previewText,
-            relativeDate: relative.localizedString(for: entry.timestamp, relativeTo: Date()),
             fullDate: entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))
         )
     }
@@ -826,7 +818,7 @@ struct FileTranscriptionView: View {
             let ext = url.pathExtension.lowercased()
             guard Self.supportedFileExtensions.contains(ext) else {
                 DispatchQueue.main.async {
-                    self.dropErrorMessage = Self.dropErrorCopy
+                    self.dropErrorMessage = PichiLocalization.text(Self.dropErrorCopy)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         self.dropErrorMessage = nil
                     }
@@ -870,23 +862,26 @@ struct FileTranscriptionView: View {
 
 // MARK: - Document for Export
 
-struct TranscriptionDocument: FileDocument {
+nonisolated struct TranscriptionDocument: FileDocument {
     static var readableContentTypes: [UTType] {
         [.plainText, .json]
     }
 
-    let result: TranscriptionResult
     let format: FileTranscriptionView.ExportFormat
-    let service: FileTranscriptionService
+    let defaultFilename: String
+    private let contents: Data
 
     init(
-        result: TranscriptionResult,
-        format: FileTranscriptionView.ExportFormat,
-        service: FileTranscriptionService
-    ) {
-        self.result = result
+        entry: FileTranscriptionEntry,
+        format: FileTranscriptionView.ExportFormat
+    ) throws {
         self.format = format
-        self.service = service
+        self.defaultFilename = "\(entry.displayTitle)_transcript.\(format.fileExtension)"
+        let result = entry.toTranscriptionResult()
+        switch format {
+        case .text: self.contents = result.textExportData
+        case .json: self.contents = try result.jsonExportData()
+        }
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -894,19 +889,12 @@ struct TranscriptionDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp.\(self.format.fileExtension)")
+        self.fileWrapper()
+    }
 
-        switch self.format {
-        case .text:
-            try self.service.exportToText(self.result, to: tempURL)
-        case .json:
-            try self.service.exportToJSON(self.result, to: tempURL)
-        }
-
-        let data = try Data(contentsOf: tempURL)
-        try? FileManager.default.removeItem(at: tempURL)
-
-        return FileWrapper(regularFileWithContents: data)
+    /// The snapshot is already serialized; exporting owns no scratch files.
+    func fileWrapper() -> FileWrapper {
+        FileWrapper(regularFileWithContents: self.contents)
     }
 }
 

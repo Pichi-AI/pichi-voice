@@ -58,8 +58,9 @@ final class AppServices: ObservableObject {
     private func prewarmLocalPrivateAIForStartup() {
         guard self.isUIReady, !self.isTerminating, self.privateAIStartupWarmup == nil else { return }
         let appID = DictationAppSession.shared.appID
-        guard DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appID) else { return }
-        let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: .primary, appBundleID: appID)
+        let settings = SettingsStore.shared
+        let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary, appBundleID: appID)
+        guard DictationAIPostProcessingGate.isProviderConfigured(route: route, settings: settings) else { return }
         guard route.usesPrivateAI, PrivateAIIntegrationService.isLocalRuntimeConfigured else { return }
         self.privateAIStartupWarmup = Task {
             await PrivateAIIntegrationService.shared.prewarmDictation(localOnly: true)
@@ -78,8 +79,9 @@ final class AppServices: ObservableObject {
                     guard let self else { return nil }
                     let appID = DictationAppSession.shared.appID
                     let slot = self.localAIResidencySlot
-                    guard DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appID) else { return nil }
-                    let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: slot, appBundleID: appID)
+                    let settings = SettingsStore.shared
+                    let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: slot, appBundleID: appID)
+                    guard DictationAIPostProcessingGate.isProviderConfigured(route: route, settings: settings) else { return nil }
                     return OllamaChatAdapter.supports(route.baseURL) ? route : nil
                 },
                 canWarm: { [weak self] in
@@ -227,10 +229,15 @@ final class AppServices: ObservableObject {
         self.setupMeetingCoordinatorForwarding()
         // The auto-detected episode itself stays consumed until the meeting's own evidence ends
         // (window/URL gone ≥60s) — not merely because our recording stopped — so only the nudge
-        // needs to be dismissed here.
+        // and the end-of-meeting watch are dropped here.
         coordinator.$state
             .receive(on: DispatchQueue.main)
-            .sink { state in
+            .sink { [weak self, weak coordinator] state in
+                // Deliveries are queued, so read the state as it is now before calling a recording over.
+                switch coordinator?.state {
+                case .preparing, .recording, .recordingDegraded: break
+                default: self?._meetingAutoDetector?.recordingStopped()
+                }
                 guard !MeetingOverlayVisibility.isVisible(for: state) else { return }
                 MeetingStillRecordingNudgeController.shared.hide()
             }
@@ -260,7 +267,8 @@ final class AppServices: ObservableObject {
             isNativeDetectionEnabled: { SettingsStore.shared.meetingAutoDetectEnabled },
             isBrowserDetectionEnabled: {
                 SettingsStore.shared.meetingAutoDetectEnabled && SettingsStore.shared.meetingAutoDetectBrowserEnabled
-            }
+            },
+            lastSpeechAt: { [weak self] in self?._meetingSessionCoordinator?.lastLiveSpeechAt }
         )
         self._meetingAutoDetector = detector
         self.wireMeetingAutoDetector(detector)
@@ -282,6 +290,9 @@ final class AppServices: ObservableObject {
         detector.onStillRecordingNudge = {
             MeetingStillRecordingNudgeController.shared.present()
         }
+        detector.onStillRecordingNudgeWithdrawn = {
+            MeetingStillRecordingNudgeController.shared.hide()
+        }
         detector.onSuggestDisablingAutoDetect = {
             MeetingAutoDetectDismissalAdvisor.shared.shouldSuggest = true
         }
@@ -302,6 +313,9 @@ final class AppServices: ObservableObject {
         }
         MeetingDetectionPromptController.shared.onTimeout = { [weak self] episodeID in
             self?._meetingAutoDetector?.timeoutDismissed(episodeID: episodeID)
+        }
+        MeetingStillRecordingNudgeController.shared.onDismiss = { [weak self] in
+            self?._meetingAutoDetector?.stillRecordingNudgeDismissed()
         }
         MeetingStillRecordingNudgeController.shared.onStop = { [weak self] in
             guard let self else { return }

@@ -154,6 +154,37 @@ final class SettingsNavigationStateTests: XCTestCase {
         XCTAssertEqual(changed.inheritedFont, Font.system(.body, design: .rounded))
     }
 
+    func testBrandPackageExplanationWrapsUnderConstrainedSettingsLayout() {
+        let originalLanguage = getenv("PICHI_INTERFACE_LANGUAGE").map { String(cString: $0) }
+        defer {
+            if let originalLanguage { setenv("PICHI_INTERFACE_LANGUAGE", originalLanguage, 1) }
+            else { unsetenv("PICHI_INTERFACE_LANGUAGE") }
+        }
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            setenv("PICHI_INTERFACE_LANGUAGE", language.rawValue, 1)
+            XCTAssertEqual(PichiLocalization.language, language)
+            for scheme in [ColorScheme.light, .dark] {
+                let theme = AppTheme.adaptive(accent: .purple, colorScheme: scheme)
+                func measuredSize(width: CGFloat) -> NSSize {
+                    let host = NSHostingController(rootView: BrandSettingsSection()
+                        .lineLimit(1)
+                        .appTheme(theme)
+                        .environment(\.colorScheme, scheme)
+                        .environment(\.locale, language.locale))
+                    // The settings scroll container can propose a compressed height.
+                    return host.sizeThatFits(in: NSSize(width: width, height: 1))
+                }
+                let singleLine = measuredSize(width: 2400)
+                for width: CGFloat in [420, 520, 900] {
+                    let wrapped = measuredSize(width: width)
+                    XCTAssertTrue(wrapped.height.isFinite)
+                    XCTAssertGreaterThan(wrapped.height, singleLine.height + 8,
+                                         "The complete brand explanation must add lines at \(width) points in \(language.rawValue)/\(scheme)")
+                }
+            }
+        }
+    }
+
     func testNativeSearchBrandTypographyKeepsEditorQueryAndSelection() async throws {
         let state = SearchLocaleFixture()
         let host = NSHostingView(rootView: SearchLocaleHost(state: state, source: "Search"))

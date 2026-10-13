@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A13F57000000000000000002 /* WaveformSimulationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13F57000000000000000001 /* WaveformSimulationTests.swift */; };
+		F111E0000000000000000002 /* FillerWordDefaultsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111E0000000000000000001 /* FillerWordDefaultsTests.swift */; };
 		A51A30000000000000000002 /* GigaAMModelStoreDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */; };
 		A51A20000000000000000002 /* S1MiniProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A51A20000000000000000001 /* S1MiniProviderTests.swift */; };
 		A51A10000000000000000003 /* NativeTextInference in Frameworks */ = {isa = PBXBuildFile; productRef = A51A10000000000000000002 /* NativeTextInference */; };
@@ -23,6 +25,7 @@
 		F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */; };
 		5A07E361DE084164A9E5A8C8 /* LocalTextModelDiscoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */; };
 		AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000003 /* HoldToMutePresentationTests.swift */; };
+		AD1030000000000000000006 /* DictionaryDrawerLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000005 /* DictionaryDrawerLayoutTests.swift */; };
 		AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD1030000000000000000001 /* HoldToMuteTests.swift */; };
 		D63B0F8456B440F1A123B987 /* PronunciationModelRevisionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */; };
 		5D4A9F54826FD6BB32CE13F8 /* SpeechModelInstallationSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */; };
@@ -39,6 +42,9 @@
 		FEA4AB111222333444555504 /* MeetingModelResidencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */; };
 		AB492EFF712C42EE91601004 /* MeetingSummaryDownloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */; };
 		AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */; };
+		BE24123456789ABCDEF00002 /* MeetingSummaryProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */; };
+		F5E000000000000000000021 /* FluidServeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000020 /* FluidServeTests.swift */; };
+		BE24123456789ABCDEF00004 /* ModelTemperatureSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */; };
 		AEC300000000000000000003 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
 		AEC300000000000000000004 /* FluidAEC3Bridge in Frameworks */ = {isa = PBXBuildFile; productRef = AEC300000000000000000002 /* FluidAEC3Bridge */; };
 		AEC3B0000000000000000002 /* MeetingAEC3Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC3B0000000000000000001 /* MeetingAEC3Tests.swift */; };
@@ -147,6 +153,7 @@
 		D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */; };
 		C093F64545C6FDD2D79BF559 /* ParakeetArchiveInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */; };
 		640AB09C7781553DF72D1156 /* CompactSpeechModelArchiveTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */; };
+		F5E000000000000000000014 /* fv-serve in Embed Helpers */ = {isa = PBXBuildFile; fileRef = F5E000000000000000000005 /* fv-serve */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -163,6 +170,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = A5B000000000000000000001;
 			remoteInfo = FluidASRBaselineHost;
+		};
+		F5E000000000000000000012 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7C078D872E3B339200FB7CAC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F5E000000000000000000001;
+			remoteInfo = "fv-serve";
 		};
 /* End PBXContainerItemProxy section */
 
@@ -189,9 +203,22 @@
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F5E000000000000000000015 /* Embed Helpers */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				F5E000000000000000000014 /* fv-serve in Embed Helpers */,
+			);
+			name = "Embed Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A13F57000000000000000001 /* WaveformSimulationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformSimulationTests.swift; sourceTree = "<group>"; };
+		F111E0000000000000000001 /* FillerWordDefaultsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FillerWordDefaultsTests.swift; sourceTree = "<group>"; };
 		A51A30000000000000000001 /* GigaAMModelStoreDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigaAMModelStoreDownloadTests.swift; sourceTree = "<group>"; };
 		A51A20000000000000000001 /* S1MiniProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = S1MiniProviderTests.swift; sourceTree = "<group>"; };
 		FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PichiMeetingSummaryLifetimeTests.swift; sourceTree = "<group>"; };
@@ -205,6 +232,7 @@
 		F470DF4CAAD74253BEE0E6AB /* LocalTextModelDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalTextModelDiscoveryTests.swift; sourceTree = "<group>"; };
 		B12A00000000000000000001 /* PichiBrand.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration/PichiBrand.xcconfig; sourceTree = SOURCE_ROOT; };
 		AD1030000000000000000003 /* HoldToMutePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMutePresentationTests.swift; sourceTree = "<group>"; };
+		AD1030000000000000000005 /* DictionaryDrawerLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictionaryDrawerLayoutTests.swift; sourceTree = "<group>"; };
 		AD1030000000000000000001 /* HoldToMuteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldToMuteTests.swift; sourceTree = "<group>"; };
 		AFA73C8D5E7647C4AB125DEE /* PronunciationModelRevisionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PronunciationModelRevisionTests.swift; sourceTree = "<group>"; };
 		7D47EF42AC1B641A705AC302 /* SpeechModelInstallationSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechModelInstallationSnapshotTests.swift; sourceTree = "<group>"; };
@@ -221,6 +249,9 @@
 		FEA4AB111222333444555503 /* MeetingModelResidencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingModelResidencyTests.swift; sourceTree = "<group>"; };
 		AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryDownloadTests.swift; sourceTree = "<group>"; };
 		AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryInputTests.swift; sourceTree = "<group>"; };
+		BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingSummaryProviderTests.swift; sourceTree = "<group>"; };
+		F5E000000000000000000020 /* FluidServeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidServeTests.swift; sourceTree = "<group>"; };
+		BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTemperatureSupportTests.swift; sourceTree = "<group>"; };
 		343B29013F4441D6A797D12D /* LLMClientRequestBodyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMClientRequestBodyTests.swift; sourceTree = "<group>"; };
 		980330F3CE464336ADCE3E23 /* TemperatureSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemperatureSupportTests.swift; sourceTree = "<group>"; };
 		A11A00000000000000000001 /* AnalyticsDatabaseTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsDatabaseTests.swift; sourceTree = "<group>"; };
@@ -318,6 +349,7 @@
 		D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdatePromptIntegrationTests.swift; sourceTree = "<group>"; };
 		5F06B51CF3F45AF989D0CA7F /* ParakeetArchiveInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetArchiveInstallerTests.swift; sourceTree = "<group>"; };
 		01DEEE85A263FAED9ED5DEF8 /* CompactSpeechModelArchiveTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompactSpeechModelArchiveTransportTests.swift; sourceTree = "<group>"; };
+		F5E000000000000000000005 /* fv-serve */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "fv-serve"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -328,6 +360,22 @@
 			);
 			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
 		};
+		F5E000000000000000000011 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Services/FluidServe/FluidServeCommand.swift,
+				Services/FluidServe/FluidServeFileBoundary.swift,
+				Services/FluidServe/FluidServeMeetings.swift,
+				Services/FluidServe/FluidServeSkill.swift,
+				Services/Meeting/PichiMeetingSummaryDocument.swift,
+				Services/Meeting/MeetingModels.swift,
+				Services/Meeting/MeetingPersistedMetadata.swift,
+				Services/Meeting/MeetingAudioAsset.swift,
+				Services/Meeting/MeetingTranscriptExporter.swift,
+				Localization/PichiLocalization.swift,
+			);
+			target = F5E000000000000000000001 /* fv-serve */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -335,6 +383,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				A5B000000000000000000012 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+				F5E000000000000000000011 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
 			);
 			path = Sources/Fluid;
 			sourceTree = "<group>";
@@ -342,6 +391,11 @@
 		A5B000000000000000000020 /* FluidASRBaselineTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = FluidASRBaselineTests;
+			sourceTree = "<group>";
+		};
+		F5E000000000000000000010 /* Sources/FVServe */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources/FVServe;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -394,6 +448,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F5E000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -401,6 +462,7 @@
 			isa = PBXGroup;
 			children = (
 				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
+				F5E000000000000000000010 /* Sources/FVServe */,
 				AEC3C0000000000000000001 /* WebRTCAEC3Notices */,
 				7CDB0A242F3C4D5600FB7CAD /* Tests */,
 				7CDB0A282F3C4D5600FB7CAD /* Frameworks */,
@@ -414,6 +476,7 @@
 				7CDB0A202F3C4D5600FB7CAD /* FluidDictationIntegrationTests.xctest */,
 				A5B000000000000000000005 /* FluidASRBaselineHost.app */,
 				A5B00000000000000000001D /* FluidASRBaselineTests.xctest */,
+				F5E000000000000000000005 /* fv-serve */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -435,6 +498,8 @@
 				7CDB0A272F3C4D5600FB7CAD /* Resources */,
 				D1C7A7100000000000000001 /* UpdatePromptIntegrationTests.swift */,
 				4263717D7203AAA6B63D9330 /* SettingsBackupRoundTripTests.swift */,
+				F111E0000000000000000001 /* FillerWordDefaultsTests.swift */,
+				A13F57000000000000000001 /* WaveformSimulationTests.swift */,
 				91C92FF93D3D21E0FD4D93EE /* UpdateRollbackBackupTests.swift */,
 				F12B5FA911AD928DAFD058FB /* UpdateInstallationPipelineTests.swift */,
 				8E4FCA0BC854678A142D944F /* UpdateAppReplacementTests.swift */,
@@ -452,6 +517,7 @@
 				CD1C7A0000000000000000B1 /* CustomDictionaryManualEntryTests.swift */,
 				7C91B0022F42AA0100C0DEF0 /* HotkeyShortcutTests.swift */,
 				AD1030000000000000000003 /* HoldToMutePresentationTests.swift */,
+				AD1030000000000000000005 /* DictionaryDrawerLayoutTests.swift */,
 				AD1030000000000000000001 /* HoldToMuteTests.swift */,
 				DAB600000000000000000002 /* DashboardLayoutTests.swift */,
 				FEB700000000000000000002 /* FeedbackClientTests.swift */,
@@ -489,6 +555,9 @@
 				EAA100000000000000000001 /* PichiTextModelEvalTests.swift */,
 				3E3A0D23580647989B82638B /* PichiLocalizationPresentationTests.swift */,
 				3B977C45F6FC4C3299D64BA7 /* PichiLocalizationTests.swift */,
+				BE24123456789ABCDEF00001 /* MeetingSummaryProviderTests.swift */,
+				F5E000000000000000000020 /* FluidServeTests.swift */,
+				BE24123456789ABCDEF00003 /* ModelTemperatureSupportTests.swift */,
 				C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */,
 				D9B100000000000000000001 /* VoiceModelDeletionTests.swift */,
 				C2B200000000000000000001 /* MeetingCanonicalPipelineTests.swift */,
@@ -604,10 +673,12 @@
 				7C078D8C2E3B339200FB7CAC /* Frameworks */,
 				7C5AF14D2F15041600DE21B0 /* Embed Frameworks */,
 				7C078D8D2E3B339200FB7CAC /* Resources */,
+				F5E000000000000000000015 /* Embed Helpers */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				F5E000000000000000000013 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				7C078D912E3B339200FB7CAC /* Sources/Fluid */,
@@ -677,6 +748,7 @@
 				7CE006BC2E80EBE600DDCCD6 /* AppUpdater */,
 				7C9A71012F58B00000FB7CAF /* TranscribeCpp */,
 				7C5AF14A2F15041600DE21B0 /* MediaRemoteAdapter */,
+				2E9B00000000000000000004 /* ZeppelinEmbed */,
 			);
 			productName = FluidASRBaselineHost;
 			productReference = A5B000000000000000000005 /* FluidASRBaselineHost.app */;
@@ -704,6 +776,25 @@
 			productReference = A5B00000000000000000001D /* FluidASRBaselineTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		F5E000000000000000000001 /* fv-serve */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fv-serve" */;
+			buildPhases = (
+				F5E000000000000000000006 /* Sources */,
+				F5E000000000000000000007 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F5E000000000000000000010 /* Sources/FVServe */,
+			);
+			name = "fv-serve";
+			productName = "fv-serve";
+			productReference = F5E000000000000000000005 /* fv-serve */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -724,6 +815,9 @@
 						CreatedOnToolsVersion = 26.0;
 					};
 					A5B000000000000000000019 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					F5E000000000000000000001 = {
 						CreatedOnToolsVersion = 26.0;
 					};
 				};
@@ -758,6 +852,7 @@
 				7CDB0A1F2F3C4D5600FB7CAD /* FluidDictationIntegrationTests */,
 				A5B000000000000000000001 /* FluidASRBaselineHost */,
 				A5B000000000000000000019 /* FluidASRBaselineTests */,
+				F5E000000000000000000001 /* fv-serve */,
 			);
 		};
 /* End PBXProject section */
@@ -795,16 +890,18 @@
 			files = (
 			);
 			inputFileListPaths = (
+				"$(FLUID_ASR_BASELINE_INPUT_LIST)",
 			);
 			inputPaths = (
-				"$(FLUID_ASR_BASELINE_INPUTS)",
 				"$(SRCROOT)/Tests/FluidASRBaselineHost/stage-inputs.sh",
+				"$(SRCROOT)/scripts/dev/asr-baseline-inputs.py",
+				"$(FLUID_ASR_BASELINE_STAGING_MANIFEST)",
 			);
 			name = "Stage ASR Baseline Inputs";
 			outputFileListPaths = (
+				"$(FLUID_ASR_BASELINE_OUTPUT_LIST)",
 			);
 			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/ASRBaselineInputs",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -827,6 +924,8 @@
 				7CDB0A2E2F3C4D5600FB7CAD /* AudioFixtureLoader.swift in Sources */,
 				D1C7A7100000000000000002 /* UpdatePromptIntegrationTests.swift in Sources */,
 				75454216C2DD7BBBB1D76D42 /* SettingsBackupRoundTripTests.swift in Sources */,
+				F111E0000000000000000002 /* FillerWordDefaultsTests.swift in Sources */,
+				A13F57000000000000000002 /* WaveformSimulationTests.swift in Sources */,
 				24AFD1DFC6BFC9DB5BC6329B /* UpdateRollbackBackupTests.swift in Sources */,
 				563881F82B15C86EDB50E198 /* UpdateInstallationPipelineTests.swift in Sources */,
 				7EAA9E7C4E4155A44F9CC415 /* UpdateAppReplacementTests.swift in Sources */,
@@ -845,6 +944,7 @@
 				CD1C7A0000000000000000B2 /* CustomDictionaryManualEntryTests.swift in Sources */,
 				7C91B0012F42AA0100C0DEF0 /* HotkeyShortcutTests.swift in Sources */,
 				AD1030000000000000000004 /* HoldToMutePresentationTests.swift in Sources */,
+				AD1030000000000000000006 /* DictionaryDrawerLayoutTests.swift in Sources */,
 				AD1030000000000000000002 /* HoldToMuteTests.swift in Sources */,
 				DAB600000000000000000001 /* DashboardLayoutTests.swift in Sources */,
 				FEB700000000000000000001 /* FeedbackClientTests.swift in Sources */,
@@ -882,6 +982,9 @@
 				EAA100000000000000000002 /* PichiTextModelEvalTests.swift in Sources */,
 				793D196E690048D89D679409 /* PichiLocalizationPresentationTests.swift in Sources */,
 				EC546646745D49A49C8EDC02 /* PichiLocalizationTests.swift in Sources */,
+				BE24123456789ABCDEF00002 /* MeetingSummaryProviderTests.swift in Sources */,
+				F5E000000000000000000021 /* FluidServeTests.swift in Sources */,
+				BE24123456789ABCDEF00004 /* ModelTemperatureSupportTests.swift in Sources */,
 				C2B100000000000000000002 /* MeetingTranscriptAssemblerTests.swift in Sources */,
 				D9B100000000000000000002 /* VoiceModelDeletionTests.swift in Sources */,
 				C2B200000000000000000002 /* MeetingCanonicalPipelineTests.swift in Sources */,
@@ -957,6 +1060,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F5E000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -969,6 +1079,11 @@
 			isa = PBXTargetDependency;
 			target = A5B000000000000000000001 /* FluidASRBaselineHost */;
 			targetProxy = A5B000000000000000000021 /* PBXContainerItemProxy */;
+		};
+		F5E000000000000000000013 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F5E000000000000000000001 /* fv-serve */;
+			targetProxy = F5E000000000000000000012 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1110,7 +1225,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -1138,7 +1253,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.11";
+				MARKETING_VERSION = "1.6.12-beta.1";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER).debug";
 				PRODUCT_MODULE_NAME = FluidVoice_Debug;
 				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME) Debug";
@@ -1166,7 +1281,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEVELOPMENT_TEAM = V4J43B279J;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_CODE_COVERAGE = NO;
@@ -1194,7 +1309,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = "1.6.11";
+				MARKETING_VERSION = "1.6.12-beta.1";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER)";
 				PRODUCT_MODULE_NAME = FluidVoice;
 				PRODUCT_NAME = "$(PICHI_PRODUCT_NAME)";
@@ -1277,6 +1392,9 @@
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				FLUID_ASR_BASELINE_INPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/inputs.xcfilelist";
+				FLUID_ASR_BASELINE_OUTPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/outputs.xcfilelist";
+				FLUID_ASR_BASELINE_STAGING_MANIFEST = "$(SRCROOT)/Tests/FluidASRBaselineHost/staging-manifest.json";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1318,6 +1436,9 @@
 				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				FLUID_ASR_BASELINE_INPUTS = "$(SRCROOT)/Tests/FluidASRBaselineHost/Inputs";
+				FLUID_ASR_BASELINE_INPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/inputs.xcfilelist";
+				FLUID_ASR_BASELINE_OUTPUT_LIST = "$(SRCROOT)/Tests/FluidASRBaselineHost/outputs.xcfilelist";
+				FLUID_ASR_BASELINE_STAGING_MANIFEST = "$(SRCROOT)/Tests/FluidASRBaselineHost/staging-manifest.json";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -1393,6 +1514,42 @@
 			};
 			name = Release;
 		};
+		F5E000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER).fv-serve";
+				PRODUCT_MODULE_NAME = FVServe;
+				PRODUCT_NAME = "fv-serve";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Debug;
+		};
+		F5E000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "$(ARCHS_STANDARD)";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = V4J43B279J;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(PICHI_BUNDLE_IDENTIFIER).fv-serve";
+				PRODUCT_MODULE_NAME = FVServe;
+				PRODUCT_NAME = "fv-serve";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				VALID_ARCHS = "$(ARCHS_STANDARD)";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1437,6 +1594,15 @@
 			buildConfigurations = (
 				A5B00000000000000000001B /* Debug */,
 				A5B00000000000000000001C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F5E000000000000000000002 /* Build configuration list for PBXNativeTarget "fv-serve" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F5E000000000000000000003 /* Debug */,
+				F5E000000000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

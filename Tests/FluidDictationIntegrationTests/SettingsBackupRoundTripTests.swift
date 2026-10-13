@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class SettingsBackupRoundTripTests: XCTestCase {
-    func testHoldToMuteRoundTripsAndLegacyBackupDefaultsOffWithoutLosingMeetingPreferences() throws {
+    func testHoldSpaceMuteRoundTripsAndLegacyBackupDefaultsOff() throws {
         try self.withSavedDefaults {
             let settings = SettingsStore.shared
             let meeting = self.meetingDefaults()
@@ -19,6 +19,7 @@ final class SettingsBackupRoundTripTests: XCTestCase {
             XCTAssertEqual(settings.meetingRecordingDefaults, meeting)
 
             let legacy = try self.payload(removing: ["holdSpaceToMute"])
+            XCTAssertNil(legacy.holdSpaceToMute)
             settings.restore(from: legacy)
             XCTAssertFalse(settings.holdSpaceToMute)
             XCTAssertEqual(settings.meetingRecordingDefaults, meeting)

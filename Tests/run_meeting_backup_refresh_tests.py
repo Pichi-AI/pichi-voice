@@ -58,13 +58,43 @@ def main() -> None:
         "private func applyPendingBackupSetupRefresh()",
         "private func finishRestoredMeetingSettingsIfPending()",
     ))
+    # Use the compiled provider's actual metadata/default policy, without importing
+    # inference adapters or making model installation queries in this UI probe.
+    factory_source = (ROOT / "Sources/Fluid/Services/Meeting/PichiMeetingProviderFactory.swift").read_text()
+    factory = factory_source[factory_source.index("enum PichiMeetingProviderFactory {"):
+                             factory_source.index("    static func validateRecordingConfiguration(")] + "}\n"
+    for field in ("providerFactory", "configurationSnapshot", "modelsExistOnDisk"):
+        factory = "\n".join(line for line in factory.splitlines()
+                            if not line.strip().startswith(f"let {field}:"))
+        clause = declaration(factory, f"{field}: {{")
+        factory = factory.replace(clause + ",", "").replace(clause, "")
+    factory = factory.replace(declaration(factory, "    nonisolated static func registeredModelsExistOnDisk("), "")
+    factory += "\n" + declaration(factory_source, "extension MeetingBackendID {") + "\n"
+    backend_source = (ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift").read_text()
+    metadata = "\n".join(declaration(backend_source, marker) for marker in (
+        "nonisolated struct MeetingBackendID:",
+        "nonisolated enum MeetingBackendExecutionLocality:",
+        "nonisolated enum MeetingBackendResultContract:",
+        "nonisolated struct MeetingBackendDescriptor:",
+    ))
+    metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text(),
+                                   "nonisolated enum MeetingAudioTrackKind:")
+    metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift").read_text(),
+                                   "nonisolated enum MeetingTextUnitPrecision:") + "\n"
     swift = r'''
 import Foundation
+nonisolated final class UserDefaults: @unchecked Sendable {
+    static let standard = UserDefaults()
+    func string(forKey key: String) -> String? { nil }
+    func set(_ value: Any?, forKey key: String) { fatalError("Unexpected preference write") }
+}
 
 enum MeetingCaptureMode { case onlineCall, inRoom }
 struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall }
 final class SettingsStore {
     static let shared = SettingsStore()
+    struct SpeechModel { let rawValue: String }
+    var selectedSpeechModel = SpeechModel(rawValue: PichiMeetingProviderFactory.gigaamModelID)
     var meetingRecordingDefaults = Defaults()
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
@@ -73,7 +103,7 @@ final class SettingsStore {
 struct Identity { let id: String }
 struct Option { let identity: Identity }
 final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
-''' + draft + r'''
+''' + metadata + factory + draft + r'''
 final class Harness {
     let coordinator = Coordinator()
     var setupDraft = MeetingTranscriptionSetupDraft()
@@ -127,6 +157,7 @@ func fresh() -> Harness {
     SettingsStore.shared.meetingAutoDetectEnabled = true
     SettingsStore.shared.meetingAutoDetectBrowserEnabled = true
     SettingsStore.shared.meetingAudioRetentionPolicy = 7
+    SettingsStore.shared.selectedSpeechModel = .init(rawValue: PichiMeetingProviderFactory.gigaamModelID)
     return Harness()
 }
 @main enum Tests {
@@ -190,7 +221,11 @@ func fresh() -> Harness {
     check(rapid.setupDraft.languageCode == "de" && !rapid.pendingBackupSetupRefresh, "same-mode repeated restores consume latest language without stale pending state")
     let legacy = fresh(); SettingsStore.shared.meetingRecordingDefaults.languageCode = nil
     legacy.notifyRestore()
-    check(legacy.setupDraft.languageCode == "en" && legacy.hardwareQueries == 0, "legacy language defaults to English without source discovery")
+    check(legacy.setupDraft.languageCode == PichiMeetingProviderFactory.defaultLanguageCode(for: SettingsStore.shared.selectedSpeechModel.rawValue)
+          && legacy.hardwareQueries == 0, "legacy language uses selected provider metadata without source discovery")
+    SettingsStore.shared.meetingRecordingDefaults.languageCode = "de"
+    legacy.notifyRestore()
+    check(legacy.setupDraft.languageCode == "de", "explicit restored language takes precedence over selected provider metadata")
     let missing = fresh(); missing.microphones = []; missing.applications = []
     restored(); missing.notifyRestore()
     check(missing.setupDraft.selectedMicrophoneID == nil && missing.setupDraft.selectedApplicationID == nil, "missing cached sources stay unselected")
@@ -204,7 +239,9 @@ func fresh() -> Harness {
         swift_file = directory / "Tests.swift"
         swift_file.write_text(swift)
         executable = directory / "tests"
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", str(swift_file), "-o", str(executable)],
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library",
+                        str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
+                        str(swift_file), "-o", str(executable)],
                        env=env, check=True, timeout=60)
         subprocess.run([str(executable)], env=env, check=True, timeout=15)
 
