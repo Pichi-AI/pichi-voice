@@ -150,6 +150,43 @@ struct MeetingCapturePCMTransportTests {
         do { try await checkpointFailure.finish(); throw NSError(domain: "ExpectedCheckpointError", code: 1) }
         catch let error as NSError where error.domain == "CheckpointFailure" { }
         try require(failureProbe.snapshot.2 == 1, "checkpoint failure closes strict intake")
+        let cancelLatch = Latch()
+        let cancelProbe = Probe()
+        let joined = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.25, maximumPendingSeconds: 1,
+            recognize: { samples, start in cancelProbe.begin(samples, at: start); await cancelLatch.wait(); return MeetingPCMTranscriptBatch(segments: [], speakers: []) },
+            checkpoint: { _ in cancelProbe.checkpoint() }, failure: { _ in cancelProbe.failed() })
+        _ = joined.enqueue(try sample(frames: 4_000))
+        for _ in 0..<1000 { if await cancelLatch.entered { break }; await Task.yield() }
+        try require(await cancelLatch.entered, "inference owns its PCM")
+        let cancelledFinish = Task { try await joined.finish() }
+        cancelledFinish.cancel()
+        for _ in 0..<50 { await Task.yield() }
+        try require(cancelProbe.snapshot.1 == 0, "cancelled caller cannot publish or abandon in-flight PCM")
+        await cancelLatch.release()
+        try await cancelledFinish.value
+        try require(cancelProbe.snapshot.1 == 1 && cancelProbe.snapshot.2 == 0, "cancelled finish caller still joins owned recognition/checkpoint")
+
+        let wrongFormatProbe = Probe()
+        let wrongFormat = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.25, maximumPendingSeconds: 1,
+            recognize: { _, _ in MeetingPCMTranscriptBatch(segments: [], speakers: []) },
+            checkpoint: { _ in }, failure: { _ in wrongFormatProbe.failed() })
+        let badPCM = try sample(frames: 100)
+        var badDescription: CMAudioFormatDescription?
+        let stereo = pcm(frames: 100, channels: 2)
+        _ = CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: stereo.format.streamDescription,
+                                           layoutSize: 0, layout: nil, magicCookieSize: 0, magicCookie: nil,
+                                           extensions: nil, formatDescriptionOut: &badDescription)
+        var malformed: CMSampleBuffer?
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 16_000), presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
+        _ = CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: CMSampleBufferGetDataBuffer(badPCM),
+                                 dataReady: true, makeDataReadyCallback: nil, refcon: nil, formatDescription: badDescription,
+                                 sampleCount: 100, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+                                 sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &malformed)
+        try require(malformed != nil, "wrong-format fixture constructed")
+        try require(!wrongFormat.enqueue(malformed!), "strict consumer rejects stereo metadata without attempting ASR")
+        do { try await wrongFormat.finish(); throw NSError(domain: "ExpectedInvalidPCM", code: 1) }
+        catch MeetingMemoryAudioError.invalidPCM { }
+        try require(wrongFormatProbe.snapshot.2 == 1, "malformed PCM emits one terminal event")
         print("Meeting PCM transport: admission, conversion, ownership, timeline, bounded inference, overload, joined finish and checkpoint failure passed.")
     }
 }
