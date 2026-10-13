@@ -870,12 +870,11 @@ private final nonisolated class RecoveryInput: DirectCoreAudioInputControlling, 
         return true
     }
 
-    func emit() {
+    func emit(samples: [Float] = [Float](repeating: 0.5, count: 48), hostTime: UInt64 = 0) {
         let handler = self.lock.withLock { self.handler }
-        let samples = [Float](repeating: 0.5, count: 48)
         samples.withUnsafeBufferPointer { buffer in
             guard let baseAddress = buffer.baseAddress else { return }
-            handler?(baseAddress, buffer.count, 48_000, 0, 0)
+            handler?(baseAddress, buffer.count, 48_000, hostTime, 0)
         }
     }
 }
@@ -1251,6 +1250,43 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testDictationMuteSurvivesAbnormalStartupRetryAndResumesTimestampedPCM() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.35) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            XCTAssertFalse(fixture.service.isAsrReady, "This capture regression must not start model inference")
+            let starting = Task { await fixture.service.start() }
+            defer { starting.cancel() }
+            try await fixture.waitForBuiltInStartCount(1)
+            fixture.service.setDictationMuted(true)
+            XCTAssertTrue(fixture.service.isDictationMuted)
+            let muteGeneration = fixture.service.dictationMuteGeneration
+            let failedGeneration = fixture.controller.snapshot.generation
+            fixture.controller.simulateAbnormalStopNotificationForTesting(generation: failedGeneration)
+
+            let outcome = await starting.value
+            XCTAssertEqual(outcome, .started)
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 100), 2)
+            XCTAssertGreaterThan(fixture.controller.snapshot.generation, failedGeneration)
+            XCTAssertEqual(fixture.service.dictationMuteGeneration, muteGeneration)
+            XCTAssertTrue(fixture.service.isDictationMuted, "A route retry must retain the logical recording's mute")
+            XCTAssertTrue(fixture.service.audioRouteRecoveryStateForTesting.acceptingPCM)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.9, count: 4800))
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, [], "Muted retry PCM must be excluded while still satisfying startup readiness")
+
+            fixture.service.setDictationMuted(false)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.2, count: 4800))
+            let resumed = fixture.service.audioRouteRecoveryStateForTesting.samples
+            XCTAssertEqual(resumed.count, 1600, accuracy: 1)
+            XCTAssertTrue(resumed.allSatisfy { $0 == 0.2 }, "Resumed PCM must contain only post-mute speech")
+            XCTAssertFalse(fixture.service.isDictationMuted)
+            XCTAssertFalse(fixture.service.showError)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
+        }
+    }
+
+    @MainActor
     func testAbnormalStartupRetiresAnAlreadyScheduledRouteRecovery() async throws {
         try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.35) { fixture in
             await fixture.service.stopWithoutTranscription()
@@ -1423,6 +1459,44 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
             fixture.service.triggerAudioRouteRecoveryForTesting()
             try await fixture.waitForBuiltInRecovery()
             fixture.assertSessionPreserved()
+        }
+    }
+
+    @MainActor
+    func testDictationMuteSurvivesInputReplacementAndCancelRestartClearsIt() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0.12) { fixture in
+            let prefix = fixture.service.audioRouteRecoveryStateForTesting.samples
+            let muteGeneration = fixture.service.dictationMuteGeneration
+            fixture.service.setDictationMuted(true)
+            fixture.hardware.emitLatest(deviceID: 200, samples: Array(repeating: 0.9, count: 4800))
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, prefix)
+            fixture.service.triggerAudioRouteRecoveryForTesting()
+            try await fixture.waitForBuiltInRecovery()
+            fixture.assertSessionPreserved()
+            XCTAssertEqual(fixture.service.dictationMuteGeneration, muteGeneration)
+            XCTAssertTrue(fixture.service.isDictationMuted)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.9, count: 4800))
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, prefix, "Replacement input must retain the original mute exclusions")
+
+            await fixture.service.stopWithoutTranscription()
+            XCTAssertFalse(fixture.service.isDictationMuted)
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, [])
+            fixture.service.micStatus = .authorized
+            XCTAssertFalse(fixture.service.isAsrReady, "This capture regression must not start model inference")
+            let outcome = await fixture.service.start()
+            XCTAssertEqual(outcome, .started)
+            XCTAssertGreaterThan(fixture.service.dictationMuteGeneration, muteGeneration)
+            XCTAssertFalse(fixture.service.isDictationMuted)
+            // A late release from the cancelled recording must not suppress this recording.
+            fixture.service.setDictationMuted(false)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.2, count: 4800))
+            let restarted = fixture.service.audioRouteRecoveryStateForTesting.samples
+            XCTAssertGreaterThanOrEqual(restarted.count, 1600)
+            XCTAssertTrue(restarted.suffix(1600).allSatisfy { $0 == 0.2 }, "A new logical recording must reset the old mute timeline")
+            XCTAssertFalse(restarted.contains(0.9))
+            XCTAssertFalse(fixture.service.showError)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
         }
     }
 
@@ -1775,6 +1849,11 @@ private final nonisolated class ASRRecoveryHardware: @unchecked Sendable {
     }
     func startCount(deviceID: AudioObjectID) -> Int {
         self.lock.withLock { self.inputs.filter { $0.deviceID == deviceID }.reduce(0) { $0 + $1.count("start") } }
+    }
+
+    func emitLatest(deviceID: AudioObjectID, samples: [Float]) {
+        let input = self.lock.withLock { self.inputs.last { $0.deviceID == deviceID } }
+        input?.emit(samples: samples, hostTime: mach_absolute_time())
     }
 
     func makeInput(_ id: AudioObjectID, handler: @escaping DirectCoreAudioPacketHandler) -> RecoveryInput {
