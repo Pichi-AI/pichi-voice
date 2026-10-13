@@ -135,6 +135,8 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
 
     func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] {
         try Task.checkCancellation()
+        let began = ContinuousClock.now
+        defer { MeetingPCMRuntimeDiagnostics.completed(.diarize, since: began, samples: samples.count) }
         let timeline = try self.diarizer.processComplete(
             samples,
             sourceSampleRate: nil,
@@ -174,7 +176,9 @@ private nonisolated struct PreparedParakeetASRSession: MeetingParakeetASRSession
     func transcribeWithTimings(
         _ samples: [Float]
     ) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
-        try await self.asrService.transcribeMeetingSamplesWithTimings(samples, provider: self.provider)
+        let began = ContinuousClock.now
+        defer { MeetingPCMRuntimeDiagnostics.completed(.asrInfer, since: began, samples: samples.count) }
+        return try await self.asrService.transcribeMeetingSamplesWithTimings(samples, provider: self.provider)
     }
 }
 
@@ -184,6 +188,20 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private let voiceModelDirectory: URL
     private let usesDefaultVoiceModelDirectory: Bool
     private let pcmIdentityState = MeetingPCMIdentityState()
+    private let compiledNemotron = MeetingNemotronCompiledModelOwner { source, target in
+        #if arch(arm64)
+        let began = ContinuousClock.now
+        defer { MeetingPCMRuntimeDiagnostics.completed(.compile, since: began) }
+        let temporary = try await MLModel.compileModel(at: source)
+        // CoreML returns a newly compiled temporary directory. Adopt only this derivative,
+        // never an installed source package or another model owner's cache.
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try Task.checkCancellation()
+        try FileManager.default.moveItem(at: temporary, to: target)
+        #else
+        throw MeetingParakeetNemotronRuntimeError.unsupportedArchitecture
+        #endif
+    }
     private let pcmSpeakerNameFormat = PichiLocalization.text("Speaker %lld")
 
     init(
@@ -204,9 +222,12 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             guard !PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(configuration.diarizationFingerprint) else {
                 throw MeetingNemotronModelReadinessError.modelNotInstalled(path: MeetingNemotronModelLocator.defaultPackageURL().path)
             }
-            artifact = try self.modelLocator.locate()
+            let located = try self.modelLocator.locate()
+            artifact = located
             if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
             try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
+            let locator = self.modelLocator
+            _ = try await self.compiledNemotron.compiledModel(for: located) { try locator.recheck($0) }
         } else { artifact = nil }
         try Task.checkCancellation()
         try self.pcmIdentityState.pin(attemptID: attemptID, configuration: configuration.identityFingerprint, artifact: artifact)
@@ -229,10 +250,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         defer { self.pcmIdentityState.end() }
         // The pipeline owns the outer withMeetingModelResidency scope, just as it
         // does for file-backed epochs. Nested resource claims are not permitted.
+        let pipelineID = DebugLogger.pipelineID
         let work = Task.detached(priority: .userInitiated) {
-            try await self.recognizePCMPhases(samples: samples, offset: offset, trackID: trackID,
-                                             attemptID: attemptID, configuration: configuration,
-                                             priorProfiles: prior.profiles, priorSpeakers: prior.speakers)
+            try await DebugLogger.$pipelineID.withValue(pipelineID) {
+                try await self.recognizePCMPhases(samples: samples, offset: offset, trackID: trackID,
+                                                 attemptID: attemptID, configuration: configuration,
+                                                 priorProfiles: prior.profiles, priorSpeakers: prior.speakers)
+            }
         }
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
@@ -308,6 +332,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     /// Runs between Nemotron and ASR, so the additional encoder never overlaps their residency.
     /// Only short, admitted single-speaker excerpts reach this local model; no audio is uploaded.
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
+        let began = ContinuousClock.now
+        defer { MeetingPCMRuntimeDiagnostics.completed(.voice, since: began, samples: samples.count) }
         #if arch(arm64)
         guard !samples.isEmpty else { return [] }
         try Task.checkCancellation()
@@ -358,7 +384,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         #if arch(arm64)
         // Recheck at open time: the artifact located at plan/readiness time is validated again
         // before CoreML touches it (plan §5).
-        let artifact = try self.modelLocator.recheck(artifact)
+        let locator = self.modelLocator
+        let compiledURL = try await self.compiledNemotron.compiledModel(for: artifact) { try locator.recheck($0) }
         // The checkpoint's trained cache settings: one silence frame per speaker, filled with its
         // learned silence embedding. Anything else splits one voice across several slots.
         let config = try SortformerConfig.nemotron(
@@ -375,11 +402,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         #else
         mlConfiguration.computeUnits = .cpuAndGPU
         #endif
+        let loadBegan = ContinuousClock.now
         let models = try await SortformerModels.load(
             config: config,
-            mainModelPath: artifact.packageURL,
+            mainModelPath: compiledURL,
             configuration: mlConfiguration
         )
+        MeetingPCMRuntimeDiagnostics.completed(.load, since: loadBegan, sourceBytes: artifact.totalByteCount)
         let factory = NemotronDiarizerFactory(config: config, models: models)
         do {
             let result = try await body(factory)
@@ -400,20 +429,48 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult
     ) async throws -> MeetingParakeetPhaseResult {
         let asrService = await self.asrServiceProvider()
+        let began = ContinuousClock.now
         return try await asrService.withPreparedMeetingASR(
             attemptID: attemptID,
             configuration: configuration
         ) { provider in
+            MeetingPCMRuntimeDiagnostics.completed(.asrPrepare, since: began)
             let session = PreparedParakeetASRSession(asrService: asrService, provider: provider)
             // ASRService runs this scope body on the main actor; the attempt's epoch loop
             // (materialization + model calls) must not live there. Cancellation of the scope
             // cancels this bridging await, which cancels the detached body.
-            let work = Task.detached(priority: .userInitiated) { try await body(session) }
+            let pipelineID = DebugLogger.pipelineID
+            let work = Task.detached(priority: .userInitiated) {
+                try await DebugLogger.$pipelineID.withValue(pipelineID) { try await body(session) }
+            }
             return try await withTaskCancellationHandler {
                 try await work.value
             } onCancel: {
                 work.cancel()
             }
+        }
+    }
+}
+
+/// Ordinary support logs use the existing rotated FileLogger in Release too. One line per
+/// phase/window contains only phase names, elapsed time and bounded counts, never text,
+/// error payloads, paths, speaker metadata or audio samples.
+private nonisolated enum MeetingPCMRuntimeDiagnostics {
+    nonisolated enum Phase: String, Sendable {
+        case compile = "nemotron.compile"
+        case load = "nemotron.load"
+        case diarize = "nemotron.diarize"
+        case voice = "voice.encode"
+        case asrPrepare = "asr.prepare"
+        case asrInfer = "asr.infer"
+    }
+    static func completed(_ phase: Phase, since began: ContinuousClock.Instant, samples: Int = 0, sourceBytes: Int64 = 0) {
+        let elapsed = began.duration(to: .now).components
+        let milliseconds = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
+        let count = max(0, min(320_000, samples))
+        let bytes = max(0, min(1_000_000_000, sourceBytes))
+        DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
+            "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes)"
         }
     }
 }
