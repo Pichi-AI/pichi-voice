@@ -12,6 +12,82 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    func testStrictBackendInputRefusedBeforeDownloadPermissionLeaseOrPersistence() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        let originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        var modelChecks = 0
+        var dependencyPreparations = 0
+        let processing = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Refused strict input cannot reach ASR"); return ASRService() },
+            managesModelResidency: false, meetingRuntimeFactory: { _ in XCTFail("Refused strict input cannot build runtime"); throw CancellationError() },
+            prepareDiarizationDependencies: { _ in XCTFail("Refused strict input cannot prepare pipeline dependencies") })
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter,
+            validateRecordingModels: { modelChecks += 1 }, prepareRecordingDependencies: { _ in dependencyPreparations += 1 })
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        configuration.mode = .inRoom
+        configuration.languageCode = "en"
+        for backendID in [MeetingBackendID.legacyCompatibility, .init(rawValue: "synthetic-unknown")] {
+            settings.meetingTranscriptionBackendID = backendID
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unsupported strict selection must fail before admission") }
+            catch {
+                let expected: MeetingBackendError = backendID == .legacyCompatibility
+                    ? .unsupportedInput(backend: backendID, input: .boundedMicrophonePCM) : .unknownBackend(backendID)
+                XCTAssertEqual(error as? MeetingBackendError, expected)
+            }
+        }
+        XCTAssertEqual(modelChecks, 0)
+        XCTAssertEqual(dependencyPreparations, 0)
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testStrictBackendChangedDuringPromptIsRevalidatedBeforeSessionAllocation() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        let originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.onPreflight = { await MainActor.run { settings.meetingTranscriptionBackendID = .legacyCompatibility } }
+        let arbiter = StubArbiter()
+        var modelChecks = 0
+        let processing = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Changed unsupported input cannot reach ASR"); return ASRService() },
+            managesModelResidency: false, meetingRuntimeFactory: { _ in XCTFail("Changed unsupported input cannot create a runtime"); throw CancellationError() })
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter,
+            validateRecordingModels: { modelChecks += 1 }, prepareRecordingDependencies: { _ in XCTFail("Disabled speaker labels cannot prepare dependencies") })
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        configuration.mode = .inRoom
+        configuration.languageCode = "en"
+        configuration.speakerLabelsEnabled = false
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Changed backend must be revalidated") }
+        catch { XCTAssertEqual(error as? MeetingBackendError, .unsupportedInput(backend: .legacyCompatibility, input: .boundedMicrophonePCM)) }
+        XCTAssertEqual(modelChecks, 1)
+        XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
     func testMemoryTailCheckpointSurvivesPartialStopFailure() async throws {
         try await self.assertMemoryTailSurvivesTerminalPath("partialFailure")
     }
@@ -5686,6 +5762,10 @@ final class MeetingProcessingSerializationGateTests: XCTestCase {
 
 @MainActor
 private final class MemoryCheckpointProcessingController: MeetingProcessingControlling {
+    func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
+        // This explicit synthetic processor implements the memory checkpoint path under test.
+        return PichiMeetingProviderFactory.registeredBackendDescriptor(for: "whisper-tiny")!
+    }
     private var operation: (@MainActor (MeetingPCMTranscriptBatch) async throws -> Void)?
     private(set) var cancelCount = 0
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws { operation = checkpoint }

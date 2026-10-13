@@ -11,7 +11,7 @@ import Foundation
 
 @MainActor
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
-    static let descriptor = MeetingBackendDescriptor(
+    nonisolated static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
         version: "5",
         execution: .local,
@@ -27,7 +27,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
         analysisSampleRate: 16_000,
-                diarizationDependencies: [.speakerSeparation, .voiceMatching]
+        diarizationDependencies: [.speakerSeparation, .voiceMatching],
+        supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
     )
 
     let descriptor: MeetingBackendDescriptor
@@ -51,6 +52,17 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         self.materializer = materializer
         self.descriptor = descriptor
         self.diarizationPolicy = diarizationPolicy
+    }
+
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        try self.descriptor.validatePCMInput(configuration: configuration, mode: mode)
+        _ = try MeetingProviderOptions.resolve(configuration)
+    }
+
+    func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning {
+        try self.descriptor.validatePCMInput(request)
+        try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode)
+        return try self.runtimeFactory(request)
     }
 
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {

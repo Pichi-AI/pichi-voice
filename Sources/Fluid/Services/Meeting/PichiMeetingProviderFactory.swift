@@ -44,7 +44,8 @@ enum PichiMeetingProviderFactory {
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
-                allowsTranscriptOnlyOnUnsupportedHardware: true
+                allowsTranscriptOnlyOnUnsupportedHardware: true,
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
             ),
             defaultLanguageCode: "ru",
             providerFactory: { configuration in
@@ -75,7 +76,8 @@ enum PichiMeetingProviderFactory {
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
-                allowsTranscriptOnlyOnUnsupportedHardware: true
+                allowsTranscriptOnlyOnUnsupportedHardware: true,
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
             ),
             defaultLanguageCode: "auto",
             providerFactory: { try WhisperProvider(meetingConfiguration: $0) },
@@ -111,7 +113,8 @@ enum PichiMeetingProviderFactory {
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
-                allowsTranscriptOnlyOnUnsupportedHardware: true
+                allowsTranscriptOnlyOnUnsupportedHardware: true,
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
             ),
             defaultLanguageCode: "auto",
             providerFactory: { try FluidAudioProvider(meetingConfiguration: $0) },
@@ -196,6 +199,19 @@ enum PichiMeetingProviderFactory {
         }
         let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
         return self.registrations[modelID]?.descriptor.id ?? saved
+    }
+
+    /// Capability/option admission uses registered metadata only. Installed artifact identity
+    /// belongs to the later frozen attempt snapshot; probing it here would hash full weights on
+    /// the main actor before downloads, permissions or the audio lease.
+    static func validationConfiguration(backendID: MeetingBackendID, languageCode: String,
+                                        diarizationEnabled: Bool) -> MeetingFinalProcessingConfiguration {
+        if let modelID = self.registrations.first(where: { $0.value.descriptor.id == backendID })?.key {
+            return MeetingFinalProcessingConfiguration(asrModel: modelID, languageCode: languageCode,
+                diarizationFingerprint: "unavailable:input-admission", speakerLabelsEnabled: diarizationEnabled)
+        }
+        return MeetingFinalProcessingConfiguration(languageCode: languageCode,
+            diarizationFingerprint: "unavailable:input-admission", speakerLabelsEnabled: diarizationEnabled)
     }
 
     /// The returned value is frozen once per attempt and used by planning, ASR and metadata.

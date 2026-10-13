@@ -22660,6 +22660,40 @@
         }
       }
     },
+    "Meeting backend \"%@\" does not support %@ input.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting backend \"%@\" does not support %@ input."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обработчик встречи «%@» не поддерживает аудиовход %@."
+          }
+        }
+      }
+    },
+    "Meeting backend \"%@\" produced capabilities different from its registration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting backend \"%@\" produced capabilities different from its registration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возможности обработчика встречи «%@» отличаются от зарегистрированных."
+          }
+        }
+      }
+    },
     "Meeting document views": {
       "extractionState": "manual",
       "localizations": {

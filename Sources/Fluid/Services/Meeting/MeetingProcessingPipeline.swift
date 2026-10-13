@@ -5,6 +5,7 @@ import Foundation
 
 @MainActor
 protocol MeetingProcessingControlling: AnyObject {
+    func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws
     func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
@@ -15,6 +16,9 @@ protocol MeetingProcessingControlling: AnyObject {
 }
 
 extension MeetingProcessingControlling {
+    func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
+        throw MeetingBackendError.unsupportedInput(backend: backendID, input: .boundedMicrophonePCM)
+    }
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws {
         throw MeetingProcessingError.noRecoverableAudio
     }
@@ -1462,6 +1466,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
 
         let declaredDescriptor = self.backendRegistry.descriptor(for: backendID)
+        if let descriptor = declaredDescriptor, !descriptor.supportedInputs.contains(.recordedChunks) {
+            throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
+        }
         if session.speakerLabelsEnabled != false, let descriptor = declaredDescriptor {
             try await self.prepareSpeakerDependencies(for: descriptor, session: session)
         }
@@ -1514,6 +1521,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
         guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
+        }
+        guard backend.descriptor.supportedInputs.contains(.recordedChunks) else {
+            throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
         }
         // Bare custom factories have no declared preflight metadata. Their descriptor is
         // available only after construction, still before planning and any runtime/model call.

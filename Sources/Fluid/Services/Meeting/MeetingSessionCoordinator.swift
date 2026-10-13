@@ -418,10 +418,18 @@ final class MeetingSessionCoordinator: ObservableObject {
             throw MeetingCoordinatorError.maintenanceInProgress
         }
 
+        // Reject unsupported strict input through the real backend factory before download
+        // owners or microphone permission prompts run. Repeat after prompts in case selection
+        // changed while they were open; final preparation still binds the exact session request.
+        let initialBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
+            selectedModelID: selectedModelID)
+        let initialPCMDescriptor = configuration.audioStorageMode == .memoryOnly
+            ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: initialBackendID) : nil
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         try await self.validateRecordingModels()
-        let dependencyDescriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
+        let dependencyDescriptor = initialPCMDescriptor
+            ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
         if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
            CPUArchitecture.isAppleSilicon || !dependencyDescriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
             try await self.prepareRecordingDependencies(dependencyDescriptor.diarizationDependencies)
@@ -467,8 +475,10 @@ final class MeetingSessionCoordinator: ObservableObject {
                 languageCode: configuration.languageCode,
                 selectedModelID: recordingModelID
             )
+            let admittedPCMDescriptor = configuration.audioStorageMode == .memoryOnly
+                ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: recordingBackendID) : nil
             if configuration.speakerLabelsEnabled != false,
-               let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID),
+               let descriptor = admittedPCMDescriptor ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID),
                CPUArchitecture.isAppleSilicon || !descriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
                 try await self.prepareRecordingDependencies(descriptor.diarizationDependencies)
                 try Task.checkCancellation()
