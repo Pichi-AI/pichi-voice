@@ -1342,6 +1342,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     var memoryAttempts: [MeetingSessionID: MeetingMemoryProcessingAttempt] = [:]
     let privacyRedactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
     private let managesModelResidency: Bool
+    private let settings: SettingsStore
     let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let serializationGate: MeetingProcessingSerializationGate
     let backendRegistry: MeetingTranscriptionBackendRegistry
@@ -1369,6 +1370,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     init(
         asrServiceProvider: @escaping @MainActor () -> any MeetingASRServicing,
         managesModelResidency: Bool = true,
+        settings: SettingsStore? = nil,
         privacyRedactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
         serializationGate: MeetingProcessingSerializationGate = .shared,
         backendRegistry: MeetingTranscriptionBackendRegistry? = nil,
@@ -1382,6 +1384,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         diarizationSupported: @escaping @MainActor () -> Bool = { CPUArchitecture.isAppleSilicon },
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
+        let settings = settings ?? SettingsStore.shared
+        self.settings = settings
         self.asrServiceProvider = asrServiceProvider
         self.privacyRedactorProvider = privacyRedactorProvider
         self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
@@ -1415,7 +1419,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             self.backendIDProvider = { _ in registryDefault }
         } else {
             self.backendIDProvider = { languageCode in
-                PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode)
+                PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode,
+                    selectedModelID: settings.selectedSpeechModel.rawValue,
+                    savedBackendID: settings.meetingTranscriptionBackendID)
             }
         }
     }
@@ -1559,7 +1565,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         let service = self.asrServiceProvider()
                         do {
                             processed = try await MeetingModelResidencyCoordinator.shared.withLegacySpeechModel(
-                                modelID: SettingsStore.shared.selectedSpeechModel.id, work: legacyWork
+                                modelID: self.settings.selectedSpeechModel.id, work: legacyWork
                             )
                         } catch {
                             await Task { try? await service.meetingResidencyParticipant().suspend() }.value
@@ -1877,11 +1883,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let asrService = self.asrServiceProvider()
         guard !asrService.isRunning else { throw MeetingProcessingError.dictationActive }
 
-        let selectedModel = SettingsStore.shared.selectedSpeechModel
+        let selectedModel = self.settings.selectedSpeechModel
         guard let languagePin = MeetingProviderLanguagePin(
             languageCode: session.languageCode,
             model: selectedModel,
-            settings: .shared
+            settings: self.settings
         ) else {
             throw MeetingProcessingError.providerDoesNotSupportLanguage(session.languageCode)
         }

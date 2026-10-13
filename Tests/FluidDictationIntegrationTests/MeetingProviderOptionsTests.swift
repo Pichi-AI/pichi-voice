@@ -111,7 +111,8 @@ final class MeetingProviderOptionsTests: XCTestCase {
             let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
             XCTAssertTrue(descriptor.supportedLanguageCodes.isSuperset(of: ["ru", "en", "auto"]))
             XCTAssertNotEqual(descriptor.id, .legacyCompatibility)
-            XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "auto", selectedModelID: model.rawValue), descriptor.id)
+            XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "auto", selectedModelID: model.rawValue,
+                savedBackendID: .productionDefault), descriptor.id)
             let provider = try PichiMeetingProviderFactory.make(configuration)
             if model.isWhisperModel {
                 let whisper = try XCTUnwrap(provider as? WhisperProvider)
@@ -124,6 +125,49 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertThrowsError(try MeetingProviderOptions.resolve(
             MeetingFinalProcessingConfiguration(asrModel: SettingsStore.SpeechModel.gigaam.rawValue, languageCode: "auto")
         ))
+    }
+
+    @MainActor
+    func testOwnedBackendPreferenceOverridesSharedSelectionWithoutChangingRollbackSemantics() {
+        let shared = SettingsStore.shared
+        let previousModel = shared.selectedSpeechModel
+        let previousBackend = shared.meetingTranscriptionBackendID
+        defer { shared.selectedSpeechModel = previousModel; shared.meetingTranscriptionBackendID = previousBackend }
+        shared.selectedSpeechModel = .whisperTiny
+        shared.meetingTranscriptionBackendID = .whisperTiny
+        let modelID = PichiMeetingProviderFactory.gigaamModelID
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
+            savedBackendID: .productionDefault), .gigaam)
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
+            savedBackendID: .gigaam), .gigaam)
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
+            savedBackendID: .whisperTiny), .whisperTiny)
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "en", selectedModelID: modelID,
+            savedBackendID: .legacyCompatibility), .legacyCompatibility)
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
+            savedBackendID: .legacyCompatibility), .productionDefault)
+        let unknown = MeetingBackendID(rawValue: "synthetic-unknown-owner")
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
+            savedBackendID: unknown), unknown)
+        // Convenience callers retain the shared owner's explicit preference.
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID), .whisperTiny)
+        XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
+    }
+
+    @MainActor
+    func testLiveModelBindsRegisteredConfigurationAndPreservesUnboundRollbackChoice() {
+        let override = PichiMeetingProviderFactory.configuration(backendID: .whisperTiny, languageCode: "ru",
+            artifactFingerprintOverride: "synthetic-whisper", diarizationEnabled: false)
+        XCTAssertEqual(PichiMeetingProviderFactory.liveModelID(backendID: .whisperTiny, configuration: override,
+            selectedModelID: PichiMeetingProviderFactory.gigaamModelID), PichiMeetingProviderFactory.whisperTinyModelID)
+        XCTAssertEqual(override.asrArtifactFingerprint, "synthetic-whisper")
+        let legacy = PichiMeetingProviderFactory.configuration(backendID: .legacyCompatibility,
+            languageCode: "en", diarizationEnabled: false)
+        XCTAssertEqual(PichiMeetingProviderFactory.liveModelID(backendID: .legacyCompatibility, configuration: legacy,
+            selectedModelID: PichiMeetingProviderFactory.whisperTinyModelID), PichiMeetingProviderFactory.whisperTinyModelID)
+        XCTAssertNil(legacy.asrArtifactFingerprint)
+        XCTAssertEqual(PichiMeetingProviderFactory.liveModelID(backendID: .init(rawValue: "synthetic-unknown"),
+            configuration: override, selectedModelID: PichiMeetingProviderFactory.gigaamModelID), PichiMeetingProviderFactory.gigaamModelID)
     }
 
     @MainActor

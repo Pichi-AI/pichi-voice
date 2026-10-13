@@ -667,6 +667,50 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         XCTAssertEqual(factoryCallCount, 0, "preflight failures must not construct a backend")
     }
 
+    func testOwnedSettingsSelectRetryWhileFirstProcessingRetainsRecordingPin() async throws {
+        let shared = SettingsStore.shared
+        let previousModel = shared.selectedSpeechModel
+        let previousBackend = shared.meetingTranscriptionBackendID
+        defer { shared.selectedSpeechModel = previousModel; shared.meetingTranscriptionBackendID = previousBackend }
+        shared.selectedSpeechModel = .whisperTiny
+        shared.meetingTranscriptionBackendID = .whisperTiny
+        let suite = "OwnedMeetingRetry.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let marker = CocoaError(.userCancelled)
+        var requests: [MeetingBackendRequest] = []
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { XCTFail("Routing test cannot prepare ASR"); return ASRService() },
+            managesModelResidency: false, settings: settings,
+            chunkObserver: UnreadableFixtureObserver(),
+            meetingRuntimeFactory: { request in requests.append(request); throw marker })
+        var session = self.makeSession(languageCode: "ru")
+        session.speakerLabelsEnabled = false
+        session.recordingBackendID = MeetingBackendID.whisperTiny.rawValue
+        session.recordingASRArtifactFingerprint = "synthetic-whisper-recording"
+        for retry in [false, true] {
+            if retry {
+                session.processingAttempts = [MeetingProcessingAttempt(id: UUID(), startedAt: Date(), completedAt: Date(),
+                    stage: .completed, pipelineVersion: MeetingProcessingPipeline.pipelineVersion,
+                    asrProvider: MeetingBackendID.whisperTiny.rawValue, asrModel: PichiMeetingProviderFactory.whisperTinyModelID,
+                    diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil)]
+            }
+            do {
+                _ = try await pipeline.process(session: session, sessionDirectory: FileManager.default.temporaryDirectory,
+                    progress: { _ in })
+                XCTFail("Expected marker before any runtime/inference")
+            } catch { XCTAssertEqual(error as? CocoaError, marker) }
+        }
+        XCTAssertEqual(requests.map { $0.configuration.asrModel }, [PichiMeetingProviderFactory.whisperTinyModelID,
+            PichiMeetingProviderFactory.gigaamModelID])
+        XCTAssertEqual(try XCTUnwrap(requests.first).configuration.asrArtifactFingerprint, "synthetic-whisper-recording")
+        XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, .productionDefault)
+    }
+
     func testSavedLegacyBackendUsesProductionForFrenchWithoutChangingPreference() async {
         let settings = SettingsStore.shared
         let previous = settings.meetingTranscriptionBackendID

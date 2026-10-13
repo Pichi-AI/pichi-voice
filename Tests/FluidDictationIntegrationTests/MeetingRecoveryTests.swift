@@ -88,6 +88,90 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(coordinator.isQuiescent)
     }
 
+    func testOwnedBackendAndFrozenModelIgnoreAnotherSettingsOwnersExplicitSelection() async throws {
+        let shared = SettingsStore.shared
+        let previousModel = shared.selectedSpeechModel
+        let previousBackend = shared.meetingTranscriptionBackendID
+        defer { shared.selectedSpeechModel = previousModel; shared.meetingTranscriptionBackendID = previousBackend }
+        shared.selectedSpeechModel = .whisperTiny
+        shared.meetingTranscriptionBackendID = .whisperTiny
+        let suite = "OwnedMeetingBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let processing = MemoryCheckpointProcessingController()
+        var frozen: MeetingFinalProcessingConfiguration?
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings,
+            validateFrozenRecordingConfiguration: { frozen = $0 })
+        var configuration = self.makeConfiguration()
+        configuration.mode = .inRoom
+        configuration.languageCode = "ru"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.speakerLabelsEnabled = false
+        let session = try await coordinator.startRecording(configuration: configuration)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        let prepared = try XCTUnwrap(processing.preparedSession)
+        let frozenConfiguration = try XCTUnwrap(frozen)
+        XCTAssertEqual(processing.validatedBackendIDs, [.gigaam, .gigaam])
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.gigaam.rawValue)
+        XCTAssertEqual(prepared.recordingBackendID, session.recordingBackendID)
+        XCTAssertEqual(frozenConfiguration.asrModel, PichiMeetingProviderFactory.gigaamModelID)
+        XCTAssertEqual(session.recordingASRArtifactFingerprint, frozenConfiguration.asrArtifactFingerprint)
+        XCTAssertEqual(prepared.recordingASRArtifactFingerprint, session.recordingASRArtifactFingerprint)
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.recordingBackendID, session.recordingBackendID)
+        let persisted = try await store.load(id: session.id)
+        XCTAssertEqual(persisted?.recordingBackendID, session.recordingBackendID)
+        XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, .productionDefault)
+    }
+
+    func testOwnedBackendChangedDuringPromptIsRevalidatedAgainstThatOwner() async throws {
+        let shared = SettingsStore.shared
+        let previousBackend = shared.meetingTranscriptionBackendID
+        defer { shared.meetingTranscriptionBackendID = previousBackend }
+        shared.meetingTranscriptionBackendID = .whisperTiny
+        let suite = "OwnedMeetingBackendPrompt.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.onPreflight = { await MainActor.run { settings.meetingTranscriptionBackendID = .legacyCompatibility } }
+        let arbiter = StubArbiter()
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Refused input cannot prepare models"); return ASRService() },
+            managesModelResidency: false, settings: settings)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+            audioArbiter: arbiter, settings: settings)
+        var configuration = self.makeConfiguration()
+        configuration.mode = .inRoom
+        configuration.languageCode = "en"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.speakerLabelsEnabled = false
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Owned backend change must be revalidated") }
+        catch { XCTAssertEqual(error as? MeetingBackendError, .unsupportedInput(backend: .legacyCompatibility, input: .boundedMicrophonePCM)) }
+        XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
+    }
+
     func testMemoryTailCheckpointSurvivesPartialStopFailure() async throws {
         try await self.assertMemoryTailSurvivesTerminalPath("partialFailure")
     }
@@ -5785,13 +5869,19 @@ final class MeetingProcessingSerializationGateTests: XCTestCase {
 
 @MainActor
 private final class MemoryCheckpointProcessingController: MeetingProcessingControlling {
+    private(set) var validatedBackendIDs: [MeetingBackendID] = []
+    private(set) var preparedSession: MeetingSession?
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
         // This explicit synthetic processor implements the memory checkpoint path under test.
-        return PichiMeetingProviderFactory.registeredBackendDescriptor(for: "whisper-tiny")!
+        self.validatedBackendIDs.append(backendID)
+        guard let descriptor = MeetingTranscriptionBackendRegistry.makeDefault().descriptor(for: backendID) else {
+            throw MeetingBackendError.unknownBackend(backendID)
+        }
+        return descriptor
     }
     private var operation: (@MainActor (MeetingPCMTranscriptBatch) async throws -> Void)?
     private(set) var cancelCount = 0
-    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws { operation = checkpoint }
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws { preparedSession = session; operation = checkpoint }
     func checkpoint(_ batch: MeetingPCMTranscriptBatch) async throws { try await operation?(batch) }
     func cancelMemoryAudio(sessionID: MeetingSessionID) async { cancelCount += 1; operation = nil }
     func process(session: MeetingSession, sessionDirectory: URL, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {

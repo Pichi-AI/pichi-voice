@@ -192,8 +192,9 @@ enum PichiMeetingProviderFactory {
         return try FluidAudioProvider(meetingConfiguration: configuration)
     }
 
-    static func selectedBackendID(languageCode: String, selectedModelID: String? = nil) -> MeetingBackendID {
-        let saved = SettingsStore.shared.meetingTranscriptionBackendID
+    static func selectedBackendID(languageCode: String, selectedModelID: String? = nil,
+                                  savedBackendID: MeetingBackendID? = nil) -> MeetingBackendID {
+        let saved = savedBackendID ?? SettingsStore.shared.meetingTranscriptionBackendID
         // Explicit rollback/unknown choices retain their historical meaning. The packaged
         // default lets a registered model choose its own backend; activation stores its ID.
         if saved != .productionDefault {
@@ -201,6 +202,14 @@ enum PichiMeetingProviderFactory {
         }
         let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
         return self.registrations[modelID]?.descriptor.id ?? saved
+    }
+
+    /// A registered provider's frozen configuration binds ASR and artifact identity. The
+    /// generic configuration of an unbound compatibility executor does not bind its ASR model.
+    nonisolated static func liveModelID(backendID: MeetingBackendID, configuration: MeetingFinalProcessingConfiguration,
+                                       selectedModelID: String) -> String {
+        guard self.registrations[configuration.asrModel]?.descriptor.id == backendID else { return selectedModelID }
+        return configuration.asrModel
     }
 
     /// Capability/option admission uses registered metadata only. Installed artifact identity

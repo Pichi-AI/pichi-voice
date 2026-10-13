@@ -423,7 +423,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         // owners or microphone permission prompts run. Repeat after prompts in case selection
         // changed while they were open; final preparation still binds the exact session request.
         let initialBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
-            selectedModelID: selectedModelID)
+            selectedModelID: selectedModelID, savedBackendID: self.settings.meetingTranscriptionBackendID)
         let initialPCMDescriptor = configuration.audioStorageMode == .memoryOnly
             ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: initialBackendID) : nil
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
@@ -479,7 +479,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             recordingModelID = selectedModelID
             recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(
                 languageCode: configuration.languageCode,
-                selectedModelID: recordingModelID
+                selectedModelID: recordingModelID,
+                savedBackendID: self.settings.meetingTranscriptionBackendID
             )
             let admittedPCMDescriptor = configuration.audioStorageMode == .memoryOnly
                 ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: recordingBackendID) : nil
@@ -548,7 +549,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         liveTranscriptionCoordinator.start(
             mode: configuration.mode,
             languageCode: configuration.languageCode,
-            modelID: recordingModelID,
+            modelID: PichiMeetingProviderFactory.liveModelID(backendID: recordingBackendID,
+                configuration: recordingASRConfiguration, selectedModelID: recordingModelID),
             artifactFingerprint: session.recordingASRArtifactFingerprint
         )
         }

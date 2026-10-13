@@ -31,7 +31,7 @@ final class AppServices: ObservableObject {
         let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
         let asr = ASRService(settings: settings)
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
-        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr },
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr }, settings: settings,
             privacyRedactorProvider: { privacy },
             prepareDiarizationModel: { _ = try await MeetingDiarizationModelStore.shared.ensureInstalled(includingVoiceEncoder: true) },
             prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) })
