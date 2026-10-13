@@ -48,6 +48,9 @@ private nonisolated final class CloudFixtureClock: @unchecked Sendable {
 private nonisolated final class CloudProviderFixtureProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (Int, Data)?)?
     nonisolated(unsafe) static var stops = CloudFixtureCounter()
+    // Bind callback evidence before URLSession can start or stop this instance.
+    // A late stop from an older exchange must not count toward the next fixture.
+    private let requestStops = CloudProviderFixtureProtocol.stops
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -58,7 +61,7 @@ private nonisolated final class CloudProviderFixtureProtocol: URLProtocol, @unch
             self.client?.urlProtocolDidFinishLoading(self)
         } catch { self.client?.urlProtocol(self, didFailWithError: error) }
     }
-    override func stopLoading() { _ = Self.stops.next() }
+    override func stopLoading() { _ = self.requestStops.next() }
 }
 
 @MainActor
