@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 import PichiGigaAM
 import XCTest
@@ -12,6 +13,20 @@ import XCTest
 /// in the hosted mobile target; that execution uses the adapters' actual CPU-only route.
 @MainActor
 final class MobileRegisteredModelInferenceTests: XCTestCase {
+    private final nonisolated class LiveObservations: @unchecked Sendable {
+        private let lock = NSLock()
+        private var ready = false
+        private var partials: [String] = []
+        private var utterances: [String] = []
+        private var failures: [String] = []
+        func markReady() { self.lock.withLock { self.ready = true } }
+        func partial(_ text: String) { self.lock.withLock { self.partials.append(text) } }
+        func utterance(_ text: String) { self.lock.withLock { self.utterances.append(text) } }
+        func failure(_ text: String) { self.lock.withLock { self.failures.append(text) } }
+        func snapshot() -> (ready: Bool, partials: [String], utterances: [String], failures: [String]) {
+            self.lock.withLock { (self.ready, self.partials, self.utterances, self.failures) }
+        }
+    }
     private struct Observation: Codable {
         let modelID: String
         let fixture: String
@@ -157,23 +172,92 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let root = try self.assets()
         let samples = try self.pcm("ru", in: root)
         let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
-        let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service }, modelLocator: MeetingNemotronModelLocator())
-        let track = UUID()
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        do {
+            #if os(macOS)
+            try await service.retireDictationASRResourcesForMeeting(lease: lease)
+            #endif
+            let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service }, modelLocator: MeetingNemotronModelLocator())
+            let track = UUID()
+            for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
+                let configuration = try await self.installedConfiguration(model: model, assets: root)
+                let attempt = UUID()
+                let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                    try await runtime.recognizePCM(samples: samples, offset: 12, trackID: track,
+                                                   attemptID: attempt, configuration: configuration)
+                }
+                XCTAssertFalse(batch.segments.isEmpty)
+                XCTAssertTrue(batch.segments.allSatisfy { $0.start.seconds >= 12 && $0.end.seconds <= 12 + Double(samples.count) / 16_000 + 0.001 })
+                XCTAssertTrue(batch.segments.allSatisfy { $0.speakerID == nil })
+                XCTAssertTrue(batch.speakers.isEmpty)
+                let files = FileManager.default.enumerator(at: root.appendingPathComponent("models"), includingPropertiesForKeys: nil)
+                let audioExtensions: Set<String> = ["wav", "aiff", "aif", "caf", "m4a", "pcm", "flac"]
+                XCTAssertFalse((files?.allObjects as? [URL] ?? []).contains { audioExtensions.contains($0.pathExtension.lowercased()) })
+            }
+            await service.shutdownForTermination()
+        } catch {
+            await service.shutdownForTermination()
+            throw error
+        }
+    }
+
+    func testOriginalBufferedCaptionEngineUsesEachRegisteredPublicArtifact() async throws {
+        let root = try self.assets()
+        let samples = try self.pcm("ru", in: root)
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1,
+                                         interleaved: false) else { throw NSError(domain: "MobileInferenceFixture", code: 2) }
+        var report: [[String: String]] = []
         for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
             let configuration = try await self.installedConfiguration(model: model, assets: root)
-            let attempt = UUID()
-            let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
-                try await runtime.recognizePCM(samples: samples, offset: 12, trackID: track,
-                                               attemptID: attempt, configuration: configuration)
+            let provider = try PichiMeetingProviderFactory.make(configuration)
+            let recognizer = PichiMeetingCaptionRecognizer(provider: provider)
+            let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+            let observations = LiveObservations()
+            await engine.configure(onPartial: { _, _, text, _, _ in observations.partial(text) },
+                                   onUtterance: { _, _, text, _, _ in observations.utterance(text) },
+                                   onDegraded: { _, text in observations.failure(text) },
+                                   onReady: { _ in observations.markReady() })
+            await engine.start()
+            do {
+                let deadline = ProcessInfo.processInfo.systemUptime + 60
+                while !observations.snapshot().ready, observations.snapshot().failures.isEmpty,
+                      ProcessInfo.processInfo.systemUptime < deadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertTrue(observations.snapshot().ready)
+                let offered = samples + [Float](repeating: 0, count: 16_000)
+                for start in stride(from: 0, to: offered.count, by: 1600) {
+                    let end = min(offered.count, start + 1600)
+                    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(end - start)))
+                    buffer.frameLength = AVAudioFrameCount(end - start)
+                    let target = try XCTUnwrap(buffer.floatChannelData?[0])
+                    for index in start..<end { target[index - start] = offered[index] }
+                    engine.offer(.init(buffer: buffer, pts: CMTime(value: Int64(start), timescale: 16_000),
+                                       duration: CMTime(value: Int64(end - start), timescale: 16_000)))
+                }
+                let drainDeadline = ProcessInfo.processInfo.systemUptime + 60
+                while observations.snapshot().utterances.isEmpty, observations.snapshot().failures.isEmpty,
+                      ProcessInfo.processInfo.systemUptime < drainDeadline {
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                let actual = observations.snapshot()
+                XCTAssertTrue(actual.failures.isEmpty, actual.failures.joined(separator: "; "))
+                XCTAssertFalse(actual.partials.isEmpty)
+                XCTAssertFalse(actual.utterances.isEmpty)
+                report.append(["modelID": model.rawValue, "partialCount": String(actual.partials.count),
+                               "committedText": actual.utterances.joined(separator: "\n")])
+                await engine.stop()
+                await recognizer.unload()
+            } catch {
+                await engine.stop()
+                await recognizer.unload()
+                throw error
             }
-            XCTAssertFalse(batch.segments.isEmpty)
-            XCTAssertTrue(batch.segments.allSatisfy { $0.start.seconds >= 12 && $0.end.seconds <= 12 + Double(samples.count) / 16_000 + 0.001 })
-            XCTAssertTrue(batch.segments.allSatisfy { $0.speakerID == nil })
-            XCTAssertTrue(batch.speakers.isEmpty)
-            let files = FileManager.default.enumerator(at: root.appendingPathComponent("models"), includingPropertiesForKeys: nil)
-            let audioExtensions: Set<String> = ["wav", "aiff", "aif", "caf", "m4a", "pcm", "flac"]
-            XCTAssertFalse((files?.allObjects as? [URL] ?? []).contains { audioExtensions.contains($0.pathExtension.lowercased()) })
         }
-        await service.shutdownForTermination()
+        let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: reportDirectory, withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+            .write(to: reportDirectory.appendingPathComponent("buffered-live-inference.json"), options: .atomic)
     }
 }

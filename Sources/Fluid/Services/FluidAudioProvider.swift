@@ -1782,19 +1782,21 @@ final class FluidAudioProvider: TranscriptionProvider {
     var shouldClearCacheAfterCancellation: Bool {
         // Hosted downloads own their unpublished temporary files. A later load
         // cancellation must retain the verified, atomically published model.
-        self.resolvedSpeechModel.parakeetDescriptor?.archiveURL == nil
+        self.meetingConfiguration?.asrArtifactDirectory == nil && self.resolvedSpeechModel.parakeetDescriptor?.archiveURL == nil
     }
 
-    func clearCache() async throws {
-        let selectedModel = self.resolvedSpeechModel
+    func releaseResidency() async {
         self.automaticPronunciationProfiles = []
         self.didLoadAutomaticPronunciationProfiles = false
         self.recordingGeneration = UUID()
         self.resetIncrementalSession()
         self.temporalWarmRequest = nil
         let warmTask = self.temporalWarmTask
+        self.temporalWarmTask = nil
         warmTask?.cancel()
         await warmTask?.value
+        let streamingManager = self.streamingAsrManager
+        let finalManager = self.finalAsrManager
         self.isReady = false
         self.streamingAsrManager = nil
         self.finalAsrManager = nil
@@ -1805,6 +1807,13 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.isWordBoostingActive = false
         self.boostedVocabularyTermsCount = 0
         self.boostedTermLookup = []
+        await streamingManager?.cleanup()
+        if let finalManager, finalManager !== streamingManager { await finalManager.cleanup() }
+    }
+
+    func clearCache() async throws {
+        let selectedModel = self.resolvedSpeechModel
+        await self.releaseResidency()
 
         guard let descriptor = selectedModel.parakeetDescriptor else {
             throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Parakeet model."])

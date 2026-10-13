@@ -428,6 +428,7 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func releaseResidency() async { self.unloadModel() }
+    var shouldClearCacheAfterCancellation: Bool { self.overriddenModelDirectory == nil && self.expectedArtifactFingerprint == nil }
 
     /// The loader consumes GGUF, not legacy whisper.cpp GGML `.bin` exports. Inspect the
     /// installed selected artifact once at attempt snapshot/preparation, never on UI render.
