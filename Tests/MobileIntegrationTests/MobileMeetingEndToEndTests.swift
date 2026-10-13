@@ -82,6 +82,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent("audio/ru.wav"))
         player.numberOfLoops = 1
         var backgroundObserved = false
+        var backgroundTextUpdates = 0
         do {
             let configuration = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom, title: "Physical synthetic speech")
             let recording = try await services.meetingSessionCoordinator.startRecording(configuration: configuration)
@@ -97,15 +98,24 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
             XCTAssertTrue(player.play())
             print("[PHYSICAL_MEETING_E2E] synthetic_speech_started")
+            var previousRevision = services.meetingSessionCoordinator.liveTranscript.revision
             for _ in 0..<25 {
                 try await Task.sleep(nanoseconds: 1_000_000_000)
-                backgroundObserved = backgroundObserved || UIApplication.shared.applicationState == .background
+                let isBackground = UIApplication.shared.applicationState == .background
+                let snapshot = services.meetingSessionCoordinator.liveTranscript
+                if isBackground, snapshot.revision > previousRevision,
+                   (!snapshot.utterances.isEmpty || snapshot.partials.values.contains(where: { !$0.text.isEmpty })) {
+                    backgroundTextUpdates += 1
+                }
+                previousRevision = snapshot.revision
+                backgroundObserved = backgroundObserved || isBackground
             }
             player.stop()
             let live = services.meetingSessionCoordinator.liveTranscript
             XCTAssertFalse(live.utterances.isEmpty && live.partials.values.allSatisfy { $0.text.isEmpty }, "Actual microphone speech must appear before recording stops")
             if ProcessInfo.processInfo.environment["PICHI_PHYSICAL_MEETING_BACKGROUND"] == "1" {
                 XCTAssertTrue(backgroundObserved, "The host app must actually enter the background during speech recognition")
+                XCTAssertGreaterThan(backgroundTextUpdates, 0, "Actual filtered live text must advance while the host app is backgrounded")
             }
             let completed = try await services.meetingSessionCoordinator.stopAndTranscribe()
             XCTAssertEqual(completed.state, .completed)
