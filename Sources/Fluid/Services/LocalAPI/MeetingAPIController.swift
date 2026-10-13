@@ -14,6 +14,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
         let updatedAt: Date
         let state: MeetingSessionState
         let languageCode: String
+        let applicationAudioScope: MeetingApplicationAudioScope?
         let durationSeconds: TimeInterval
         let segmentCount: Int
         let transcriptIsComplete: Bool?
@@ -53,6 +54,7 @@ struct MeetingAPIController: LocalAPIRouteHandler {
                     updatedAt: session.updatedAt,
                     state: session.state,
                     languageCode: session.languageCode,
+                    applicationAudioScope: session.mode == .onlineCall ? session.effectiveApplicationAudioScope : nil,
                     durationSeconds: session.duration,
                     segmentCount: session.transcriptSegments.count,
                     transcriptIsComplete: session.transcriptIsComplete

@@ -1409,6 +1409,49 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(segment.status, .final)
     }
 
+    func testLegacyCaptureAndSessionScopeRemainSelectedApplication() throws {
+        let configuration = MeetingModelFixture.makeOnlineConfiguration()
+        let decodedConfiguration = try JSONDecoder().decode(MeetingCaptureConfiguration.self, from: JSONEncoder().encode(configuration))
+        XCTAssertNil(decodedConfiguration.applicationAudioScope)
+        XCTAssertEqual(decodedConfiguration.effectiveApplicationAudioScope, .selectedApplication)
+        XCTAssertNoThrow(try decodedConfiguration.validate())
+        let decodedSession = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(MeetingModelFixture.makeSession()))
+        XCTAssertNil(decodedSession.applicationAudioScope)
+        XCTAssertEqual(decodedSession.effectiveApplicationAudioScope, .selectedApplication)
+        XCTAssertEqual(decodedSession.capturedApplication?.bundleIdentifier, configuration.application?.bundleIdentifier)
+        XCTAssertNoThrow(try decodedSession.validateForPersistence())
+        let decodedDefaults = try JSONDecoder().decode(MeetingRecordingDefaults.self, from: JSONEncoder().encode(MeetingRecordingDefaults.unconfigured))
+        XCTAssertNil(decodedDefaults.applicationAudioScope)
+        XCTAssertEqual(decodedDefaults.effectiveApplicationAudioScope, .systemAudio)
+    }
+
+    func testSystemAudioSessionRoundTripHasNoCapturedApplication() throws {
+        var configuration = MeetingModelFixture.makeOnlineConfiguration()
+        configuration.application = nil
+        configuration.applicationAudioScope = .systemAudio
+        XCTAssertNoThrow(try configuration.validate())
+        guard case .systemAudio? = configuration.applicationAudioSource else {
+            return XCTFail("System audio must resolve independently of process identity")
+        }
+        let legacy = MeetingModelFixture.makeSession()
+        let session = MeetingSession(configuration: configuration, timebase: legacy.timebase)
+        let decoded = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(decoded.applicationAudioScope, .systemAudio)
+        XCTAssertNil(decoded.capturedApplication)
+        XCTAssertEqual(decoded.audioSourceDisplayName, "System audio")
+        XCTAssertNoThrow(try decoded.validateForPersistence())
+        var invalid = decoded
+        invalid.capturedApplication = MeetingModelFixture.makeOnlineConfiguration().application
+        XCTAssertThrowsError(try invalid.validateForPersistence()) {
+            XCTAssertEqual($0 as? MeetingModelValidationError, .unexpectedSystemAudioApplication)
+        }
+        configuration.application = MeetingModelFixture.makeOnlineConfiguration().application
+        self.assertConfigurationValidationError(.unexpectedSystemAudioApplication, configuration: configuration)
+        configuration.application = nil
+        configuration.mode = .inRoom
+        self.assertConfigurationValidationError(.unexpectedInRoomApplication, configuration: configuration)
+    }
+
     func testCaptureConfigurationPinsEnglishAndSeparatesMicrophoneIdentifiers() {
         let configuration = MeetingCaptureConfiguration(
             mode: .inRoom,

@@ -61,6 +61,7 @@ def main() -> None:
     models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
     model_declarations = "\n".join(declaration(models, marker) for marker in (
         "nonisolated enum MeetingCaptureMode:",
+        "nonisolated enum MeetingApplicationAudioScope:",
         "nonisolated enum MeetingMicrophoneRole:",
         "nonisolated struct MeetingRecordingDefaults:",
         "nonisolated struct MeetingApplicationIdentity:",

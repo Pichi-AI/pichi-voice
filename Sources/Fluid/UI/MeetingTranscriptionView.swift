@@ -30,6 +30,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var selectedApplicationID: String?
     /// Stable intent survives source refreshes; the process ID is resolved before admission.
     var selectedApplicationBundleIdentifier: String?
+    var applicationAudioScope: MeetingApplicationAudioScope = .systemAudio
     var usesAutomaticApplication = true
     var selectedMicrophoneID: String?
     /// Once true, the default title stops following the selected application/mode.
@@ -58,6 +59,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         self.languageCode = defaults.languageCode
             ?? fallbackLanguageCode
         self.mode = defaults.mode
+        self.applicationAudioScope = defaults.effectiveApplicationAudioScope
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
         self.usesAutomaticApplication = defaults.usesAutomaticApplication
         self.selectedApplicationBundleIdentifier = defaults.usesAutomaticApplication ? nil : defaults.applicationBundleIdentifier
@@ -67,15 +69,24 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     }
 
     mutating func chooseApplication(_ application: MeetingApplicationIdentity?) {
+        self.applicationAudioScope = .selectedApplication
         self.usesAutomaticApplication = application == nil
         self.selectedApplicationID = application.map { MeetingApplicationOption(identity: $0).id }
         self.selectedApplicationBundleIdentifier = application?.bundleIdentifier
+    }
+
+    mutating func chooseSystemAudio() {
+        self.applicationAudioScope = .systemAudio
+        self.usesAutomaticApplication = false
+        self.selectedApplicationID = nil
+        self.selectedApplicationBundleIdentifier = nil
     }
 
     mutating func refreshApplicationSelection(
         from identities: [MeetingApplicationIdentity],
         automaticTarget: MeetingAutoDetector.ResolvedTarget?
     ) {
+        guard self.applicationAudioScope == .selectedApplication else { self.selectedApplicationID = nil; return }
         let options = identities.map(MeetingApplicationOption.init)
         if self.usesAutomaticApplication {
             self.selectedApplicationID = options.first {
@@ -92,6 +103,7 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         from identities: [MeetingApplicationIdentity],
         automaticTarget: MeetingAutoDetector.ResolvedTarget?
     ) throws -> MeetingApplicationIdentity? {
+        if self.mode == .onlineCall, self.applicationAudioScope == .systemAudio { return nil }
         let selected = identities.first { MeetingApplicationOption(identity: $0).id == self.selectedApplicationID }
         if self.mode == .onlineCall, self.usesAutomaticApplication {
             guard let selected, let automaticTarget,
@@ -112,15 +124,16 @@ struct MeetingTranscriptionSetupDraft: Equatable {
         applications: [MeetingApplicationIdentity]
     ) throws -> MeetingRecordingDefaults {
         let application = applications.first { MeetingApplicationOption(identity: $0).id == self.selectedApplicationID }
-        if self.mode == .onlineCall, !self.usesAutomaticApplication, application == nil {
+        if self.mode == .onlineCall, self.applicationAudioScope == .selectedApplication, !self.usesAutomaticApplication, application == nil {
             throw MeetingCaptureError.applicationNotSelected
         }
-        let savedApplication = self.mode == .onlineCall && !self.usesAutomaticApplication ? application : nil
+        let savedApplication = self.mode == .onlineCall && self.applicationAudioScope == .selectedApplication && !self.usesAutomaticApplication ? application : nil
         return MeetingRecordingDefaults(
             isConfigured: true,
             mode: self.mode,
             applicationBundleIdentifier: savedApplication?.bundleIdentifier,
             applicationDisplayName: savedApplication?.displayName,
+            applicationAudioScope: self.mode == .onlineCall ? self.applicationAudioScope : nil,
             microphoneCaptureDeviceID: microphone.captureDeviceID,
             microphoneCoreAudioUID: microphone.coreAudioUID,
             microphoneRole: .unknown,
@@ -409,12 +422,16 @@ struct MeetingTranscriptionView: View {
         .onChange(of: self.setupDraft.selectedApplicationID) { _, _ in
             self.regenerateDefaultTitleIfNeeded()
         }
+        .onChange(of: self.setupDraft.applicationAudioScope) { _, _ in
+            self.selectPreferredApplication(from: self.applications.map(\.identity))
+            self.regenerateDefaultTitleIfNeeded()
+        }
         .onChange(of: self.setupDraft.usesAutomaticApplication) { _, automatic in
-            guard automatic else { return }
+            guard automatic, self.setupDraft.applicationAudioScope == .selectedApplication else { return }
             self.selectPreferredApplication(from: self.applications.map(\.identity))
         }
         .onChange(of: self.appServices.meetingAutomaticTarget) { _, _ in
-            guard self.setupDraft.usesAutomaticApplication, !self.isShowingMeetingSettings,
+            guard self.setupDraft.applicationAudioScope == .selectedApplication, self.setupDraft.usesAutomaticApplication, !self.isShowingMeetingSettings,
                   self.coordinator.isQuiescent, !self.isStarting else { return }
             self.selectPreferredApplication(from: self.applications.map(\.identity))
             Task { await self.refreshSources(requestPermissions: false) }
@@ -596,7 +613,7 @@ struct MeetingTranscriptionView: View {
     private var readiness: MeetingSetupReadiness {
         let microphoneStatus = self.cachedMicrophoneStatus
         let microphoneReady = microphoneStatus == .authorized
-        let applicationResolved = (try? self.setupDraft.resolvedRecordingApplication(
+        let applicationResolved = self.setupDraft.applicationAudioScope == .systemAudio || (try? self.setupDraft.resolvedRecordingApplication(
             from: self.applications.map(\.identity),
             automaticTarget: self.appServices.meetingAutomaticTarget
         )) != nil
@@ -854,6 +871,7 @@ struct MeetingTranscriptionView: View {
                 MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName)
             },
             application: application,
+            applicationAudioScope: self.setupDraft.mode == .onlineCall ? self.setupDraft.applicationAudioScope : nil,
             microphone: microphone,
             timestampDefaultTitle: !self.setupDraft.titleWasEdited
         )
@@ -1044,7 +1062,7 @@ struct MeetingTranscriptionView: View {
             return nil
         }
         var application: MeetingApplicationIdentity?
-        if session.mode == .onlineCall {
+        if session.mode == .onlineCall, session.effectiveApplicationAudioScope == .selectedApplication {
             guard let bundleIdentifier = session.capturedApplication?.bundleIdentifier,
                   let resolved = self.applications.first(where: { $0.identity.bundleIdentifier == bundleIdentifier })
             else {
@@ -1059,6 +1077,7 @@ struct MeetingTranscriptionView: View {
             languageCode: session.languageCode,
             platform: session.platform,
             application: application,
+            applicationAudioScope: session.applicationAudioScope,
             microphone: microphone,
             timestampDefaultTitle: session.defaultTitleBase != nil
         )
@@ -2108,7 +2127,7 @@ private struct MeetingHistoryRow: View {
     }
 
     private var sourceName: String {
-        self.session.capturedApplication?.displayName ?? PichiLocalization.text("In-room")
+        self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
     }
 
     private var statusText: String {
@@ -2175,7 +2194,7 @@ private struct MeetingSetupCanvas: View {
     }
 
     private var resolvedApplication: MeetingApplicationOption? {
-        guard self.draft.mode == .onlineCall else { return nil }
+        guard self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .selectedApplication else { return nil }
         return self.applications.first(where: { $0.id == self.draft.selectedApplicationID })
     }
 
@@ -2186,11 +2205,13 @@ private struct MeetingSetupCanvas: View {
     }
 
     private var planHeadline: String {
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("Record audio from all apps.") }
         if let app = resolvedApplication { return PichiLocalization.format("%@ is open.", app.identity.displayName) }
         return PichiLocalization.text(self.draft.mode == .inRoom ? "In-person meeting." : "No call open.")
     }
 
     private var planDetail: String {
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("System audio and your mic will be recorded, including apps opened during the meeting.") }
         if let app = resolvedApplication { return PichiLocalization.format("%@ and your mic will be recorded.", app.identity.displayName) }
         if self.draft.mode == .inRoom { return PichiLocalization.text("Your mic will record the room.") }
         if self.readiness.showScreenRecordingSettingsAction {
@@ -2200,6 +2221,7 @@ private struct MeetingSetupCanvas: View {
     }
 
     private var sourceLabel: String {
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("System audio") }
         if let app = resolvedApplication { return app.identity.displayName }
         if self.draft.mode == .inRoom { return PichiLocalization.text("In person") }
         return PichiLocalization.text(self.draft.usesAutomaticApplication ? "Automatic" : "Source unavailable")
@@ -2281,10 +2303,14 @@ private struct MeetingSetupCanvas: View {
             self.sourceEntry(PichiLocalization.text("In person · mic only"), systemImage: "person.2", selected: self.draft.mode == .inRoom) {
                 self.draft.mode = .inRoom
             }
+            self.sourceEntry(PichiLocalization.text("System audio · all apps"), systemImage: "speaker.wave.2", selected: self.draft.mode == .onlineCall && self.draft.applicationAudioScope == .systemAudio) {
+                self.draft.mode = .onlineCall
+                self.draft.chooseSystemAudio()
+            }
             self.sourceEntry(
                 PichiLocalization.text("Automatic · follows a detected call"),
                 systemImage: "wand.and.stars",
-                selected: self.draft.mode == .onlineCall && self.draft.usesAutomaticApplication
+                selected: self.draft.mode == .onlineCall && self.draft.applicationAudioScope == .selectedApplication && self.draft.usesAutomaticApplication
             ) {
                 self.draft.mode = .onlineCall
                 self.draft.chooseApplication(nil)
@@ -2324,7 +2350,7 @@ private struct MeetingSetupCanvas: View {
     }
 
     private func applicationEntry(_ option: MeetingApplicationOption) -> some View {
-        let selected = self.draft.mode == .onlineCall && !self.draft.usesAutomaticApplication && self.draft.selectedApplicationID == option.id
+        let selected = self.draft.mode == .onlineCall && self.draft.applicationAudioScope == .selectedApplication && !self.draft.usesAutomaticApplication && self.draft.selectedApplicationID == option.id
         return self.sourceEntry(option.identity.displayName, systemImage: "app", selected: selected) {
             self.draft.mode = .onlineCall
             self.draft.chooseApplication(option.identity)

@@ -136,8 +136,7 @@
           }
         }
       }
-    }
-,
+    },
     "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
       "extractionState": "manual",
       "localizations": {
@@ -47397,6 +47396,108 @@
           "stringUnit": {
             "state": "translated",
             "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки продукта, а не измеренная точность распознавания. Для этого компактного экспорта INT8 не проводилась оценка WER или тест скорости на процессоре."
+          }
+        }
+      }
+    },
+    "System audio": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук"
+          }
+        }
+      }
+    },
+    "System audio · all apps": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio · all apps"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук · все приложения"
+          }
+        }
+      }
+    },
+    "Record audio from all apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record audio from all apps."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте звук всех приложений."
+          }
+        }
+      }
+    },
+    "System audio and your mic will be recorded, including apps opened during the meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio and your mic will be recorded, including apps opened during the meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Будут записаны системный звук и микрофон, включая приложения, открытые во время встречи."
+          }
+        }
+      }
+    },
+    "System audio includes apps opened during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio includes apps opened during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук включает приложения, открытые во время записи."
+          }
+        }
+      }
+    },
+    "System audio cannot be restricted to an application.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio cannot be restricted to an application."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук нельзя ограничить одним приложением."
           }
         }
       }

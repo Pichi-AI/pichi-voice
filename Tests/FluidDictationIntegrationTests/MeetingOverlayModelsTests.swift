@@ -402,6 +402,14 @@ final class MeetingMenuBarStartTests: XCTestCase {
         XCTAssertNil(manager.requestedNavigationDestination)
     }
 
+    func testFreshMenuBarDefaultsCaptureSystemAudioWithoutDetectedCall() throws {
+        let configuration = try self.configuration(defaults: .unconfigured, target: nil, applications: [])
+        XCTAssertEqual(configuration.applicationAudioScope, .systemAudio)
+        XCTAssertNil(configuration.application)
+        XCTAssertNil(configuration.platform)
+        XCTAssertNoThrow(try configuration.validate())
+    }
+
     func testAutomaticSourceUsesExactProcessAndWindow() throws {
         let configuration = try self.configuration(targetPID: 42, availablePID: 42)
         XCTAssertEqual(configuration.mode, .onlineCall)
@@ -428,6 +436,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
     func testSavedManualApplicationWorksWithoutAutomaticDetection() throws {
         var defaults = MeetingRecordingDefaults.unconfigured
         defaults.isConfigured = true
+        defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "manual.app"
         let application = MeetingApplicationIdentity(bundleIdentifier: "manual.app", processID: 73, displayName: "Manual App")
         let configuration = try self.configuration(defaults: defaults, target: nil, applications: [application])
@@ -439,6 +448,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
     func testUnavailableSavedManualApplicationNeverUsesDetectedAlternative() {
         var defaults = MeetingRecordingDefaults.unconfigured
         defaults.isConfigured = true
+        defaults.applicationAudioScope = .selectedApplication
         defaults.applicationBundleIdentifier = "manual.app"
         XCTAssertThrowsError(try self.configuration(
             defaults: defaults,
@@ -454,6 +464,7 @@ final class MeetingMenuBarStartTests: XCTestCase {
     ) throws -> MeetingCaptureConfiguration {
         var defaults = MeetingRecordingDefaults.unconfigured
         defaults.mode = mode
+        defaults.applicationAudioScope = .selectedApplication
         return try self.configuration(
             defaults: defaults,
             target: targetPID.map { MeetingAutoDetector.ResolvedTarget(bundleIdentifier: "meeting.app", pid: $0, windowID: 123) },
@@ -487,6 +498,42 @@ final class MeetingSetupSourceSelectionTests: XCTestCase {
 
     private func draft(_ defaults: MeetingRecordingDefaults = .unconfigured) -> MeetingTranscriptionSetupDraft {
         MeetingTranscriptionSetupDraft(defaults: defaults, autoDetectEnabled: true, browserDetectionEnabled: false, fallbackLanguageCode: "en")
+    }
+
+    func testSystemAudioStartsWithoutAnApplicationAndPersistsItsScope() throws {
+        var draft = self.draft()
+        XCTAssertEqual(draft.applicationAudioScope, .systemAudio)
+        draft.refreshApplicationSelection(from: [], automaticTarget: nil)
+        XCTAssertNil(try draft.resolvedRecordingApplication(from: [], automaticTarget: nil))
+        let saved = try draft.recordingDefaults(microphone: self.microphone, applications: [])
+        XCTAssertEqual(saved.applicationAudioScope, .systemAudio)
+        XCTAssertNil(saved.applicationBundleIdentifier)
+        let restored = self.draft(try JSONDecoder().decode(MeetingRecordingDefaults.self, from: JSONEncoder().encode(saved)))
+        XCTAssertEqual(restored.applicationAudioScope, .systemAudio)
+    }
+
+    func testLegacyManualPreferencesAdoptSystemScopeUntilExplicitlySelectedAgain() throws {
+        var legacyDefaults = MeetingRecordingDefaults.unconfigured
+        legacyDefaults.isConfigured = true
+        legacyDefaults.applicationBundleIdentifier = self.app.bundleIdentifier
+        var draft = self.draft(legacyDefaults)
+        XCTAssertEqual(draft.applicationAudioScope, .systemAudio)
+        draft.refreshApplicationSelection(from: [], automaticTarget: nil)
+        XCTAssertNil(try draft.resolvedRecordingApplication(from: [], automaticTarget: nil))
+        let saved = try draft.recordingDefaults(microphone: self.microphone, applications: [])
+        XCTAssertNil(saved.applicationBundleIdentifier)
+        XCTAssertEqual(saved.applicationAudioScope, .systemAudio)
+    }
+
+    func testSystemAudioChoiceClearsManualIdentityWithoutFollowingDetection() throws {
+        var draft = self.draft()
+        draft.chooseApplication(self.app)
+        draft.chooseSystemAudio()
+        let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: self.other.bundleIdentifier, pid: 73, windowID: 123)
+        draft.refreshApplicationSelection(from: [self.app, self.other], automaticTarget: target)
+        XCTAssertNil(draft.selectedApplicationID)
+        XCTAssertNil(draft.selectedApplicationBundleIdentifier)
+        XCTAssertNil(try draft.resolvedRecordingApplication(from: [self.app, self.other], automaticTarget: target))
     }
 
     func testManualChoiceSavesStableBundleAndRestoresCurrentProcessAfterRelaunch() throws {
@@ -542,6 +589,7 @@ final class MeetingSetupSourceSelectionTests: XCTestCase {
 
     func testAutomaticWithoutDetectionRejectsEvenWhenApplicationsAreAvailable() {
         var draft = self.draft()
+        draft.chooseApplication(nil)
         draft.refreshApplicationSelection(from: [self.app, self.other], automaticTarget: nil)
         XCTAssertNil(draft.selectedApplicationID)
         XCTAssertThrowsError(try draft.resolvedRecordingApplication(from: [self.app, self.other], automaticTarget: nil))
@@ -549,6 +597,7 @@ final class MeetingSetupSourceSelectionTests: XCTestCase {
 
     func testAutomaticPinsDetectedProcessAndWindowAndRejectsChangedTargetBeforeRefresh() throws {
         var draft = self.draft()
+        draft.chooseApplication(nil)
         let target = MeetingAutoDetector.ResolvedTarget(bundleIdentifier: self.app.bundleIdentifier, pid: 42, windowID: 777)
         draft.refreshApplicationSelection(from: [self.app, self.other], automaticTarget: target)
         let resolved = try XCTUnwrap(draft.resolvedRecordingApplication(from: [self.app, self.other], automaticTarget: target))

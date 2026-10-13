@@ -92,6 +92,7 @@ nonisolated enum MeetingTranscriptExporter {
             durationSeconds: session.duration,
             mode: session.mode.rawValue,
             applicationDisplayName: session.capturedApplication?.displayName,
+            applicationAudioScope: session.mode == .onlineCall ? session.effectiveApplicationAudioScope : nil,
             speakers: speakers,
             segments: segments
         )
@@ -177,6 +178,7 @@ private struct ExportedTranscript: Codable {
     var durationSeconds: TimeInterval
     var mode: String
     var applicationDisplayName: String?
+    var applicationAudioScope: MeetingApplicationAudioScope?
     var speakers: [ExportedSpeaker]
     var segments: [ExportedSegment]
 }
