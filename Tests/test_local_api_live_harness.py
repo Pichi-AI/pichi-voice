@@ -125,7 +125,7 @@ class LocalAPILiveHarnessTests(unittest.TestCase):
     def test_invalid_preflight_never_sends_http(self):
         for key, value in [("synthetic_audio", None), ("timeout", 0), ("timeout", 181),
                            ("timeout", float("nan")), ("app_pid", None), ("app_pid", 1),
-                           ("bundle_id", "wrong.identity")]:
+                           ("bundle_id", "wrong.identity"), ("expect_text_contains", " "), ("expect_provider", "")]:
             previous = getattr(self.args, key)
             setattr(self.args, key, value)
             with self.subTest(key=key), self.guards(), patch.object(HARNESS, "exchange") as send:
@@ -233,13 +233,15 @@ class LocalAPILiveHarnessTests(unittest.TestCase):
                 HARNESS.parse_response(raw)
 
     def test_socket_response_limit_and_total_deadline(self):
-        for chunks, clock in [([b"X" * (HARNESS.MAX_HEADER_BYTES + 1)], [0, 0, 0, 0]),
+        for chunks, clock in [([b"X" * (HARNESS.MAX_HEADER_BYTES + 1)], [0, 0, 0, 0, 0]),
                               ([b""], [0, 3])]:
             fake = FakeSocket(chunks)
             with patch.object(socket, "socket", return_value=fake), patch.object(HARNESS.time, "monotonic", side_effect=clock), \
                  self.assertRaises(HARNESS.HarnessError):
                 HARNESS.exchange("127.0.0.1", 47733, b"synthetic", 2)
             self.assertTrue(fake.closed)
+            if clock == [0, 3]:
+                self.assertEqual(fake.sent, [], "An expired connection budget must stop before writing any request")
 
     def test_health_and_error_shape_refuse_success_html_empty_and_wrong_version(self):
         for status, value in [(200, {}), (200, {"status": "ok", "version": "wrong"}), (400, {"status": "ok", "version": "1.6.11"})]:

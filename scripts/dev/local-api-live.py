@@ -189,6 +189,9 @@ def exchange(host, port, payload, timeout):
     with socket.socket(family, socket.SOCK_STREAM) as connection:
         connection.settimeout(timeout)
         connection.connect((host, port))
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, "request_deadline_exceeded")
+        connection.settimeout(remaining)
         connection.sendall(payload)
         raw = bytearray()
         while True:
@@ -243,6 +246,8 @@ def run_live(args):
     host, port = endpoint(args.endpoint)
     require(args.synthetic_audio is not None, "caller_supplied_synthetic_audio_required")
     require(1 <= args.timeout <= 180, "timeout_out_of_bounds")
+    require(args.expect_text_contains is None or bool(args.expect_text_contains.strip()), "empty_text_expectation")
+    require(args.expect_provider is None or bool(args.expect_provider.strip()), "empty_provider_expectation")
     fingerprint, samples = audio_fixture(args.synthetic_audio)
     app = target(args, port)
     rows = []
