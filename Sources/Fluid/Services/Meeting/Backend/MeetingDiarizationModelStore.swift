@@ -184,7 +184,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
         let destination = MeetingNemotronModelLocator.defaultPackageURL()
         let staging = destination.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("download-\(MeetingNemotronModelLocator.cacheVersion)", isDirectory: true)
-        let downloader = HuggingFaceModelDownloader(
+        let downloader = await HuggingFaceModelDownloader(
             owner: Self.repositoryOwner,
             repo: Self.repositoryName,
             revision: Self.repositoryRevision,

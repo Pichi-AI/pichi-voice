@@ -19,6 +19,11 @@ extension MeetingProcessingPipeline {
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws {
         guard session.audioStorageMode == .memoryOnly, self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
+        guard let descriptor = self.backendRegistry.descriptor(for: backendID) else { throw MeetingBackendError.unknownBackend(backendID) }
+        if session.speakerLabelsEnabled != false {
+            try await self.prepareDiarizationDependencies(descriptor.diarizationDependencies)
+            try Task.checkCancellation()
+        }
         let configuration = PichiMeetingProviderFactory.configuration(
             backendID: backendID, languageCode: session.languageCode,
             artifactFingerprintOverride: session.recordingASRArtifactFingerprint,

@@ -408,6 +408,17 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         XCTAssertTrue(store.allSpeakerResourcesReady)
     }
 
+    func testVoicePackageRejectsSymlinkedAncestorBeforeReadingWeights() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let package = root.appendingPathComponent("model.mlmodelc", isDirectory: true)
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("analytics"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createSymbolicLink(at: package.appendingPathComponent("weights"), withDestinationURL: outside)
+        XCTAssertThrowsError(try MeetingSpeakerVoiceModelArtifacts.validatePackageDirectories(at: package))
+    }
+
     func testUnavailableRepositoryMessage() {
         XCTAssertEqual(
             MeetingDiarizationModelStore.userMessage(for: NSError(domain: "HF", code: 401)),

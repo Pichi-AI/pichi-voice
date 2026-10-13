@@ -186,12 +186,14 @@ enum PichiMeetingProviderFactory {
     }
 
     static func selectedBackendID(languageCode: String, selectedModelID: String? = nil) -> MeetingBackendID {
-        let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
-        if let registration = self.registrations[modelID] {
-            return registration.descriptor.id
-        }
         let saved = SettingsStore.shared.meetingTranscriptionBackendID
-        return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+        // Explicit rollback/unknown choices retain their historical meaning. The packaged
+        // default lets a registered model choose its own backend; activation stores its ID.
+        if saved != .productionDefault {
+            return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+        }
+        let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
+        return self.registrations[modelID]?.descriptor.id ?? saved
     }
 
     /// The returned value is frozen once per attempt and used by planning, ASR and metadata.
@@ -205,8 +207,8 @@ enum PichiMeetingProviderFactory {
             return registration.configurationSnapshot(languageCode, artifactFingerprintOverride, diarizationEnabled)
         }
         return MeetingFinalProcessingConfiguration(languageCode: languageCode,
-                                                  diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
-                    speakerLabelsEnabled: diarizationEnabled)
+                                                  diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
+                                                  speakerLabelsEnabled: diarizationEnabled)
     }
 
     static func configuration(
@@ -219,8 +221,8 @@ enum PichiMeetingProviderFactory {
             return registration.configurationSnapshot(languageCode, artifactFingerprintOverride, diarizationEnabled)
         }
         return MeetingFinalProcessingConfiguration(asrModel: asrModel, languageCode: languageCode,
-                                                  diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
-                    speakerLabelsEnabled: diarizationEnabled)
+                                                  diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
+                                                  speakerLabelsEnabled: diarizationEnabled)
     }
 
     private static func gigaamConfiguration(

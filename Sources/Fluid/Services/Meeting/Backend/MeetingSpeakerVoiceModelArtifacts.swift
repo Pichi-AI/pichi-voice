@@ -23,10 +23,24 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
         AppBrand.modelsDirectory.appendingPathComponent("speaker-diarization-coreml", isDirectory: true)
             .appendingPathComponent(self.packageName, isDirectory: true)
     }
-    static func validate() throws { try self.validate(at: self.packageURL()) }
+    static func validateRootContainment() throws {
+        let root = AppBrand.modelsDirectory.resolvingSymlinksInPath().standardizedFileURL.path
+        let package = self.packageURL().resolvingSymlinksInPath().standardizedFileURL.path
+        guard package.hasPrefix(root + "/") else { throw MeetingModelResidencyError.unsupportedProvider }
+    }
+    static func validate() throws {
+        try self.validateRootContainment()
+        try self.validate(at: self.packageURL())
+    }
+    static func validatePackageDirectories(at directory: URL) throws {
+        for relative in ["", "analytics", "weights"] {
+            let url = relative.isEmpty ? directory : directory.appendingPathComponent(relative, isDirectory: true)
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true, values.isSymbolicLink != true else { throw MeetingModelResidencyError.unsupportedProvider }
+        }
+    }
     static func validate(at directory: URL) throws {
-        let folder = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard folder.isDirectory == true, folder.isSymbolicLink != true else { throw MeetingModelResidencyError.unsupportedProvider }
+        try self.validatePackageDirectories(at: directory)
         for proof in self.files {
             let url = directory.appendingPathComponent(proof.path)
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
@@ -42,9 +56,10 @@ nonisolated enum MeetingSpeakerVoiceModelArtifacts {
     }
     static func ensureInstalled(progress: @escaping @Sendable (Double) -> Void) async throws {
         if (try? self.validate()) != nil { return }
+        try self.validateRootContainment()
         let root = self.packageURL().deletingLastPathComponent()
         let stage = root.appendingPathComponent(".wespeaker-\(self.revision).staging", isDirectory: true)
-        let downloader = HuggingFaceModelDownloader(owner: "FluidInference", repo: "speaker-diarization-coreml", revision: self.revision,
+        let downloader = await HuggingFaceModelDownloader(owner: "FluidInference", repo: "speaker-diarization-coreml", revision: self.revision,
                                                      requiredItems: [.init(path: self.packageName, isDirectory: true)])
         try await downloader.ensureModelsPresent(at: stage) { fraction, _ in progress(fraction) }
         let source = stage.appendingPathComponent(self.packageName, isDirectory: true)

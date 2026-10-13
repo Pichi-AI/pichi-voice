@@ -1340,7 +1340,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let managesModelResidency: Bool
     let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let serializationGate: MeetingProcessingSerializationGate
-    private let backendRegistry: MeetingTranscriptionBackendRegistry
+    let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
     private let usesRecordingBackendPin: Bool
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
@@ -1356,7 +1356,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
-    private let prepareDiarizationDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
+    let prepareDiarizationDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
     /// Test seam: runs after the canonical sidecar is written and read-back verified, before the
     /// final cancellation check, so "cancelled after sidecar" is deterministically exercisable.
     private let canonicalSidecarVerifiedProbe: (MeetingResultSidecarReference) -> Void
@@ -1448,7 +1448,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             source: "MeetingProcessingPipeline"
         )
 
-        if session.speakerLabelsEnabled != false, let descriptor = self.backendRegistry.descriptor(for: backendID) {
+        let declaredDescriptor = self.backendRegistry.descriptor(for: backendID)
+        if session.speakerLabelsEnabled != false, let descriptor = declaredDescriptor {
             try await self.prepareDiarizationDependencies(descriptor.diarizationDependencies)
             try Task.checkCancellation()
         }
@@ -1501,6 +1502,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
         guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
+        }
+        // Bare custom factories have no declared preflight metadata. Their descriptor is
+        // available only after construction, still before planning and any runtime/model call.
+        if declaredDescriptor == nil, session.speakerLabelsEnabled != false {
+            try await self.prepareDiarizationDependencies(backend.descriptor.diarizationDependencies)
+            try Task.checkCancellation()
         }
         let plan = try backend.plan(request)
         if let defect = plan.agreementDefect(with: request, descriptor: backend.descriptor) {

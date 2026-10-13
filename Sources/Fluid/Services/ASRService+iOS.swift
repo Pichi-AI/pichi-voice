@@ -185,6 +185,9 @@ final class ASRService: ObservableObject {
         self.residentModelID = nil
         self.isAsrReady = false
         self.settings.selectedSpeechModel = model
+        if let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue) {
+            self.settings.meetingTranscriptionBackendID = descriptor.id
+        }
         self.modelsExistOnDisk = true
     }
 
