@@ -213,6 +213,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     private var savedCategory: AVAudioSession.Category?
     private var savedMode: AVAudioSession.Mode?
     private var savedOptions: AVAudioSession.CategoryOptions?
+    private var savedPreferredInput: AVAudioSessionPortDescription?
+    private var savedPreferredSampleRate: Double?
+    private var savedPreferredIOBufferDuration: TimeInterval?
     private var configuredSession = false
     private var installedTap = false
 
@@ -237,6 +240,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                     self.savedCategory = audioSession.category
                     self.savedMode = audioSession.mode
                     self.savedOptions = audioSession.categoryOptions
+                    self.savedPreferredInput = audioSession.preferredInput
+                    self.savedPreferredSampleRate = audioSession.preferredSampleRate
+                    self.savedPreferredIOBufferDuration = audioSession.preferredIOBufferDuration
                     // Default mode avoids voice-chat processing that would alter in-room speech.
                     // Mixing keeps other apps' presentation playback eligible; actual routing and
                     // interruption behavior must still be verified on each physical device.
@@ -302,11 +308,28 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                 do {
                     if self.configuredSession {
                         let session = AVAudioSession.sharedInstance()
-                        try session.setActive(false, options: .notifyOthersOnDeactivation)
+                        var restorationFailure: Error?
+                        func restore(_ operation: () throws -> Void) {
+                            do { try operation() } catch { restorationFailure = restorationFailure ?? error }
+                        }
+                        // Attempt every restoration even when one setter fails. The engine/tap
+                        // are already stopped, so restoring a vanished input to automatic is safe.
+                        let priorInput = self.savedPreferredInput.flatMap { prior in
+                            session.availableInputs?.first(where: { $0.uid == prior.uid })
+                        }
+                        restore { try session.setPreferredInput(priorInput) }
+                        if let rate = self.savedPreferredSampleRate, rate > 0 {
+                            restore { try session.setPreferredSampleRate(rate) }
+                        }
+                        if let duration = self.savedPreferredIOBufferDuration, duration > 0 {
+                            restore { try session.setPreferredIOBufferDuration(duration) }
+                        }
+                        restore { try session.setActive(false, options: .notifyOthersOnDeactivation) }
                         if let category = self.savedCategory, let mode = self.savedMode, let options = self.savedOptions {
-                            try session.setCategory(category, mode: mode, options: options)
+                            restore { try session.setCategory(category, mode: mode, options: options) }
                         }
                         self.configuredSession = false
+                        if let restorationFailure { throw restorationFailure }
                     }
                     if let failure = self.lock.withLock({ self.terminalFailure }) { throw failure }
                     continuation.resume()
