@@ -49764,6 +49764,40 @@
           }
         }
       }
+    },
+    "Oops, text wasn't inserted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oops, text wasn't inserted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось вставить текст"
+          }
+        }
+      }
+    },
+    "Your transcript is saved. Copy it and paste it into a text field.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your transcript is saved. Copy it and paste it into a text field."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст сохранён. Скопируйте его и вставьте в текстовое поле."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

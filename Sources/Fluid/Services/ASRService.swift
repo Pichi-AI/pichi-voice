@@ -7698,6 +7698,7 @@ final class ASRService: ObservableObject {
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval? = nil,
         preserveTranscriptOnClipboard: Bool = false,
+        requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         await self.typeOutputPlanToActiveField(
@@ -7705,6 +7706,7 @@ final class ASRService: ObservableObject {
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            requiredFocusTarget: requiredFocusTarget,
             isOutputValid: isOutputValid
         )
     }
@@ -7717,6 +7719,7 @@ final class ASRService: ObservableObject {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         preserveTranscriptOnClipboard: Bool = false,
+        requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         let requestedAt = ProcessInfo.processInfo.systemUptime
@@ -7734,6 +7737,7 @@ final class ASRService: ObservableObject {
             toggleStopRequestedAt: toggleStopRequestedAt,
             tracksDictionaryCorrections: tracksDictionaryCorrections,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            requiredFocusTarget: requiredFocusTarget,
             isOutputValid: isOutputValid
         )
         let dispatchedAt = ProcessInfo.processInfo.systemUptime

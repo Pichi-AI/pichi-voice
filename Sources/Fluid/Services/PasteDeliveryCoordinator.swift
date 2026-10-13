@@ -645,6 +645,7 @@ final class PasteDeliveryCoordinator {
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
+        targetIsReady: @escaping @MainActor () -> Bool = { true },
         onCommandPosted: ((TimeInterval) -> Void)? = nil
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
@@ -658,6 +659,13 @@ final class PasteDeliveryCoordinator {
         }
 
         guard isOutputValid() else { return .cancelled }
+        guard targetIsReady() else {
+            if preserveTranscriptOnClipboard, isOutputValid() {
+                self.generation &+= 1
+                self.writeBackup(text)
+            }
+            return .recoverableFailure(.targetUnavailable)
+        }
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.generation &+= 1
         let generation = self.generation
@@ -689,6 +697,10 @@ final class PasteDeliveryCoordinator {
         guard isOutputValid() else {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
             return .cancelled
+        }
+        guard targetIsReady() else {
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: preserveTranscriptOnClipboard)
+            return .recoverableFailure(.targetUnavailable)
         }
         let commandPosted = await self.commandPoster.postGlobalPasteCommand()
         let commandPostedAt = ProcessInfo.processInfo.systemUptime

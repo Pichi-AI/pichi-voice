@@ -431,6 +431,7 @@ final class TypingService {
         textReadyAt: TimeInterval?,
         toggleStopRequestedAt: TimeInterval? = nil,
         preserveTranscriptOnClipboard: Bool = false,
+        requiredFocusTarget: CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         await self.typeOutputPlanInstantly(
@@ -439,6 +440,7 @@ final class TypingService {
             textReadyAt: textReadyAt,
             toggleStopRequestedAt: toggleStopRequestedAt,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            requiredFocusTarget: requiredFocusTarget,
             isOutputValid: isOutputValid
         )
     }
@@ -452,6 +454,7 @@ final class TypingService {
         tracksDictionaryCorrections: Bool = false,
         preserveTranscriptOnClipboard: Bool = false,
         verifiesLanding: Bool = true,
+        requiredFocusTarget: CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
@@ -518,6 +521,11 @@ final class TypingService {
             return result
         }
 
+        let targetIsReady: @MainActor () -> Bool = {
+            requiredFocusTarget.map(Self.isExactFocusTargetActive) ?? true
+        }
+        guard targetIsReady() else { return .recoverableFailure(.targetUnavailable) }
+        let insertionIsValid: @MainActor () -> Bool = { isOutputValid() && targetIsReady() }
         let usesClipboard = mode == .reliablePaste ||
             self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID) != nil
         // The read-back baseline costs an AX value read; only the clipboard
@@ -532,9 +540,10 @@ final class TypingService {
                 text,
                 preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
                 isOutputValid: isOutputValid,
+                targetIsReady: targetIsReady,
                 onCommandPosted: { dispatchedAt = $0 }
             )
-        } else if await self.insertTextDirectlyOffMain(text, preferredTargetPID: preferredTargetPID, isOutputValid: isOutputValid) {
+        } else if await self.insertTextDirectlyOffMain(text, preferredTargetPID: preferredTargetPID, isOutputValid: insertionIsValid) {
             deliveryPath = .direct
             await PasteDeliveryCoordinator.shared.copyBackup(text, enabled: preserveTranscriptOnClipboard, isOutputValid: isOutputValid)
             result = .commandPosted
@@ -546,6 +555,7 @@ final class TypingService {
                 text,
                 preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
                 isOutputValid: isOutputValid,
+                targetIsReady: targetIsReady,
                 onCommandPosted: { dispatchedAt = $0 }
             )
         }
@@ -618,6 +628,7 @@ final class TypingService {
                     preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
                     // A send key empties the field right after the paste, so the read-back would report a false miss.
                     verifiesLanding: postInsertionKey == nil,
+                    requiredFocusTarget: requiredFocusTarget,
                     isOutputValid: isOutputValid
                 )
                 guard result.wasDispatched else {

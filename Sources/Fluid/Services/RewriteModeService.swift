@@ -17,6 +17,15 @@ final class RewriteModeService: ObservableObject {
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
+    /// Direct typing rechecks validity from native queues outside a Swift Task.
+    /// Keep cancellation attached to this acceptance, including those callbacks.
+    private final nonisolated class AcceptanceCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        var isCancelled: Bool { self.lock.withLock { self.cancelled } }
+        func cancel() { self.lock.withLock { self.cancelled = true } }
+    }
     private var thinkingBuffer: [String] = [] // Buffer thinking tokens
     private var forcePromptTraceToConsole: Bool {
         ProcessInfo.processInfo.environment["FLUID_PROMPT_TRACE"] == "1"
@@ -154,8 +163,12 @@ final class RewriteModeService: ObservableObject {
     }
 
     @MainActor
-    func acceptRewrite(_ text: String) async -> TextDeliveryResult {
-        guard !Task.isCancelled, !self.isAcceptingRewrite else { return .cancelled }
+    func acceptRewrite(
+        _ text: String,
+        targetContext: TypingService.RecordingTargetContext?,
+        isOutputValid: @escaping @MainActor () -> Bool = { true }
+    ) async -> TextDeliveryResult {
+        guard !Task.isCancelled, isOutputValid(), !self.isAcceptingRewrite else { return .cancelled }
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
             return .cancelled
@@ -169,30 +182,40 @@ final class RewriteModeService: ObservableObject {
         // queued button action cannot dispatch the same rewrite concurrently.
         self.isAcceptingRewrite = true
         defer { self.isAcceptingRewrite = false }
-        let isOutputValid: @MainActor () -> Bool = { !Task.isCancelled }
-        NSApp.hide(nil)
-        // Hiding alone races the paste: the focused element can still be our
-        // panel when the editability check runs. Put focus back on the field
-        // the rewrite was recorded from, and fall back to a short settle.
-        var targetPID: pid_t?
-        if let context = NotchContentState.shared.recordingTargetContext {
-            let preparation = await TypingService.prepareTargetForDelivery(context, isOutputValid: isOutputValid)
-            self.appendDiagnosticLog("acceptRewrite focus=\(preparation.rawValue) pid=\(context.pid)")
-            guard isOutputValid() else { return .cancelled }
-            guard preparation.isReady else {
-                return .recoverableFailure(AXIsProcessTrusted() ? .targetRestoreFailed : .accessibilityNotTrusted)
+        let cancellation = AcceptanceCancellation()
+        let outputIsValid: @MainActor () -> Bool = { !cancellation.isCancelled && isOutputValid() }
+        return await withTaskCancellationHandler {
+            guard outputIsValid() else { return .cancelled }
+            NSApp.hide(nil)
+            // Hiding alone races the paste: the focused element can still be our
+            // panel when the editability check runs. Put focus back on the field
+            // captured by the accepting action, and fall back to a short settle.
+            var targetPID: pid_t?
+            var focusTarget: TypingService.CapturedFocusTarget?
+            if let context = targetContext {
+                guard let element = context.element else { return .recoverableFailure(.targetUnavailable) }
+                let preparation = await TypingService.prepareTargetForDelivery(context, isOutputValid: outputIsValid)
+                self.appendDiagnosticLog("acceptRewrite focus=\(preparation.rawValue) pid=\(context.pid)")
+                guard outputIsValid() else { return .cancelled }
+                guard preparation.isReady else {
+                    return .recoverableFailure(AXIsProcessTrusted() ? .targetRestoreFailed : .accessibilityNotTrusted)
+                }
+                targetPID = context.pid
+                focusTarget = .init(pid: context.pid, window: context.window, element: element)
+            } else {
+                try? await Task.sleep(nanoseconds: 80_000_000)
             }
-            targetPID = context.pid
-        } else {
-            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard outputIsValid() else { return .cancelled }
+            return await self.typingService.typeTextInstantly(
+                text,
+                preferredTargetPID: targetPID,
+                textReadyAt: nil,
+                requiredFocusTarget: focusTarget,
+                isOutputValid: outputIsValid
+            )
+        } onCancel: {
+            cancellation.cancel()
         }
-        guard isOutputValid() else { return .cancelled }
-        return await self.typingService.typeTextInstantly(
-            text,
-            preferredTargetPID: targetPID,
-            textReadyAt: nil,
-            isOutputValid: isOutputValid
-        )
     }
 
     func clearState() {
