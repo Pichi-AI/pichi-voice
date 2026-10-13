@@ -384,7 +384,9 @@ struct MobileMeetingRoot: View {
     }
 
     private func transcript(_ session: MeetingSession) -> some View {
-        ScrollView {
+        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        let rows = MeetingTranscriptExporter.displayRows(for: session.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start < $1.start }, in: session)
+        return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Text(session.title).font(theme.typography.title)
                 HStack {
@@ -444,13 +446,17 @@ struct MobileMeetingRoot: View {
                 if let message = playback.errorMessage {
                     Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
                 }
-                ForEach(session.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start < $1.start }) { segment in
+                LazyVStack(alignment: .leading, spacing: 20) {
+                ForEach(rows, id: \.segment.id) { row in
+                    let segment = row.segment
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text(MeetingTranscriptExporter.timestampText(segment.start.seconds)).monospacedDigit()
-                            Text(MeetingTranscriptExporter.speakerLabel(for: segment, in: session,
-                                speakerNames: Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) }),
-                                language: PichiLocalization.language)).foregroundStyle(theme.palette.secondaryText)
+                            if row.showsLabel {
+                                Text(MeetingTranscriptExporter.speakerLabel(for: segment, in: session,
+                                    speakerNames: names, language: PichiLocalization.language))
+                                    .foregroundStyle(theme.palette.secondaryText)
+                            }
                             Spacer()
                             if session.hasFinalizedAudio && session.retention.audioDeletedAt == nil {
                                 Button { playback.toggle(sessionID: session.id, segmentID: segment.id) } label: {
@@ -468,6 +474,7 @@ struct MobileMeetingRoot: View {
                             MeetingSegmentAudioPlayer(playback: playback, isLoading: playback.isLoading)
                         }
                     }.accessibilityElement(children: .contain).accessibilityIdentifier("transcript.segment.\(segment.id)")
+                }
                 }
             }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
         }.accessibilityIdentifier("meeting.transcript")

@@ -57,6 +57,20 @@ nonisolated enum MeetingTranscriptExporter {
         ].joined(separator: "|")
     }
 
+    /// Shared presentation only: preserve every input segment and show its label
+    /// at a speaker/attribution change, as the original desktop transcript does.
+    static func displayRows(for segments: [MeetingTranscriptSegment], in session: MeetingSession)
+        -> [(segment: MeetingTranscriptSegment, showsLabel: Bool)] {
+        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        var previousIdentity: String?
+        return segments.map { segment in
+            let identity = self.speakerLabelIdentity(for: segment, in: session, speakerNames: names)
+            let showsLabel = identity != previousIdentity
+            previousIdentity = identity
+            return (segment, showsLabel)
+        }
+    }
+
     static func json(for session: MeetingSession) throws -> Data {
         let speakers = session.activeSpeakers.map {
             ExportedSpeaker(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)
