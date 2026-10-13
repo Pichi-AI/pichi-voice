@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -61,6 +62,26 @@ class DiarizationRepeatabilityTests(unittest.TestCase):
         left = artifact(segment("a", 0, 3), segment("b", 0, 3))
         right = artifact(segment("new-b", 0, 3), segment("new-a", 0, 3))
         self.assertEqual(self.compare(left, right)["status"], "PASS")
+
+    def test_end_jitter_does_not_change_simultaneous_speaker_numbering(self):
+        left = artifact(segment("a", 0, 5), segment("b", 0, 5), segment("a", 10, 15), segment("b", 20, 25))
+        right = artifact(segment("x", 0, 5.01), segment("y", 0, 5), segment("x", 10, 15), segment("y", 20, 25))
+        self.assertEqual(self.compare(left, right)["status"], "PASS")
+
+    def test_start_jitter_can_reorder_first_appearance_without_partition_change(self):
+        left = artifact(segment("a", 1, 5), segment("b", 1, 4), segment("a", 6, 7))
+        right = artifact(segment("x", 0.98, 5), segment("y", 1, 4), segment("x", 6, 7))
+        self.assertEqual(self.compare(left, right)["status"], "PASS")
+
+    def test_global_bijection_reassigns_an_ambiguous_candidate(self):
+        left = artifact(segment("a", 0, 2.05), segment("b", 0.1, 2))
+        right = artifact(segment("x", 0.02, 2), segment("y", 0.08, 2.14))
+        self.assertEqual(self.compare(left, right)["status"], "PASS")
+
+    def test_many_to_one_candidate_matching_cannot_create_false_pass(self):
+        left = artifact(segment("a", 0, 2), segment("b", 0.05, 2))
+        right = artifact(segment("x", 0.02, 2), segment("y", 1, 2))
+        self.assertEqual(self.compare(left, right)["status"], "FAIL")
 
     def test_two_ids_do_not_hide_changed_speaker_assignment(self):
         left = artifact(segment("a", 0, 3), segment("b", 4, 7), segment("a", 8, 11))
@@ -129,6 +150,19 @@ class DiarizationRepeatabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECK.ArtifactError, "too_many_segments"):
             CHECK.normalize_segments(value)
 
+    def test_speaker_count_bounds_limit_bijection_work(self):
+        value = artifact(*(segment(str(index), 0, 3) for index in range(CHECK.MAX_SPEAKERS + 1)))
+        with self.assertRaisesRegex(CHECK.ArtifactError, "too_many_speakers"):
+            CHECK.normalize_segments(value)
+
+    def test_same_speaker_overlap_is_explicitly_unsupported(self):
+        for value in (artifact(segment("a", 0, 5), segment("a", 0.01, 3)),
+                      artifact(segment("a", 0, 3), segment("a", 0, 3))):
+            with self.assertRaisesRegex(CHECK.ArtifactError, "same_speaker_overlap"):
+                CHECK.normalize_segments(value)
+        adjacent = artifact(segment("a", 0, 3), segment("a", 3, 6))
+        self.assertEqual(self.compare(adjacent, adjacent)["status"], "PASS")
+
     def test_cli_success_ignores_transcript_embeddings_and_private_metadata(self):
         left = artifact(segment("SYNTHETIC_SPEAKER_SECRET", 0, 3))
         left["text"] = "SYNTHETIC_TRANSCRIPT_MUST_NOT_PRINT"
@@ -147,6 +181,7 @@ class DiarizationRepeatabilityTests(unittest.TestCase):
     def test_cli_malformed_json_duplicate_keys_and_nonfinite_constants_return_error(self):
         for text in ("{", '{"segments":[],"segments":[]}', '{"segments":[],"private":NaN}',
                      '{"segments":[],"private":Infinity}', '{"segments":[],"private":-Infinity}',
+                     '{"segments":[],"embedding":[1e999]}',
                      '{"segments":[{"speakerID":"a","start":0,"end":1e999}]}'):
             with self.subTest(text=text):
                 status, report = self.cli(text, artifact())
@@ -168,6 +203,34 @@ class DiarizationRepeatabilityTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)["reason"], "unreadable_artifact")
         self.assertNotIn("SYNTHETIC_PATH_SECRET", result.stdout + result.stderr)
         self.assertEqual(result.stderr, "")
+
+    def test_nonregular_directory_is_rejected_before_reading(self):
+        with tempfile.TemporaryDirectory(prefix="PRIVATE_DIRECTORY_MARKER-") as directory:
+            result = subprocess.run([sys.executable, "-S", str(SCRIPT), directory, "unused"], capture_output=True, text=True, timeout=2)
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(json.loads(result.stdout)["reason"], "regular_file_required")
+            self.assertNotIn(directory, result.stdout + result.stderr)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "Synthetic FIFO requires POSIX")
+    def test_fifo_and_symlink_to_fifo_are_rejected_without_waiting_for_writer(self):
+        with tempfile.TemporaryDirectory(prefix="PRIVATE_FIFO_MARKER-") as directory:
+            fifo = Path(directory) / "metadata.fifo"
+            os.mkfifo(fifo)
+            linked = Path(directory) / "linked.fifo"
+            linked.symlink_to(fifo)
+            for path in (fifo, linked):
+                result = subprocess.run([sys.executable, "-S", str(SCRIPT), str(path), "unused"], capture_output=True, text=True, timeout=2)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stdout)["reason"], "regular_file_required")
+                self.assertNotIn(directory, result.stdout + result.stderr)
+
+    def test_symlinks_to_regular_json_remain_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original.json"
+            original.write_text(json.dumps(artifact(segment("a", 0, 3))))
+            linked = Path(directory) / "linked.json"
+            linked.symlink_to(original)
+            self.assertEqual(CHECK.read_artifact(linked), CHECK.read_artifact(original))
 
     def test_invalid_tolerance_bounds_are_rejected(self):
         value = artifact(segment("a", 0, 3))

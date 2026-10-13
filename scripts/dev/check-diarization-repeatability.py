@@ -4,12 +4,14 @@
 import argparse
 import json
 import math
-from pathlib import Path
+import os
+import stat
 import sys
 
 
 MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
 MAX_SEGMENTS = 10_000
+MAX_SPEAKERS = 256
 MAX_SPEAKER_ID_LENGTH = 256
 MAX_TIMESTAMP_SECONDS = 24 * 60 * 60
 MAX_TOLERANCE_SECONDS = 60
@@ -30,6 +32,13 @@ def unique_object(pairs):
 
 def reject_constant(value):
     raise ArtifactError("nonfinite_json_number")
+
+
+def finite_float(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ArtifactError("nonfinite_json_number")
+    return number
 
 
 def bounded_number(value, maximum, code):
@@ -63,29 +72,79 @@ def normalize_segments(artifact):
             raise ArtifactError("nonpositive_segment_duration")
         segments.append((label, start, end))
         trajectories.setdefault(label, []).append((start, end))
+        if len(trajectories) > MAX_SPEAKERS:
+            raise ArtifactError("too_many_speakers")
     # Number speakers by chronological first appearance. Entire numeric
     # trajectories break simultaneous first-appearance ties without consulting
     # raw IDs or input order; identical trajectories are interchangeable.
     signatures = {label: tuple(sorted(ranges)) for label, ranges in trajectories.items()}
+    for ranges in signatures.values():
+        if any(previous[1] > following[0] for previous, following in zip(ranges, ranges[1:])):
+            raise ArtifactError("same_speaker_overlap")
     labels = {label: index for index, label in enumerate(sorted(signatures, key=signatures.get))}
     return sorted(((labels[label], start, end) for label, start, end in segments), key=lambda item: (item[1], item[2], item[0]))
 
 
 def read_artifact(path):
+    descriptor = None
     try:
-        with Path(path).open("rb") as stream:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ArtifactError("regular_file_required")
+        stream = os.fdopen(descriptor, "rb")
+        descriptor = None
+        with stream:
             data = stream.read(MAX_ARTIFACT_BYTES + 1)
+    except ArtifactError:
+        raise
     except (OSError, ValueError):
         raise ArtifactError("unreadable_artifact") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     if len(data) > MAX_ARTIFACT_BYTES:
         raise ArtifactError("artifact_too_large")
     try:
-        artifact = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=reject_constant)
+        artifact = json.loads(data.decode("utf-8"), object_pairs_hook=unique_object,
+                              parse_constant=reject_constant, parse_float=finite_float)
     except ArtifactError:
         raise
     except (UnicodeError, ValueError, RecursionError):
         raise ArtifactError("invalid_json") from None
     return normalize_segments(artifact)
+
+
+def boundaries_close(a, b, tolerance):
+    return all(delta <= tolerance or math.isclose(delta, tolerance, rel_tol=1e-12, abs_tol=0)
+               for delta in (abs(a[0] - b[0]), abs(a[1] - b[1])))
+
+
+def has_speaker_bijection(left, right, tolerance):
+    trajectories = []
+    for partition in (left, right):
+        groups = {}
+        for label, start, end in partition:
+            groups.setdefault(label, []).append((start, end))
+        trajectories.append(groups)
+    a, b = trajectories
+    if len(a) != len(b):
+        return False
+    candidates = {label: [other for other, ranges in b.items()
+                          if len(own) == len(ranges) and all(boundaries_close(x, y, tolerance) for x, y in zip(own, ranges))]
+                  for label, own in a.items()}
+    matches = {}
+
+    def assign(label, seen):
+        for other in candidates[label]:
+            if other in seen:
+                continue
+            seen.add(other)
+            if other not in matches or assign(matches[other], seen):
+                matches[other] = label
+                return True
+        return False
+
+    return all(assign(label, set()) for label in a)
 
 
 def compare_partitions(left, right, tolerance_seconds=0.1):
@@ -95,9 +154,12 @@ def compare_partitions(left, right, tolerance_seconds=0.1):
         return report | {"status": "FAIL", "reason": "segment_count_changed"}
     for index, (a, b) in enumerate(zip(left, right)):
         if a[0] != b[0]:
+            if has_speaker_bijection(left, right, tolerance):
+                return report
             return report | {"status": "FAIL", "reason": "speaker_partition_changed", "firstMismatchIndex": index}
-        differences = (abs(a[1] - b[1]), abs(a[2] - b[2]))
-        if any(delta > tolerance and not math.isclose(delta, tolerance, rel_tol=1e-12, abs_tol=0) for delta in differences):
+        if not boundaries_close(a[1:], b[1:], tolerance):
+            if has_speaker_bijection(left, right, tolerance):
+                return report
             return report | {"status": "FAIL", "reason": "boundary_changed", "firstMismatchIndex": index}
     return report
 
