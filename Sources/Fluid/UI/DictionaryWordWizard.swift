@@ -273,7 +273,7 @@ struct DictionaryWordWizard: View {
                 .font(self.theme.typography.bodyStrong)
                 .foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 28, height: 28)
-                .background(self.theme.palette.accent.opacity(0.1), in: Circle())
+                .background(self.theme.palette.elevatedCardBackground, in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 Text(PichiLocalization.text(title)).font(self.theme.typography.sectionTitle)
@@ -427,7 +427,7 @@ struct DictionaryWordWizard: View {
                         Text(variant)
                             .font(self.theme.typography.caption)
                             .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(self.theme.palette.accent.opacity(0.08), in: Capsule())
+                            .background(self.theme.palette.elevatedCardBackground, in: Capsule())
                     }
                 }
             }
