@@ -98,6 +98,33 @@ flowchart TB
 
 ## Модели и смешанная речь
 
+## Общее приложение на разных платформах
+
+Один репозиторий содержит macOS target и universal iOS target для iPad/iPhone. На первом этапе Xcode target membership ссылается на одни и те же исходные файлы. Отдельный Swift Package имеет смысл после доказанной portable dependency closure, если он упрощает сборку и общие тесты. Новые `MobileMeetingSession`, `MobileProcessingPipeline` и независимый mobile model installer не нужны.
+
+| Часть | Одна реализация для платформ | Различие платформ |
+| --- | --- | --- |
+| Встреча | `MeetingSession`, состояния, сегменты, speakers, immutable processing configuration. | Адаптивная навигация и расположение действий. |
+| Оркестрация | Тот же `MeetingSessionCoordinator`, admission, generation guards, stop/finalization, recovery/retention. | Injected source discovery, permissions и audio handoff. |
+| Распознавание | `TranscriptionProvider`, существующие GigaAM/Whisper/FluidAudio inference adapters, один backend registry и canonical assembler. | Runtime availability, device budgets и compute policy в descriptor/adapter. |
+| Установка моделей | Общие prepare/install/import/activate/remove operations и operation state. | Native picker, supported probes и мобильный набор из трёх провайдеров. |
+| Хранение | Один `MeetingSessionStore`, persistence queue, chunk ledger/writer и sidecar schema. | Sandbox root, iOS Data Protection/backup policy. |
+| Живой текст | Те же snapshot, composer, renderer и String Catalog. | UIKit/AppKit theme/font bridge и adaptive widths. |
+| Захват | Общий `MeetingCaptureControlling`, события и PCM consumer contracts. | Текущий macOS capture и новый iOS AVAudioSession adapter. |
+| Необязательная обработка | Existing post-processing boundary сохраняется общей. | iOS не регистрирует AI-enhancement/summary providers и не показывает их UI. |
+
+Реальные препятствия: `ASRService` импортирует AppKit/CoreAudio (`Sources/Fluid/Services/ASRService.swift:9`) и содержит lease/executor/preparation/residency, тогда как `MeetingProcessingPipeline` принимает этот конкретный класс (`MeetingProcessingPipeline.swift:1325`, `:1354`). Выделяем **существующую** lifecycle-реализацию в общего владельца, macOS `ASRService` делегирует ему, iOS использует того же владельца. Desktop participants, например PrivateAI/dictionary, инъецируются при сборке графа зависимостей (`ASRService.swift:4358`). Не отключаем residency ради успешной iOS-сборки.
+
+`SettingsStore.SpeechModel` и meeting/model preferences находятся в AppKit-зависимом `SettingsStore.swift:1`, `:5077`. Выделяем существующие value/catalog и accessors с сохранением ключей и migration/default behavior. Onboarding/settings используют общий service/view-model state; `NSOpenPanel`/`NSWorkspace` остаются platform adapters, а не отдельной модельной lifecycle-логикой.
+
+Whisper Tiny уже имеет общий provider, но ещё требует регистрации immutable meeting/provider configuration в `PichiMeetingProviderFactory.swift:19`, `:79`, `:91`. Наличие модели в dictation catalog не означает готовность canonical meeting backend или live-caption registration. Для новых моделей не добавляем switch/factory-параметр в coordinator.
+
+Порядок extraction: общие values/contracts -> model catalog/preferences и общий lifecycle owner -> существующий coordinator/pipeline/store -> общие SwiftUI компоненты -> iOS capture. Первый функциональный milestone должен завершить синтетическую встречу на Mac и iOS Simulator через **одни и те же классы** coordinator/store/pipeline. Аппаратные capture/inference/background milestones идут затем.
+
+Анимированный прототип уже проверяет небольшую часть этой схемы: шесть исходных production-файлов компилируются без изменений для macOS и iOS SDK, включая реальный renderer. Theme bridge и synthetic replay остаются только в `Prototypes/`; они не заменяют сервисы приложения. Общие contract tests должны защищать preparation ownership, residency restoration, provider options, canonical publication, recovery/retention и live-row identity.
+
+## Мобильный набор моделей
+
 В мобильном каталоге три ASR-провайдера: Whisper Tiny multilingual, GigaAM v3 для русского и NVIDIA Parakeet TDT 0.6B v3 multilingual. AI-улучшение и генерация итогов не регистрируются. Whisper Tiny Q8 является самым маленьким текущим зарегистрированным вариантом. Ещё меньший [Tiny Q5_1](https://huggingface.co/ggerganov/whisper.cpp/blob/main/ggml-tiny-q5_1.bin), около 32.2 MB, можно проверить через тот же runtime и добавить как artifact descriptor при подтверждении совместимости и качества. Не объявляем Q8 самым маленьким существующим экспортом. `.en` варианты не подходят для равноправного русского.
 
 | Кандидат | Размер существующего Q8 artifact в каталоге | Роль | Ограничение |
