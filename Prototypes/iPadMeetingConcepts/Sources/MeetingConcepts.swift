@@ -162,7 +162,7 @@ struct PrototypeRoot: View {
         VStack(spacing: 0) {
             topBar(compact: narrow, showBrand: true)
             divider
-            if isSettings || screen == .history {
+            if isSettings || screen == .history || screen == .processing {
                 mainContent(narrow: narrow, generous: false)
             } else {
                 ScrollView {
