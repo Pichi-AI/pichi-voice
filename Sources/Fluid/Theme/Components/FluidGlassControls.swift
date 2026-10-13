@@ -151,7 +151,10 @@ private struct FluidGlassActionModifier: ViewModifier {
             content.buttonStyle(FluidQuietActionStyle(circular: self.circular, tone: self.tone, spacious: self.spacious))
         } else if #available(macOS 26, *), !self.reduceTransparency {
             if self.prominent {
-                content.buttonStyle(.glassProminent).tint(self.tone ?? self.theme.palette.accent)
+                // Native tint does not select the portable brand's paired text
+                // color. Match the fallback accent style; explicit tones retain white.
+                content.foregroundStyle(self.tone == nil ? self.theme.palette.accentForeground : Color.white)
+                    .buttonStyle(.glassProminent).tint(self.tone ?? self.theme.palette.accent)
                     .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             } else {
                 content.buttonStyle(.glass).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)

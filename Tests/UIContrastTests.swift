@@ -31,9 +31,12 @@ struct UIContrastTests {
 
     @MainActor
     static func verify(_ view: some View, name: String, theme: AppTheme, scheme: ColorScheme,
-                       textBackground: [Double], directory: URL) throws {
-        let expected = self.components(theme.palette.primaryText)
-        precondition(self.contrast(expected, textBackground) >= 4.5, "\(name): label contrast must meet 4.5:1")
+                       textBackground: [Double], directory: URL, expectedForeground: Color? = nil,
+                       labelOnly: Bool = false, requiredContrast: Double? = 4.5) throws {
+        let expected = self.components(expectedForeground ?? theme.palette.primaryText)
+        if let requiredContrast {
+            precondition(self.contrast(expected, textBackground) >= requiredContrast, "\(name): label contrast must meet \(requiredContrast):1")
+        }
         let renderer = ImageRenderer(content: view
             .padding(12)
             .background(theme.palette.cardBackground)
@@ -51,6 +54,13 @@ struct UIContrastTests {
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         var matching = 0
         for index in stride(from: 0, to: pixels.count, by: 4) {
+            if labelOnly {
+                let x = (index / 4) % image.width
+                let y = (index / 4) / image.width
+                // Text only: exclude the symbol, surrounding card and surface outline.
+                guard x >= Int(Double(image.width) * 0.4), x < image.width - 24,
+                      y >= Int(Double(image.height) * 0.3), y < Int(Double(image.height) * 0.7) else { continue }
+            }
             var matches = pixels[index + 3] == 255
             for channel in 0..<3 {
                 matches = matches && abs(Double(pixels[index + channel]) / 255 - expected[channel]) < 0.025
@@ -71,7 +81,11 @@ struct UIContrastTests {
             ("sber", "Configuration/BrandExamples/sber-demo.json"),
             ("alfa", "Configuration/BrandExamples/alfa-demo.json"),
         ]
+        // The actual saved accent observed in the frozen native app. This is a
+        // regression fixture, never a product default or a settings mutation.
+        let savedPaleAccent = "#A98CFF"
         var checks = 0
+        var actionChecks = 0
         for (name, path) in packages {
             let package = try BrandPackage.decode(Data(contentsOf: URL(fileURLWithPath: path)))
             for scheme: ColorScheme in [.light, .dark] {
@@ -99,11 +113,43 @@ struct UIContrastTests {
                                 name: "accuracy-\(suffix)", theme: theme, scheme: scheme, textBackground: background, directory: directory)
                             checks += 3
                         }
+                        for (variant, accentHex) in [("brand", brandAccent), ("saved-pale", savedPaleAccent)] {
+                            let theme = AppTheme.adaptive(accent: Color(hex: accentHex)!, colorScheme: scheme, package: package)
+                            let suffix = "\(name)-\(scheme == .dark ? "dark" : "light")-\(variant)"
+                            let foreground = theme.palette.accentForeground
+                            let accentRGB = self.components(theme.palette.accent)
+                            // Actual accessibility fallback controls use the same paired
+                            // foreground as native glass. Label pixels are rendered from
+                            // fail-closed source excerpts, not copied surrogate labels.
+                            try self.verify(ChooseFileActionFixture(),
+                                name: "fallback-choose-\(suffix)", theme: theme, scheme: scheme, textBackground: accentRGB,
+                                directory: directory, expectedForeground: foreground, labelOnly: true)
+                            try self.verify(CopyTranscriptActionFixture(),
+                                name: "fallback-copy-\(suffix)", theme: theme, scheme: scheme, textBackground: accentRGB,
+                                directory: directory, expectedForeground: foreground, labelOnly: true)
+                            try self.verify(ExploreReleaseActionFixture(),
+                                name: "fallback-explore-\(suffix)", theme: theme, scheme: scheme, textBackground: accentRGB,
+                                directory: directory, expectedForeground: foreground, labelOnly: true)
+                            try self.verify(CopyToastFixture(), name: "toast-\(suffix)", theme: theme, scheme: scheme,
+                                textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
+                            // Explicit semantic tones and live recording intentionally
+                            // retain their existing white ink, independently of the accent.
+                            try self.verify(Button("Tone role") {}.buttonStyle(AccentButtonStyle(tone: .red)), name: "tone-role-\(suffix)",
+                                theme: theme, scheme: scheme, textBackground: self.components(.red), directory: directory,
+                                expectedForeground: .white, labelOnly: true, requiredContrast: nil)
+                            try self.verify(Button("Record role") {}.buttonStyle(FluidRecordInvitationStyle(inviting: false, recording: true)),
+                                name: "record-role-\(suffix)", theme: theme, scheme: scheme,
+                                textBackground: self.components(.red), directory: directory,
+                                expectedForeground: .white, labelOnly: true, requiredContrast: nil)
+                            actionChecks += 6
+                        }
                     } catch { failure = error }
                 }
                 if let failure { throw failure }
             }
         }
         print("Actual delete, active badge and metric foreground: \(checks) native rendering checks passed")
+        print("Actual fallback actions, toast and preserved semantic ink: \(actionChecks) rendering checks passed")
+        print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }

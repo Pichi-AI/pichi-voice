@@ -72,7 +72,7 @@ struct ReleaseHighlightsView: View {
                 .frame(minHeight: 68, alignment: .topLeading)
             FluidGlassControlGroup {
                 Button(PichiLocalization.text(feature.action), systemImage: "arrow.up.right") { self.onClose(feature.destination) }
-                    .fluidGlassAction()
+                    .fluidGlassAction(prominent: true)
                     .disabled(!self.canExplore)
             }
             .padding(.top, 18)

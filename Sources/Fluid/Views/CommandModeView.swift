@@ -361,7 +361,7 @@ struct CommandModeView: View {
                     Button("Cancel") {
                         guard self.service.pendingCommand?.id == pending.id, !self.service.isProcessing else { return }
                         self.service.cancelPendingCommand()
-                    }.fluidGlassAction()
+                    }.fluidGlassAction(quiet: true)
                     Button {
                         Task {
                             guard self.service.pendingCommand?.id == pending.id, !self.service.isProcessing else { return }
