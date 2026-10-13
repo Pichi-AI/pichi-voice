@@ -138,12 +138,21 @@ struct RewriteModeView: View {
                                 Button("Replace Original") {
                                     let text = self.service.rewrittenText
                                     Task { @MainActor in
-                                        await self.service.acceptRewrite(text)
+                                        let result = await self.service.acceptRewrite(text)
+                                        if result.wasDispatched {
+                                            self.onClose?()
+                                        } else if case let .recoverableFailure(failure) = result,
+                                                  let message = failure.userFacingMessage
+                                        {
+                                            self.asr.errorTitle = message
+                                            self.asr.errorMessage = TextDeliveryFailure.userFacingDetail(forMessage: message) ?? ""
+                                            self.asr.showError = true
+                                        }
                                     }
-                                    self.onClose?()
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .tint(self.theme.palette.accent)
+                                .disabled(self.service.isAcceptingRewrite)
                             }
                             .padding(.top, 8)
                         }

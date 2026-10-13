@@ -246,22 +246,7 @@ final class TypingService {
 
     static func isExactFocusTargetActive(_ target: CapturedFocusTarget) -> Bool {
         guard AXIsProcessTrusted() else { return false }
-
-        let systemWideElement = AXUIElementCreateSystemWide()
-        var focusedElementRef: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
-            systemWideElement,
-            kAXFocusedUIElementAttribute as CFString,
-            &focusedElementRef
-        )
-        guard result == .success, let focusedElementRef,
-              CFGetTypeID(focusedElementRef) == AXUIElementGetTypeID()
-        else {
-            return false
-        }
-
-        let currentElement = unsafeBitCast(focusedElementRef, to: AXUIElement.self)
-        return CFEqual(currentElement, target.element)
+        return self.isCurrentlyFocusedElement(target.element, expectedPID: target.pid)
     }
 
     @discardableResult
@@ -975,6 +960,7 @@ final class TypingService {
     }
 
     private nonisolated static func isCurrentlyFocusedElement(_ expectedElement: AXUIElement, expectedPID: pid_t) -> Bool {
+        guard expectedPID > 0 else { return false }
         let systemWideElement = AXUIElementCreateSystemWide()
         var focusedElementRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
@@ -986,20 +972,12 @@ final class TypingService {
         guard CFGetTypeID(focusedElementRef) == AXUIElementGetTypeID() else { return false }
 
         let currentElement = unsafeBitCast(focusedElementRef, to: AXUIElement.self)
-        if CFEqual(currentElement, expectedElement) { return true }
-
         var currentPID: pid_t = 0
-        AXUIElementGetPid(currentElement, &currentPID)
-        guard currentPID == expectedPID else { return false }
-
-        var currentRoleRef: CFTypeRef?
-        let roleResult = AXUIElementCopyAttributeValue(
-            currentElement,
-            kAXRoleAttribute as CFString,
-            &currentRoleRef
-        )
-        guard roleResult == .success, let currentRole = currentRoleRef as? String else { return false }
-        return ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXWebArea", "AXGroup"].contains(currentRole)
+        guard AXUIElementGetPid(currentElement, &currentPID) == .success,
+              currentPID == expectedPID else { return false }
+        // PID and editability describe an app, not the field captured at stop.
+        // AX equality also handles separate wrappers for the same remote element.
+        return CFEqual(currentElement, expectedElement)
     }
 
     private nonisolated func insertTextBulkInstant(_ text: String, targetPID: pid_t, isOutputValid: () -> Bool) -> Bool {
