@@ -35,6 +35,60 @@ extension View {
     }
 }
 
+/// Presentation only. Timed word-sized rows flow together without changing their source,
+/// text, IDs or the canonical transcript. Boundaries depend on committed preceding text,
+/// so a growing partial stays in the same paragraph as it becomes final.
+nonisolated enum MeetingLiveCaptionParagraphs {
+    struct Paragraph: Identifiable, Equatable {
+        let rows: [MeetingLiveBubbleComposer.Row]
+        var id: UUID { rows[0].id }
+        var speaker: MeetingLiveSpeaker { rows[0].speaker }
+        var showsLabel: Bool { rows[0].showsLabel }
+
+        func text(includingPartials: Bool = true) -> String {
+            let visible = includingPartials ? rows : rows.filter { !$0.isPartial }
+            return visible.enumerated().map { index, row in
+                Self.separator(after: index > 0 ? visible[index - 1].text : nil, before: row.text) + row.text
+            }.joined()
+        }
+
+        static func separator(after previous: String?, before next: String) -> String {
+            guard let last = previous?.last, let first = next.first,
+                  !last.isWhitespace, !first.isWhitespace else { return "" }
+            if ".,;:!?…)]}»".contains(first) || "([{«".contains(last) { return "" }
+            return " "
+        }
+    }
+
+    static func compose(_ rows: [MeetingLiveBubbleComposer.Row]) -> [Paragraph] {
+        var paragraphs: [Paragraph] = []
+        var members: [MeetingLiveBubbleComposer.Row] = []
+        var committedLength = 0
+        for row in rows {
+            let previous = members.last
+            let endsSentence = previous.map { !$0.isPartial && ".!?…".contains($0.text.last ?? " ") } ?? false
+            let startsParagraph = previous.map {
+                $0.speaker != row.speaker || (!$0.isPartial && $0.text.contains("\n"))
+                    || committedLength >= 512 || (committedLength >= 320 && endsSentence)
+            } ?? false
+            if startsParagraph {
+                paragraphs.append(Paragraph(rows: members))
+                members = []; committedLength = 0
+            }
+            members.append(row)
+            if !row.isPartial { committedLength += row.text.count + 1 }
+        }
+        if !members.isEmpty { paragraphs.append(Paragraph(rows: members)) }
+        return paragraphs
+    }
+}
+
+private extension MeetingLiveSpeaker {
+    var captionSourceLabel: String {
+        self == .you ? PichiLocalization.text("Microphone") : PichiLocalization.text("Meeting audio")
+    }
+}
+
 /// Auto-follows the newest row only while the user is pinned to the bottom; scrolling up suspends
 /// following and shows a jump-to-bottom button.
 struct MeetingLiveBubbleScrollList: View {
@@ -47,11 +101,7 @@ struct MeetingLiveBubbleScrollList: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPinnedToBottom = true
     @Namespace private var scrollViewport
-
-    private var trailingPartialLength: Int {
-        guard let last = self.rows.last, last.isPartial else { return 0 }
-        return last.text.count
-    }
+    private let bottomAnchor = "meeting.liveTranscript.bottom"
 
     var body: some View {
         let rowIDs = self.rows.map(\.id)
@@ -59,13 +109,23 @@ struct MeetingLiveBubbleScrollList: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                        ForEach(self.rows) { row in
-                            MeetingLiveBubbleRow(row: row, hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
-                                                 documentStyle: self.documentStyle, interfaceLanguageID: self.locale.identifier)
-                                .equatable()
-                                .id(row.id)
-                                .transition(.opacity)
+                        if self.documentStyle {
+                            ForEach(MeetingLiveCaptionParagraphs.compose(self.rows)) { paragraph in
+                                MeetingLiveParagraphRow(paragraph: paragraph,
+                                    hidesPartialFromAccessibility: self.hidesPartialFromAccessibility)
+                                    .id(paragraph.id)
+                                    .transition(.opacity)
+                            }
+                        } else {
+                            ForEach(self.rows) { row in
+                                MeetingLiveBubbleRow(row: row, hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
+                                                     interfaceLanguageID: self.locale.identifier)
+                                    .equatable()
+                                    .id(row.id)
+                                    .transition(.opacity)
+                            }
                         }
+                        Color.clear.frame(height: 1).id(self.bottomAnchor).accessibilityHidden(true)
                     }
                     .background {
                         if #available(iOS 18, macOS 15, *) {
@@ -74,7 +134,9 @@ struct MeetingLiveBubbleScrollList: View {
                             GeometryReader { geometry in
                                 Color.clear.preference(
                                     key: MeetingCaptionScrollTracking.GeometryKey.self,
-                                    value: .init(contentBottom: geometry.frame(in: .named(self.scrollViewport)).maxY)
+                                    value: .init(contentBottom: geometry.frame(in: .named(self.scrollViewport)).maxY,
+                                                 contentHeight: geometry.size.height,
+                                                 contentOffset: -geometry.frame(in: .named(self.scrollViewport)).minY)
                                 )
                             }
                             .allowsHitTesting(false)
@@ -84,14 +146,13 @@ struct MeetingLiveBubbleScrollList: View {
                 }
                 .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
                 .modifier(MeetingCaptionScrollTracking(
-                    viewport: self.scrollViewport, isPinnedToBottom: self.$isPinnedToBottom
+                    viewport: self.scrollViewport, isPinnedToBottom: self.$isPinnedToBottom,
+                    onLayoutChange: { self.scrollToBottomIfPinned(proxy: proxy) }
                 ))
-                .onChange(of: self.rows.count) {
+                .onChange(of: self.rows) {
                     self.scrollToBottomIfPinned(proxy: proxy)
                 }
-                .onChange(of: self.trailingPartialLength) {
-                    self.scrollToBottomIfPinned(proxy: proxy)
-                }
+                .onAppear { self.scrollToBottomIfPinned(proxy: proxy) }
 
                 if !self.isPinnedToBottom {
                     Button {
@@ -101,12 +162,13 @@ struct MeetingLiveBubbleScrollList: View {
                         Image(systemName: "chevron.down")
                             .font(.fluidSystem(size: 12, weight: .semibold))
                             .foregroundStyle(self.theme.palette.primaryText)
-                            .frame(width: 28, height: 28)
+                            .frame(width: 44, height: 44)
                             .background(self.theme.palette.contentBackground, in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .help("Jump to latest captions")
-                    .accessibilityLabel("Jump to latest captions")
+                    .help(PichiLocalization.text("Jump to latest captions"))
+                    .accessibilityLabel(PichiLocalization.text("Jump to latest captions"))
+                    .accessibilityIdentifier("meeting.liveTranscript.latest")
                     .padding(6)
                 }
             }
@@ -114,38 +176,79 @@ struct MeetingLiveBubbleScrollList: View {
     }
 
     private func scrollToBottomIfPinned(proxy: ScrollViewProxy) {
-        guard self.isPinnedToBottom else { return }
-        self.scrollToBottom(proxy: proxy, animated: false)
+        // Match the shared command workspace: wait for wrapped text's rendered height,
+        // then recheck user intent instead of capturing a stale follow decision.
+        DispatchQueue.main.async {
+            guard self.isPinnedToBottom else { return }
+            self.scrollToBottom(proxy: proxy, animated: false)
+        }
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
-        guard let lastID = self.rows.last?.id else { return }
         guard animated, !self.reduceMotion else {
-            proxy.scrollTo(lastID, anchor: .bottom)
+            proxy.scrollTo(self.bottomAnchor, anchor: .bottom)
             return
         }
         withAnimation(.easeInOut(duration: 0.2)) {
-            proxy.scrollTo(lastID, anchor: .bottom)
+            proxy.scrollTo(self.bottomAnchor, anchor: .bottom)
         }
     }
 }
 
 /// iOS 17 has no scroll-geometry callback. This adapter measures the same scroll viewport
 /// through preferences; rendering, IDs, follow actions and transcript ownership remain shared.
-private struct MeetingCaptionScrollTracking: ViewModifier {
+struct MeetingCaptionScrollTracking: ViewModifier {
     let viewport: Namespace.ID
     @Binding var isPinnedToBottom: Bool
+    let onLayoutChange: () -> Void
+    @State private var isUserScrolling = false
+    @State private var isDraggingUp = false
+    @State private var previousGeometry: Geometry?
 
     nonisolated struct Geometry: Equatable, Sendable {
         var contentBottom: CGFloat? = nil
         var viewportHeight: CGFloat? = nil
+        var contentHeight: CGFloat? = nil
+        var contentOffset: CGFloat? = nil
 
         var isPinnedToBottom: Bool? {
             guard let contentBottom, let viewportHeight,
                   contentBottom.isFinite, viewportHeight.isFinite, viewportHeight > 0 else { return nil }
-            // Match the existing wide threshold so one wrapped partial line cannot disengage
-            // follow before scrollTo runs; deliberate upward scrolling still suspends it.
             return contentBottom <= viewportHeight + 80
+        }
+
+        func offsetChanged(from previous: Self) -> Bool {
+            guard let contentOffset, let oldOffset = previous.contentOffset else { return false }
+            return abs(contentOffset - oldOffset) > 0.5
+        }
+
+        func movedTowardEarlierText(from previous: Self) -> Bool {
+            guard let contentOffset, let oldOffset = previous.contentOffset else { return false }
+            return contentOffset < oldOffset - 0.5
+        }
+
+        func layoutChanged(from previous: Self) -> Bool {
+            contentHeight != previous.contentHeight || viewportHeight != previous.viewportHeight
+        }
+
+        func followPreference(after previous: Self, currentlyFollowing: Bool,
+                              userIsScrolling: Bool, upwardDrag: Bool = false) -> Bool {
+            guard userIsScrolling, !layoutChanged(from: previous), offsetChanged(from: previous),
+                  let nearBottom = isPinnedToBottom else { return currentlyFollowing }
+            if upwardDrag {
+                // A finger gesture may belong to the outer recording view or bounce a short
+                // document. Pause only when older text in this viewport actually moves.
+                if let contentHeight, let viewportHeight, contentHeight > viewportHeight + 1,
+                   movedTowardEarlierText(from: previous) { return false }
+                return currentlyFollowing
+            }
+            // The latest-button animation moves downward through older positions. It must
+            // not suspend its own follow choice before reaching the bottom.
+            if !currentlyFollowing {
+                return !movedTowardEarlierText(from: previous) && nearBottom
+            }
+            if movedTowardEarlierText(from: previous) { return nearBottom }
+            return currentlyFollowing
         }
     }
 
@@ -155,17 +258,26 @@ private struct MeetingCaptionScrollTracking: ViewModifier {
             let next = nextValue()
             if let bottom = next.contentBottom { value.contentBottom = bottom }
             if let height = next.viewportHeight { value.viewportHeight = height }
+            if let height = next.contentHeight { value.contentHeight = height }
+            if let offset = next.contentOffset { value.contentOffset = offset }
         }
     }
 
     @ViewBuilder func body(content: Content) -> some View {
         if #available(iOS 18, macOS 15, *) {
-            content.onScrollGeometryChange(for: Bool.self) { geometry in
-                let bottomOffset = geometry.contentSize.height - geometry.containerSize.height
-                return geometry.contentOffset.y >= bottomOffset - 80
-            } action: { _, isPinned in
-                self.isPinnedToBottom = isPinned
-            }
+            content
+                .onScrollPhaseChange { _, phase in
+                    self.isUserScrolling = phase == .interacting || phase == .decelerating
+                }
+                .onScrollGeometryChange(for: Geometry.self) { geometry in
+                    .init(contentBottom: geometry.contentSize.height - geometry.visibleRect.minY,
+                          viewportHeight: geometry.visibleRect.height, contentHeight: geometry.contentSize.height,
+                          contentOffset: geometry.contentOffset.y)
+                } action: { previous, current in
+                    self.isPinnedToBottom = current.followPreference(after: previous,
+                        currentlyFollowing: self.isPinnedToBottom, userIsScrolling: self.isUserScrolling)
+                    if current.layoutChanged(from: previous) { self.onLayoutChange() }
+                }
         } else {
             content
                 .coordinateSpace(name: self.viewport)
@@ -177,11 +289,62 @@ private struct MeetingCaptionScrollTracking: ViewModifier {
                     .accessibilityHidden(true)
                 }
                 .onPreferenceChange(GeometryKey.self) { geometry in
-                    if let isPinned = geometry.isPinnedToBottom, isPinned != self.isPinnedToBottom {
-                        self.isPinnedToBottom = isPinned
+                    defer { self.previousGeometry = geometry }
+                    if let previous = self.previousGeometry {
+                        // Content growth and rotation change layout, not the user's follow choice.
+                        // Offset-only changes also cover deceleration and non-touch scrolling.
+                        self.isPinnedToBottom = geometry.followPreference(after: previous,
+                            currentlyFollowing: self.isPinnedToBottom, userIsScrolling: true,
+                            upwardDrag: self.isDraggingUp)
+                        if geometry.layoutChanged(from: previous) { self.onLayoutChange() }
                     }
                 }
+                .simultaneousGesture(DragGesture(minimumDistance: 2)
+                    .onChanged { value in
+                        self.isDraggingUp = value.translation.height > 2
+                    }
+                    .onEnded { _ in self.isDraggingUp = false })
         }
+    }
+}
+
+private struct MeetingLiveParagraphRow: View {
+    let paragraph: MeetingLiveCaptionParagraphs.Paragraph
+    let hidesPartialFromAccessibility: Bool
+    @Environment(\.theme) private var theme
+
+    private var flowingText: Text {
+        var text = AttributedString()
+        for (index, row) in self.paragraph.rows.enumerated() {
+            let separator = MeetingLiveCaptionParagraphs.Paragraph.separator(
+                after: index > 0 ? self.paragraph.rows[index - 1].text : nil, before: row.text)
+            var fragment = AttributedString(separator + row.text)
+            fragment.foregroundColor = row.isPartial ? self.theme.palette.secondaryText : self.theme.palette.primaryText
+            text.append(fragment)
+        }
+        return Text(text)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if self.paragraph.showsLabel {
+                Text(self.paragraph.speaker.captionSourceLabel)
+                    .font(self.theme.typography.captionStrong)
+                    .foregroundStyle(self.paragraph.speaker == .you ? self.theme.palette.accent : self.theme.palette.secondaryText)
+            }
+            self.flowingText
+                .font(self.theme.typography.body)
+                .lineSpacing(5)
+                .fixedSize(horizontal: false, vertical: true)
+                .transaction { $0.animation = nil }
+                .padding(.vertical, self.theme.metrics.spacing.sm)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(self.paragraph.speaker.captionSourceLabel + ", "
+            + self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility))
+        .accessibilityHidden(self.hidesPartialFromAccessibility && self.paragraph.rows.allSatisfy(\.isPartial))
+        .accessibilityIdentifier("meeting.liveParagraph.\(self.paragraph.id.uuidString)")
     }
 }
 
@@ -201,7 +364,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
     private var isMicrophone: Bool { self.row.speaker == .you }
 
     private var sourceLabel: String {
-        self.isMicrophone ? PichiLocalization.text("Microphone") : PichiLocalization.text("Meeting audio")
+        self.row.speaker.captionSourceLabel
     }
 
     /// Distinguish capture sources without claiming that either source belongs to a person.
