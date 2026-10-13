@@ -110,7 +110,6 @@ private struct FluidControlSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
         let fillOpacity = self.isSelected ? 0.96 : (self.isHovered ? 0.42 : 0)
-        let shineOpacity = self.isSelected ? 0.14 : (self.isHovered ? 0.07 : 0)
         let strokeColor = self.isSelected
             ? self.tone.opacity(0.24)
             : (self.isHovered ? self.theme.palette.cardBorder.opacity(0.28) : .clear)
@@ -119,14 +118,6 @@ private struct FluidControlSurfaceModifier: ViewModifier {
             .background(
                 shape
                     .fill(self.theme.palette.cardBackground.opacity(fillOpacity))
-                    .overlay(
-                        LinearGradient(
-                            colors: [.white.opacity(shineOpacity), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .clipShape(shape)
-                    )
                     .overlay(shape.stroke(strokeColor, lineWidth: 1))
                     .shadow(
                         color: .black.opacity(self.isSelected ? 0.16 : (self.isHovered ? 0.08 : 0)),
@@ -167,7 +158,6 @@ struct GlassButtonStyle: ButtonStyle {
                 .frame(height: self.height ?? 36)
                 .contentShape(self.shape)
                 .foregroundStyle(self.theme.palette.primaryText)
-                .background(self.theme.materials.card, in: self.shape)
                 .background(
                     self.shape
                         .fill(self.theme.palette.cardBackground)
@@ -566,7 +556,6 @@ struct SquareIconButtonStyle: ButtonStyle {
                 .frame(minWidth: 24, minHeight: 24)
                 .contentShape(self.shape)
                 .foregroundStyle(foregroundColor)
-                .background(self.theme.materials.card, in: self.shape)
                 .background(
                     self.shape
                         .fill(self.theme.palette.cardBackground)
