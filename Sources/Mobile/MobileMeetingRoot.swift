@@ -63,7 +63,7 @@ struct MobileMeetingRoot: View {
                     navigation(for: destination)
                 }.navigationSplitViewStyle(.balanced)
             } else {
-                TabView(selection: $destination) {
+                TabView(selection: Binding(get: { destination }, set: selectSection)) {
                     ForEach(Destination.allCases) { item in
                         navigation(for: item)
                             .tag(item)
@@ -151,7 +151,7 @@ struct MobileMeetingRoot: View {
                 Text(AppBrand.appName).font(theme.typography.sectionTitle)
             }.padding(.vertical, 16)
             ForEach(Destination.allCases) { item in
-                Button { destination = item } label: {
+                Button { selectSection(item) } label: {
                     Label(PichiLocalization.text(item.title), systemImage: item.symbol)
                         .font(theme.typography.sidebarItem)
                         .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
@@ -164,6 +164,18 @@ struct MobileMeetingRoot: View {
             }
             Spacer()
         }.padding(16).background(theme.palette.sidebarBackground)
+    }
+
+    private func selectSection(_ item: Destination) {
+        if destination == item {
+            switch item {
+            case .settings: settingsPath.removeAll()
+            case .history: selectedHistory = nil
+            case .meetings: break // Its root is the current meeting, including an active recording.
+            }
+        } else {
+            destination = item
+        }
     }
 
     @ViewBuilder private func navigation(for item: Destination) -> some View {

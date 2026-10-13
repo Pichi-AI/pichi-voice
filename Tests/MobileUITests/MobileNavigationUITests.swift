@@ -117,6 +117,29 @@ final class MobileNavigationUITests: XCTestCase {
         capture("sheet-closed-history")
     }
 
+    func testReselectingSettingsReturnsToRoot() throws {
+        for detail in ["general", "recording", "models", "privacy"] {
+            openNavigation("settings", title: "Settings")
+            let row = app.buttons["settings.\(detail)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            row.tap()
+            let visibleDetail = app.descendants(matching: .any)["settings.\(detail).detail"].firstMatch
+            XCTAssertTrue(visibleDetail.waitForExistence(timeout: 5))
+            capture("reselect-\(detail)-opened")
+            openNavigation("settings", title: "Settings")
+            XCTAssertTrue(row.waitForExistence(timeout: 5), "Reselecting Settings must return to its root")
+            XCTAssertTrue(row.isHittable)
+            XCTAssertFalse(visibleDetail.exists)
+            capture("reselect-\(detail)-root")
+        }
+        openNavigation("meetings", title: "Meetings")
+        openNavigation("meetings", title: "Meetings")
+        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+        openNavigation("history", title: "History")
+        openNavigation("history", title: "History")
+        XCTAssertTrue(app.descendants(matching: .any)["history.list"].firstMatch.waitForExistence(timeout: 5))
+    }
+
     func testRussianSettingsAndModelsInDarkAppearance() throws {
         app.terminate()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"]
