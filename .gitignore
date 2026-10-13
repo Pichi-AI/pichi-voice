@@ -261,6 +261,7 @@ builds/
 /scripts/dev/*
 !/scripts/dev/*.sh
 !/scripts/dev/check-localization.py
+!/scripts/dev/check-xcode-build-settings.py
 !/scripts/dev/macos-regression.py
 !/scripts/dev/asr-baseline-inputs.py
 !/scripts/dev/standalone-regression.py

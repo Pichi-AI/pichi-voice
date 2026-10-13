@@ -223,6 +223,7 @@ PROBES = tuple(sorted(
     [Probe(f"Tests/run_{name}_tests.sh", "sh") for name in SHELL_PROBES]
     + [Probe(f"Tests/run_{name}_tests.py", "python3") for name in PYTHON_PROBES]
     + [Probe("Tests/run_clipboard_backup_reproduction.sh", "sh"),
+       Probe("Tests/run_upstream_sync_tests.sh", "bash"),
        Probe("Tests/run_update_prompt_tests.sh", "sh", requires_ui=True)],
     key=lambda probe: probe.name,
 ))
