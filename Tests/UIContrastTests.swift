@@ -14,6 +14,14 @@ final class SettingsStore: ObservableObject {
 
 @main
 struct UIContrastTests {
+    // A renderer's inherited ink is applied around its configuration label, as
+    // native prominent glass does. This probe isolates label-scope precedence;
+    // it does not substitute for or claim native glass rasterization.
+    private struct InheritedWhiteInkRenderer: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label.foregroundStyle(.white)
+        }
+    }
     static func components(_ color: Color) -> [Double] {
         let rgb = NSColor(color).usingColorSpace(.sRGB)!
         return [Double(rgb.redComponent), Double(rgb.greenComponent), Double(rgb.blueComponent)]
@@ -132,6 +140,21 @@ struct UIContrastTests {
                                 directory: directory, expectedForeground: foreground, labelOnly: true)
                             try self.verify(CopyToastFixture(), name: "toast-\(suffix)", theme: theme, scheme: scheme,
                                 textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
+                            if #available(macOS 26, *) {
+                                // Exercise the real production Button constructor, not
+                                // the fallback style. An inherited white foreground
+                                // models the native renderer default that caused the
+                                // bug. Explicit ink INSIDE the label must win.
+                                let button = FluidGlassProminentActionStyle.pairedLabelButton(role: nil, foreground: foreground, action: {}) {
+                                    Label("Production label", systemImage: "plus")
+                                }
+                                .buttonStyle(InheritedWhiteInkRenderer())
+                                .padding(14)
+                                .background(theme.palette.accent)
+                                try self.verify(button, name: "native-label-boundary-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
+                                actionChecks += 1
+                            }
                             // Explicit semantic tones and live recording intentionally
                             // retain their existing white ink, independently of the accent.
                             try self.verify(Button("Tone role") {}.buttonStyle(AccentButtonStyle(tone: .red)), name: "tone-role-\(suffix)",

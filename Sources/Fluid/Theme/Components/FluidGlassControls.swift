@@ -151,10 +151,8 @@ private struct FluidGlassActionModifier: ViewModifier {
             content.buttonStyle(FluidQuietActionStyle(circular: self.circular, tone: self.tone, spacious: self.spacious))
         } else if #available(macOS 26, *), !self.reduceTransparency {
             if self.prominent {
-                // Native tint does not select the portable brand's paired text
-                // color. Match the fallback accent style; explicit tones retain white.
-                content.foregroundStyle(self.tone == nil ? self.theme.palette.accentForeground : Color.white)
-                    .buttonStyle(.glassProminent).tint(self.tone ?? self.theme.palette.accent)
+                content.buttonStyle(FluidGlassProminentActionStyle(tone: self.tone))
+                    .tint(self.tone ?? self.theme.palette.accent)
                     .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             } else {
                 content.buttonStyle(.glass).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
@@ -165,6 +163,31 @@ private struct FluidGlassActionModifier: ViewModifier {
             } else {
                 content.buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight))
             }
+        }
+    }
+}
+
+/// Native glass replaces an inherited foreground on Button itself. Decorate the
+/// label inside the real button, then delegate activation and rendering to glass.
+@available(macOS 26, *)
+struct FluidGlassProminentActionStyle: PrimitiveButtonStyle {
+    let tone: Color?
+    @Environment(\.theme) private var theme
+
+    func makeBody(configuration: Configuration) -> some View {
+        Self.pairedLabelButton(role: configuration.role,
+                               foreground: self.tone == nil ? self.theme.palette.accentForeground : .white,
+                               action: configuration.trigger) { configuration.label }
+            .buttonStyle(.glassProminent)
+    }
+
+    /// One production construction point keeps the explicit label foreground
+    /// below a renderer's inherited defaults. Tests exercise this exact Button.
+    static func pairedLabelButton<Label: View>(role: ButtonRole?, foreground: Color,
+                                              action: @escaping @MainActor () -> Void,
+                                              @ViewBuilder label: () -> Label) -> some View {
+        Button(role: role, action: action) {
+            label().foregroundStyle(foreground)
         }
     }
 }
