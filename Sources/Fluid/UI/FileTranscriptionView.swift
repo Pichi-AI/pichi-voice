@@ -692,9 +692,8 @@ struct FileTranscriptionView: View {
                         .fluidGlassAction()
                         Button(role: .destructive) { self.pendingDeleteEntry = entry } label: {
                             Label("Delete", systemImage: "trash")
-                                .foregroundStyle(.red)
                         }
-                        .fluidGlassAction()
+                        .buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight, foreground: self.theme.palette.primaryText))
                         .help(PichiLocalization.text("Delete transcript"))
                         .accessibilityLabel(PichiLocalization.text("Delete transcript"))
                         Spacer(minLength: 0)
@@ -746,12 +745,9 @@ struct FileTranscriptionView: View {
     }
 
     private func metadata(for entry: FileTranscriptionEntry) -> RowMetadata {
-        let relative = RelativeDateTimeFormatter()
-        relative.unitsStyle = .abbreviated
-        relative.locale = self.interfaceLocale
         return RowMetadata(
             preview: entry.previewText,
-            relativeDate: relative.localizedString(for: entry.timestamp, relativeTo: Date()),
+            relativeDate: entry.relativeTimeString(locale: self.interfaceLocale),
             fullDate: entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))
         )
     }

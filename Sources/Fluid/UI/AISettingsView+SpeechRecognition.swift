@@ -460,8 +460,8 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmallStrong)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.fluidGreen.opacity(0.25)))
-                            .foregroundStyle(Color.fluidGreen)
+                            .background(Capsule().fill(self.theme.palette.accent.opacity(0.25)))
+                            .foregroundStyle(self.theme.palette.primaryText)
                     } else {
                         Button("Activate") {
                             self.viewModel.activateSpeechModel(model)
