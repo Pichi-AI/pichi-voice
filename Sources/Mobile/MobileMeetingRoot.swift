@@ -408,6 +408,7 @@ struct MobileMeetingRoot: View {
                                     }
                                 }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                             }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("history.session.\(session.id)")
                             .swipeActions { Button(PichiLocalization.text("Delete"), role: .destructive) { deleteCandidate = session } }
                     }

@@ -149,6 +149,7 @@ final class MobileNavigationUITests: XCTestCase {
             throw XCTSkip("Stage the synthetic NavigationMeeting.json in the simulator's meeting store before this test")
         }
         meeting.tap()
+        capture("history-detail-after-row-tap")
         XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
         capture("history-detail-opened")
         openNavigation("meetings", title: "Meetings")
