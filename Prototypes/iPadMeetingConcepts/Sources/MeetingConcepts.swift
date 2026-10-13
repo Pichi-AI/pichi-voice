@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum PrototypeScreen: String { case ready, active, completed, privacy, models, history }
+enum PrototypeScreen: String { case ready, active, completed, settings, privacy, models, history }
 
 struct PrototypeRoot: View {
     let options: PrototypeOptions
@@ -96,7 +96,7 @@ struct PrototypeRoot: View {
                     sidebar.frame(width: 220)
                     columnDivider
                 }
-                if width >= 700 && screen != .privacy && screen != .models {
+                if width >= 700 && !isSettings {
                     historyList(width: width >= 1000 ? 260 : 252)
                     columnDivider
                 }
@@ -129,7 +129,7 @@ struct PrototypeRoot: View {
         VStack(spacing: 0) {
             topBar(compact: narrow, showBrand: true)
             divider
-            if screen == .privacy || screen == .models || screen == .history {
+            if isSettings || screen == .history {
                 mainContent(narrow: narrow, generous: false)
             } else {
                 ScrollView {
@@ -169,8 +169,7 @@ struct PrototypeRoot: View {
             VStack(spacing: 8) {
                 navRow("meetings", icon: "waveform", selected: isMeeting) { showCurrentMeeting() }
                 navRow("history", icon: "clock", selected: screen == .history) { screen = .history }
-                navRow("models", icon: "square.stack.3d.up", selected: screen == .models) { screen = .models }
-                navRow("privacy", icon: "hand.raised", selected: screen == .privacy) { screen = .privacy }
+                navRow("settings", icon: "gearshape", selected: isSettings) { screen = .settings }
             }
             Spacer()
             VStack(alignment: .leading, spacing: 10) {
@@ -185,22 +184,30 @@ struct PrototypeRoot: View {
     }
 
     private var isMeeting: Bool { [.ready, .active, .completed].contains(screen) }
+    private var isSettings: Bool { [.settings, .privacy, .models].contains(screen) }
     private var divider: some View { Rectangle().fill(theme.color("separator")).frame(height: 1) }
     private var columnDivider: some View { Rectangle().fill(theme.color("separator")).frame(width: 1) }
 
     private func topBar(compact: Bool, showBrand: Bool) -> some View {
         HStack(spacing: 12) {
-            if showBrand {
+            if screen == .privacy || screen == .models {
+                Button { screen = .settings } label: {
+                    Label(Copy.text("settings"), systemImage: "chevron.left")
+                        .font(theme.font(.body)).frame(minHeight: 44)
+                }.buttonStyle(.plain).foregroundStyle(theme.accent)
+            } else if showBrand {
                 theme.brand.logo.resizable().scaledToFit().frame(width: 28, height: 28)
                 Text(theme.brand.profile.meetingName).font(theme.font(.section))
             } else {
-                Text(Copy.text(screen == .privacy ? "privacy" : screen == .models ? "models" : "offline_meeting"))
+                Text(Copy.text(screen == .settings ? "settings" : "offline_meeting"))
                     .font(theme.font(.section))
             }
             Spacer(minLength: 8)
             if !compact { Text(Copy.text("prototype")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText")) }
-            iconButton("plus", label: "new_meeting") { showMeetingSetup() }
-            if compact { iconButton("clock", label: "history") { showHistory = true } }
+            if !isSettings {
+                iconButton("plus", label: "new_meeting") { showMeetingSetup() }
+                if compact { iconButton("clock", label: "history") { showHistory = true } }
+            }
         }
         .padding(.horizontal, compact ? 16 : 24)
         .frame(height: 68)
@@ -276,6 +283,7 @@ struct PrototypeRoot: View {
         switch screen {
         case .ready: readyScreen(narrow: narrow, generous: generous)
         case .active, .completed: meetingScreen(narrow: narrow, generous: generous)
+        case .settings: settingsScreen(narrow: narrow)
         case .privacy: privacyScreen(narrow: narrow)
         case .models: modelsScreen(narrow: narrow)
         case .history:
@@ -304,7 +312,7 @@ struct PrototypeRoot: View {
                         infoLine("mic", title: "microphone", value: "built_in_mic")
                         infoLine("globe", title: "speech_languages", value: "ru_en")
                         infoLine("lock", title: "retention", value: saveAudio ? "audio_and_text" : "text_only")
-                        Button { screen = .privacy } label: { Label(Copy.text("change_settings"), systemImage: "slider.horizontal.3").font(theme.font(.body)) }
+                        Button { screen = .settings } label: { Label(Copy.text("change_settings"), systemImage: "slider.horizontal.3").font(theme.font(.body)) }
                             .buttonStyle(.plain).foregroundStyle(theme.accent).frame(minHeight: 44)
                     }
                 }
@@ -449,11 +457,41 @@ struct PrototypeRoot: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Label(Copy.text("device_storage"), systemImage: "internaldrive").font(theme.font(.section))
                     Text(Copy.text("device_storage_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                    Button { screen = .privacy } label: { Text(Copy.text("privacy")).font(theme.font(.body)).frame(minHeight: 44) }
+                    Button { screen = .settings } label: { Text(Copy.text("settings")).font(theme.font(.body)).frame(minHeight: 44) }
                         .buttonStyle(.plain).foregroundStyle(theme.accent)
                 }
             }
         }
+    }
+
+    private func settingsScreen(narrow: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                pageHeading("settings", subtitle: "settings_subtitle")
+                surface {
+                    VStack(spacing: 20) {
+                        settingsDestination("models", detail: "models_subtitle", icon: "square.stack.3d.up", destination: .models)
+                        divider
+                        settingsDestination("privacy", detail: "privacy_subtitle", icon: "hand.raised", destination: .privacy)
+                    }
+                }
+            }.frame(maxWidth: 760).padding(narrow ? 20 : 32).frame(maxWidth: .infinity)
+        }
+    }
+
+    private func settingsDestination(_ title: String, detail: String, icon: String, destination: PrototypeScreen) -> some View {
+        Button { screen = destination } label: {
+            HStack(spacing: 16) {
+                tileIcon(icon)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(Copy.text(title)).font(theme.font(.section)).foregroundStyle(theme.color("primaryText"))
+                    Text(Copy.text(detail)).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").foregroundStyle(theme.accent)
+            }.frame(maxWidth: .infinity, minHeight: 56, alignment: .leading).contentShape(Rectangle())
+        }.buttonStyle(.plain)
     }
 
     private func privacyScreen(narrow: Bool) -> some View {
@@ -530,8 +568,7 @@ struct PrototypeRoot: View {
         HStack(spacing: 0) {
             bottomItem("meetings", icon: "waveform", selected: isMeeting) { showCurrentMeeting() }
             bottomItem("history", icon: "clock", selected: screen == .history) { screen = .history }
-            bottomItem("models", icon: "square.stack.3d.up", selected: screen == .models) { screen = .models }
-            bottomItem("privacy", icon: "hand.raised", selected: screen == .privacy) { screen = .privacy }
+            bottomItem("settings", icon: "gearshape", selected: isSettings) { screen = .settings }
         }
         .frame(height: 76)
         .background(theme.color("toolbarBackground"))

@@ -14,6 +14,8 @@ Every concept uses the existing portable purple brand package, decoded once from
 
 Body and title roles use the package's native Apple font designs. iOS uses scalable native text styles, and the Mac preview uses matching default iOS point sizes. Numeric timers preserve a rounded numeric role; timestamps preserve a monospaced role. Main controls are at least 44 points, usually 56, and phone text stays readable. UI copy is in `Resources/Localizable.xcstrings` with English and Russian localizations. Transcript and meeting names are separate synthetic fixture data and are not translated with the interface.
 
+Main navigation is **Meetings / History / Settings**. Speech models and privacy remain inside application Settings in every composition, following the user's correction. Their detail screens have a Settings back action, and compact navigation keeps Settings selected while either detail is open.
+
 ## Fixture behavior and decisions
 
 - Audio retention is **on by default**, following the user's decision. `--audio-off` demonstrates the optional strict mode.
@@ -50,7 +52,7 @@ Options:
 | Flag | Values |
 | --- | --- |
 | `--layout` | `A`, `B`, `C` |
-| `--screen` | `ready`, `active`, `completed`, `privacy`, `models`, `history` |
+| `--screen` | `ready`, `active`, `completed`, `settings`, `privacy`, `models`, `history` |
 | `--width`, `--height` | Suggested content sizes: 1194 x 834, 834 x 1194, 550 x 834, 390 x 844 |
 | `--dark` | Dark appearance from the brand package |
 | `--audio-off` | Start this fixture with strict text-only selected; default remains audio on |
