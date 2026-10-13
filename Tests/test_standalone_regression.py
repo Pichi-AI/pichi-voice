@@ -131,7 +131,8 @@ class StandaloneRunnerTests(unittest.TestCase):
             status, report, _ = self.run_probes(probes)
         self.assertEqual(status, 130)
         self.assertEqual(report["counts"], {"total": 3, "passed": 1, "failed": 1, "skipped": 1})
-        self.assertEqual(report["results"][1]["exitCode"], 130)
+        self.assertEqual(report["results"][1]["runnerExitCode"], 130)
+        self.assertIsNone(report["results"][1]["exitCode"])
         self.assertEqual(report["results"][2]["reason"], "not run after interruption")
 
     def worker_probe(self, *, wait=True):
@@ -144,7 +145,7 @@ class StandaloneRunnerTests(unittest.TestCase):
         command += "wait" if wait else "exit 0"
         return self.probe("descendant", command)
 
-    def test_real_interrupt_joins_descendant_that_ignores_term(self):
+    def verify_real_signal_cleanup(self, number):
         probe = self.worker_probe()
         signal_sent = threading.Event()
 
@@ -153,7 +154,7 @@ class StandaloneRunnerTests(unittest.TestCase):
             while time.monotonic() < deadline:
                 if (self.root / "worker-started").exists():
                     signal_sent.set()
-                    os.kill(os.getpid(), signal.SIGINT)
+                    os.kill(os.getpid(), number)
                     return
                 time.sleep(0.01)
 
@@ -165,13 +166,74 @@ class StandaloneRunnerTests(unittest.TestCase):
         finally:
             sender.join(timeout=4)
         self.assertTrue(signal_sent.is_set())
-        self.assertEqual(status, 130, (directory / "descendant.log").read_text())
+        self.assertEqual(status, 128 + number, (directory / "descendant.log").read_text())
+        self.assertEqual(report["runnerExitCode"], 128 + number)
+        self.assertIn(report["results"][0]["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
         self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
         self.assertFalse((self.root / "later-executed").exists())
         time.sleep(0.6)
         self.assertFalse((self.root / "escaped-worker").exists(), "Descendant must not write after runner returns")
         with RUNNER.run_lock(self.root):
             pass
+
+    def test_real_interrupt_joins_descendant_that_ignores_term(self):
+        self.verify_real_signal_cleanup(signal.SIGINT)
+
+    def test_real_term_joins_descendant_and_preserves_exit_143(self):
+        self.verify_real_signal_cleanup(signal.SIGTERM)
+
+    def wait_for_worker(self):
+        deadline = time.monotonic() + 3
+        while not (self.root / "worker-started").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue((self.root / "worker-started").exists())
+
+    def test_int_during_popen_creation_is_deferred_until_owner_is_recorded(self):
+        probe = self.worker_probe()
+        original = RUNNER.subprocess.Popen
+
+        def interrupt_in_constructor(*args, **options):
+            process = original(*args, **options)
+            if options.get("start_new_session"):
+                self.wait_for_worker()
+                os.kill(os.getpid(), signal.SIGINT)
+            return process
+
+        with patch.object(RUNNER.subprocess, "Popen", side_effect=interrupt_in_constructor), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+            status, report, _ = self.run_probes([probe])
+        self.assertEqual(status, 130)
+        self.assertEqual(report["status"], "FAIL")
+        time.sleep(0.6)
+        self.assertFalse((self.root / "escaped-worker").exists())
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def test_term_during_marker_write_is_deferred_then_joined(self):
+        probe = self.worker_probe()
+        original = Path.write_text
+        delivered = False
+
+        def terminate_in_marker(path, *args, **options):
+            nonlocal delivered
+            if path.name == RUNNER.PROCESS_MARKER and not delivered:
+                self.wait_for_worker()
+                delivered = True
+                os.kill(os.getpid(), signal.SIGTERM)
+            return original(path, *args, **options)
+
+        with patch.object(Path, "write_text", terminate_in_marker), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+            status, report, _ = self.run_probes([probe])
+        self.assertTrue(delivered)
+        self.assertEqual(status, 143)
+        self.assertEqual(report["runnerExitCode"], 143)
+        time.sleep(0.6)
+        self.assertFalse((self.root / "escaped-worker").exists())
+
+    def test_creation_deferral_preserves_child_signal_mask(self):
+        expected = sorted(int(number) for number in signal.pthread_sigmask(signal.SIG_BLOCK, set()))
+        probe = self.probe("mask", 'import json, signal\nprint(json.dumps(sorted(int(n) for n in signal.pthread_sigmask(signal.SIG_BLOCK, set()))))', interpreter="python3")
+        status, _, directory = self.run_probes([probe])
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads((directory / "mask.log").read_text()), expected)
 
     def test_background_descendant_is_not_a_success_or_left_running(self):
         probe = self.worker_probe(wait=False)

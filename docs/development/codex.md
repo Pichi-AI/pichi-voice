@@ -83,7 +83,7 @@ bash scripts/dev/standalone-regression.sh --list
 bash scripts/dev/standalone-regression.sh --only file_export --only file_transcript_relative_date --only ui_contrast
 ```
 
-Each probe owns a separate process session. Cancellation sends TERM then KILL if necessary, waits for runnable descendants to stop and reaps the direct process before releasing the worktree lock. If cleanup cannot finish, its ownership marker blocks another suite from using those build directories.
+Each probe owns a separate process session. INT and TERM trigger bounded TERM/KILL cleanup, wait for runnable descendants to stop and reap the direct process before releasing the worktree lock. Reports retain the runner's 130/143 status separately from the direct child's actual exit code. If cleanup cannot finish, its ownership marker blocks another suite from using those build directories. Signal delivery during process creation is deferred until its owner and marker are stored, without changing the child's inherited signal mask.
 
 The update prompt probe can activate test UI. It is recorded as `SKIP` by default and runs only with the explicit `--include-ui` flag. Selecting it with `--only update_prompt` does not implicitly enable UI. Skipped probes are never counted as passes, and an all-skipped run returns failure.
 

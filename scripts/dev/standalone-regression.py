@@ -23,13 +23,63 @@ KILL_WAIT_SECONDS = 2
 PROCESS_MARKER = "standalone-regression.process.json"
 
 
+class RunTermination(BaseException):
+    def __init__(self, signal_number):
+        self.signal_number = signal_number
+
+
+def interruption_status(error):
+    return 128 + (error.signal_number if isinstance(error, RunTermination) else signal.SIGINT)
+
+
 @contextmanager
 def defer_interrupts():
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
     try:
         yield
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+@contextmanager
+def suite_signal_handlers():
+    depth = 0
+    pending = None
+
+    def deliver(number):
+        if number == signal.SIGINT:
+            raise KeyboardInterrupt()
+        raise RunTermination(number)
+
+    def handle(number, frame):
+        nonlocal pending
+        if depth:
+            pending = pending or number
+        else:
+            deliver(number)
+
+    @contextmanager
+    def protect_creation():
+        nonlocal depth, pending
+        depth += 1
+        try:
+            yield
+        finally:
+            depth -= 1
+            if not depth and pending:
+                number, pending = pending, None
+                deliver(number)
+
+    originals = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+    with defer_interrupts():
+        for number in originals:
+            signal.signal(number, handle)
+    try:
+        yield protect_creation
+    finally:
+        with defer_interrupts():
+            for number, original in originals.items():
+                signal.signal(number, original)
 
 
 def live_process_group(group):
@@ -59,22 +109,28 @@ def stop_process_group(process):
             raise OSError("Owned descendants did not stop; this worktree remains reserved")
 
 
-def run_owned_process(command, root, stream):
+def run_owned_process(command, root, stream, protect_creation):
     marker = root / ".build" / PROCESS_MARKER
-    process = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL,
-                               stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+    process = None
     try:
-        marker.write_text(json.dumps({"processGroup": process.pid}) + "\n")
+        # Defer handler delivery rather than blocking OS signals: children must
+        # inherit their normal signal mask. Record ownership before delivering.
+        with protect_creation():
+            process = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL,
+                                       stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+            marker.write_text(json.dumps({"processGroup": process.pid}) + "\n")
         code = process.wait()
         if live_process_group(process.pid):
             stop_process_group(process)
             return code, "Probe left unjoined descendant processes"
         return code, None
-    except BaseException:
-        stop_process_group(process)
+    except BaseException as error:
+        if process is not None:
+            stop_process_group(process)
+            error.child_exit_code = process.returncode
         raise
     finally:
-        if not live_process_group(process.pid):
+        if process is not None and not live_process_group(process.pid):
             marker.unlink(missing_ok=True)
 
 
@@ -177,6 +233,12 @@ def timestamp():
 
 
 def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False):
+    with suite_signal_handlers() as protect_creation:
+        return _run_suite(root, probes, include_ui=include_ui, revision=revision, dirty=dirty,
+                          protect_creation=protect_creation)
+
+
+def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
     root = root.resolve()
     with run_lock(root):
         base = root / ".build/standalone-regression"
@@ -200,6 +262,7 @@ def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False
 
         save()
         interrupted = False
+        interrupt_code = 130
         abort_reason = None
 
         def make_row(probe):
@@ -224,7 +287,7 @@ def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False
                     start = time.monotonic()
                     with log.open("wb") as stream:
                         try:
-                            code, ownership_error = run_owned_process(probe.command, root, stream)
+                            code, ownership_error = run_owned_process(probe.command, root, stream, protect_creation)
                             row.update(status="PASS" if code == 0 and not ownership_error else "FAIL", exitCode=code)
                             if ownership_error:
                                 row["reason"] = ownership_error
@@ -234,17 +297,21 @@ def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False
                             stream.write(traceback.format_exc().encode())
                             if (root / ".build" / PROCESS_MARKER).exists():
                                 abort_reason = "not run while previous process cleanup is incomplete"
-                        except KeyboardInterrupt:
-                            row.update(status="FAIL", exitCode=130, reason="interrupted")
+                        except (KeyboardInterrupt, RunTermination) as error:
+                            interrupt_code = interruption_status(error)
+                            row.update(status="FAIL", exitCode=getattr(error, "child_exit_code", None),
+                                       runnerExitCode=interrupt_code, reason="interrupted")
                             interrupted = True
                     row["durationSeconds"] = round(time.monotonic() - start, 3)
                 print(f"{row['status']} {probe.name}", flush=True)
                 save()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, RunTermination) as error:
             interrupted = True
+            interrupt_code = interruption_status(error)
             for row in report["results"]:
                 if row["status"] == "RUNNING":
-                    row.update(status="FAIL", exitCode=130, reason="interrupted")
+                    row.update(status="FAIL", exitCode=getattr(error, "child_exit_code", None),
+                               runnerExitCode=interrupt_code, reason="interrupted")
                     (directory / row["log"]).touch()
             for probe in probes[len(report["results"]):]:
                 row = make_row(probe)
@@ -255,6 +322,7 @@ def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False
         with defer_interrupts():
             counts = report["counts"]
             report["interrupted"] = interrupted
+            report["runnerExitCode"] = interrupt_code if interrupted else (0 if counts["passed"] and not counts["failed"] else 1)
             report["status"] = "PASS" if counts["passed"] and not counts["failed"] and not interrupted else "FAIL"
             if interrupted:
                 report["reason"] = "Run interrupted"
@@ -267,7 +335,7 @@ def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False
             lines += [f"{row['status']} {row['name']} exit={row['exitCode']} log={row['log']}" for row in report["results"]]
             (directory / "summary.txt").write_text("\n".join(lines) + "\n")
             print(lines[2], flush=True)
-            return (130 if interrupted else (0 if report["status"] == "PASS" else 1)), report
+            return report["runnerExitCode"], report
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
