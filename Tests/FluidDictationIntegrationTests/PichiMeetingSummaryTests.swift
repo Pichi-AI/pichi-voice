@@ -474,6 +474,34 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertTrue((schema["required"] as? [String] ?? []).contains("decisions"))
     }
 
+    func testNativeSchemaDescribesMeetingAndTaskBeforeChoosingTheirLiteralFields() throws {
+        let config = LLMClient.Config(messages: [["role": "system", "content": "Summarize a meeting"]], model: "fixture-model",
+                                      baseURL: "http://127.0.0.1:11434/v1", apiKey: "", streaming: false)
+        let request = try PichiMeetingSummaryTransport.ollamaRequest(config)
+        let data = try XCTUnwrap(request.httpBody)
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let schema = try XCTUnwrap(body["format"] as? [String: Any])
+        XCTAssertEqual(schema as NSDictionary, PichiMeetingSummaryTransport.schema(ledger: false) as NSDictionary,
+                       "Ordering must preserve every schema field, required value and validation limit")
+        let raw = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(raw.contains("\"properties\":{\"summary\":"), "The grammar must describe the meeting before selecting separate ledgers")
+        let root = try XCTUnwrap(raw.range(of: "\"properties\":{\"summary\":"))
+        let questions = try XCTUnwrap(raw.range(of: "\"openQuestions\":", range: root.upperBound..<raw.endIndex))
+        let actions = try XCTUnwrap(raw.range(of: "\"actions\":", range: root.upperBound..<raw.endIndex))
+        XCTAssertLessThan(questions.lowerBound, actions.lowerBound, "Classify unresolved inquiries before selecting actionable work")
+        XCTAssertTrue(raw.contains("\"properties\":{\"title\":"), "The grammar must identify the task before choosing its owner or deadline")
+        let title = try XCTUnwrap(raw.range(of: "\"properties\":{\"title\":"))
+        let text = try XCTUnwrap(raw.range(of: "\"text\":", range: title.upperBound..<raw.endIndex))
+        let deadline = try XCTUnwrap(raw.range(of: "\"deadline\":", range: title.upperBound..<raw.endIndex))
+        XCTAssertLessThan(text.lowerBound, deadline.lowerBound)
+        let options = try XCTUnwrap(body["options"] as? [String: Any])
+        XCTAssertEqual(options["num_ctx"] as? Int, 8192)
+        XCTAssertEqual(options["num_predict"] as? Int, 3000)
+        XCTAssertEqual(body["think"] as? Bool, false)
+        XCTAssertEqual(body["truncate"] as? Bool, false)
+        XCTAssertEqual(body["shift"] as? Bool, false)
+    }
+
     func testNativeOllamaAdapterLeavesOtherEndpointsOnExistingTransport() {
         for endpoint in ["http://localhost:1234/v1", "http://localhost:11434/proxy/v1", "https://api.example.com/v1"] {
             let config = LLMClient.Config(messages: [], model: "fixture", baseURL: endpoint, apiKey: "", streaming: false)
@@ -1160,7 +1188,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: modelID,
                                                              baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru")
         let session = self.session()
-        let result = try await PichiMeetingSummaryGenerator().generate(session: session, configuration: configuration)
+        let result = try await self.generateLiveSyntheticSummary(session: session, configuration: configuration)
         XCTAssertFalse(result.summary.isEmpty)
         XCTAssertFalse(result.decisions.isEmpty, "An explicitly stated pricing decision should be retained")
         XCTAssertTrue(result.decisions.allSatisfy { !$0.text.contains("Иван") },
@@ -1188,7 +1216,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         closing.text = "Какие вопросы ещё остались? Нужно выяснить, можно ли вернуть платёж. Решения о возврате пока нет."
         session.transcriptSegments.append(closing)
         let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
-        let result = try await PichiMeetingSummaryGenerator().generate(session: session, configuration: configuration)
+        let result = try await self.generateLiveSyntheticSummary(session: session, configuration: configuration)
         let opening = try XCTUnwrap(result.openQuestions.first { item in
             item.text.localizedCaseInsensitiveContains("отправ") && item.text.localizedCaseInsensitiveContains("материал")
                 && item.evidence.contains { $0.segmentID == self.id }
@@ -1204,6 +1232,49 @@ final class PichiMeetingSummaryTests: XCTestCase {
                       "Requested work may be retained, but no owner or deadline was assigned")
         XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
+    // Only the two public synthetic opt-in fixtures use this trace helper. Never
+    // attach a saved session's speech or dump API credentials/provider options.
+    private func generateLiveSyntheticSummary(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration) async throws -> PichiMeetingSummaryDocument {
+        let trace = LiveSyntheticSummaryTrace()
+        let generator = PichiMeetingSummaryGenerator(
+            complete: { try await trace.complete($0) },
+            prepare: { try await PichiMeetingSummaryTransport.snapshot($0) },
+            resolveArtifact: { try await PichiMeetingSummaryTransport.artifactID($0) }
+        )
+        do {
+            let result = try await generator.generate(session: session, configuration: configuration)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let document = String(decoding: try encoder.encode(result), as: UTF8.self)
+            self.attachLiveSyntheticSummaryTrace(await trace.report() + "\nFINAL DOCUMENT:\n" + document, modelID: configuration.modelID)
+            return result
+        } catch {
+            self.attachLiveSyntheticSummaryTrace(await trace.report() + "\nERROR:\n" + error.localizedDescription, modelID: configuration.modelID)
+            throw error
+        }
+    }
+
+    private func attachLiveSyntheticSummaryTrace(_ report: String, modelID: String) {
+        let attachment = XCTAttachment(string: "SELECTED MODEL: \(modelID)\n" + report)
+        attachment.name = "Synthetic meeting summary stages"
+        attachment.lifetime = .keepAlways
+        self.add(attachment)
+    }
+
+    private actor LiveSyntheticSummaryTrace {
+        private var entries: [String] = []
+
+        func complete(_ config: LLMClient.Config) async throws -> String {
+            let stage = (config.messages.first?["content"] as? String ?? "").split(separator: "\n").first.map(String.init) ?? ""
+            let input = config.messages.last?["content"] as? String ?? ""
+            let response = try await PichiMeetingSummaryTransport.complete(config)
+            self.entries.append("STAGE: \(stage)\nSYNTHETIC INPUT:\n\(input)\nRAW OUTPUT:\n\(response)")
+            return response
+        }
+
+        func report() -> String { self.entries.joined(separator: "\n\n") }
     }
 
     func testLiveSavedSessionSummaryWhenExplicitlyEnabled() async throws {
@@ -2030,6 +2101,79 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(requests[0].timeoutSeconds, requests[1].timeoutSeconds)
         XCTAssertEqual(requests[0].providerOptions, requests[1].providerOptions)
         XCTAssertEqual(PichiMeetingSummaryInput.turns(for: session).count, 3)
+    }
+
+    func testSupportReviewRecoversSeparateDecisionAndAssignedTaskFromRecapOnlyCandidate() async throws {
+        let evidence: [[String: Any]] = [["sourceIndex": 0]]
+        let recap: [[String: Any]] = [["text": "Иван подготовит отчёт к пятнице. Решили оставить текущую цену.", "evidence": evidence]]
+        let candidate: [String: Any] = ["summary": recap, "decisions": [], "actions": [], "openQuestions": [], "changes": [], "answers": []]
+        let corrected: [String: Any] = [
+            "summary": recap,
+            "decisions": [["text": "Решили оставить текущую цену.", "evidence": evidence]],
+            "actions": [["title": "Подготовить отчёт", "text": "Подготовить отчёт.", "status": "requested", "urgency": "unspecified",
+                         "owner": "Иван", "deadline": "к пятнице", "evidence": evidence]],
+            "openQuestions": [], "changes": [], "answers": [],
+        ]
+        let transport = SupportReviewTransport(responses: [try Self.wireJSON(candidate), try Self.wireJSON(corrected)])
+        let session = self.session()
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.decisions.map(\.text), ["Решили оставить текущую цену."])
+        let action = try XCTUnwrap(result.actions.first)
+        XCTAssertEqual(action.owner, "Иван")
+        XCTAssertEqual(action.deadline, "к пятнице")
+        XCTAssertEqual(action.status, .requested)
+        XCTAssertEqual(action.evidence.map(\.segmentID), [self.id])
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2, "Coverage recovery shares the existing single review, with no extra inference pass")
+        let input = try XCTUnwrap(requests[1].messages.last?["content"] as? String)
+        let sourceRange = try XCTUnwrap(input.range(of: "\"sources\":"))
+        let candidateRange = try XCTUnwrap(input.range(of: "\"candidate\":"))
+        XCTAssertLessThan(sourceRange.lowerBound, candidateRange.lowerBound,
+                          "Original speech must precede a fallible recap-only candidate in the source-first review")
+    }
+
+    func testSupportReviewReplacesPendingChoiceWithUnresolvedQuestionAndKeepsUnknownAssignment() async throws {
+        var session = self.session()
+        session.transcriptSegments[0].text = "Equipment is installed. Can the final materials be sent to the customer?"
+        var closing = session.transcriptSegments[0]
+        closing.id = UUID()
+        closing.start = .init(value: 60_000, timescale: 1000)
+        closing.text = "Please find out whether a refund is possible. No refund decision has been made yet."
+        session.transcriptSegments.append(closing)
+        func item(_ text: String, index: Int) -> [String: Any] {
+            ["text": text, "evidence": [["sourceIndex": index]]]
+        }
+        let recap = [item("Equipment is installed; refund eligibility is unresolved.", index: 1)]
+        let candidate: [String: Any] = ["summary": recap, "decisions": [item("No refund decision has been made.", index: 1)],
+                                        "actions": [], "openQuestions": [], "changes": [], "answers": []]
+        let corrected: [String: Any] = [
+            "summary": [item("Equipment is installed.", index: 0), item("Refund eligibility is unresolved.", index: 1)],
+            "decisions": [],
+            "actions": [["title": "Check refund eligibility", "text": "Find out whether a refund is possible.",
+                         "status": "requested", "urgency": "unspecified", "owner": NSNull(), "deadline": NSNull(),
+                         "evidence": [["sourceIndex": 1]]]],
+            "openQuestions": [item("Can the final materials be sent?", index: 0), item("Is a refund possible?", index: 1)],
+            "changes": [], "answers": [],
+        ]
+        let transport = SupportReviewTransport(responses: [try Self.wireJSON(candidate), try Self.wireJSON(corrected)])
+        let original = self.configuration()
+        let configuration = PichiMeetingSummaryConfiguration(providerID: original.providerID, modelID: original.modelID,
+                                                              baseURL: original.baseURL, apiKey: original.apiKey, language: "en")
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: configuration)
+        XCTAssertTrue(result.decisions.isEmpty, "A pending or absent decision is a status, not a chosen option")
+        XCTAssertEqual(result.openQuestions.count, 2)
+        XCTAssertTrue(result.openQuestions.allSatisfy { $0.resolved == nil })
+        XCTAssertEqual(result.openQuestions.last?.evidence.map(\.segmentID), [closing.id])
+        XCTAssertEqual(result.actions.first?.status, .requested)
+        XCTAssertNil(result.actions.first?.owner)
+        XCTAssertNil(result.actions.first?.deadline)
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2, "An unrelated later status must not create an answer-ledger update")
     }
 
     func testSupportReviewPreservesValidShortQuotesFromCompatibleAPI() async throws {
