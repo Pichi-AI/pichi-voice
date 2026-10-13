@@ -506,7 +506,7 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
             return
         }
         if let memoryConsumer, !memoryConsumer.enqueue(sample) {
-            self.fail(MeetingCapturePCMError.conversionFailed(PichiLocalization.text("In-memory transcription could not keep up with microphone capture.")),
+            self.fail(MeetingCapturePCMError.transcriptionStopped,
                       kind: .writerBackpressure)
             return
         }
@@ -577,6 +577,7 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         }
         self.gate.close()
         guard first else { return }
+        DebugLogger.shared.error("capture_stopped sessionTrack=\(self.trackID) interruption=\(kind.rawValue) errorType=\(String(reflecting: type(of: error)))", source: "IOSMeetingCaptureEngine")
         self.eventHandler(.interrupted(kind: kind, trackID: self.trackID, detail: error.localizedDescription))
         self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: self.trackID, detail: error.localizedDescription))
     }

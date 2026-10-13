@@ -37,6 +37,13 @@ private actor FinalizerProbe {
     func saved(_ values: [String]) { checkpoints.append(values) }
 }
 
+private final class DiagnosticProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func record(_ line: String) { lock.withLock { lines.append(line) } }
+    var snapshot: [String] { lock.withLock { lines } }
+}
+
 @main
 struct MeetingCapturePCMTransportTests {
     static func require(_ condition: Bool, _ detail: String) throws {
@@ -134,9 +141,10 @@ struct MeetingCapturePCMTransportTests {
 
         let latch = Latch()
         let overloadedProbe = Probe()
+        let diagnostics = DiagnosticProbe()
         let overloaded = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.25, maximumPendingSeconds: 0.5,
             recognize: { samples, start in overloadedProbe.begin(samples, at: start); await latch.wait(); return MeetingPCMTranscriptBatch(segments: [], speakers: []) },
-            checkpoint: { _ in overloadedProbe.checkpoint() }, failure: { _ in overloadedProbe.failed() })
+            checkpoint: { _ in overloadedProbe.checkpoint() }, diagnostic: { diagnostics.record($0) }, failure: { _ in overloadedProbe.failed() })
         try require(overloaded.enqueue(try sample(frames: 4_000)), "first in-flight batch")
         for _ in 0..<1000 { if await latch.entered { break }; await Task.yield() }
         try require(await latch.entered, "worker started")
@@ -148,14 +156,24 @@ struct MeetingCapturePCMTransportTests {
         do { try await finishing.value; throw NSError(domain: "ExpectedOverload", code: 1) }
         catch MeetingMemoryAudioError.overload { }
         try require(overloadedProbe.snapshot.1 == 0 && overloadedProbe.snapshot.2 == 1, "cancelled inference cannot publish unsaved partial output, one failure")
+        try require(diagnostics.snapshot.count == 1, "one terminal diagnostic for overloaded intake")
+        try require(diagnostics.snapshot[0].contains("errorKind=overload")
+                    && diagnostics.snapshot[0].contains("pendingFrames=8000")
+                    && diagnostics.snapshot[0].contains("budgetFrames=8000"), "log the actual saturated budget before discarding pending PCM")
 
         let failureProbe = Probe()
+        let failureDiagnostics = DiagnosticProbe()
         let checkpointFailure = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.25, maximumPendingSeconds: 1,
             recognize: { _, _ in MeetingPCMTranscriptBatch(segments: [], speakers: []) },
-            checkpoint: { _ in throw NSError(domain: "CheckpointFailure", code: 42) }, failure: { _ in failureProbe.failed() })
+            checkpoint: { _ in throw NSError(domain: "CheckpointFailure", code: 42,
+                userInfo: [NSLocalizedDescriptionKey: "Synthetic sensitive transcript fragment"]) },
+            diagnostic: { failureDiagnostics.record($0) }, failure: { _ in failureProbe.failed() })
         _ = checkpointFailure.enqueue(try sample(frames: 4_000))
         do { try await checkpointFailure.finish(); throw NSError(domain: "ExpectedCheckpointError", code: 1) }
         catch let error as NSError where error.domain == "CheckpointFailure" { }
+        try require(!failureDiagnostics.snapshot.isEmpty, "failed checkpoints must have a bounded diagnostic")
+        try require(failureDiagnostics.snapshot.allSatisfy { !$0.contains("sensitive transcript") && !$0.contains("CheckpointFailure") },
+                    "provider and checkpoint error contents must never enter support logs")
         try require(failureProbe.snapshot.2 == 1, "checkpoint failure closes strict intake")
         let cancelLatch = Latch()
         let cancelProbe = Probe()

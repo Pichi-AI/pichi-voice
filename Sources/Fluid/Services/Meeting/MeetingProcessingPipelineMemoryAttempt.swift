@@ -113,14 +113,28 @@ extension MeetingProcessingPipeline {
         let consumer = try Self.makeMemoryAudioConsumer(
             recognize: { samples, offset in
                 try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
-                    var batch = try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration)
+                    let started = ProcessInfo.processInfo.systemUptime
+                    var batch = try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                        try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration)
+                    }
                     batch.sourceTrack = track
-                    if let privacyContext { return try await privacyContext.redact(batch) }
+                    let recognized = ProcessInfo.processInfo.systemUptime
+                    if let privacyContext { batch = try await privacyContext.redact(batch) }
+                    let elapsed = Int((recognized - started) * 1000)
+                    let privacyElapsed = Int((ProcessInfo.processInfo.systemUptime - recognized) * 1000)
+                    DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                        DebugLogger.shared.info("stage=window offset=\(offset) frames=\(samples.count) runtimeMs=\(elapsed) privacyMs=\(privacyElapsed) publishedSegments=\(batch.segments.count)", source: "MeetingMemoryAudio")
+                    }
                     return batch
                 }
             },
             checkpoint: { batch in try await checkpoint(batch) },
             finalize: { try await privacyContext?.finish() },
+            diagnostic: { message in
+                DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                    DebugLogger.shared.info(message, source: "MeetingMemoryAudio")
+                }
+            },
             failure: { _ in
                 // Neither provider errors nor transcript content cross into durable diagnostics.
                 eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: trackID,

@@ -12,11 +12,12 @@ extension MeetingProcessingPipeline {
         recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
         finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)? = nil,
+        diagnostic: @escaping @Sendable (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingMemoryAudio") },
         failure: @escaping @Sendable (Error) -> Void
     ) throws -> any MeetingMemoryAudioConsuming {
         try MeetingPipelineMemoryAudioConsumer(chunkSeconds: chunkSeconds,
                                               maximumPendingSeconds: maximumPendingSeconds,
-                                              recognize: recognize, checkpoint: checkpoint, finalize: finalize, failure: failure)
+                                              recognize: recognize, checkpoint: checkpoint, finalize: finalize, diagnostic: diagnostic, failure: failure)
     }
 }
 
@@ -52,6 +53,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private let checkpoint: @Sendable (MeetingPCMTranscriptBatch) async throws -> Void
     private let finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?
     private let failure: @Sendable (Error) -> Void
+    private let diagnostic: @Sendable (String) -> Void
     private var accepting = true
     private var terminalError: Error?
     private var tail: [Float] = []
@@ -67,6 +69,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
          recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
          checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
          finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?,
+         diagnostic: @escaping @Sendable (String) -> Void,
          failure: @escaping @Sendable (Error) -> Void) throws {
         guard chunkSeconds.isFinite, maximumPendingSeconds.isFinite,
               chunkSeconds >= 0.25, chunkSeconds <= 30,
@@ -79,6 +82,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         self.checkpoint = checkpoint
         self.finalize = finalize
         self.failure = failure
+        self.diagnostic = diagnostic
         self.tail.reserveCapacity(self.chunkFrames)
     }
 
@@ -186,12 +190,20 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             }
             return self.jobs.removeFirst()
         }) {
+            let started = ProcessInfo.processInfo.systemUptime
             do {
                 try Task.checkCancellation()
                 let batch = try await self.recognize(job.samples, job.start)
                 try Task.checkCancellation()
+                let recognized = ProcessInfo.processInfo.systemUptime
                 try await self.checkpoint(batch)
-                self.lock.withLock { self.pendingFrames = max(0, self.pendingFrames - job.samples.count) }
+                let pending = self.lock.withLock { () -> Int in
+                    self.pendingFrames = max(0, self.pendingFrames - job.samples.count)
+                    return self.pendingFrames
+                }
+                let checkpointMs = Int((ProcessInfo.processInfo.systemUptime - recognized) * 1000)
+                let inferenceMs = Int((recognized - started) * 1000)
+                self.diagnostic("window offset=\(job.start) frames=\(job.samples.count) inferenceMs=\(inferenceMs) checkpointMs=\(checkpointMs) pendingFrames=\(pending) budgetFrames=\(self.maximumPendingFrames)")
             } catch {
                 self.fail(error)
                 self.lock.withLock { self.worker = nil }
@@ -201,16 +213,28 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     }
 
     private func fail(_ error: Error) {
-        let first = self.lock.withLock { () -> Bool in
-            guard self.terminalError == nil else { return false }
+        let pending = self.lock.withLock { () -> (Int, Int)? in
+            guard self.terminalError == nil else { return nil }
+            let state = (self.pendingFrames, self.jobs.count)
             self.terminalError = error
             self.accepting = false
             self.tail.removeAll(keepingCapacity: false)
             self.jobs.removeAll(keepingCapacity: false)
             self.pendingFrames = 0
             self.worker?.cancel()
-            return true
+            return state
         }
-        if first { self.failure(error) }
+        if let pending {
+            let kind: String
+            switch error as? MeetingMemoryAudioError {
+            case .overload: kind = "overload"
+            case .invalidPCM: kind = "invalid_pcm"
+            case .invalidBudget: kind = "invalid_budget"
+            case .timelineDiscontinuity: kind = "timeline_discontinuity"
+            case nil: kind = String(reflecting: type(of: error))
+            }
+            self.diagnostic("stopped errorKind=\(kind) pendingFrames=\(pending.0) queuedWindows=\(pending.1) budgetFrames=\(self.maximumPendingFrames)")
+            self.failure(error)
+        }
     }
 }
