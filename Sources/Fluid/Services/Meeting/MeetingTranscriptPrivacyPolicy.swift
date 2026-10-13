@@ -92,7 +92,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 segments[a].start == segments[b].start ? a < b : segments[a].start < segments[b].start
             }
             let fragments = ordered.map { TextFragment(key: $0, text: segments[$0].text) }
-            let projected = try await self.projectedTexts(fragments, prefix: contextPrefixes[trackID] ?? "", separator: "\n", using: redactor)
+            let projected = try await self.projectedTexts(fragments, prefix: contextPrefixes[trackID] ?? "", using: redactor)
             for index in ordered {
                 copy[index].text = projected[index] ?? segments[index].text
                 copy[index].originalText = nil
@@ -254,7 +254,7 @@ actor MeetingTranscriptPrivacyContext {
         // tail. Reusing its original ID later preserves normal store operations.
         safe.segments.removeAll { $0.id == tail.id }
         let published = combined.segments.filter { $0.id != tail.id }.sorted { $0.start < $1.start }
-        prefix = Self.suffix(([context] + published.map(\.text)).filter { !$0.isEmpty }.joined(separator: "\n"))
+        prefix = Self.suffix(([context] + published.map(\.text)).filter { !$0.isEmpty }.joined(separator: " "))
         pending = tail; pending?.originalText = nil
         pendingIsComplete = batch.isComplete
         trackID = currentTrack; lastEnd = tail.end

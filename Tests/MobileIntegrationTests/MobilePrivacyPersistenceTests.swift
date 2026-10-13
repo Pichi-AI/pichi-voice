@@ -37,6 +37,16 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
                   sourceTrackID: track, speakerID: nil, text: text, originalText: text, revision: 1,
                   status: .final, overlap: .none, completeness: .complete)
         }
+        let wordText = "карта 4111 1111 1111 1111 дата рождения 12 мая 1980 метформин 500 мг"
+        let words = wordText.split(separator: " ").enumerated().map { segment(String($0.element), Int64($0.offset)) }
+        let safeWords = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: words), using: privacy)
+        let joinedWords = safeWords.segments.map(\.text).joined(separator: " ")
+        XCTAssertFalse(joinedWords.contains("4111"))
+        XCTAssertFalse(joinedWords.contains("1111"))
+        XCTAssertFalse(joinedWords.contains("1980"))
+        XCTAssertTrue(joinedWords.contains("метформин 500 мг"))
+        XCTAssertEqual(safeWords.segments.map(\.id), words.map(\.id))
+        XCTAssertEqual(safeWords.segments.map(\.start), words.map(\.start))
         original.transcriptSegments = [segment("телефон", 0), segment("273 55 11", 1),
             segment("дата рождения", 2), segment("12 мая 1980", 3), segment("домашний адрес", 4),
             segment("улица Примерная дом 12", 5), segment("метформин 500 мг", 6)]
