@@ -210,18 +210,21 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     }
 }
 
-/// One bounded context owner per frozen strict-memory attempt. The last segment
+/// One bounded context owner per frozen strict-memory attempt. A lexical tail
 /// waits for the next window's context instead of first publishing a possible
-/// entity fragment. Finish flushes it before the consumer's joined drain returns.
+/// entity fragment. Segment granularity can be a word or an utterance. Finish
+/// flushes the whole held array before the consumer's joined drain returns.
 /// This is fallible text detection, not a promise about every incomplete entity.
 actor MeetingTranscriptPrivacyContext {
     nonisolated static let maximumContextUTF16 = 1_024
     nonisolated static let maximumPendingUTF16 = 16_384
+    nonisolated static let minimumPendingTokens = 32
+    nonisolated static let maximumPendingSegments = 128
     private let redactor: any TranscriptTextRedacting
     private var trackID: MeetingAudioTrackID?
     private var lastEnd: MeetingMediaTime?
     private var prefix = ""
-    private var pending: MeetingTranscriptSegment?
+    private var pending: [MeetingTranscriptSegment] = []
     private var pendingIsComplete = true
     private var isProcessing = false
     init(redactor: any TranscriptTextRedacting) { self.redactor = redactor }
@@ -238,40 +241,54 @@ actor MeetingTranscriptPrivacyContext {
         let sameTrack = currentTrack != nil && currentTrack == trackID
         let forward = ordered.first.map { first in lastEnd.map { first.start.seconds + 0.001 >= $0.seconds } ?? true } ?? true
         let continues = sameTrack && forward
-        if pending != nil, !ordered.isEmpty, !continues { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        if !pending.isEmpty, !ordered.isEmpty, !continues { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         let context = continues ? prefix : ""
-        guard let tail = ordered.last else {
+        guard let last = ordered.last else {
             return try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor)
         }
-        guard tail.text.utf16.count <= Self.maximumPendingUTF16 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         var combined = batch
-        combined.segments = pending.map { [$0] + batch.segments } ?? batch.segments
+        combined.segments = pending + batch.segments
         combined.isComplete = combined.isComplete && pendingIsComplete
+        let combinedOrdered = combined.segments.sorted { $0.start < $1.start }
+        var heldCount = 0
+        var tokens = 0
+        var heldUTF16 = 0
+        for segment in combinedOrdered.reversed() {
+            heldCount += 1
+            tokens += segment.text.split(whereSeparator: { $0.isWhitespace }).count
+            heldUTF16 += segment.text.utf16.count + (heldCount > 1 ? 1 : 0)
+            guard heldCount <= Self.maximumPendingSegments, heldUTF16 <= Self.maximumPendingUTF16 else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+            if tokens >= Self.minimumPendingTokens { break }
+        }
+        let tail = Array(combinedOrdered.suffix(heldCount))
+        let heldIDs = Set(tail.map(\.id))
         var safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(combined, using: redactor,
             contextPrefixes: currentTrack.map { [$0: context] } ?? [:])
         try Task.checkCancellation()
-        // A checkpoint receives all earlier complete segments, never this raw
-        // tail. Reusing its original ID later preserves normal store operations.
-        safe.segments.removeAll { $0.id == tail.id }
-        let published = combined.segments.filter { $0.id != tail.id }.sorted { $0.start < $1.start }
+        // A checkpoint receives earlier complete segments, never any word from
+        // this raw lexical tail. Its stable IDs later use normal store operations.
+        safe.segments.removeAll { heldIDs.contains($0.id) }
+        let published = combinedOrdered.filter { !heldIDs.contains($0.id) }
         prefix = Self.suffix(([context] + published.map(\.text)).filter { !$0.isEmpty }.joined(separator: " "))
-        pending = tail; pending?.originalText = nil
-        pendingIsComplete = batch.isComplete
-        trackID = currentTrack; lastEnd = tail.end
+        pending = tail.map { segment in var copy = segment; copy.originalText = nil; return copy }
+        pendingIsComplete = combined.isComplete
+        trackID = currentTrack; lastEnd = last.end
         return safe
     }
 
     func finish() async throws -> MeetingPCMTranscriptBatch? {
         try Task.checkCancellation()
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
-        guard let pending else { return nil }
+        guard !pending.isEmpty else { return nil }
         isProcessing = true
         defer { isProcessing = false }
-        let batch = MeetingPCMTranscriptBatch(segments: [pending], isComplete: pendingIsComplete)
+        let batch = MeetingPCMTranscriptBatch(segments: pending, isComplete: pendingIsComplete)
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor,
-            contextPrefixes: [pending.sourceTrackID: prefix])
+            contextPrefixes: trackID.map { [$0: prefix] } ?? [:])
         try Task.checkCancellation()
-        self.pending = nil; prefix = ""; trackID = nil; lastEnd = nil
+        self.pending = []; prefix = ""; trackID = nil; lastEnd = nil
         return safe
     }
 

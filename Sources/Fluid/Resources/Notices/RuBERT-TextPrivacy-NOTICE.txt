@@ -34,5 +34,19 @@ for names absent from the lexicon or without recognizable morphology/context.
 Text redaction does not redact retained audio recordings. If audio storage is
 enabled, the recording retains voices and spoken personal information.
 
+Strict transcript checkpoints keep a bounded lexical tail in memory until the
+next inference window or joined finish. The tail uses at least 32 whitespace
+tokens across whole source segments, with total limits of 16,384 UTF-16 units
+and 128 segments. This avoids publishing the first card/name fragment when ASR
+uses word-level segments. It can delay visible/durable text and that unfinished
+tail can be lost after a crash. Detection beyond the finite context/tail, or of
+incomplete and incorrectly recognized entities, is not guaranteed.
+
+Card detection checks complete digit-group boundaries and chooses a valid Luhn
+candidate of 13..19 digits rather than rejecting a valid prefix of a longer run.
+A following explicit currency/dose unit keeps a separately grouped amount out
+of the replacement. Without a semantic separator, two plausible numeric fields
+can be ambiguous; Luhn alone does not prove that a number is a payment card.
+
 Native inference uses the existing ONNX Runtime distribution, licensed in the
 accompanying ONNXRuntime-LICENSE.txt notice.

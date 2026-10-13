@@ -84,6 +84,48 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         let json = String(decoding: try MeetingTranscriptExporter.json(for: saved), as: UTF8.self)
         XCTAssertFalse(json.contains("8 999")); XCTAssertFalse(json.contains("123 45 67"))
         XCTAssertTrue(saved.transcriptSegments.allSatisfy { $0.originalText == nil })
+
+        // A word-granularity PAN split between PCM windows must not leak its
+        // first group through an earlier durable checkpoint or native export.
+        for amount in ["500", "508"] {
+            let cards = MeetingTranscriptPrivacyContext(redactor: privacy)
+            let cardA = ["карта", "4111", "1111"].enumerated().map { segment($0.element, Int64($0.offset)) }
+            let cardB = ["1111", "1111", amount, "мг", "метформин500мг"].enumerated().map { segment($0.element, 8 + Int64($0.offset)) }
+            let checkpointA = try await cards.redact(.init(segments: cardA))
+            let checkpointB = try await cards.redact(.init(segments: cardB))
+            let checkpointC = try await cards.finish()
+            strict.transcriptSegments = []
+            for checkpoint in [checkpointA, checkpointB] + (checkpointC.map { [$0] } ?? []) {
+                strict.transcriptSegments += checkpoint.segments
+                try await store.save(strict)
+                let value = try await store.load(id: strict.id)
+                let persisted = try XCTUnwrap(value)
+                for text in [MeetingTranscriptExporter.text(for: persisted), String(decoding: try MeetingTranscriptExporter.json(for: persisted), as: UTF8.self)] {
+                    XCTAssertFalse(text.contains("4111")); XCTAssertFalse(text.contains("1111"))
+                }
+            }
+            XCTAssertEqual(strict.transcriptSegments.map(\.id), (cardA + cardB).map(\.id))
+            XCTAssertEqual(strict.transcriptSegments.map(\.start), (cardA + cardB).map(\.start))
+            XCTAssertEqual(strict.transcriptSegments.suffix(3).map(\.text), [amount, "мг", "метформин500мг"])
+            XCTAssertTrue(strict.transcriptSegments.allSatisfy { $0.originalText == nil })
+        }
+
+        let names = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let nameA = ["доктор", "анна"].enumerated().map { segment($0.element, Int64($0.offset)) }
+        let nameB = ["сергеевна", "кузнецова", "метотрексат", "15", "мг"].enumerated().map { segment($0.element, 8 + Int64($0.offset)) }
+        let namesA = try await names.redact(.init(segments: nameA))
+        let namesB = try await names.redact(.init(segments: nameB))
+        let namesC = try await names.finish()
+        strict.transcriptSegments = []
+        for checkpoint in [namesA, namesB] + (namesC.map { [$0] } ?? []) {
+            strict.transcriptSegments += checkpoint.segments
+            try await store.save(strict)
+            let exported = String(decoding: try MeetingTranscriptExporter.json(for: strict), as: UTF8.self)
+            for privateWord in ["анна", "сергеевна", "кузнецова"] { XCTAssertFalse(exported.contains(privateWord)) }
+        }
+        XCTAssertEqual(strict.transcriptSegments.map(\.id), (nameA + nameB).map(\.id))
+        XCTAssertEqual(strict.transcriptSegments.map(\.start), (nameA + nameB).map(\.start))
+        XCTAssertEqual(strict.transcriptSegments.suffix(3).map(\.text), ["метотрексат", "15", "мг"])
         try await privacy.unload()
     }
 

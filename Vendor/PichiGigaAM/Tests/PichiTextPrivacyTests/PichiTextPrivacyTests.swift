@@ -61,6 +61,27 @@ final class PichiTextPrivacyTests: XCTestCase {
         XCTAssertEqual(result.counts[.card], 1)
     }
 
+    func testCardCandidatesStopAtActualGroupsAndPreserveFollowingAmount() throws {
+        for pan in ["4111 1111 1111 1111", "4111111111111111", "4111-1111-1111-1111", "3782 822463 10005"] {
+            let text = "карта \(pan) 500 мг метформин500мг"
+            let result = try PIIRedactor.redact(text, ner: [])
+            XCTAssertEqual(result.text, "карта [КАРТА] 500 мг метформин500мг", pan)
+            XCTAssertEqual(result.counts[.card], 1)
+        }
+        for text in ["дозировка 500 мг количество 123456 участников", "число 41111111111111115000", "номер 4111 1111 1111 1112"] {
+            XCTAssertEqual(try PIIRedactor.redact(text, ner: []).text, text)
+        }
+        // At least one extension below passes Luhn too: an explicit amount unit
+        // must keep that separate quantity outside the card's replacement span.
+        XCTAssertTrue(PIIRedactor.luhnValid("4111111111111111508".compactMap(\.wholeNumberValue)))
+        for amount in ["500", "503", "508", "1 500"] {
+            for unit in ["рублей", "мг", "USD"] {
+                let text = "карта 4111 1111 1111 1111 \(amount) \(unit)"
+                XCTAssertEqual(try PIIRedactor.redact(text, ner: []).text, "карта [КАРТА] \(amount) \(unit)")
+            }
+        }
+    }
+
     func testStructuredRussianAddressesStopBeforeUnpunctuatedDrugAndDose() throws {
         for address in ["улица Примерная дом 12", "г. Москва ул. Примерная д.12А корп.2 кв.17",
                         "улица 8 Марта дом12/1", "улица Примерная д12к2 строение1 офис3", "улица 1905 года дом7"] {

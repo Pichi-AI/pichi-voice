@@ -130,7 +130,7 @@ public enum PIIRedactor {
         try matches(boundary + #"инн[^\d]{0,15}(\d{12}|\d{10})"# + end, .inn, capture: 1, contextual: true)
         try matches(boundary + #"(?:\d{12}|\d{10})"# + end, .inn, validate: { innValid(digits($0)) })
         try matches(#"(?:родил[а-яё]*|дата рождения|день рождения|года рождения|г\.р\.|date of birth|born)[^.]{0,25}?(\d{1,2}[. /-]\d{1,2}[. /-]\d{2,4}|\d{1,2}\s+[а-яё]+\s+\d{4}|\d{4})(?!\d)"#, .birthDate, capture: 1, contextual: true)
-        try matches(boundary + #"(?:\d[ -]?){13,19}"# + end, .card, validate: { luhnValid(digits($0)) })
+        entities += try paymentCards(in: text)
         try matches(boundary + #"[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}"# + end, .account)
         try matches(#"(?:лицевой сч[её]т|номер сч[её]та|account number|р/с)\D{0,15}?((?<!\d)\d(?:[ -]?\d){9,24}(?![ -]?\d))"#, .account, capture: 1, contextual: true)
         // Context is required: blindly masking every 6-digit number destroys
@@ -153,6 +153,55 @@ public enum PIIRedactor {
         try matches(addressCue + "(" + city + street + addressWord + #"(?:\s+"# + addressWord + #"){0,5}?"# + house + building + unit + ")",
                     .address, capture: 1, contextual: true)
         return entities
+    }
+
+    /// Candidate ends must be actual numeric-group boundaries. A greedy run may
+    /// contain a valid 16-digit PAN followed by a separate three-digit amount;
+    /// rejecting that 19-digit run must not discard the complete earlier PAN.
+    private static func paymentCards(in text: String) throws -> [PIIDetection] {
+        let runs = try NSRegularExpression(pattern: boundary + #"\d{1,19}(?:[\s-]+\d{1,19})*"# + end)
+        let groups = try NSRegularExpression(pattern: #"\d+"#)
+        let amountUnit = try NSRegularExpression(pattern: #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#, options: [.caseInsensitive])
+        let source = text as NSString
+        var result: [PIIDetection] = []
+        for run in runs.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            let parts = groups.matches(in: text, range: run.range).map(\.range)
+            guard let last = parts.last else { continue }
+            let suffix = source.substring(from: NSMaxRange(last))
+            let hasAmountUnit = amountUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count)) != nil
+            var amountSuffixStart = parts.count
+            if hasAmountUnit, (1...3).contains(last.length) {
+                amountSuffixStart = parts.count - 1
+                while amountSuffixStart > 0, parts[amountSuffixStart - 1].length == 3 { amountSuffixStart -= 1 }
+                if amountSuffixStart > 0, (1...2).contains(parts[amountSuffixStart - 1].length) { amountSuffixStart -= 1 }
+            }
+            var start = 0
+            while start < parts.count {
+                var candidateDigits: [Int] = []
+                var validEnds: [Int] = []
+                for finish in start..<parts.count {
+                    candidateDigits += digits(source.substring(with: parts[finish]))
+                    if candidateDigits.count > 19 { break }
+                    if luhnValid(candidateDigits) { validEnds.append(finish) }
+                }
+                var bestEnd = validEnds.last
+                if hasAmountUnit {
+                    // A trailing explicit amount unit distinguishes a quantity
+                    // from a PAN group, even if PAN + quantity also passes Luhn.
+                    // Grouped amounts use one leading 1..3-digit group followed
+                    // by three-digit groups. Unmarked ambiguous runs keep the
+                    // longest valid boundary candidate instead of guessing.
+                    for finish in validEnds where finish + 1 < parts.count && finish + 1 >= amountSuffixStart {
+                        bestEnd = finish; break
+                    }
+                }
+                if let finish = bestEnd {
+                    result.append(.init(range: NSUnionRange(parts[start], parts[finish]), kind: .card, contextual: false))
+                    start = finish + 1
+                } else { start += 1 }
+            }
+        }
+        return result
     }
 
     static func merge(_ candidates: [PIIDetection]) -> [PIIDetection] {

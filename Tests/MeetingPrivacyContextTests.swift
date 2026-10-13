@@ -131,9 +131,9 @@ struct MeetingPrivacyContextTests {
         let firstOutput = try await context.redact(first)
         try check(firstOutput.segments.isEmpty, "possible raw entity tail published early")
         let secondOutput = try await context.redact(second)
-        try check(secondOutput.segments.count == 1 && !secondOutput.segments[0].text.contains("8 999"), "first-half phone leaked after join")
+        try check(secondOutput.segments.isEmpty, "raw lexical tail published before its holdback closed")
         let finalOutput = try await context.finish()
-        try check(finalOutput?.segments.count == 1 && finalOutput?.segments[0].text.contains("123 45 67") == false, "final phone tail leaked")
+        try check(finalOutput?.segments.count == 2 && finalOutput?.segments.map(\.text).joined(separator: " ").contains("123 45 67") == false, "final phone tail leaked")
         let repeatFinish = try await context.finish()
         try check(repeatFinish == nil, "finish duplicated a checkpoint")
 
@@ -152,5 +152,59 @@ struct MeetingPrivacyContextTests {
         _ = try await fresh.redact(MeetingPCMTranscriptBatch(segments: [segment("12 мая 1980", track: track, start: 0)]))
         let freshOutput = try await fresh.finish()
         try check(freshOutput?.segments[0].text == "12 мая 1980", "context leaked across attempts")
+
+        // ASR may emit a separate segment per word. The whole sensitive lexical
+        // suffix must wait, not only the final word of the first PCM window.
+        let cards = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let firstWords = ["карта", "4111", "1111"].enumerated().map { segment($0.element, track: track, start: $0.offset) }
+        let secondWords = ["1111", "1111", "500", "мг", "метформин500мг"].enumerated().map { segment($0.element, track: track, start: 8 + $0.offset) }
+        let cardA = try await cards.redact(.init(segments: firstWords))
+        let cardB = try await cards.redact(.init(segments: secondWords))
+        let cardC = try await cards.finish()
+        let checkpoints = [cardA, cardB] + (cardC.map { [$0] } ?? [])
+        for checkpoint in checkpoints {
+            let text = checkpoint.segments.map(\.text).joined(separator: " ")
+            try check(!text.contains("4111") && !text.contains("1111"), "a PAN fragment reached an earlier checkpoint")
+            let json = String(decoding: try JSONEncoder().encode(checkpoint.segments), as: UTF8.self)
+            try check(!json.contains("4111") && !json.contains("1111"), "a PAN fragment reached an export payload")
+        }
+        let all = checkpoints.flatMap(\.segments)
+        try check(all.map(\.id) == (firstWords + secondWords).map(\.id), "held words changed IDs or vanished")
+        try check(all.map(\.start) == (firstWords + secondWords).map(\.start), "held words changed timestamps")
+        try check(all.allSatisfy { $0.originalText == nil }, "held words retained original text")
+        try check(all.suffix(3).map(\.text) == ["500", "мг", "метформин500мг"], "PAN detection absorbed an adjacent dose")
+
+        let names = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let nameA = ["доктор", "анна"].enumerated().map { segment($0.element, track: track, start: $0.offset) }
+        let nameB = ["сергеевна", "кузнецова", "метотрексат", "15", "мг"].enumerated().map { segment($0.element, track: track, start: 8 + $0.offset) }
+        let nameCheckpoints = [try await names.redact(.init(segments: nameA)), try await names.redact(.init(segments: nameB))]
+        let nameTail = try await names.finish()
+        for checkpoint in nameCheckpoints + (nameTail.map { [$0] } ?? []) {
+            let text = checkpoint.segments.map(\.text).joined(separator: " ")
+            try check(!text.contains("анна") && !text.contains("сергеевна") && !text.contains("кузнецова"), "recognized name fragment reached a checkpoint")
+        }
+        try check(nameTail?.segments.suffix(3).map(\.text) == ["метотрексат", "15", "мг"], "name tail changed adjacent medication")
+
+        // A long complete utterance still holds one segment; token-based policy
+        // must not delay 32 complete eight-second utterances.
+        let complete = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let utterance = Array(repeating: "документ", count: 40).joined(separator: " ")
+        let utteranceA = segment(utterance, track: track, start: 0)
+        let utteranceB = segment(utterance, track: track, start: 8)
+        _ = try await complete.redact(.init(segments: [utteranceA]))
+        let released = try await complete.redact(.init(segments: [utteranceB]))
+        try check(released.segments.map(\.id) == [utteranceA.id], "complete utterance granularity over-buffered")
+        let completeTail = try await complete.finish()
+        try check(completeTail?.segments.map(\.id) == [utteranceB.id], "complete utterance tail did not flush")
+
+        // Enforce the budget over the entire held array, not each individual word.
+        let bounded = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let part = String(repeating: "x", count: 8_000)
+        _ = try await bounded.redact(.init(segments: [segment(part, track: track, start: 0)]))
+        _ = try await bounded.redact(.init(segments: [segment(part, track: track, start: 8)]))
+        do {
+            _ = try await bounded.redact(.init(segments: [segment(part, track: track, start: 16)]))
+            throw Failure.assertion("whole pending array exceeded its UTF-16 budget")
+        } catch is MeetingPrivacyPublicationError { }
     }
 }
