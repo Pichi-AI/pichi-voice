@@ -3,6 +3,20 @@ import Foundation
 import XCTest
 
 final class PichiLocalizationTests: XCTestCase {
+    func testHoldSpaceMuteCopyUsesCompiledEnglishAndRussianResources() {
+        let copy = [
+            "Hold Space to Mute": "Отключать микрофон при удержании пробела",
+            "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority.": "Во время диктовки удерживайте пробел, чтобы отключить микрофон, и отпустите для продолжения. Короткое нажатие вводит пробел. Другие сочетания клавиш с пробелом имеют приоритет.",
+            "Muted": "Микрофон выключен",
+            "Dictation muted. Release Space to resume.": "Микрофон диктовки выключен. Отпустите пробел для продолжения.",
+            "Release Space to resume dictation": "Отпустите пробел, чтобы продолжить диктовку",
+        ]
+        for (key, russian) in copy {
+            XCTAssertEqual(PichiLocalization.text(key, language: .russian, bundle: .main), russian)
+            XCTAssertEqual(PichiLocalization.text(key, language: .english, bundle: .main), key)
+        }
+    }
+
     func testMissingAndUnknownPreferencesDefaultToRussianIndependentlyOfSpeechLanguage() throws {
         let suite = "PichiLocalizationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
