@@ -95,11 +95,13 @@ final class OllamaChatTransportTests: XCTestCase {
         let pending = Task { try await owned.session.data(for: request) }
         for _ in 0..<100 where context.fixture.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(context.fixture.requests.count, 1)
+        let stopped = context.fixture.stopExpectation(for: "/api/chat")
         await owned.lifetime.invalidateAndWait(for: owned.session)
         XCTAssertTrue(owned.lifetime.hasInvalidated)
         do { _ = try await pending.value; XCTFail("Cancelled request cannot complete successfully") } catch {}
         // invalidateAndCancel may notify the session delegate before request cancellation
         // finishes. Production joins the request as well as the session's invalidation.
+        await self.fulfillment(of: [stopped], timeout: 2)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
     }
 
@@ -114,8 +116,10 @@ final class OllamaChatTransportTests: XCTestCase {
         let pending = Task { try await context.client.call(config) }
         for _ in 0..<100 where context.fixture.metadataRequests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(context.fixture.metadataRequests.count, 1)
+        let stopped = context.fixture.stopExpectation(for: "/api/version")
         pending.cancel()
         do { _ = try await pending.value; XCTFail("Cancelled metadata cannot admit inference") } catch {}
+        await self.fulfillment(of: [stopped], timeout: 2)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/version"), 1)
         XCTAssertTrue(context.fixture.requests.isEmpty)
     }
@@ -163,6 +167,7 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertTrue(MeetingSummaryActivityCoordinator.shared.isProcessing)
         task.cancel()
         do { try await task.value; XCTFail("Cancelled warmup cannot succeed") } catch {}
+        await self.fulfillment(of: [context.fixture.stopExpectation(for: "/api/chat")], timeout: 2)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
         XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
         try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) {}
@@ -190,8 +195,9 @@ final class OllamaChatTransportTests: XCTestCase {
         XCTAssertEqual(context.fixture.requests.count, 1)
         let activity = OllamaWarmupActivity()
         let result = try await MeetingSummaryActivityCoordinator.shared.withSummary(activity: activity) {
+            await self.fulfillment(of: [context.fixture.stopExpectation(for: "/api/chat")], timeout: 2)
             XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1,
-                                        "Explicit summary must join optional transport cancellation before taking model ownership")
+                                        "Cancelling optional warmup must stop its held transport fixture")
             XCTAssertFalse(MeetingSummaryActivityCoordinator.shared.isProcessing)
             return try await MeetingModelResidencyCoordinator.shared.withExclusive(attemptID: UUID(), participants: []) { 42 }
         }
@@ -526,6 +532,7 @@ final class OllamaChatTransportTests: XCTestCase {
                 } else { false }
                 XCTAssertTrue(error is CancellationError || cancelledNetwork, "Unexpected cancellation error: \(error)")
             }
+            await self.fulfillment(of: [context.fixture.stopExpectation(for: "/api/chat")], timeout: 2)
             XCTAssertGreaterThanOrEqual(context.fixture.stops, 1, "The caller must cancel its owned URLSession task")
             XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
             XCTAssertEqual(context.fixture.requests.count, 1)
@@ -614,6 +621,7 @@ final class OllamaChatTransportTests: XCTestCase {
                 } else { false }
                 XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled || networkCancelled)
             }
+            await self.fulfillment(of: [context.fixture.stopExpectation(for: path)], timeout: 2)
             XCTAssertGreaterThanOrEqual(context.fixture.stops, 1)
             XCTAssertGreaterThanOrEqual(context.fixture.stops(for: path), 1, "Cancellation must stop the held metadata request itself")
             XCTAssertTrue(context.fixture.requests.isEmpty)
@@ -681,10 +689,12 @@ final class OllamaChatTransportTests: XCTestCase {
         }
         for _ in 0..<100 where context.fixture.metadataRequests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(context.fixture.metadataRequests.count, 1)
+        let stopped = context.fixture.stopExpectation(for: "/api/version")
         pending.cancel()
         do { _ = try await pending.value; XCTFail("Cancelled admission cannot publish a summary") }
         catch { XCTAssertTrue(error is CancellationError, "Unexpected cancellation: \(error)") }
         XCTAssertTrue(context.fixture.requests.isEmpty)
+        await self.fulfillment(of: [stopped], timeout: 2)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/version"), 1)
     }
 
@@ -809,11 +819,23 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
     private var recordedMetadataRequests: [URLRequest] = []
     private var stopCount = 0
     private var stoppedPaths: [String: Int] = [:]
+    private var stopExpectations: [String: [XCTestExpectation]] = [:]
 
     var requests: [URLRequest] { self.lock.withLock { self.recordedRequests } }
     var metadataRequests: [URLRequest] { self.lock.withLock { self.recordedMetadataRequests } }
     var stops: Int { self.lock.withLock { self.stopCount } }
     func stops(for path: String) -> Int { self.lock.withLock { self.stoppedPaths[path] ?? 0 } }
+
+    func stopExpectation(for path: String) -> XCTestExpectation {
+        let expectation = XCTestExpectation(description: "URLProtocol stopped \(path)")
+        let stopped = self.lock.withLock {
+            if self.stoppedPaths[path, default: 0] > 0 { return true }
+            self.stopExpectations[path, default: []].append(expectation)
+            return false
+        }
+        if stopped { expectation.fulfill() }
+        return expectation
+    }
 
     init(status: Int, body: String, chunkSize: Int?, held: Bool, version: String, showBody: String, heldMetadataPath: String?) {
         self.status = status
@@ -853,10 +875,12 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
     }
 
     func stopped(path: String) {
-        self.lock.withLock {
+        let expectations = self.lock.withLock {
             self.stopCount += 1
             self.stoppedPaths[path, default: 0] += 1
+            return self.stopExpectations.removeValue(forKey: path) ?? []
         }
+        for expectation in expectations { expectation.fulfill() }
     }
 
     static func body(_ request: URLRequest) throws -> [String: Any] {
