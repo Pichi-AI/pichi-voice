@@ -25,7 +25,10 @@ final class MobileNavigationUITests: XCTestCase {
             let tabBar = app.tabBars.firstMatch.frame
             XCTAssertTrue(app.buttons["meeting.start"].frame.intersection(tabBar).isEmpty,
                           "The floating tab bar must not cover the recording action")
-            XCTAssertTrue(app.staticTexts["meeting.storageNote"].frame.intersection(tabBar).isEmpty,
+            let storageCaption = app.descendants(matching: .any)["meeting.storageNote"].firstMatch
+            XCTAssertTrue(storageCaption.waitForExistence(timeout: 5))
+            XCTAssertGreaterThan(storageCaption.frame.height, 0)
+            XCTAssertTrue(storageCaption.frame.intersection(tabBar).isEmpty,
                           "The floating tab bar must not cover the storage caption")
         }
         capture("02-ready-landscape")
