@@ -65,7 +65,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                 Text(self.eyebrow)
                     .font(.fluidSystem(size: 14, weight: .bold))
                     .tracking(4.2)
-                    .foregroundStyle(FluidOnboardingLandingColors.blue.opacity(0.72))
+                    .foregroundStyle(self.theme.palette.accentText)
                     .textCase(.uppercase)
                     .padding(.bottom, 16)
             }
@@ -80,7 +80,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                 Text(PichiLocalization.text(self.accentTitle, locale: self.locale))
                     .font(.fluidSystem(size: 50, weight: .semibold, role: .title))
                     .italic()
-                    .foregroundStyle(FluidOnboardingLandingColors.blue)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.76)
             }
@@ -456,7 +456,7 @@ private final class LandingPrimaryNSButton: NSButton {
             string: title,
             attributes: [
                 .font: NSFont.fluidSystemFont(ofSize: 18, weight: .semibold),
-                .foregroundColor: NSColor(FluidOnboardingLandingColors.foreground),
+                .foregroundColor: NSColor(AppTheme.Palette.contrastingInk(on: Color(nsColor: self.backgroundColor(isHighlighted: isHighlighted)))),
             ]
         )
         self.alignment = .center

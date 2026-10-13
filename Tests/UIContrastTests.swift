@@ -195,8 +195,11 @@ struct UIContrastTests {
                                 ("backup", AnyView(BackupPrimaryActionFixture())),
                                 ("updates", AnyView(UpdatePrimaryActionFixture())),
                             ] {
+                                let disabled = roleName == "updates" && !AppBrand.updatesEnabled
                                 try self.verify(control, name: "settings-\(roleName)-\(suffix)", theme: theme, scheme: scheme,
-                                    textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
+                                    textBackground: disabled ? self.components(theme.palette.elevatedCardBackground) : accentRGB,
+                                    directory: directory, expectedForeground: disabled ? theme.palette.secondaryText : foreground,
+                                    labelOnly: true, requiredContrast: disabled ? 3 : 4.5)
                             }
                             actionChecks += 4
                             if #available(macOS 26, *) {
@@ -231,18 +234,47 @@ struct UIContrastTests {
                                     .background(theme.palette.elevatedCardBackground)
                                 try self.verify(tone, name: "secondary-tone-\(suffix)", theme: theme, scheme: scheme,
                                     textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
-                                    expectedForeground: .red, labelOnly: true, requiredContrast: nil)
+                                    expectedForeground: theme.palette.readableText(.red), labelOnly: true, requiredContrast: 3)
                                 actionChecks += 3
                             }
-                            // Explicit semantic tones and live recording intentionally
-                            // retain their existing white ink, independently of the accent.
+                            // Explicit tones must pair ink with their actual fill, including
+                            // pale saved accents passed explicitly by the dictionary wizard.
+                            for (toneName, tone) in [("explicit-accent", theme.palette.accent), ("white", Color.white),
+                                                     ("black", Color.black), ("yellow", Color.yellow), ("red", Color.red)] {
+                                let ink = theme.palette.foreground(on: tone)
+                                try self.verify(Button("Tone action") {}.buttonStyle(AccentButtonStyle(tone: tone)),
+                                    name: "tone-\(toneName)-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: self.components(tone), directory: directory,
+                                    expectedForeground: ink, labelOnly: true)
+                                actionChecks += 1
+                            }
+                            let disabledBackground = self.components(theme.palette.elevatedCardBackground)
+                            for (controlName, control) in [
+                                ("glass", AnyView(Button("Continue") {}.fluidGlassAction(prominent: true, tone: theme.palette.accent).disabled(true))),
+                                ("fallback", AnyView(Button("Continue") {}.buttonStyle(AccentButtonStyle(tone: theme.palette.accent)).disabled(true))),
+                                ("outlined", AnyView(Button("Continue") {}.buttonStyle(FluidOutlinedButtonStyle()).disabled(true))),
+                            ] {
+                                try self.verify(control, name: "disabled-\(controlName)-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: disabledBackground, directory: directory,
+                                    expectedForeground: theme.palette.secondaryText, labelOnly: true, requiredContrast: 3)
+                                actionChecks += 1
+                            }
+                            precondition(theme.palette.readableText(theme.palette.primaryText.opacity(0.05)) == theme.palette.primaryText,
+                                         "Transparent label ink must fall back before it disappears on the surface")
+                            let paleTheme = AppTheme.adaptive(accent: .white, colorScheme: scheme, package: package)
+                            for surface in [paleTheme.palette.windowBackground, paleTheme.palette.contentBackground,
+                                            paleTheme.palette.sidebarBackground, paleTheme.palette.cardBackground,
+                                            paleTheme.palette.elevatedCardBackground, paleTheme.palette.toolbarBackground] {
+                                precondition(self.contrast(self.components(paleTheme.palette.accentText), self.components(surface)) >= 3,
+                                             "Legacy/saved pale accent text must be legible on every surface")
+                            }
                             try self.verify(Button("Tone role") {}.buttonStyle(AccentButtonStyle(tone: .red)), name: "tone-role-\(suffix)",
                                 theme: theme, scheme: scheme, textBackground: self.components(.red), directory: directory,
-                                expectedForeground: .white, labelOnly: true, requiredContrast: nil)
+                                expectedForeground: theme.palette.foreground(on: .red), labelOnly: true)
                             try self.verify(Button("Record role") {}.buttonStyle(FluidRecordInvitationStyle(inviting: false, recording: true)),
                                 name: "record-role-\(suffix)", theme: theme, scheme: scheme,
                                 textBackground: self.components(.red), directory: directory,
-                                expectedForeground: .white, labelOnly: true, requiredContrast: nil)
+                                expectedForeground: theme.palette.foreground(on: .red), labelOnly: true)
                             actionChecks += 6
                         }
                     } catch { failure = error }
