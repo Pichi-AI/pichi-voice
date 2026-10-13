@@ -19,7 +19,14 @@ private struct FluidWindowSizingModifier: ViewModifier {
     let sizing: FluidWindowSizing
 
     func body(content: Content) -> some View {
-        content.background(FluidWindowSizingBridge(sizing: self.sizing))
+        // Hosting size probes must not turn a scrollable document's ideal height
+        // into the size of the whole navigation split view. Both columns use
+        // the actual window viewport, including during resize/full-screen transitions.
+        GeometryReader { viewport in
+            content
+                .frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+                .background(FluidWindowSizingBridge(sizing: self.sizing))
+        }
     }
 }
 

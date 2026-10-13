@@ -141,6 +141,71 @@ private struct CompactModelReviewView: View {
 
 @MainActor
 final class WindowSizingRegressionTests: XCTestCase {
+    func testLongLibraryDoesNotBecomeTheHostingMinimumHeight() async {
+        let state = LibraryLayoutSelection()
+        state.showsLibrary = true
+        let host = NSHostingController(rootView: LibraryLayoutFixture(selection: state))
+        let window = NSWindow(contentViewController: host)
+        window.isReleasedWhenClosed = false
+        defer { window.contentViewController = nil; window.close() }
+        window.setContentSize(NSSize(width: 1000, height: 560))
+        await self.settleHosting(host.view)
+        XCTAssertLessThanOrEqual(host.view.fittingSize.height, 560,
+                                 "A scrollable document must not become the main window's minimum height")
+    }
+
+    func testSwitchingToLongLibraryPreservesSmallWindowAndScrollViewport() async {
+        let state = LibraryLayoutSelection()
+        let host = NSHostingController(rootView: LibraryLayoutFixture(selection: state))
+        let window = NSWindow(contentViewController: host)
+        window.isReleasedWhenClosed = false
+        defer { window.contentViewController = nil; window.close() }
+        window.setContentSize(NSSize(width: 1000, height: 560))
+        await self.settleHosting(host.view)
+        let initialFrame = window.frame
+        state.showsLibrary = true
+        await self.settleHosting(host.view)
+        XCTAssertEqual(window.frame.height, initialFrame.height, accuracy: 1,
+                       "Opening the library must preserve the user's window height")
+        let library = self.scrollViews(in: host.view).first { ($0.documentView?.bounds.height ?? 0) > 900 }
+        XCTAssertNotNil(library, "The actual hosted library must retain a native scroll viewport")
+        guard let library, let document = library.documentView else { return }
+        XCTAssertLessThanOrEqual(library.contentSize.height, 560)
+        XCTAssertGreaterThan(document.bounds.height, library.contentSize.height + 500)
+        document.scroll(NSPoint(x: 0, y: document.bounds.maxY - library.contentSize.height))
+        XCTAssertEqual(library.documentVisibleRect.maxY, document.bounds.maxY, accuracy: 2,
+                       "The last model must be reachable in a small window")
+    }
+
+    func testLibraryViewportFollowsRepeatedSmallAndLargeResizes() async {
+        let state = LibraryLayoutSelection()
+        state.showsLibrary = true
+        let host = NSHostingController(rootView: LibraryLayoutFixture(selection: state))
+        let window = NSWindow(contentViewController: host)
+        window.isReleasedWhenClosed = false
+        defer { window.contentViewController = nil; window.close() }
+        for size in [NSSize(width: 1000, height: 560), NSSize(width: 1600, height: 1000),
+                     NSSize(width: 850, height: 520), NSSize(width: 1500, height: 900)] {
+            window.setContentSize(size)
+            await self.settleHosting(host.view)
+            XCTAssertEqual(host.view.bounds.height, size.height, accuracy: 1)
+            let library = self.scrollViews(in: host.view).first { ($0.documentView?.bounds.height ?? 0) > 900 }
+            XCTAssertNotNil(library)
+            if let library { XCTAssertLessThanOrEqual(library.contentSize.height, size.height) }
+        }
+    }
+
+    private func settleHosting(_ view: NSView) async {
+        for _ in 0..<3 {
+            view.layoutSubtreeIfNeeded()
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+    }
+
+    private func scrollViews(in view: NSView) -> [NSScrollView] {
+        ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { self.scrollViews(in: $0) }
+    }
+
     func testRepeatedLayoutAndResizeEventsDoNotRewriteStableBounds() async {
         let window = SizingRecordingWindow()
         let view = FluidWindowSizingNSView(sizing: .minimum(width: 800, height: 500))
@@ -216,6 +281,35 @@ final class WindowSizingRegressionTests: XCTestCase {
                 DispatchQueue.main.async { continuation.resume() }
             }
         }
+    }
+}
+
+@MainActor
+private final class LibraryLayoutSelection: ObservableObject {
+    @Published var showsLibrary = false
+}
+
+@MainActor
+private struct LibraryLayoutFixture: View {
+    @ObservedObject var selection: LibraryLayoutSelection
+
+    var body: some View {
+        NavigationSplitView {
+            VStack(spacing: 0) {
+                Text("Search")
+                List(0..<20, id: \.self) { index in Text("Sidebar \(index)") }
+                Text("Settings")
+            }
+            .navigationSplitViewColumnWidth(min: 264, ideal: 300, max: 360)
+        } detail: {
+            if self.selection.showsLibrary {
+                VoiceEngineSettingsScreen(appServices: .shared, theme: .dark)
+            } else {
+                Text("Overview").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+        .fluidWindowSizing(.minimum(width: 800, height: 500))
     }
 }
 
