@@ -145,7 +145,7 @@ struct MeetingCapturePCMTransportTests {
             recognize: { samples, start in initialProbe.begin(samples, at: start); return MeetingPCMTranscriptBatch(segments: [], speakers: []) },
             checkpoint: { _ in initialProbe.checkpoint() }, failure: { _ in initialProbe.failed() })
         for start in stride(from: 0, to: 12_000, by: 4_000) {
-            try require(initial.enqueue(try sample(frames: 4_000, startFrame: start)), "bounded startup PCM accepted")
+            try require(initial.enqueue(try sample(frames: 4_000, startFrame: Int64(start))), "bounded startup PCM accepted")
         }
         try await initial.finish()
         try require(initialProbe.snapshot.0.map(\.1) == [4_000, 8_000], "only the initial window uses the shorter startup cadence")
