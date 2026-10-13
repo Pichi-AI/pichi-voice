@@ -5,17 +5,27 @@ struct DictationMutedIndicator: View {
     var compact = false
 
     var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "mic.slash.fill")
-            if !self.compact {
-                Text("Muted")
+        // Recording surfaces use dark glass in either application theme.
+        let overlayTheme = AppTheme.adaptive(accent: self.theme.palette.accent, colorScheme: .dark)
+        // Keep the icon legible over clear glass and a bright desktop.
+        let mutedIcon = Image(systemName: "mic.slash.fill")
+            .padding(self.theme.metrics.spacing.xs)
+            .background(overlayTheme.palette.cardBackground, in: Circle())
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 5) {
+                mutedIcon
+                if !self.compact {
+                    Text("Muted")
+                }
             }
+            .fixedSize()
+            mutedIcon.fixedSize()
         }
         .font(self.theme.typography.captionStrong)
-        .foregroundStyle(self.theme.palette.warning)
-        .fixedSize()
+        .foregroundStyle(overlayTheme.palette.warning)
+        .environment(\.colorScheme, .dark)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Dictation muted. Release Space to resume.")
-        .help("Release Space to resume dictation")
+        .accessibilityLabel(PichiLocalization.text("Dictation muted. Release Space to resume."))
+        .help(PichiLocalization.text("Release Space to resume dictation"))
     }
 }
