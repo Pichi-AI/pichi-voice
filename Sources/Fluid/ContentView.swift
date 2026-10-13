@@ -4183,9 +4183,10 @@ struct ContentView: View {
         self.menuBarManager.setProcessing(true)
         NotchOverlayManager.shared.updateTranscriptionText("Inserting")
         let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: fallbackTargetPID)
-        let focusTarget = targetContext.flatMap { context in
-            context.element.map { TypingService.CapturedFocusTarget(pid: context.pid, window: context.window, element: $0) }
-        } ?? (typingTarget.shouldRestoreOriginalFocus ? nil : TypingService.captureSystemFocusTarget())
+        let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+            guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+            return .init(pid: context.pid, window: context.window, element: element)
+        } ?? (typingTarget.shouldRestoreOriginalFocus ? nil : TypingService.captureSystemFocusTarget().flatMap { $0.pid == typingTarget.pid ? $0 : nil })
         let keepBackup = SettingsStore.shared.copyTranscriptionToClipboard
         if typingTarget.shouldRestoreOriginalFocus,
            !(await self.prepareRecordingTargetForDelivery(transcript, keepBackup: keepBackup, targetContext: targetContext, isOutputValid: isOutputValid))
@@ -4308,9 +4309,10 @@ struct ContentView: View {
         let shouldTypeExternally = !isFluidFrontmost
         if shouldTypeExternally {
             let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: targetContext?.pid)
-            let focusTarget = typingTarget.shouldRestoreOriginalFocus ? targetContext.flatMap { context in
-                context.element.map { TypingService.CapturedFocusTarget(pid: context.pid, window: context.window, element: $0) }
-            } : nil
+            let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+                guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+                return .init(pid: context.pid, window: context.window, element: element)
+            }
             if typingTarget.shouldRestoreOriginalFocus {
                 guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext) else {
                     self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
@@ -4441,9 +4443,10 @@ struct ContentView: View {
         let shouldTypeExternally = !isFluidFrontmost || self.isTranscriptionFocused == false
         if shouldTypeExternally {
             let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: targetContext?.pid)
-            let focusTarget = typingTarget.shouldRestoreOriginalFocus ? targetContext.flatMap { context in
-                context.element.map { TypingService.CapturedFocusTarget(pid: context.pid, window: context.window, element: $0) }
-            } : nil
+            let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+                guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+                return .init(pid: context.pid, window: context.window, element: element)
+            }
             if typingTarget.shouldRestoreOriginalFocus {
                 guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext) else {
                     self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
@@ -4516,9 +4519,10 @@ struct ContentView: View {
 
             // Type the rewritten text
             let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: fallbackTargetPID)
-            let focusTarget = targetContext.flatMap { context in
-                context.element.map { TypingService.CapturedFocusTarget(pid: context.pid, window: context.window, element: $0) }
-            } ?? (typingTarget.shouldRestoreOriginalFocus ? nil : TypingService.captureSystemFocusTarget())
+            let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+                guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+                return .init(pid: context.pid, window: context.window, element: element)
+            } ?? (typingTarget.shouldRestoreOriginalFocus ? nil : TypingService.captureSystemFocusTarget().flatMap { $0.pid == typingTarget.pid ? $0 : nil })
             let keepBackup = SettingsStore.shared.copyTranscriptionToClipboard
             if typingTarget.shouldRestoreOriginalFocus {
                 guard await self.prepareRecordingTargetForDelivery(rewrittenText, keepBackup: keepBackup, targetContext: targetContext, isOutputValid: isOutputValid) else {

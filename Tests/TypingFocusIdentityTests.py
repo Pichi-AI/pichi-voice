@@ -16,6 +16,7 @@ output.mkdir(parents=True, exist_ok=True)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('reference', nargs='?', default='', help='Project this revision of the identity helper into current caller contracts')
 parser.add_argument('--rewrite-reference', default='', help='Project original Rewrite acceptance body for the independent failed-restore proof')
+parser.add_argument('--conditional-reference', default='', help='Compare earlier history/reprocess field binding without changing current delivery gates')
 parser.add_argument('--mutation', choices=['ambient_cancel', 'clipboard_focus', 'direct_focus', 'view_cancel','restored_forwarding'])
 args = parser.parse_args()
 def read(path, reference=''):
@@ -120,7 +121,8 @@ for name in ('processRewriteWithVoiceInstruction','retryTextDelivery','resolveTy
 retry_callback=block(content,'        NotchContentState.shared.onRetryTextDeliveryRequested = { transcript in')
 history_methods=[]
 for production_name,fixture_name in [('applyHistoryTextOutput','historyProjection'),('reprocessDictationText','reprocessProjection')]:
-    function=block(content,'    private func '+production_name+'(')
+    history_source=read('Sources/Fluid/ContentView.swift',args.conditional_reference) if args.conditional_reference else content
+    function=block(history_source,'    private func '+production_name+'(')
     assert function.count('let targetContext = TypingService.captureRecordingTargetContext()')==1
     segment=block(function,'        if shouldTypeExternally {')
     # The first closing brace ends the if body. Include the actual clipboard else branch too.
@@ -201,5 +203,5 @@ subprocess.run(['xcrun','xcstringstool','compile','Sources/Fluid/Localization/Lo
 binary=bundle/'Contents/MacOS/tests'
 flags=['-D','LEGACY_REWRITE'] if args.rewrite_reference else []
 subprocess.run(['xcrun','swiftc','-swift-version','5','-default-isolation','MainActor','-parse-as-library',*flags,'-module-cache-path',str(output/'ModuleCache'),str(output/'ProductionFocusFixture.swift'),'-o',str(binary)],cwd=repo,check=True)
-run_flags=['--rewrite-only'] if args.rewrite_reference else (['--'+args.mutation] if args.mutation else [])
+run_flags=['--rewrite-only'] if args.rewrite_reference else (['--restored_forwarding'] if args.conditional_reference else (['--'+args.mutation] if args.mutation else []))
 subprocess.run([str(binary),*run_flags],cwd=repo,check=True)

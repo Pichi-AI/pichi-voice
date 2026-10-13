@@ -444,7 +444,8 @@ nonisolated final class UserDefaults: @unchecked Sendable {
         let appInfo=(name:"Synthetic editor",bundleId:"synthetic.editor",windowTitle:"Synthetic document")
         for callerKind in ["automatic","retry","history","reprocess"] {
             for transport in ["clipboard","direct"] {
-                reset(callerKind=="automatic" || callerKind=="retry" ? a:b)
+                for initiallyFocused in [true,false] {
+                reset(initiallyFocused ? a:b)
                 NotchContentState.shared.recordingTargetContext=context(a)
                 NotchContentState.shared.recordingTargetPID=42
                 let caller=AutomaticDeliveryCaller()
@@ -474,7 +475,7 @@ nonisolated final class UserDefaults: @unchecked Sendable {
                 } else {
                     if callerKind=="automatic" { await waitUntil { caller.rewriteModeService.rewrittenText=="automatic frozen text" } }
                     else if callerKind=="retry" { await waitUntil { caller.menuBarManager.isProcessing } }
-                    else { await waitUntil { syntheticAX.focus?.id=="A" } }
+                    await waitUntil { syntheticAX.focus?.id=="A" }
                     for _ in 0..<20 { await Task.yield() }
                 }
                 NotchContentState.shared.recordingTargetContext=context(b)
@@ -484,11 +485,12 @@ nonisolated final class UserDefaults: @unchecked Sendable {
                 else { TypingService.directInsertionQueue.resume() }
                 if let pending { await pending.value } else { await waitUntil { !caller.failures.isEmpty } }
                 check(caller.failures==[.targetUnavailable] && syntheticAX.values["B"]==nil && syntheticAX.insertions.isEmpty,
-                      "Actual \(callerKind) forwarding must protect the frozen restored field across \(transport) wait; actual insertions: \(syntheticAX.insertions)")
+                      "Actual \(callerKind) forwarding must protect the frozen field (initiallyFocused=\(initiallyFocused)) across \(transport) wait; actual insertions: \(syntheticAX.insertions)")
                 let expected=callerKind=="automatic" ? "automatic frozen text" : callerKind+" frozen text"
                 check(caller.failedTranscript==expected,"Failure UI uses immutable accepted output rather than a newer draft/recording")
                 if callerKind=="automatic" { check(caller.rewriteModeService.rewrittenText=="newer pending draft" && caller.rewriteModeService.clears==0,"Automatic failure preserves the newer pending result") }
                 check(syntheticPasteboard.text=="original synthetic clipboard" && !syntheticPasteboard.isTemporary && !PasteDeliveryCoordinator.shared.fixtureIsDelivering,"Restored caller releases clipboard ownership without a wrong-field write")
+                }
             }
         }
         reset(a)
