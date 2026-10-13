@@ -67,6 +67,8 @@ bash scripts/dev/macos.sh test
 # Commit the pending merge, push the task branch to origin, and open a PR.
 ```
 
+GitHub CLI may retain FluidVoice as its default repository. Pass `--repo Pichi-AI/pichi-voice` explicitly for PR creation, inspection, updates and merging. Use `repos/Pichi-AI/pichi-voice/...` for repository-specific `gh api` calls. Check both `origin` and the GitHub repository target before publication; the upstream Git push guard does not control GitHub API writes.
+
 If the primary checkout is inside a macOS protected folder and the test host cannot open its source-relative fixtures, choose a Codex-managed worktree or set `PICHI_VOICE_WORKTREE_ROOT="$HOME/.codex/worktrees/pichi-voice"` for the sync command. Build and runtime fixtures must both be accessible. Do not bypass signing or edit the permission database to make tests run.
 
 The helper fetches `origin/main`, `upstream/main` and upstream tags, then resolves the chosen target to an immutable commit SHA. It rejects a target outside the fetched upstream main history. Before creating a worktree, it prints the downstream baseline, upstream target, fetched upstream main and common ancestor SHAs. If our main already contains that target, it exits without creating a worktree.
