@@ -18,6 +18,22 @@ private struct SyntheticFailingRedactor: TranscriptTextRedacting {
 }
 
 final class MeetingPrivacyPublicationTests: XCTestCase {
+    func testLivePartialUsesPriorPhraseContextWithoutChangingIdentityOrTiming() async throws {
+        let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: "Анна", start: 0, end: 1)
+        let partial = MeetingLivePartial(id: UUID(), text: "Тестова просит копию.", start: 1)
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = [utterance]
+        snapshot.partials = [.you: partial]
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: SyntheticPersonRedactor())
+        XCTAssertEqual(safe.utterances[0].text, "[PERSON]")
+        XCTAssertEqual(safe.partials[.you]?.text, "[PERSON] просит копию.")
+        XCTAssertEqual(safe.utterances[0].id, utterance.id)
+        XCTAssertEqual(safe.utterances[0].start, utterance.start)
+        XCTAssertEqual(safe.partials[.you]?.id, partial.id)
+        XCTAssertEqual(safe.partials[.you]?.start, partial.start)
+        XCTAssertEqual(snapshot.utterances[0].text, "Анна")
+    }
+
     func testUtteranceKeepsUnrelatedTextAndTimingAfterPIIRedaction() async throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let input = MeetingFinalTextUnit(id: "utterance", trackID: epoch.trackID, analysisEpochID: epoch,

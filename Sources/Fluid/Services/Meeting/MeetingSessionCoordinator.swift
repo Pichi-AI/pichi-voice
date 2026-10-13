@@ -1704,14 +1704,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.livePrivacyTask?.cancel()
         self.livePrivacyTask = Task { @MainActor [weak self] in
             do {
-                var safe = snapshot
-                safe.utterances = Array(snapshot.utterances.suffix(100))
-                for i in safe.utterances.indices { safe.utterances[i].text = try await redactor.redact(safe.utterances[i].text) }
-                for (source, partial) in snapshot.partials {
-                    var value = partial
-                    value.text = try await redactor.redact(partial.text)
-                    safe.partials[source] = value
-                }
+                let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: redactor)
                 try Task.checkCancellation()
                 guard let self, self.liveTranscriptionCoordinator != nil,
                       self.liveTranscript.accepts(safe, generation: generation, activeGeneration: self.captureGeneration) else { return }

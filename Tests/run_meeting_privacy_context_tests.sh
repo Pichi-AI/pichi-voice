@@ -34,6 +34,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingMicrophoneCaptureContracts.swift \
     Sources/Fluid/Services/Meeting/MeetingPCMTranscriptBatch.swift \
+    Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift \
     Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptPrivacyPolicy.swift \
     "$task_test_dir/EvidenceTypes.swift" Tests/MeetingPrivacyContextTests.swift \

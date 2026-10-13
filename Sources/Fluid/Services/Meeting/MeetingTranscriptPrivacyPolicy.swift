@@ -58,6 +58,28 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         return copy
     }
 
+    /// Live text uses the same bounded span projection as durable publication. A finalized
+    /// phrase supplies context to the next partial without changing row identity or timing.
+    static func redactedLiveSnapshot(_ snapshot: MeetingLiveTranscriptSnapshot,
+                                     using redactor: any TranscriptTextRedacting) async throws -> MeetingLiveTranscriptSnapshot {
+        var copy = snapshot
+        copy.utterances = Array(snapshot.utterances.suffix(100))
+        for source: MeetingLiveSpeaker in [.you, .them] {
+            let indices = copy.utterances.indices.filter { copy.utterances[$0].speaker == source }
+                .sorted { copy.utterances[$0].start < copy.utterances[$1].start }
+            var fragments = indices.map { TextFragment(key: $0, text: copy.utterances[$0].text) }
+            let partialKey = copy.utterances.count
+            if let partial = copy.partials[source] { fragments.append(.init(key: partialKey, text: partial.text)) }
+            let safe = try await self.projectedTexts(fragments, prefix: "", using: redactor)
+            for index in indices { copy.utterances[index].text = safe[index] ?? copy.utterances[index].text }
+            if var partial = copy.partials[source] {
+                partial.text = safe[partialKey] ?? partial.text
+                copy.partials[source] = partial
+            }
+        }
+        return copy
+    }
+
     /// Preserve bounded linguistic context across adjacent utterances, then
     /// project replacements back to each original segment. Context is inference
     /// input only; it cannot add text, change timing, or enter a checkpoint.
