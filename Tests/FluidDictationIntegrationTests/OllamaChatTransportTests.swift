@@ -87,18 +87,29 @@ final class OllamaChatTransportTests: XCTestCase {
         }
     }
 
-    func testOwnedNativeSessionCancellationJoinsStopBeforeInvalidationCompletion() async throws {
+    func testOwnedNativeSessionCancellationStopsHeldRequestAndJoinsInvalidation() async throws {
         let context = OllamaTransportContext(body: "", held: true)
         defer { context.cleanup() }
         let owned = try context.client.makeBoundedLocalSession(self.config())
         let request = try context.client.buildRequest(self.config())
+        let stopped = context.fixture.expectStop(for: "/api/chat")
         let pending = Task { try await owned.session.data(for: request) }
         for _ in 0..<100 where context.fixture.requests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(context.fixture.requests.count, 1)
         await owned.lifetime.invalidateAndWait(for: owned.session)
         XCTAssertTrue(owned.lifetime.hasInvalidated)
+        // Invalidation's delegate notification and URLProtocol.stopLoading run
+        // on separate queues. Observe the real stop event explicitly instead
+        // of assuming it precedes didBecomeInvalid.
+        await self.fulfillment(of: [stopped], timeout: 1)
         XCTAssertGreaterThanOrEqual(context.fixture.stops(for: "/api/chat"), 1)
-        do { _ = try await pending.value; XCTFail("Cancelled request cannot complete successfully") } catch {}
+        do {
+            _ = try await pending.value
+            XCTFail("Cancelled request cannot complete successfully")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .cancelled,
+                           "Session invalidation must cancel the held task, not fail for an unrelated reason")
+        }
     }
 
     func testNativeMetadataHasItsOwnResourceBoundAndJoinedCancellation() async throws {
@@ -807,6 +818,18 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
     private var recordedMetadataRequests: [URLRequest] = []
     private var stopCount = 0
     private var stoppedPaths: [String: Int] = [:]
+    private var stopExpectations: [String: XCTestExpectation] = [:]
+
+    func expectStop(for path: String) -> XCTestExpectation {
+        let expectation = XCTestExpectation(description: "URLProtocol stopped \(path)")
+        let alreadyStopped = self.lock.withLock {
+            if (self.stoppedPaths[path] ?? 0) > 0 { return true }
+            self.stopExpectations[path] = expectation
+            return false
+        }
+        if alreadyStopped { expectation.fulfill() }
+        return expectation
+    }
 
     var requests: [URLRequest] { self.lock.withLock { self.recordedRequests } }
     var metadataRequests: [URLRequest] { self.lock.withLock { self.recordedMetadataRequests } }
@@ -851,10 +874,12 @@ private nonisolated final class OllamaTransportFixture: @unchecked Sendable {
     }
 
     func stopped(path: String) {
-        self.lock.withLock {
+        let expectation = self.lock.withLock {
             self.stopCount += 1
             self.stoppedPaths[path, default: 0] += 1
+            return self.stopExpectations.removeValue(forKey: path)
         }
+        expectation?.fulfill()
     }
 
     static func body(_ request: URLRequest) throws -> [String: Any] {
