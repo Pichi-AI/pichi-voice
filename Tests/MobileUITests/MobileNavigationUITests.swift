@@ -7,9 +7,11 @@ final class MobileNavigationUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
         app.launchArguments += ["-PichiInterfaceLanguage", "en"]
         app.launch()
+        waitForOrientation(portrait: true)
     }
 
     func testMVPSettingsAndOrientation() throws {
@@ -17,6 +19,7 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(app.buttons["meeting.start"].frame.height, 44)
         capture("01-ready-portrait")
         XCUIDevice.shared.orientation = .landscapeLeft
+        waitForOrientation(portrait: false)
         XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
         capture("02-ready-landscape")
         openNavigation("settings", title: "Settings")
@@ -27,10 +30,13 @@ final class MobileNavigationUITests: XCTestCase {
         XCTAssertEqual(app.switches["privacy.pii"].value as? String, "0")
         capture("03-privacy-defaults")
         app.switches["privacy.saveAudio"].tap()
-        XCTAssertEqual(app.switches["privacy.saveAudio"].value as? String, "0")
+        capture("04-privacy-after-tap")
+        let changed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == '0'"), object: app.switches["privacy.saveAudio"])
+        XCTAssertEqual(XCTWaiter.wait(for: [changed], timeout: 3), .completed)
         capture("04-privacy-audio-off")
         app.switches["privacy.saveAudio"].tap()
         XCUIDevice.shared.orientation = .portrait
+        waitForOrientation(portrait: true)
         capture("05-privacy-portrait")
     }
 
@@ -65,6 +71,16 @@ final class MobileNavigationUITests: XCTestCase {
                 }
             }
         }
+    }
+
+    private func waitForOrientation(portrait: Bool) {
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let frame = self.app.windows.firstMatch.frame
+            guard frame.width > 0, frame.height > 0 else { return false }
+            return (portrait ? frame.height > frame.width : frame.width > frame.height)
+                && (self.app.buttons["meeting.start"].exists ? self.app.buttons["meeting.start"].isHittable : true)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
     }
 
     private func openNavigation(_ identifier: String, title: String) {

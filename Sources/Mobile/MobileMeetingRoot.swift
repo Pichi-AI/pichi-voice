@@ -208,6 +208,7 @@ struct MobileMeetingRoot: View {
                     HStack {
                         Button { beginMeeting() } label: {
                             Label(PichiLocalization.text("Start Recording"), systemImage: "record.circle")
+                                .foregroundStyle(theme.palette.accentForeground)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }.buttonStyle(.borderedProminent).disabled(isBusy || !coordinator.isQuiescent)
                             .accessibilityIdentifier("meeting.start")
@@ -257,14 +258,17 @@ struct MobileMeetingRoot: View {
                     .foregroundStyle(theme.palette.secondaryText)
             case .available: EmptyView()
             }
-            Text(PichiLocalization.text("Speaker labels are added after recording."))
-                .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            if session.speakerLabelsEnabled != false {
+                Text(PichiLocalization.text("Speaker labels are added after recording."))
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+            }
                 }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { run { _ = try await coordinator.stopAndTranscribe() } } label: {
                 Label(PichiLocalization.text("Stop & Transcribe"), systemImage: "stop.fill")
+                    .foregroundStyle(theme.palette.accentForeground)
                     .frame(maxWidth: .infinity, minHeight: 48)
             }.buttonStyle(.borderedProminent).disabled(isBusy || !coordinator.isRecording)
                 .accessibilityIdentifier("meeting.stop")
@@ -324,7 +328,8 @@ struct MobileMeetingRoot: View {
                         .disabled(isBusy || !coordinator.isQuiescent)
                     if session.transcriptSegments.isEmpty {
                         Text(session.title).font(theme.typography.title)
-                        Text(PichiLocalization.text("There is no transcript text or saved audio available for this meeting."))
+                        Text(PichiLocalization.text(session.hasRetryableAudio ? "Your captured audio is preserved"
+                            : "There is no transcript text or saved audio available for this meeting."))
                             .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
                     }
                 }.padding(24)

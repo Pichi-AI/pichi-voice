@@ -26,6 +26,7 @@ def arr(values):
 manifest = ROOT / "Sources/Mobile/shared-sources.txt"
 sources = [line.strip() for line in manifest.read_text().splitlines() if line.strip() and not line.startswith("#")]
 sources += [str(path.relative_to(ROOT)) for path in sorted((ROOT / "Sources/Mobile").glob("*.swift"))]
+sources = list(dict.fromkeys(sources))
 resource_paths = [
     "Sources/Fluid/Localization/Localizable.xcstrings", "Sources/Fluid/Assets.xcassets",
     "Sources/Fluid/Branding/brand-package.json", "Sources/Fluid/Resources/Notices",

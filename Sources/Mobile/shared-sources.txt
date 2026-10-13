@@ -137,4 +137,3 @@ Sources/Fluid/UI/MeetingSegmentAudioPlayer.swift
 Sources/Fluid/UI/MeetingSpeakerPalette.swift
 Sources/Fluid/UI/MeetingUILocalization.swift
 Sources/Fluid/UI/Visualization/AudioWaveformBars.swift
-Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceModelArtifacts.swift

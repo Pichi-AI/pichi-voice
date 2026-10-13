@@ -11,12 +11,19 @@ final class AppServices: ObservableObject {
     let meetingStore: any MeetingSessionStoring
     let transcriptPrivacy: PichiTranscriptPrivacyService
     @Published private(set) var isUIReady = false
+    private static var didCleanExportStaging = false
 
     init(store: (any MeetingSessionStoring)? = nil,
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
          settings: SettingsStore? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
          microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
+        // A cold-start operation only. Additional service compositions must not remove
+        // files currently being used by an already-open native share sheet.
+        if !Self.didCleanExportStaging {
+            try? MeetingSharePayload.cleanupAbandonedShares()
+            Self.didCleanExportStaging = true
+        }
         let settings = settings ?? SettingsStore.shared
         let store = store ?? MeetingSessionStore.shared
         let privacy = privacy ?? PichiTranscriptPrivacyService()
