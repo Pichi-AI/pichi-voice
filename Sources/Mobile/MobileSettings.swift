@@ -146,6 +146,7 @@ private struct MobileVoiceEngineSettings: View {
     @State private var installed: Set<String> = []
     @State private var importing: SettingsStore.SpeechModel?
     @State private var fileImporter = false
+    @State private var activatingModelID: String?
 
     var body: some View {
         List {
@@ -173,9 +174,28 @@ private struct MobileVoiceEngineSettings: View {
                             Button(PichiLocalization.text("Cancel")) { asr.cancelModelDownload() }
                         } else {
                             if installed.contains(model.id) {
-                                Button(PichiLocalization.text("Use Model")) {
-                                    Task { do { try await asr.activateModel(model); await refresh() } catch { reportError(error) } }
-                                }.disabled(asr.activeExclusiveActivity != nil).accessibilityIdentifier("model.activate.\(model.id)")
+                                Button {
+                                    activatingModelID = model.id
+                                    Task { @MainActor in
+                                        defer { activatingModelID = nil }
+                                        do { try await asr.activateModel(model); await refresh() }
+                                        catch { reportError(error) }
+                                    }
+                                } label: {
+                                    if activatingModelID == model.id {
+                                        ProgressView()
+                                    } else {
+                                        Label(PichiLocalization.text(settings.selectedSpeechModel == model ? "Selected" : "Use Model"),
+                                            systemImage: settings.selectedSpeechModel == model ? "checkmark.circle.fill" : "checkmark.circle")
+                                    }
+                                }.disabled(asr.activeExclusiveActivity != nil || activatingModelID != nil
+                                    || settings.selectedSpeechModel == model)
+                                    .accessibilityIdentifier("model.activate.\(model.id)")
+                                if settings.selectedSpeechModel == model {
+                                    Text(PichiLocalization.text("Selected for new meetings. Recognition runs during the meeting or after recording."))
+                                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
+                                        .accessibilityIdentifier("model.selected.\(model.id)")
+                                }
                                 Button(PichiLocalization.text("Delete"), role: .destructive) {
                                     Task { do { try await asr.clearModelCache(for: model); await refresh() } catch { reportError(error) } }
                                 }.disabled(asr.activeExclusiveActivity != nil).accessibilityIdentifier("model.delete.\(model.id)")

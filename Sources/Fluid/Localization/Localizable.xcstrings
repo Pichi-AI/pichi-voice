@@ -48373,6 +48373,23 @@
           }
         }
       }
+    },
+    "Selected for new meetings. Recognition runs during the meeting or after recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected for new meetings. Recognition runs during the meeting or after recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель выбрана для новых встреч. Распознавание выполняется во время встречи или после записи."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

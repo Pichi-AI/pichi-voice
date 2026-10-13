@@ -254,15 +254,16 @@ struct MobileMeetingRoot: View {
             }.font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             Divider()
             Text(PichiLocalization.text("Live transcript")).font(theme.typography.sectionTitle)
-            MeetingLiveBubbleScrollList(rows: MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript), documentStyle: true)
-                .frame(height: max(200, geometry.size.height - 250))
-                .accessibilityIdentifier("meeting.liveTranscript")
             switch coordinator.liveTranscript.availability {
             case .unavailable(let reason), .degraded(let reason):
                 Text(MeetingUILocalization.captionAvailability(reason)).font(theme.typography.caption)
                     .foregroundStyle(theme.palette.secondaryText)
+                    .accessibilityIdentifier("meeting.liveAvailability")
             case .available: EmptyView()
             }
+            MeetingLiveBubbleScrollList(rows: MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript), documentStyle: true)
+                .frame(height: max(200, geometry.size.height - 250))
+                .accessibilityIdentifier("meeting.liveTranscript")
             if session.speakerLabelsEnabled != false {
                 Text(PichiLocalization.text("Speaker labels are added after recording."))
                     .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
