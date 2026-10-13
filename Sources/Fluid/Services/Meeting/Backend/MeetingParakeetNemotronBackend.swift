@@ -26,7 +26,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
-        analysisSampleRate: 16_000
+        analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching]
     )
 
     let descriptor: MeetingBackendDescriptor

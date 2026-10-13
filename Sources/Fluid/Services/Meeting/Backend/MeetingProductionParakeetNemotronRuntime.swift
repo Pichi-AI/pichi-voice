@@ -264,21 +264,14 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         #else
         let computeUnits: MLComputeUnits = .cpuAndNeuralEngine
         #endif
-        let models = try await DownloadUtils.loadModels(
-            .diarizer,
-            modelNames: [ModelNames.Diarizer.embeddingFile],
-            directory: AppBrand.modelsDirectory,
-            computeUnits: computeUnits
-        )
+        try MeetingSpeakerVoiceModelArtifacts.validate()
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = computeUnits
+        let model = try MLModel(contentsOf: MeetingSpeakerVoiceModelArtifacts.packageURL(), configuration: configuration)
         try Task.checkCancellation()
-        guard let model = models[ModelNames.Diarizer.embeddingFile],
-              let maskFrames = model.modelDescription.inputDescriptionsByName["mask"]?
-              .multiArrayConstraint?.shape.last?.intValue,
-              (1...4096).contains(maskFrames)
-        else {
-            throw NSError(domain: "MeetingSpeakerVoice", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "The speaker voice model has an unsupported input format.",
-            ])
+        guard let maskFrames = model.modelDescription.inputDescriptionsByName["mask"]?.multiArrayConstraint?.shape.last?.intValue,
+              (1...4096).contains(maskFrames) else {
+            throw MeetingModelResidencyError.unsupportedProvider
         }
         let extractor = EmbeddingExtractor(embeddingModel: model)
         let mask = [Float](repeating: 1, count: maskFrames)

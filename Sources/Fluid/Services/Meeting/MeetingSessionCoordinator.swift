@@ -195,6 +195,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private var correctionUndoStacks: [MeetingSessionID: [TranscriptCorrection]] = [:]
+    private let prepareRecordingDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
     private let validateRecordingModels: @MainActor () async throws -> Void
     private let validateFrozenRecordingConfiguration: @MainActor (MeetingFinalProcessingConfiguration) throws -> Void
     private let processingLogger: @MainActor (String) -> Void
@@ -210,6 +211,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         defaultConfigurationResolver: (@MainActor (MeetingCaptureMode, String) async throws -> MeetingCaptureConfiguration)? = nil,
         redactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
         validateRecordingModels: @escaping @MainActor () async throws -> Void = {},
+        prepareRecordingDependencies: @escaping @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void = { _ in },
         validateFrozenRecordingConfiguration: @escaping @MainActor (MeetingFinalProcessingConfiguration) throws -> Void = { _ in },
         processingLogger: @escaping @MainActor (String) -> Void = { DebugLogger.shared.info($0, source: "MeetingSessionCoordinator") }
     ) {
@@ -223,6 +225,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.defaultConfigurationResolver = defaultConfigurationResolver
         self.redactorProvider = redactorProvider
         self.validateRecordingModels = validateRecordingModels
+        self.prepareRecordingDependencies = prepareRecordingDependencies
         self.validateFrozenRecordingConfiguration = validateFrozenRecordingConfiguration
         self.processingLogger = processingLogger
     }
@@ -415,6 +418,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         try await self.validateRecordingModels()
+        let dependencyDescriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
+        if configuration.speakerLabelsEnabled != false, let dependencyDescriptor {
+            try await self.prepareRecordingDependencies(dependencyDescriptor.diarizationDependencies)
+        }
         try Task.checkCancellation()
         try await self.capture.preflightPermissions()
         try Task.checkCancellation()

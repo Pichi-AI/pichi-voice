@@ -47,6 +47,11 @@ nonisolated enum MeetingBackendResultContract: String, Codable, Sendable {
 
 /// Identity/version, platform reach, execution locality, supported final precision, track topology
 /// and the limits a caller must not assume away.
+nonisolated enum MeetingDiarizationDependency: String, Hashable, Sendable {
+    case speakerSeparation
+    case voiceMatching
+}
+
 nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     let id: MeetingBackendID
     let version: String
@@ -65,6 +70,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// The backend's real analysis/resample rate, when it has one. The pipeline records it on the
     /// analysis manifest; `nil` leaves sample-rate conversion explicitly unknown (plan §3).
     let analysisSampleRate: Double?
+    let diarizationDependencies: Set<MeetingDiarizationDependency>
 
     init(
         id: MeetingBackendID,
@@ -75,7 +81,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         supportedFinalPrecisions: Set<MeetingTextUnitPrecision>,
         resultContract: MeetingBackendResultContract,
         knownLimits: [String],
-        analysisSampleRate: Double? = nil
+        analysisSampleRate: Double? = nil,
+        diarizationDependencies: Set<MeetingDiarizationDependency> = []
     ) {
         self.id = id
         self.version = version
@@ -86,6 +93,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.resultContract = resultContract
         self.knownLimits = knownLimits
         self.analysisSampleRate = analysisSampleRate
+        self.diarizationDependencies = diarizationDependencies
     }
 }
 

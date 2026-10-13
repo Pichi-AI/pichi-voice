@@ -201,7 +201,7 @@ final class AppServices: ObservableObject {
             capture: MeetingCaptureEngine(),
             processing: MeetingProcessingPipeline(
                 asrServiceProvider: { AppServices.shared.asr },
-                prepareDiarizationModel: { try await MeetingDiarizationModelStore.shared.ensureInstalled() }
+                prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) }
             ),
             audioArbiter: self.meetingAudioActivityArbiter,
             preferredMicrophoneUID: { [weak self] in

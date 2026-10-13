@@ -24,6 +24,7 @@ final class ASRService: ObservableObject {
     private let scope = MeetingASRPreparedScope()
     private var activityLease: ASRActivityLease?
     private var deferredRelease: ASRActivityLease?
+    private var isTerminating = false
     private var residentProvider: (any TranscriptionProvider)?
     private var residentModelID: String?
     private var modelOperation: Task<Void, Error>?
@@ -47,9 +48,9 @@ final class ASRService: ObservableObject {
         drainExecutor: { [weak self] _ in await self?.executor.cancelAndAwaitPending() }
     )
 
-    init(meetingModelResidency: MeetingModelResidencyCoordinator = .shared, settings: SettingsStore = .shared) {
-        self.residency = meetingModelResidency
-        self.settings = settings
+    init(meetingModelResidency: MeetingModelResidencyCoordinator? = nil, settings: SettingsStore? = nil) {
+        self.residency = meetingModelResidency ?? .shared
+        self.settings = settings ?? .shared
     }
 
     var availableMeetingModels: [SettingsStore.SpeechModel] {
@@ -74,7 +75,26 @@ final class ASRService: ObservableObject {
         )
     }
 
+    func shutdownForTermination() async {
+        self.isTerminating = true
+        self.residency.beginTermination()
+        let operation = self.modelOperation
+        operation?.cancel()
+        _ = await operation?.result
+        await self.scope.cancelAndWait()
+        if let token = self.preparationOwner.currentClaimToken { await self.preparationOwner.release(token) }
+        await self.executor.cancelAndAwaitPending()
+        await self.residentProvider?.releaseResidency()
+        self.residentProvider = nil
+        self.residentModelID = nil
+        self.isAsrReady = false
+        self.activityLease = nil
+        self.activeExclusiveActivity = nil
+        self.deferredRelease = nil
+    }
+
     func acquireExclusiveActivity(_ activity: ASRExclusiveActivity) throws -> ASRActivityLease {
+        guard !self.isTerminating else { throw MeetingModelResidencyError.terminating }
         guard self.activityLease == nil else {
             throw ASRActivityError.activityInProgress(self.activeExclusiveActivity ?? activity)
         }

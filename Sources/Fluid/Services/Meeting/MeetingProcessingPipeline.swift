@@ -1356,7 +1356,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
-    private let prepareDiarizationModel: @MainActor () async throws -> Void
+    private let prepareDiarizationDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
     /// Test seam: runs after the canonical sidecar is written and read-back verified, before the
     /// final cancellation check, so "cancelled after sidecar" is deterministically exercisable.
     private let canonicalSidecarVerifiedProbe: (MeetingResultSidecarReference) -> Void
@@ -1373,6 +1373,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
+        prepareDiarizationDependencies: (@MainActor (Set<MeetingDiarizationDependency>) async throws -> Void)? = nil,
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
         self.asrServiceProvider = asrServiceProvider
@@ -1388,7 +1389,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 modelLocator: MeetingNemotronModelLocator()
             )
         }
-        self.prepareDiarizationModel = prepareDiarizationModel
+        self.prepareDiarizationDependencies = prepareDiarizationDependencies ?? { dependencies in
+            if !dependencies.isEmpty { try await prepareDiarizationModel() }
+        }
         self.canonicalSidecarVerifiedProbe = canonicalSidecarVerifiedProbe ?? { _ in }
         let resolvedRegistry = backendRegistry ?? MeetingTranscriptionBackendRegistry.makeDefault()
         self.backendRegistry = resolvedRegistry
@@ -1445,6 +1448,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             source: "MeetingProcessingPipeline"
         )
 
+        if session.speakerLabelsEnabled != false, let descriptor = self.backendRegistry.descriptor(for: backendID) {
+            try await self.prepareDiarizationDependencies(descriptor.diarizationDependencies)
+            try Task.checkCancellation()
+        }
+
         // Resolving and planning the backend happens before the serialization lease and before any
         // model readiness work, so an unknown selection or an incompatible session fails without
         // loading anything.
@@ -1493,9 +1501,6 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
         guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
-        }
-        if backendID == .parakeetNemotron {
-            try await self.prepareDiarizationModel()
         }
         let plan = try backend.plan(request)
         if let defect = plan.agreementDefect(with: request, descriptor: backend.descriptor) {

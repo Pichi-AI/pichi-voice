@@ -6,6 +6,12 @@ typealias MeetingAudioChunkID = UUID
 typealias SessionSpeakerID = UUID
 typealias MeetingTranscriptSegmentID = UUID
 
+nonisolated enum MeetingLanguageCode {
+    static func isValid(_ value: String) -> Bool {
+        value == "auto" || (value.utf8.count <= 35 && value.range(of: "^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$", options: .regularExpression) != nil)
+    }
+}
+
 nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case onlineCall
     case inRoom
@@ -309,7 +315,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     }
 
     func validate() throws {
-        guard self.languageCode == "auto" || VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
+        guard MeetingLanguageCode.isValid(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.microphone.captureDeviceID.isEmpty else {
@@ -1036,7 +1042,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         else {
             throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
         }
-        guard self.languageCode == "auto" || VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
+        guard MeetingLanguageCode.isValid(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.selectedMicrophone.captureDeviceID.isEmpty else {

@@ -60,3 +60,26 @@ final class MeetingPrivacyPublicationTests: XCTestCase {
         } catch is SyntheticFailingRedactor.Failure { }
     }
 }
+
+@MainActor
+final class MeetingCaptureLanguageAdmissionTests: XCTestCase {
+    func testValidWhisperLanguageOutsideParakeetCatalogueIsAdmittedBySharedDomain() throws {
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic", displayName: "Synthetic microphone")
+        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic", languageCode: "ta", microphone: microphone)
+        XCTAssertNoThrow(try configuration.validate())
+        XCTAssertTrue(PichiMeetingProviderFactory.registeredLanguageCodes(for: "whisper-tiny")?.contains("ta") == true)
+        XCTAssertNoThrow(try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(asrModel: "whisper-tiny", languageCode: "ta")))
+        XCTAssertThrowsError(try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ta")))
+    }
+    func testMalformedLanguageCannotReachProviderOrPersistence() throws {
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic", displayName: "Synthetic microphone")
+        for code in ["../ru", "en\n", "", String(repeating: "a", count: 36)] {
+            XCTAssertThrowsError(try MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic", languageCode: code, microphone: microphone).validate())
+        }
+    }
+    func testAllRegisteredMVPBackendsDeclareIndependentSpeakerResources() {
+        for model in ["gigaam-v3-eou", "whisper-tiny", "parakeet-tdt"] {
+            XCTAssertEqual(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model)?.diarizationDependencies, [.speakerSeparation, .voiceMatching])
+        }
+    }
+}

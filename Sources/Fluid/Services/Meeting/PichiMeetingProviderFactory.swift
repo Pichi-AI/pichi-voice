@@ -43,7 +43,8 @@ enum PichiMeetingProviderFactory {
                     "Automatic speaker separation requires an installed Nemotron model and Apple Silicon.",
                     "Without diarization, speaker identities remain unknown; microphone/application source tracks remain distinct.",
                 ],
-                analysisSampleRate: 16_000
+                analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching]
             ),
             defaultLanguageCode: "ru",
             providerFactory: { configuration in
@@ -72,7 +73,8 @@ enum PichiMeetingProviderFactory {
                     "Word times are requested only when the loaded runtime advertises them; otherwise text remains an utterance.",
                     "Automatic speaker separation is independent of Whisper and requires an installed Nemotron model.",
                 ],
-                analysisSampleRate: 16_000
+                analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching]
             ),
             defaultLanguageCode: "auto",
             providerFactory: { try WhisperProvider(meetingConfiguration: $0) },
@@ -106,7 +108,8 @@ enum PichiMeetingProviderFactory {
                     "Automatic speaker separation requires an installed Nemotron model.",
                     "CPU-only mobile runtime throughput and mixed-language quality require sustained device measurements.",
                 ],
-                analysisSampleRate: 16_000
+                analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching]
             ),
             defaultLanguageCode: "auto",
             providerFactory: { try FluidAudioProvider(meetingConfiguration: $0) },
@@ -243,9 +246,9 @@ enum PichiMeetingProviderFactory {
     private static func availableDiarizationFingerprint(enabled: Bool) -> String {
         guard enabled else { return self.transcriptOnlyDiarizationFingerprint }
         #if arch(arm64)
-        return (try? MeetingNemotronModelLocator().locate()) == nil
-            ? self.transcriptOnlyDiarizationFingerprint
-            : MeetingProcessingCheckpoint.currentDiarizationFingerprint
+        guard (try? MeetingNemotronModelLocator().locate()) != nil,
+              (try? MeetingSpeakerVoiceModelArtifacts.validate()) != nil else { return self.transcriptOnlyDiarizationFingerprint }
+        return MeetingProcessingCheckpoint.currentDiarizationFingerprint + ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision
         #else
         return self.transcriptOnlyDiarizationFingerprint
         #endif
