@@ -11387,6 +11387,23 @@
         }
       }
     },
+    "Copy code": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy code"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать код"
+          }
+        }
+      }
+    },
     "Copy dictation": {
       "extractionState": "manual",
       "localizations": {

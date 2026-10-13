@@ -325,7 +325,7 @@ struct CommandSessionSidebar: View {
                         Spacer(minLength: 0)
                         Text(self.row.relativeTime)
                             .font(self.theme.typography.captionSmall)
-                            .foregroundStyle(self.theme.palette.tertiaryText)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                             .fixedSize()
                             .opacity(self.showsActions ? 0 : 1)
                     }
@@ -409,7 +409,8 @@ struct CommandSessionSidebar: View {
         let calendar = Calendar.current
         let yesterday = calendar.date(byAdding: .day, value: -1, to: now)
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
+        formatter.dateTimeStyle = .named
+        formatter.unitsStyle = .full
         formatter.locale = self.interfaceLocale
         self.rows = sessions.sorted { $0.updatedAt > $1.updatedAt }.map { session in
             let message = session.messages.last {
