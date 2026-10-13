@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-task_test_dir="$(mktemp -d "${TMPDIR:-/tmp}/pichi-capture-pcm.XXXXXX")"
+mkdir -p .build
+task_test_dir="$(mktemp -d "$PWD/.build/pichi-capture-pcm.XXXXXX")"
 trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
 # The pipeline/metadata stubs isolate the transport from engine installation and application
 # composition. Actual PCM converter, format contract, sample copier and consumer are compiled.
