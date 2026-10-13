@@ -116,6 +116,26 @@ final class AIEnhancementSettingsViewModel {
     func selectSoleVerifiedProviderIfNeeded() {}
 }
 
+// Trace only the actual arguments passed to SwiftUI's outer presentation
+// modifiers. This is a source-boundary probe, never native interaction evidence.
+struct AddProviderPresentationBoundary {
+    var controlsEnabled = true
+    var interactiveDismissalAllowed = true
+    func disabled(_ value: Bool) -> Self {
+        var copy = self
+        copy.controlsEnabled = !value
+        return copy
+    }
+    func interactiveDismissDisabled(_ value: Bool) -> Self {
+        var copy = self
+        copy.interactiveDismissalAllowed = !value
+        return copy
+    }
+    func attemptControl(_ action: () -> Void) {
+        if self.controlsEnabled { action() }
+    }
+}
+
 @main enum ProviderSetupBoundaryTests {
     static func main() async throws {
         var count = 0
@@ -348,6 +368,78 @@ final class AIEnhancementSettingsViewModel {
         closing.isTestingConnection = true
         check(!(await closing.saveManagedProviderBeforeClosing("ollama")), "Busy editor cannot dismiss")
         check(manager.contains(".interactiveDismissDisabled()"), "Interactive dismissal cannot bypass failed persistence")
+        let addSheet = AIEnhancementSettingsViewModel()
+        var presentation = AddProviderPresentationFixture(viewModel: addSheet)
+        var cancelCount = 0
+        var backCount = 0
+        var editedKey = "synthetic-original"
+        let idle = presentation.boundary
+        idle.attemptControl { cancelCount += 1 }
+        idle.attemptControl { backCount += 1 }
+        idle.attemptControl { editedKey = "synthetic-edited" }
+        check(cancelCount == 1 && backCount == 1 && editedKey == "synthetic-edited",
+              "Idle Add-sheet boundary preserves Cancel, Back and form editing")
+        check(idle.interactiveDismissalAllowed, "Idle Add-sheet permits normal interactive dismissal")
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1
+            && !presentation.isEditing && !presentation.saveFailed && !presentation.showingManualModel,
+              "Exact idle Cancel and Back handlers retain dismissal and draft/fetch reset behavior")
+        presentation.isEditing = true
+        presentation.saveFailed = true
+        presentation.showingManualModel = true
+        presentation.draft.name = "Synthetic submitted snapshot"
+        presentation.beginSubmission()
+        let admitted = presentation.boundary
+        admitted.attemptControl { cancelCount += 1 }
+        admitted.attemptControl { backCount += 1 }
+        admitted.attemptControl { editedKey = "synthetic-admission-race" }
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1
+            && presentation.isEditing && presentation.saveFailed && presentation.showingManualModel,
+              "Exact handlers reject dismissal/reset in the pre-Task admission window, before a native control refresh")
+        check(presentation.isSubmitting && !addSheet.isSavingProviderCredentials,
+              "Production Button admission sets its local gate synchronously before any Task starts")
+        check(cancelCount == 1 && backCount == 1 && editedKey == "synthetic-edited" && !admitted.interactiveDismissalAllowed,
+              "Cancel/Escape, Back, editing and interactive dismissal are gated during the admission window")
+        presentation.draft.name = "Synthetic later source change"
+        check(presentation.submittedDraft?.name == "Synthetic submitted snapshot", "The queued action owns the exact synchronously captured draft")
+        presentation.beginSubmission()
+        check(presentation.submittedDraft?.name == "Synthetic submitted snapshot", "A second admission cannot replace the owned submission")
+        addSheet.isSavingProviderCredentials = true
+        let saving = presentation.boundary
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1,
+              "Exact Cancel and Back handlers cannot dismiss the owned credential operation")
+        presentation.isSubmitting = false
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(!presentation.boundary.controlsEnabled && !presentation.boundary.interactiveDismissalAllowed
+            && presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1,
+              "VM-owned credential IO alone also gates the sheet if local submission has not started")
+        presentation.isSubmitting = true
+        saving.attemptControl { cancelCount += 1 }
+        saving.attemptControl { backCount += 1 }
+        saving.attemptControl { editedKey = "synthetic-racing-edit" }
+        check(cancelCount == 1 && backCount == 1 && editedKey == "synthetic-edited",
+              "Actual production saving gate disables Cancel/Escape, Back and form changes while intent is owned")
+        check(!saving.interactiveDismissalAllowed, "Actual production saving gate prevents interactive dismissal during credential IO")
+        addSheet.isSavingProviderCredentials = false
+        check(!presentation.boundary.controlsEnabled, "Local submission ownership remains until the sheet Task's defer completes")
+        presentation.isSubmitting = false
+        let resumed = presentation.boundary
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 2 && presentation.fetchCancellationCount == 2
+            && !presentation.isEditing && !presentation.saveFailed && !presentation.showingManualModel,
+              "Exact Cancel/Back handlers resume normal behavior when submission ownership is released")
+        resumed.attemptControl { cancelCount += 1 }
+        resumed.attemptControl { backCount += 1 }
+        resumed.attemptControl { editedKey = "synthetic-after-save" }
+        check(cancelCount == 2 && backCount == 2 && editedKey == "synthetic-after-save" && resumed.interactiveDismissalAllowed,
+              "Completion/failure releases the scoped gate and restores normal sheet actions")
         let historySource = try String(contentsOfFile: "Sources/Fluid/UI/TranscriptionHistoryView.swift", encoding: .utf8)
         // Inspect only the request type and its inputs. Unrelated properties may
         // legitimately sit between these declarations and the filtered list.

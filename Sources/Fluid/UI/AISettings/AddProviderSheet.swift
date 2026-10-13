@@ -8,6 +8,7 @@ struct AddProviderSheet<Logo: View>: View {
     @State private var draft = ProviderSetupDraft()
     @State private var isEditing = false
     @State private var saveFailed = false
+    @State private var isSubmitting = false
     @State private var modelFetchTask: Task<Void, Never>?
     @State private var modelFetchID: UUID?
     @State private var modelFetchError: String?
@@ -37,7 +38,10 @@ struct AddProviderSheet<Logo: View>: View {
                             .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
                     }
                     Spacer()
-                    Button("Cancel") { self.dismiss() }
+                    Button("Cancel") {
+                        guard !self.isSubmitting, !self.viewModel.isSavingProviderCredentials else { return }
+                        self.dismiss()
+                    }
                         .keyboardShortcut(.cancelAction)
                         .fluidGlassAction()
                 }
@@ -101,6 +105,8 @@ struct AddProviderSheet<Logo: View>: View {
         .padding(28)
         .frame(width: 720, height: 650)
         .background(self.theme.palette.windowBackground)
+        .disabled(self.isSubmitting || self.viewModel.isSavingProviderCredentials)
+        .interactiveDismissDisabled(self.isSubmitting || self.viewModel.isSavingProviderCredentials)
         .onChange(of: self.draft.connectionIdentity) { _, _ in
             self.cancelModelFetch()
             self.modelFetchError = nil
@@ -139,17 +145,24 @@ struct AddProviderSheet<Logo: View>: View {
             }
             Spacer()
             HStack {
-                Button("Back") { self.cancelModelFetch(); self.isEditing = false; self.saveFailed = false; self.showingManualModel = false }
+                Button("Back") {
+                    guard !self.isSubmitting, !self.viewModel.isSavingProviderCredentials else { return }
+                    self.cancelModelFetch(); self.isEditing = false; self.saveFailed = false; self.showingManualModel = false
+                }
                     .fluidGlassAction()
                 Spacer()
                 Button("Add Provider") {
+                    guard !self.isSubmitting, !self.viewModel.isSavingProviderCredentials else { return }
+                    self.isSubmitting = true
+                    let submission = self.draft
                     Task {
-                        if await self.viewModel.addProvider(self.draft) { self.dismiss() } else { self.saveFailed = true }
+                        defer { self.isSubmitting = false }
+                        if await self.viewModel.addProvider(submission) { self.dismiss() } else { self.saveFailed = true }
                     }
                 }
                 .keyboardShortcut(.defaultAction)
                 .fluidGlassAction(prominent: true)
-                .disabled(self.viewModel.isSavingProviderCredentials || self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
+                .disabled(self.isSubmitting || self.viewModel.isSavingProviderCredentials || self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
             }
         }
     }
