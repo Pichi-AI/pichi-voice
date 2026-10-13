@@ -528,7 +528,7 @@ private struct MeetingDetectionPromptContent: View {
                 } else {
                     Image(systemName: "person.2.wave.2.fill")
                         .font(.fluidSystem(size: 20))
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                         .frame(width: 34, height: 34)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -595,7 +595,7 @@ private struct MeetingDetectionPromptContent: View {
         )
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.98))
+                .fill(self.theme.palette.contentBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -738,7 +738,7 @@ private struct MeetingStillRecordingNudgeContent: View {
         .frame(width: MeetingStillRecordingNudgeController.panelSize.width, height: MeetingStillRecordingNudgeController.panelSize.height)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.96))
+                .fill(self.theme.palette.contentBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)

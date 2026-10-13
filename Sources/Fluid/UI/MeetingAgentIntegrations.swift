@@ -267,13 +267,13 @@ struct MeetingAgentIntegrations: View {
                         Divider()
                         self.otherAgentsRow
                     } else {
-                        self.statusLabel(AppBrand.text("This build of FluidVoice cannot share meetings with coding agents."), symbol: "exclamationmark.circle.fill", color: .orange)
+                        self.statusLabel(AppBrand.text("This build of FluidVoice cannot share meetings with coding agents."), symbol: "exclamationmark.circle.fill", color: self.theme.palette.warning)
                     }
                 }
             }
             self.checkLine
             if let issue = self.model.issue {
-                self.statusLabel(issue, symbol: "exclamationmark.circle.fill", color: .orange)
+                self.statusLabel(issue, symbol: "exclamationmark.circle.fill", color: self.theme.palette.warning)
                     .textSelection(.enabled)
             }
         }
@@ -285,9 +285,9 @@ struct MeetingAgentIntegrations: View {
     private var checkLine: some View {
         switch self.model.check {
         case .accessOff:
-            self.statusLabel(PichiLocalization.text("Meetings are not reaching your agents yet. Remove the skill and add it again."), symbol: "exclamationmark.circle.fill", color: .orange)
+            self.statusLabel(PichiLocalization.text("Meetings are not reaching your agents yet. Remove the skill and add it again."), symbol: "exclamationmark.circle.fill", color: self.theme.palette.warning)
         case let .failed(reason):
-            self.statusLabel(reason, symbol: "exclamationmark.circle.fill", color: .orange)
+            self.statusLabel(reason, symbol: "exclamationmark.circle.fill", color: self.theme.palette.warning)
         case .working, nil:
             EmptyView()
         }
@@ -367,12 +367,12 @@ struct MeetingAgentIntegrations: View {
                 if self.model.copiedAgentInstructions {
                     Label("Copied. Now paste it.", systemImage: "checkmark.circle.fill")
                         .font(self.theme.typography.caption)
-                        .foregroundStyle(Color.fluidGreen)
+                        .foregroundStyle(self.theme.palette.success)
                         .lineLimit(1)
                 } else if self.model.sharedOnlyWithOtherAgents {
                     Label("Sharing is on", systemImage: "checkmark.circle.fill")
                         .font(self.theme.typography.caption)
-                        .foregroundStyle(Color.fluidGreen)
+                        .foregroundStyle(self.theme.palette.success)
                         .lineLimit(1)
                 } else {
                     Text("Cursor, Gemini and others")
@@ -395,8 +395,8 @@ struct MeetingAgentIntegrations: View {
 
     private func color(for tone: Tone) -> Color {
         switch tone {
-        case .good: return Color.fluidGreen
-        case .attention: return .orange
+        case .good: return self.theme.palette.success
+        case .attention: return self.theme.palette.warning
         case .neutral: return self.theme.palette.secondaryText
         }
     }

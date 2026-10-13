@@ -294,7 +294,7 @@ struct MeetingRecordingSettingsSheet: View {
                 Button(self.readiness.isCheckingSources ? PichiLocalization.text("Refreshing…") : PichiLocalization.text("Refresh"), systemImage: "arrow.clockwise", action: self.onRefreshSources)
                     .buttonStyle(.plain)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .disabled(self.readiness.isCheckingSources)
                     .help("Rescan meeting apps and microphones.")
                     .accessibilityLabel("Refresh audio sources")

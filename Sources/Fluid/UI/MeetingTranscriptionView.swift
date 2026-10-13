@@ -1654,7 +1654,7 @@ private struct MeetingHeaderIconButton: View {
     var body: some View {
         Button(action: self.action) {
             Label(self.label, systemImage: self.systemImage)
-                .foregroundStyle(self.isSelected ? self.theme.palette.accent : self.theme.palette.primaryText)
+                .foregroundStyle(self.isSelected ? self.theme.palette.accentText : self.theme.palette.primaryText)
         }
         .buttonStyle(.automatic)
         .help(self.label)
@@ -1741,11 +1741,11 @@ private struct MeetingHistoryInspector: View {
             .padding(.bottom, self.theme.metrics.spacing.md)
 
             HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(self.theme.palette.secondaryText)
                 TextField("Search meetings", text: self.$searchText).textFieldStyle(.plain)
                 if !self.searchText.isEmpty {
                     Button { self.searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(self.theme.palette.secondaryText)
                     }
                     .buttonStyle(.plain)
                     .meetingHoverFeedback()
@@ -1762,7 +1762,7 @@ private struct MeetingHistoryInspector: View {
             if let errorMessage, !self.sessions.isEmpty {
                 Text(PichiLocalization.text(errorMessage))
                     .font(.fluidSystem(.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .padding(self.theme.metrics.spacing.md)
             }
 
@@ -1844,7 +1844,7 @@ private struct MeetingHistoryInspector: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(self.theme.materials.sidebar)
+        .background(self.theme.palette.sidebarBackground)
         .alert("Rename Meeting", isPresented: Binding(
             get: { self.renameSessionID != nil },
             set: { if !$0 { self.renameSessionID = nil } }
@@ -2073,7 +2073,7 @@ private struct MeetingHistoryRow: View {
     }
 
     private var actionColor: Color {
-        self.session.state == .interrupted ? self.theme.palette.warning : self.theme.palette.accent
+        self.session.state == .interrupted ? self.theme.palette.warning : self.theme.palette.accentText
     }
 
     private var rowBackground: Color {
@@ -2333,12 +2333,12 @@ private struct MeetingSetupCanvas: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .foregroundStyle(self.theme.palette.secondaryText)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text("Last meeting").font(self.theme.typography.caption).foregroundStyle(.secondary)
+                        Text("Last meeting").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                         Text(recentSession.title).font(self.theme.typography.bodyStrong).lineLimit(2)
                     }
                     Spacer()
                     Text(Self.durationText(recentSession.duration))
-                        .font(self.theme.typography.codeCaption).foregroundStyle(.secondary)
+                        .font(self.theme.typography.codeCaption).foregroundStyle(self.theme.palette.secondaryText)
                 }
             }
         }
