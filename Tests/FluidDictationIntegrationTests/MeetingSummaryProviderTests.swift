@@ -1,5 +1,6 @@
 @testable import FluidVoice_Debug
 import Foundation
+import NaturalLanguage
 import XCTest
 
 @MainActor
@@ -348,11 +349,20 @@ final class MeetingSummaryProviderTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(englishCounts.letters, 80)
         XCTAssertEqual(englishCounts.cyrillic, 0, "Speaker names cannot make an English summary pass the Russian-body check")
         XCTAssertGreaterThanOrEqual(Double(englishCounts.latin) / Double(englishCounts.letters), 0.8)
+        XCTAssertEqual(self.templateBodyLanguage(english, speakerNames: names), .english)
         let namesOnly = self.templateLanguageLetterCounts(String(repeating: names.joined(separator: "\n"), count: 10), speakerNames: names)
         XCTAssertEqual(namesOnly.letters, 0, "A name-only response must fail the minimum body length")
+        XCTAssertNil(self.templateBodyLanguage(names.joined(separator: "\n"), speakerNames: names))
         let russian = String(repeating: "После проверки участники подготовят тестовый отчёт, а дата запуска пока не определена. ", count: 3)
         let russianCounts = self.templateLanguageLetterCounts(russian, speakerNames: names)
         XCTAssertGreaterThanOrEqual(Double(russianCounts.cyrillic) / Double(russianCounts.letters), 0.6)
+        XCTAssertEqual(self.templateBodyLanguage(russian, speakerNames: names), .russian)
+        let french = String(repeating: "Le rapport sera disponible vendredi, après les contrôles. La date de lancement reste une question ouverte. ", count: 3)
+        let frenchCounts = self.templateLanguageLetterCounts(french, speakerNames: names)
+        XCTAssertGreaterThanOrEqual(Double(frenchCounts.latin) / Double(frenchCounts.letters), 0.8,
+                                   "A Latin-script threshold alone incorrectly accepts French as English")
+        XCTAssertEqual(self.templateBodyLanguage(french, speakerNames: names), .french)
+        XCTAssertNotEqual(self.templateBodyLanguage(french, speakerNames: names), .english)
     }
 
     private func checkLiveTemplateLanguage(kind: MeetingSummaryKind, englishOverride: Bool) async throws {
@@ -397,6 +407,8 @@ final class MeetingSummaryProviderTests: XCTestCase {
             let afterDigest = try await PichiMeetingSummaryTransport.artifactID(artifactConfiguration)
             XCTAssertEqual(afterDigest, digest, "A changed local artifact cannot establish this regression result")
             XCTAssertGreaterThanOrEqual(counts.letters, 80, "Require meaningful summary body beyond preserved speaker names")
+            XCTAssertEqual(self.templateBodyLanguage(output, speakerNames: source.activeSpeakers.map(\.displayName)),
+                           englishOverride ? .english : .russian, "A dominant language check distinguishes English from other Latin-script languages")
             let expectedLetters = englishOverride ? counts.latin : counts.cyrillic
             let threshold = englishOverride ? 0.8 : 0.6
             XCTAssertGreaterThanOrEqual(Double(expectedLetters) / Double(max(1, counts.letters)), threshold,
@@ -410,8 +422,18 @@ final class MeetingSummaryProviderTests: XCTestCase {
         }
     }
 
+    private func templateBodyLanguage(_ output: String, speakerNames: [String]) -> NLLanguage? {
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(self.templateSummaryBody(output, speakerNames: speakerNames))
+        return recognizer.dominantLanguage
+    }
+
+    private func templateSummaryBody(_ output: String, speakerNames: [String]) -> String {
+        speakerNames.reduce(output) { $0.replacingOccurrences(of: $1, with: "") }
+    }
+
     private func templateLanguageLetterCounts(_ output: String, speakerNames: [String]) -> (letters: Int, cyrillic: Int, latin: Int) {
-        let body = speakerNames.reduce(output) { $0.replacingOccurrences(of: $1, with: "") }
+        let body = self.templateSummaryBody(output, speakerNames: speakerNames)
         let letters = body.unicodeScalars.filter { $0.properties.isAlphabetic }
         // Script dominance is a bounded regression oracle, not a production language detector.
         let cyrillic = letters.filter { (0x0400...0x052F).contains($0.value) }.count
