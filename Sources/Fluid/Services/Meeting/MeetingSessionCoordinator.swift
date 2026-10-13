@@ -463,6 +463,14 @@ final class MeetingSessionCoordinator: ObservableObject {
                 languageCode: configuration.languageCode,
                 selectedModelID: recordingModelID
             )
+            if configuration.speakerLabelsEnabled != false,
+               let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID) {
+                try await self.prepareRecordingDependencies(descriptor.diarizationDependencies)
+                try Task.checkCancellation()
+                guard self.startReservation == reservation,
+                      self.settings.selectedSpeechModel.rawValue == recordingModelID,
+                      self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
+            }
             recordingASRConfiguration = PichiMeetingProviderFactory.configuration(
                 backendID: recordingBackendID,
                 languageCode: configuration.languageCode,

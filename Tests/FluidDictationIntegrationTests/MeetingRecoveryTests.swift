@@ -4282,6 +4282,69 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.acquireCount, 1)
     }
 
+    func testModelChangedDuringAdmittedDependencyPreparationRollsBackBeforeCapture() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        let previousBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = previous; settings.meetingTranscriptionBackendID = previousBackend }
+        settings.selectedSpeechModel = .parakeetTDT
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            prepareRecordingDependencies: { dependencies in
+                XCTAssertEqual(dependencies, [.speakerSeparation, .voiceMatching])
+                if arbiter.acquireCount > 0 { settings.selectedSpeechModel = .gigaam }
+            })
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "en"
+        do {
+            _ = try await coordinator.startRecording(configuration: configuration)
+            XCTFail("A changed admitted model must not be published")
+        } catch is CancellationError { }
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testCancellationDuringAdmittedDependencyPreparationJoinsBeforeLeaseRelease() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        let previousBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = previous; settings.meetingTranscriptionBackendID = previousBackend }
+        settings.selectedSpeechModel = .parakeetTDT
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let gate = PermissionPreflightGate()
+        let reached = self.expectation(description: "admitted preparation waiting")
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            prepareRecordingDependencies: { _ in
+                if arbiter.acquireCount > 0 { reached.fulfill(); await gate.wait() }
+            })
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "en"
+        let task = Task { try await coordinator.startRecording(configuration: configuration) }
+        await self.fulfillment(of: [reached], timeout: 2)
+        task.cancel()
+        XCTAssertEqual(arbiter.releaseCount, 0, "Noncooperative dependency work still owns admission")
+        await gate.open()
+        do { _ = try await task.value; XCTFail("Expected cancellation") } catch is CancellationError { }
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
     func testModelChangedDuringPermissionPromptIsValidatedBeforeCaptureAllocation() async throws {
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel
