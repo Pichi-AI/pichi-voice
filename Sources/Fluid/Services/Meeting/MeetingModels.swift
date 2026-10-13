@@ -1160,16 +1160,16 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 }
 
 extension MeetingSession {
-    var savesAudio: Bool { self.audioStorageMode != .memoryOnly }
+    nonisolated var savesAudio: Bool { self.audioStorageMode != .memoryOnly }
 
-    var hasFinalizedAudio: Bool {
+    nonisolated var hasFinalizedAudio: Bool {
         self.audioTracks.contains { track in
             track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
         }
     }
 
     /// Shared retry/recovery predicate: ended, with at least one finalized non-empty chunk.
-    var hasRetryableAudio: Bool {
+    nonisolated var hasRetryableAudio: Bool {
         self.retention.audioDeletedAt == nil && self.endedAt != nil && self.hasFinalizedAudio
     }
 }

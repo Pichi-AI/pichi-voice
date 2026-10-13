@@ -156,7 +156,11 @@ final class ASRService: ObservableObject {
     func activateModel(_ model: SettingsStore.SpeechModel) async throws {
         guard self.activityLease == nil, self.modelOperation == nil, !self.residency.isExclusive else { throw MeetingModelResidencyError.busy }
         guard model.isInstalled else { throw MeetingProcessingError.modelUnavailable }
+        let lease = try self.acquireExclusiveActivity(.modelMaintenance)
+        defer { self.releaseExclusiveActivity(lease) }
         await self.residentProvider?.releaseResidency()
+        try Task.checkCancellation()
+        guard self.activityLease == lease else { throw CancellationError() }
         self.residentProvider = nil
         self.residentModelID = nil
         self.isAsrReady = false
