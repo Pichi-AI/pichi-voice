@@ -38,6 +38,24 @@ private actor CancellablePrivacyRedactor: TranscriptTextRedacting {
     }
 }
 
+private actor DeferredLiveRedactor: TranscriptTextRedacting {
+    let started: AsyncStream<String>.Continuation
+    let cancelled: AsyncStream<Void>.Continuation
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    init(started: AsyncStream<String>.Continuation, cancelled: AsyncStream<Void>.Continuation) {
+        self.started = started; self.cancelled = cancelled
+    }
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        started.yield(text)
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { waiters.append($0) }
+        } onCancel: { self.cancelled.yield(()) }
+        try Task.checkCancellation()
+        return try await StructuredPrivacyRedactor().redactWithSpans(text)
+    }
+    func release() { if !waiters.isEmpty { waiters.removeFirst().resume() } }
+}
+
 @main
 struct MeetingPrivacyContextTests {
     enum Failure: Error { case assertion(String) }
@@ -51,11 +69,14 @@ struct MeetingPrivacyContextTests {
     }
     static func main() async throws {
         try await suite(using: StructuredPrivacyRedactor())
+        try await liveSuite(using: StructuredPrivacyRedactor())
         if let path = ProcessInfo.processInfo.environment["PICHI_PII_TEST_MODEL_DIRECTORY"] {
             let native = NativePrivacyRedactor()
             try await native.prepare(URL(fileURLWithPath: path, isDirectory: true))
             try await suite(using: native)
+            try await liveSuite(using: native)
         }
+        try await liveDeliverySuite()
         let track = UUID()
         let invalid = MeetingPCMTranscriptBatch(segments: [segment("🙂 Иван", track: track, start: 0)])
         do {
@@ -83,6 +104,114 @@ struct MeetingPrivacyContextTests {
         let cancelledTail = try await cancelled.finish()
         try check(cancelledTail == nil, "cancelled transform committed a raw pending tail")
         print("Meeting privacy context tests passed: actual segments/evidence, structured rules, opt-in native NER, delayed tail and final flush")
+    }
+
+    static func liveSuite(using redactor: any TranscriptTextRedacting) async throws {
+        let cases: [(String, [String], [String], String)] = [
+            ("документ передали сидорову", ["ивану", "ивану петровичу метформин 500 мг"], ["сидорову", "ивану", "петровичу"], "метформин 500 мг"),
+            ("телефон 273", ["55", "55 11 метотрексат 15 мг"], ["273", "55 11"], "метотрексат 15 мг"),
+            ("дата рождения 12", ["мая", "мая 1980 инсулин 10 единиц"], ["12", "мая 1980"], "инсулин 10 единиц"),
+            ("домашний адрес улица Примерная", ["дом", "дом 12 квартира 7 лизиноприл 10 мг"], ["Примерная", "квартира 7"], "лизиноприл 10 мг"),
+            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 508 рублей оземпик"], ["4111", "1111"], "508 рублей оземпик"),
+        ]
+        for (initial, partials, privatePieces, medication) in cases {
+            let first = MeetingLiveUtterance(id: UUID(), speaker: .you, text: initial, start: 0, end: 1)
+            let partialID = UUID()
+            var raw = MeetingLiveTranscriptSnapshot.empty
+            raw.utterances = [first]
+            raw.availability = .available
+            raw.revision = 1
+            for (index, text) in partials.enumerated() {
+                raw = raw.settingPartial(.init(id: partialID, text: text, start: 1), for: .you)
+                raw.revision += 1
+                let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: redactor)
+                try check(safe.utterances[0].id == first.id && safe.utterances[0].start == 0 && safe.utterances[0].end == 1, "live completed row identity/timing changed")
+                try check(safe.partials[.you]?.id == partialID && safe.partials[.you]?.start == 1, "live partial identity changed")
+                try check(raw.utterances[0].text == initial && raw.partials[.you]?.text == text, "filtered strings replaced canonical raw input")
+                if index == partials.count - 1 {
+                    let joined = safe.utterances.map(\.text).joined(separator: " ") + " " + (safe.partials[.you]?.text ?? "")
+                    for value in privatePieces { try check(!joined.contains(value), "earlier completed live row was not corrected: \(value)") }
+                    try check(joined.contains(medication), "live privacy changed a neighboring medication/dose")
+                }
+            }
+            raw = raw.settingPartial(nil, for: .you).inserting(.init(id: partialID, speaker: .you, text: partials.last!, start: 1, end: 4))
+            raw.revision += 1
+            let completed = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: redactor)
+            try check(completed.utterances.map(\.id) == [first.id, partialID], "EOU changed continuous row identities")
+            try check(completed.utterances[1].start == 1 && completed.utterances[1].end == 4 && completed.partials.isEmpty, "EOU timing/state changed")
+            let joined = completed.utterances.map(\.text).joined(separator: " ")
+            for value in privatePieces { try check(!joined.contains(value), "completed rows restored recognized PII") }
+            try check(joined.contains(medication), "EOU privacy changed a medication/dose")
+        }
+        // Separate source tags remain source tags, not diarization identities.
+        var sources = MeetingLiveTranscriptSnapshot.empty
+        sources.utterances = [.init(id: UUID(), speaker: .you, text: "дата рождения", start: 0, end: 1),
+                              .init(id: UUID(), speaker: .them, text: "12 мая 1980", start: 1, end: 2)]
+        let separate = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(sources, using: redactor)
+        try check(separate.utterances[1].text == "12 мая 1980", "microphone context contaminated another audio source")
+    }
+
+    static func liveDeliverySuite() async throws {
+        let started = AsyncStream<String>.makeStream()
+        let cancelled = AsyncStream<Void>.makeStream()
+        let delivered = AsyncStream<(MeetingLiveTranscriptSnapshot, UUID)>.makeStream()
+        let redactor = DeferredLiveRedactor(started: started.continuation, cancelled: cancelled.continuation)
+        let publisher = MeetingLivePrivacyPublication()
+        let generation = UUID()
+        var failures = 0
+        func snapshot(_ revision: UInt64, _ text: String) -> MeetingLiveTranscriptSnapshot {
+            var value = MeetingLiveTranscriptSnapshot.empty
+            value.revision = revision
+            value.utterances = [.init(id: UUID(), speaker: .you, text: text, start: 0, end: 1)]
+            return value
+        }
+        func submit(_ value: MeetingLiveTranscriptSnapshot, _ token: UUID) {
+            publisher.submit(value, generation: token, using: redactor,
+                publish: { value, generation in delivered.continuation.yield((value, generation)) }, failed: { _ in failures += 1 })
+        }
+        var starts = started.stream.makeAsyncIterator()
+        var updates = delivered.stream.makeAsyncIterator()
+        submit(snapshot(1, "метформин 500 мг"), generation)
+        _ = await starts.next()
+        submit(snapshot(2, "инсулин 10 единиц"), generation)
+        submit(snapshot(3, "метотрексат 15 мг"), generation)
+        submit(snapshot(2, "out-of-order old update"), generation)
+        await redactor.release()
+        let first = await updates.next()
+        try check(first?.0.revision == 1, "new partial cancelled/starved the running safe revision")
+        let latestInput = await starts.next()
+        try check(latestInput == "метотрексат 15 мг", "pending privacy input was not coalesced to latest raw revision")
+        await redactor.release()
+        let latest = await updates.next()
+        try check(latest?.0.revision == 3 && latest?.1 == generation, "latest live privacy revision did not publish")
+
+        submit(snapshot(4, "телефон 273 55 11"), generation)
+        _ = await starts.next()
+        var stopped = false
+        let stop = Task { await publisher.stop(); stopped = true }
+        var cancellations = cancelled.stream.makeAsyncIterator()
+        _ = await cancellations.next()
+        try check(!stopped, "teardown abandoned an unfinished native privacy operation")
+        await redactor.release()
+        await stop.value
+        try check(stopped && failures == 0, "joined cancellation produced a failure/publication")
+        let freshGeneration = UUID()
+        submit(snapshot(1, "оземпик"), freshGeneration)
+        _ = await starts.next()
+        await redactor.release()
+        let fresh = await updates.next()
+        try check(fresh?.0.revision == 1 && fresh?.1 == freshGeneration, "a stopped generation published into a new meeting")
+        await publisher.stop()
+        var large = MeetingLiveTranscriptSnapshot.empty
+        large.revision = 1
+        large.utterances = (0..<200).map { index in .init(id: UUID(), speaker: .you, text: "строка \(index)", start: Double(index), end: Double(index + 1)) }
+        submit(large, UUID())
+        let boundedInput = await starts.next()
+        try check(boundedInput?.contains("строка 99 ") == false && boundedInput?.hasPrefix("строка 100 ") == true, "pending raw snapshot retained rows outside the display bound")
+        await redactor.release()
+        let boundedOutput = await updates.next()
+        try check(boundedOutput?.0.utterances.count == 100 && boundedOutput?.0.utterances.first?.id == large.utterances[100].id, "bounded live rows changed identity")
+        await publisher.stop()
     }
 
     static func suite(using redactor: any TranscriptTextRedacting) async throws {

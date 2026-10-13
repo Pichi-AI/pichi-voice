@@ -138,7 +138,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private var liveTranscriptionCoordinator: MeetingLiveTranscriptionCoordinator?
-    private var livePrivacyTask: Task<Void, Never>?
+    private let livePrivacyPublication = MeetingLivePrivacyPublication()
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
     private var captureGeneration: UUID?
@@ -1711,22 +1711,16 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     private func publishLiveTranscript(_ snapshot: MeetingLiveTranscriptSnapshot, generation: UUID, redactor: (any TranscriptTextRedacting)?) {
         guard let redactor else { self.liveTranscript = snapshot; return }
-        self.livePrivacyTask?.cancel()
-        self.livePrivacyTask = Task { @MainActor [weak self] in
-            do {
-                let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: redactor)
-                try Task.checkCancellation()
+        self.livePrivacyPublication.submit(snapshot, generation: generation, using: redactor,
+            publish: { [weak self] safe, generation in
                 guard let self, self.liveTranscriptionCoordinator != nil,
                       self.liveTranscript.accepts(safe, generation: generation, activeGeneration: self.captureGeneration) else { return }
                 self.liveTranscript = safe
-            } catch is CancellationError {
-                return
-            } catch {
-                guard let self, self.captureGeneration == generation, !Task.isCancelled else { return }
+            }, failed: { [weak self] generation in
+                guard let self, self.captureGeneration == generation else { return }
                 self.handleCaptureEvent(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil,
                                                     detail: "Sensitive data redaction stopped. Recording was interrupted."), generation: generation)
-            }
-        }
+            })
     }
 
     private func checkpointMemoryTranscript(_ batch: MeetingPCMTranscriptBatch, sessionID: UUID, generation: UUID) async throws {
@@ -2227,10 +2221,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Must complete before any code path that calls into `processing.process`, so both live
     /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads.
     private func tearDownLiveTranscription() async {
-        let privacyTask = self.livePrivacyTask
-        self.livePrivacyTask = nil
-        privacyTask?.cancel()
-        await privacyTask?.value
+        await self.livePrivacyPublication.stop()
         guard let coordinator = self.liveTranscriptionCoordinator else { return }
         self.liveTranscriptionCoordinator = nil
         await coordinator.stop()

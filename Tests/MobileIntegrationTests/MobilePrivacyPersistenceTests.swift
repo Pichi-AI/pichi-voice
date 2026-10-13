@@ -16,6 +16,49 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativeLivePIIRetagsCompletedRowsAcrossPartialUpdates() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_MOBILE_INFERENCE_ASSETS"] else { throw XCTSkip("Requires explicitly staged public privacy artifacts") }
+        let models = URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("models/privacy", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: models.appendingPathComponent(PichiTranscriptPrivacyModelStore.descriptor.id).appendingPathComponent("model_int8.onnx").path) else { throw XCTSkip("Stage public privacy model under models/privacy/rubert-tiny-news-int8") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: models))
+        try await privacy.prepare()
+        let cases: [(String, [String], [String], String)] = [
+            ("документ передали сидорову", ["ивану", "ивану петровичу метформин 500 мг"], ["сидорову", "ивану", "петровичу"], "метформин 500 мг"),
+            ("телефон 273", ["55", "55 11 метотрексат 15 мг"], ["273", "55 11"], "метотрексат 15 мг"),
+            ("дата рождения 12", ["мая", "мая 1980 инсулин 10 единиц"], ["12", "мая 1980"], "инсулин 10 единиц"),
+            ("домашний адрес улица Примерная", ["дом", "дом 12 квартира 7 лизиноприл 10 мг"], ["Примерная", "квартира 7"], "лизиноприл 10 мг"),
+            ("карта 4111", ["1111", "1111 1111", "1111 1111 1111 508 рублей оземпик"], ["4111", "1111"], "508 рублей оземпик"),
+        ]
+        for (initial, partials, privateWords, medication) in cases {
+            let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: initial, start: 0, end: 1)
+            let partialID = UUID()
+            var raw = MeetingLiveTranscriptSnapshot.empty
+            raw.utterances = [utterance]; raw.availability = .available; raw.revision = 1
+            for (index, text) in partials.enumerated() {
+                raw = raw.settingPartial(.init(id: partialID, text: text, start: 1), for: .you)
+                raw.revision += 1
+                let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
+                XCTAssertEqual(safe.utterances[0].id, utterance.id)
+                XCTAssertEqual(safe.utterances[0].start, 0); XCTAssertEqual(safe.utterances[0].end, 1)
+                XCTAssertEqual(safe.partials[.you]?.id, partialID); XCTAssertEqual(safe.partials[.you]?.start, 1)
+                XCTAssertEqual(raw.utterances[0].text, initial)
+                if index == partials.count - 1 {
+                    let joined = safe.utterances.map(\.text).joined(separator: " ") + " " + (safe.partials[.you]?.text ?? "")
+                    for value in privateWords { XCTAssertFalse(joined.contains(value)) }
+                    XCTAssertTrue(joined.contains(medication))
+                }
+            }
+            raw = raw.settingPartial(nil, for: .you).inserting(.init(id: partialID, speaker: .you, text: partials.last!, start: 1, end: 4))
+            raw.revision += 1
+            let final = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
+            XCTAssertEqual(final.utterances.map(\.id), [utterance.id, partialID])
+            XCTAssertEqual(final.utterances[1].start, 1); XCTAssertEqual(final.utterances[1].end, 4)
+            XCTAssertTrue(final.partials.isEmpty)
+            for value in privateWords { XCTAssertFalse(final.utterances.map(\.text).joined(separator: " ").contains(value)) }
+        }
+        try await privacy.unload()
+    }
+
     func testNativePIIAcrossSegmentsAndStrictWindowsBeforePersistence() async throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_MOBILE_INFERENCE_ASSETS"] else {
             throw XCTSkip("Requires explicitly staged public privacy artifacts")

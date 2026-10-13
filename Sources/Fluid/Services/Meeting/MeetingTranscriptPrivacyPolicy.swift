@@ -62,11 +62,10 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     /// phrase supplies context to the next partial without changing row identity or timing.
     static func redactedLiveSnapshot(_ snapshot: MeetingLiveTranscriptSnapshot,
                                      using redactor: any TranscriptTextRedacting) async throws -> MeetingLiveTranscriptSnapshot {
-        var copy = snapshot
-        copy.utterances = Array(snapshot.utterances.suffix(100))
+        var copy = self.boundedLiveInput(snapshot)
         for source: MeetingLiveSpeaker in [.you, .them] {
             let indices = copy.utterances.indices.filter { copy.utterances[$0].speaker == source }
-                .sorted { copy.utterances[$0].start < copy.utterances[$1].start }
+                .sorted { a, b in copy.utterances[a].start == copy.utterances[b].start ? a < b : copy.utterances[a].start < copy.utterances[b].start }
             var fragments = indices.map { TextFragment(key: $0, text: copy.utterances[$0].text) }
             let partialKey = copy.utterances.count
             if let partial = copy.partials[source] { fragments.append(.init(key: partialKey, text: partial.text)) }
@@ -77,6 +76,14 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 copy.partials[source] = partial
             }
         }
+        return copy
+    }
+
+    /// The UI projects at most 100 completed rows. Apply the same bound before
+    /// queuing inference so replaced snapshots cannot retain an entire meeting.
+    static func boundedLiveInput(_ snapshot: MeetingLiveTranscriptSnapshot) -> MeetingLiveTranscriptSnapshot {
+        var copy = snapshot
+        copy.utterances = Array(snapshot.utterances.suffix(100))
         return copy
     }
 
@@ -207,6 +214,77 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                                                units: units, speakerActivity: evidence.speakerActivity,
                                                voiceProfiles: evidence.voiceProfiles,
                                                speakerSlotsContinueAcrossEpochs: evidence.speakerSlotsContinueAcrossEpochs)
+    }
+}
+
+/// Delivery ownership for the existing live privacy transform. Cancelling every
+/// partial can starve slow inference and leave unjoined work behind; one worker
+/// instead finishes its revision and then consumes the latest bounded raw input.
+/// Raw snapshots are never replaced by previously filtered display strings.
+@MainActor
+final class MeetingLivePrivacyPublication {
+    private struct Pending {
+        let snapshot: MeetingLiveTranscriptSnapshot
+        let generation: UUID
+        let redactor: any TranscriptTextRedacting
+        let publish: @MainActor (MeetingLiveTranscriptSnapshot, UUID) -> Void
+        let failed: @MainActor (UUID) -> Void
+    }
+    private var pending: Pending?
+    private var worker: Task<Void, Never>?
+    private var workerID: UUID?
+    private var generation: UUID?
+    private var submittedRevision: UInt64 = 0
+
+    func submit(_ snapshot: MeetingLiveTranscriptSnapshot, generation: UUID,
+                using redactor: any TranscriptTextRedacting,
+                publish: @escaping @MainActor (MeetingLiveTranscriptSnapshot, UUID) -> Void,
+                failed: @escaping @MainActor (UUID) -> Void) {
+        // A caller must join stop before changing the recording generation.
+        guard (self.generation == nil && worker == nil) || self.generation == generation else { return }
+        guard snapshot.revision > submittedRevision else { return }
+        self.generation = generation
+        submittedRevision = snapshot.revision
+        self.pending = Pending(snapshot: MeetingTranscriptPrivacyPolicy.boundedLiveInput(snapshot),
+                               generation: generation, redactor: redactor, publish: publish, failed: failed)
+        guard worker == nil else { return }
+        let id = UUID()
+        workerID = id
+        worker = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.workerID == id { self.worker = nil; self.workerID = nil }
+            }
+            while self.workerID == id, let item = self.pending {
+                self.pending = nil
+                do {
+                    try Task.checkCancellation()
+                    let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(item.snapshot, using: item.redactor)
+                    try Task.checkCancellation()
+                    guard self.workerID == id, self.generation == item.generation else { return }
+                    item.publish(safe, item.generation)
+                } catch is CancellationError { return }
+                catch {
+                    guard self.workerID == id, self.generation == item.generation, !Task.isCancelled else { return }
+                    self.pending = nil
+                    item.failed(item.generation)
+                    return
+                }
+            }
+        }
+    }
+
+    /// Keep the task slot until it finishes, so concurrent teardown callers join
+    /// the same native operation and a new generation cannot inherit old work.
+    func stop() async {
+        pending = nil
+        generation = nil
+        submittedRevision = 0
+        let task = worker
+        let id = workerID
+        task?.cancel()
+        await task?.value
+        if workerID == id { worker = nil; workerID = nil }
     }
 }
 
