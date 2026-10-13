@@ -1673,13 +1673,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stored on this iPad. Position your microphone so everyone can be heard."
+            "value": "Stored on this device. Position your microphone so everyone can be heard."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Хранится на этом iPad. Расположите микрофон так, чтобы было слышно всех."
+            "value": "Хранится на этом устройстве. Расположите микрофон так, чтобы было слышно всех."
           }
         }
       }

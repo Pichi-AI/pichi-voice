@@ -201,7 +201,7 @@ struct PrototypeRoot: View {
             }.padding(.top, 16)
             VStack(spacing: 8) {
                 navRow("meetings", icon: "waveform", selected: isMeeting) { showCurrentMeeting() }
-                navRow("history", icon: "clock", selected: screen == .history) { screen = .history }
+                navRow("history", icon: "clock", selected: isHistory) { screen = .history }
                 navRow("settings", icon: "gearshape", selected: isSettings) { screen = .settings }
             }
             Spacer()
@@ -216,14 +216,20 @@ struct PrototypeRoot: View {
         .background(theme.color("sidebarBackground"))
     }
 
-    private var isMeeting: Bool { [.ready, .active, .processing, .completed].contains(screen) }
+    private var isHistory: Bool { screen == .history || (screen == .completed && selectedSessionID != 1) }
+    private var isMeeting: Bool { [.ready, .active, .processing, .completed].contains(screen) && !isHistory }
     private var isSettings: Bool { [.settings, .privacy, .models].contains(screen) }
     private var divider: some View { Rectangle().fill(theme.color("separator")).frame(height: 1) }
     private var columnDivider: some View { Rectangle().fill(theme.color("separator")).frame(width: 1) }
 
     private func topBar(compact: Bool, showBrand: Bool) -> some View {
         HStack(spacing: 12) {
-            if screen == .privacy || screen == .models {
+            if screen == .completed && isHistory {
+                Button { screen = .history } label: {
+                    Label(Copy.text("history"), systemImage: "chevron.left")
+                        .font(theme.font(.body)).frame(minHeight: 44)
+                }.buttonStyle(.plain).foregroundStyle(theme.accent)
+            } else if screen == .privacy || screen == .models {
                 Button { screen = .settings } label: {
                     Label(Copy.text("settings"), systemImage: "chevron.left")
                         .font(theme.font(.body)).frame(minHeight: 44)
@@ -663,7 +669,7 @@ struct PrototypeRoot: View {
     private var bottomNavigation: some View {
         HStack(spacing: 0) {
             bottomItem("meetings", icon: "waveform", selected: isMeeting) { showCurrentMeeting() }
-            bottomItem("history", icon: "clock", selected: screen == .history) { screen = .history }
+            bottomItem("history", icon: "clock", selected: isHistory) { screen = .history }
             bottomItem("settings", icon: "gearshape", selected: isSettings) { screen = .settings }
         }
         .frame(height: 76)
