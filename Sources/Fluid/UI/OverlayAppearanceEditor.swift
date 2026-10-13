@@ -236,9 +236,15 @@ struct OverlayAppearanceEditor: View {
                     .font(self.theme.typography.caption.monospacedDigit()).foregroundStyle(self.theme.palette.secondaryText)
             }
             HStack {
-                Text(PichiLocalization.text(low)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .leading)
+                Text(PichiLocalization.text(low))
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(1).fixedSize()
+                    .frame(minWidth: 48, alignment: .leading)
                 Slider(value: value, in: range, step: 0.05).accessibilityLabel(PichiLocalization.text(title))
-                Text(PichiLocalization.text(high)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .trailing)
+                Text(PichiLocalization.text(high))
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(1).fixedSize()
+                    .frame(minWidth: 48, alignment: .trailing)
             }
         }
     }

@@ -2010,6 +2010,8 @@ struct SettingsView: View {
                 Text("Export or import settings, prompt profiles, history, and stats. API keys excluded.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 16)

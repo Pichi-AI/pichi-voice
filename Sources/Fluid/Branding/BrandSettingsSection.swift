@@ -37,6 +37,8 @@ struct BrandSettingsSection: View {
             .disabled(self.importing)
             Text(PichiLocalization.text("One JSON file contains names, logos, light and dark palettes, style and links. Import applies them immediately. Installation identity and network policy belong to the signed distribution."))
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
             if let errorMessage {
                 Text(PichiLocalization.text(errorMessage)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
             }
