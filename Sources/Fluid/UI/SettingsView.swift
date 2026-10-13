@@ -664,11 +664,11 @@ struct SettingsView: View {
                                 self.instructionsBox(
                                     title: "How to enable microphone access:",
                                     steps: self.asr.micStatus == .notDetermined
-                                        ? ["Click **Grant Access** above", "Choose **Allow** in the system dialog"]
+                                        ? [PichiLocalization.text("Click **Grant Access** above"), PichiLocalization.text("Choose **Allow** in the system dialog")]
                                         : [
-                                            "Click **Open Settings** above",
-                                            "Find **\(self.appDisplayName)** in the microphone list",
-                                            "Toggle **\(self.appDisplayName) ON** to allow access",
+                                            PichiLocalization.text("Click **Open Settings** above"),
+                                            AppBrand.format("Find **%@** in the microphone list", self.appDisplayName),
+                                            AppBrand.format("Toggle **%@ ON** to allow access", self.appDisplayName),
                                         ]
                                 )
                             }
@@ -1051,10 +1051,10 @@ struct SettingsView: View {
                                 self.instructionsBox(
                                     title: "Follow these steps to enable Accessibility:",
                                     steps: [
-                                        "Click **Open Accessibility Settings** above",
-                                        "In the Accessibility window, click the **+ button**",
-                                        "Select **\(self.appDisplayName)**; use **Reveal in Finder** below if needed",
-                                        "Click **Open**, then toggle **\(self.appDisplayName) ON** in the list",
+                                        PichiLocalization.text("Click **Open Accessibility Settings** above"),
+                                        PichiLocalization.text("In the Accessibility window, click the **+ button**"),
+                                        AppBrand.format("Select **%@**; use **Reveal in Finder** below if needed", self.appDisplayName),
+                                        AppBrand.format("Click **Open**, then toggle **%@ ON** in the list", self.appDisplayName),
                                     ],
                                     warningStyle: true
                                 )
@@ -1259,7 +1259,7 @@ struct SettingsView: View {
                                 Spacer()
                                 FluidDropdownPicker(
                                     "Output device",
-                                    selectedTitle: self.outputDevices.first(where: { $0.uid == self.selectedOutputUID }).map { $0.name == self.cachedDefaultOutputName ? "\($0.name) (System Default)" : $0.name } ?? "Loading...",
+                                    selectedTitle: self.outputDevices.first(where: { $0.uid == self.selectedOutputUID }).map { Self.outputDeviceDisplayName($0.name, isSystemDefault: $0.name == self.cachedDefaultOutputName) } ?? PichiLocalization.text("Loading..."),
                                     selection: self.$selectedOutputUID
                                 ) {
                                     // Handle empty state gracefully
@@ -1269,7 +1269,7 @@ struct SettingsView: View {
                                         ForEach(self.outputDevices, id: \.uid) { dev in
                                             // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
                                             let isSystemDefault = !self.cachedDefaultOutputName.isEmpty && dev.name == self.cachedDefaultOutputName
-                                            Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
+                                            Text(Self.outputDeviceDisplayName(dev.name, isSystemDefault: isSystemDefault)).tag(dev.uid)
                                         }
                                     }
                                 }
@@ -2164,7 +2164,7 @@ struct SettingsView: View {
                             .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
                             .fontWeight(.semibold)
                             .frame(width: 16, alignment: .trailing)
-                        Text(.init(step))
+                        Text((try? AttributedString(markdown: step)) ?? AttributedString(step))
                             .font(.fluidSystem(.caption))
                             .foregroundStyle(.primary)
                     }
@@ -2176,6 +2176,11 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill((warningStyle ? self.theme.palette.warning : self.theme.palette.accent).opacity(0.12))
         )
+    }
+
+    /// Append owned interface copy without translating or rewriting a CoreAudio device name.
+    private static func outputDeviceDisplayName(_ name: String, isSystemDefault: Bool) -> String {
+        isSystemDefault ? PichiLocalization.format("%@ (System Default)", name) : name
     }
 
     private func primaryDictationShortcutsList() -> some View {
