@@ -81,6 +81,10 @@ struct ReleaseHighlightsPolicyTests {
         for privateAI in [false, true] {
             let content = ReleaseHighlightsContent.current(hasPrivateAI: privateAI)
             precondition(ReleaseHighlightsPolicy.matches(version: version, release: content.release), "Update release highlights when bumping the app version")
+            // Help must replay the shipped notes even after their automatic offer was acknowledged.
+            var shippedVersionPolicy = ReleaseHighlightsPolicy(seenVersions: [version])
+            let manual = shippedVersionPolicy.request(owner: owner, version: version, release: content.release, eligible: true, manual: true)
+            precondition(manual?.version == version && manual?.manual == true, "Help must open the shipped release highlights after acknowledgment")
             precondition((1...3).contains(content.features.count))
             precondition(Set(content.features.map(\.id)).count == content.features.count)
             for feature in content.features {
@@ -91,7 +95,7 @@ struct ReleaseHighlightsPolicyTests {
                 precondition(!last.title.contains("Fluid models"))
             }
         }
-        print("PASS: version ledger, persistence, multiple owners, rapid dismissal, interruption/retry, stale callbacks, bounded history, and release content")
+        print("PASS: version ledger, persistence, multiple owners, rapid dismissal, interruption/retry, stale callbacks, bounded history, release content, and manual replay for the shipped release")
     }
 
     private static func require<T>(_ value: T?) throws -> T {

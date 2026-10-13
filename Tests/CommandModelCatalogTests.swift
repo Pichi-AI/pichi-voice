@@ -8,6 +8,7 @@ final class UserDefaults {
     var values: [String: Any] = [:]
     var writes: [String] = []
     func object(forKey key: String) -> Any? { self.values[key] }
+    func string(forKey key: String) -> String? { self.values[key] as? String }
     func set(_ value: Any?, forKey key: String) {
         self.values[key] = value
         self.writes.append(key)
@@ -53,6 +54,7 @@ final class SettingsStore: ObservableObject {
     var rewriteModeSelectedProviderID = "anthropic" { didSet { self.writes.append("rewriteProvider") } }
     var rewriteModeSelectedModel = "rewrite-model" { didSet { self.writes.append("rewriteModel") } }
     var verifiedProviderFingerprints: [String: String] = [:] { didSet { self.writes.append("verification") } }
+    var providerConnectionOptions: [String: [String: String]] = [:] { didSet { self.writes.append("providerOptions") } }
     var availableModelsByProvider: [String: [String]] = [:] { didSet { self.writes.append("modelLists") } }
     var savedProviders: [SavedProvider] = [] { didSet { self.writes.append("savedProviders") } }
     var credentials: [String: String] = [:]

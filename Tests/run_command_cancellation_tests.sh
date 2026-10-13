@@ -9,6 +9,8 @@ fi
 export DEVELOPER_DIR="$task_developer_dir"
 task_test_dir=$(mktemp -d /tmp/fluidvoice-command-cancellation.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
+# Reuse the brand schema without admitting the production disk/defaults store.
+sed '/^nonisolated final class BrandPackageStore:/,$d' Sources/Fluid/Branding/BrandPackage.swift > "$task_test_dir/BrandPackageTypes.swift"
 # Include the actual voice continuation and notch submit methods to cover their await boundaries.
 python3 - "$task_test_dir/CommandUI.swift" <<'PYCODE'
 from pathlib import Path
@@ -24,7 +26,11 @@ PYCODE
 # Compile the entire production agent, including streaming callbacks and recursive turns.
 # Only its model, terminal, UI, and UserDefaults dependencies are test doubles.
 xcrun swiftc -parse-as-library \
+    Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift \
+    "$task_test_dir/BrandPackageTypes.swift" \
+    Tests/Support/StandaloneBrandPackageStore.swift \
+    Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Services/CommandModeService.swift \
     Sources/Fluid/Persistence/ChatHistoryStore.swift \
     Sources/Fluid/Persistence/PersistedHistory.swift \

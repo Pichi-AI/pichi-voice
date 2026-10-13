@@ -9,8 +9,15 @@ export DEVELOPER_DIR="$task_developer_dir"
 task_repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 task_test_dir=$(mktemp -d /tmp/fluidvoice-dictionary-tests.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
+# Reuse the brand schema without admitting the production disk/defaults store.
+sed '/^nonisolated final class BrandPackageStore:/,$d' "$task_repo_dir/Sources/Fluid/Branding/BrandPackage.swift" > "$task_test_dir/BrandPackageTypes.swift"
 xcrun swiftc -D DICTIONARY_EXPERIMENT_STANDALONE -O -parse-as-library \
-    Sources/Fluid/Branding/AppBrand.swift \
+    "$task_repo_dir/Sources/Fluid/Localization/PichiLocalization.swift" \
+    "$task_repo_dir/Sources/Fluid/Branding/AppBrand.swift" \
+    "$task_test_dir/BrandPackageTypes.swift" \
+    "$task_repo_dir/Tests/Support/StandaloneBrandPackageStore.swift" \
+    "$task_repo_dir/Sources/Fluid/Branding/BrandDistribution.swift" \
+    "$task_repo_dir/Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryCorrectionEditPolicy.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryExperimentalMatcher.swift" \
     "$task_repo_dir/Sources/Fluid/Services/DictionaryNegativeExamples.swift" \

@@ -8,6 +8,7 @@ final class UserDefaults {
     func data(forKey key: String) -> Data? { self.values[key] as? Data }
     func string(forKey key: String) -> String? { self.values[key] as? String }
     func set(_ value: Any?, forKey key: String) { self.values[key] = value; self.writes += 1 }
+    func removeObject(forKey key: String) { self.values.removeValue(forKey: key); self.writes += 1 }
 }
 
 @MainActor final class TerminalService {
@@ -47,6 +48,7 @@ final class UserDefaults {
     let effectiveCommandModeProviderID = "fake"
     let effectiveCommandModeSelectedModel = "fake"
     let savedProviders = [Provider(id: "fake", baseURL: "https://fake.invalid")]
+    let providerConnectionOptions: [String: [String: String]] = [:]
     let enableAIStreaming = true
     func analyticsAIModelDescriptor(for mode: Mode) -> String { "fake" }
     func getAPIKey(for provider: String) -> String? { nil }
@@ -146,6 +148,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
     }
 
     struct Config {
+        var providerOptions: [String: String] = [:]
         let messages: [[String: Any]]
         var maxRetries = 0
         var retryDelayMs = 0
