@@ -534,6 +534,13 @@ final class TypingService {
         }
         guard targetIsReady() else { return .recoverableFailure(.targetUnavailable) }
         let insertionIsValid: @MainActor () -> Bool = { isOutputValid() && targetIsReady() }
+        let isAXCandidateValid: @Sendable @MainActor (AXUIElement) -> Bool = { candidate in
+            guard let requiredFocusTarget else { return true }
+            var candidatePID: pid_t = 0
+            guard AXUIElementGetPid(candidate, &candidatePID) == .success,
+                  candidatePID == requiredFocusTarget.pid else { return false }
+            return CFEqual(candidate, requiredFocusTarget.element)
+        }
         let usesClipboard = mode == .reliablePaste ||
             self.ghosttyTargetPID(preferredTargetPID: preferredTargetPID) != nil
         // The read-back baseline costs an AX value read; only the clipboard
@@ -552,7 +559,7 @@ final class TypingService {
                 onCommandPosted: { dispatchedAt = $0 }
             )
         } else {
-            let directOutcome = await self.insertTextDirectlyOffMain(text, preferredTargetPID: preferredTargetPID, isOutputValid: insertionIsValid)
+            let directOutcome = await self.insertTextDirectlyOffMain(text, preferredTargetPID: preferredTargetPID, isOutputValid: insertionIsValid, isAXCandidateValid: isAXCandidateValid)
             switch directOutcome {
             case .fullyDispatched:
                 deliveryPath = .direct
@@ -779,15 +786,20 @@ final class TypingService {
 
     // MARK: - Internal insertion pipeline
 
-    private func insertTextDirectlyOffMain(_ text: String, preferredTargetPID: pid_t?, isOutputValid: @escaping @MainActor () -> Bool) async -> DirectDispatchOutcome {
+    private func insertTextDirectlyOffMain(_ text: String, preferredTargetPID: pid_t?, isOutputValid: @escaping @MainActor () -> Bool, isAXCandidateValid: @escaping @Sendable @MainActor (AXUIElement) -> Bool = { _ in true }) async -> DirectDispatchOutcome {
         await withCheckedContinuation { continuation in
             Self.directInsertionQueue.async {
                 let valid = DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } }
                 guard valid else { continuation.resume(returning: DirectDispatchOutcome.notDispatched); return }
                 continuation.resume(
-                    returning: self.insertTextDirectly(text, preferredTargetPID: preferredTargetPID, isOutputValid: {
-                        DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } }
-                    })
+                    returning: self.insertTextDirectly(
+                        text,
+                        preferredTargetPID: preferredTargetPID,
+                        isOutputValid: { DispatchQueue.main.sync { MainActor.assumeIsolated { isOutputValid() } } },
+                        isAXCandidateValid: { candidate in
+                            DispatchQueue.main.sync { MainActor.assumeIsolated { isAXCandidateValid(candidate) } }
+                        }
+                    )
                 )
             }
         }
@@ -803,7 +815,7 @@ final class TypingService {
         return insert()
     }
 
-    private nonisolated func insertTextDirectly(_ text: String, preferredTargetPID: pid_t?, isOutputValid: () -> Bool) -> DirectDispatchOutcome {
+    private nonisolated func insertTextDirectly(_ text: String, preferredTargetPID: pid_t?, isOutputValid: () -> Bool, isAXCandidateValid: (AXUIElement) -> Bool) -> DirectDispatchOutcome {
         self.log("[TypingService] insertTextInstantly called with \(text.count) characters")
         self.log("[TypingService] Attempting to type text: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
 
@@ -849,7 +861,7 @@ final class TypingService {
 
         // Secondary: Try Accessibility insertion into the actual focused element
         self.log("[TypingService] Trying Accessibility focused-element insertion")
-        if Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextViaAccessibility(text, isOutputValid: isOutputValid) }) {
+        if Self.attemptDirectInsertion(isOutputValid: isOutputValid, insert: { self.insertTextViaAccessibility(text, isOutputValid: isOutputValid, isAXCandidateValid: isAXCandidateValid) }) {
             self.log("[TypingService] SUCCESS: Accessibility insertion completed")
             return .fullyDispatched
         }
@@ -1094,7 +1106,7 @@ final class TypingService {
         (0xdc00...0xdfff).contains(value)
     }
 
-    private nonisolated func insertTextViaAccessibility(_ text: String, isOutputValid: () -> Bool) -> Bool {
+    private nonisolated func insertTextViaAccessibility(_ text: String, isOutputValid: () -> Bool, isAXCandidateValid: (AXUIElement) -> Bool = { _ in true }) -> Bool {
         self.log("[TypingService] Starting Accessibility API insertion")
 
         // Try multiple strategies to find text input element
@@ -1103,7 +1115,7 @@ final class TypingService {
         self.log("[TypingService] Strategy 1: Getting focused UI element...")
         if let textElement = getFocusedTextElement() {
             self.log("[TypingService] Found focused text element")
-            if self.tryAllTextInsertionMethods(textElement, text, isOutputValid: isOutputValid) {
+            if self.tryAllTextInsertionMethods(textElement, text, isOutputValid: isOutputValid, isAXCandidateValid: isAXCandidateValid) {
                 return true
             }
         }
@@ -1114,7 +1126,7 @@ final class TypingService {
         self.log("[TypingService] Strategy 2: Traversing app UI hierarchy...")
         if let textElement = findTextElementInFrontmostApp() {
             self.log("[TypingService] Found text element in app hierarchy")
-            if self.tryAllTextInsertionMethods(textElement, text, isOutputValid: isOutputValid) {
+            if self.tryAllTextInsertionMethods(textElement, text, isOutputValid: isOutputValid, isAXCandidateValid: isAXCandidateValid) {
                 return true
             }
         }
@@ -1125,7 +1137,7 @@ final class TypingService {
         self.log("[TypingService] Strategy 3: Looking for keyboard focus...")
         if let textElement = findKeyboardFocusedElement() {
             self.log("[TypingService] Found keyboard focused element")
-            if self.tryAllTextInsertionMethods(textElement, text, isOutputValid: isOutputValid) {
+            if self.tryAllTextInsertionMethods(textElement, text, isOutputValid: isOutputValid, isAXCandidateValid: isAXCandidateValid) {
                 return true
             }
         }
@@ -1211,7 +1223,10 @@ final class TypingService {
         return nil
     }
 
-    private nonisolated func tryAllTextInsertionMethods(_ element: AXUIElement, _ text: String, isOutputValid: () -> Bool) -> Bool {
+    private nonisolated func tryAllTextInsertionMethods(_ element: AXUIElement, _ text: String, isOutputValid: () -> Bool, isAXCandidateValid: (AXUIElement) -> Bool = { _ in true }) -> Bool {
+        // Current focus alone cannot authorize a different or stale hierarchy
+        // candidate. Recheck this actual write handle at every atomic AX write.
+        guard isOutputValid(), isAXCandidateValid(element) else { return false }
         // Get element info for debugging
         if let role = getElementAttribute(element, kAXRoleAttribute as CFString) {
             self.log("[TypingService] Trying insertion on element with role: \(role)")
@@ -1222,23 +1237,23 @@ final class TypingService {
         }
 
         self.log("[TypingService] Trying approach 0: Insert at cursor via kAXSelectedTextRangeAttribute + kAXValueAttribute")
-        if self.insertTextAtCursorUsingSelectedRange(element, text, isOutputValid: isOutputValid) {
+        if self.insertTextAtCursorUsingSelectedRange(element, text, isOutputValid: { isOutputValid() && isAXCandidateValid(element) }) {
             return true
         }
 
         // Try multiple approaches for text insertion
         self.log("[TypingService] Trying approach 1: Direct kAXValueAttribute")
-        if self.setTextViaValue(element, text, isOutputValid: isOutputValid) {
+        if self.setTextViaValue(element, text, isOutputValid: { isOutputValid() && isAXCandidateValid(element) }) {
             return true
         }
 
         self.log("[TypingService] Trying approach 2: kAXSelectedTextAttribute (replace selection)")
-        if self.setTextViaSelection(element, text, isOutputValid: isOutputValid) {
+        if self.setTextViaSelection(element, text, isOutputValid: { isOutputValid() && isAXCandidateValid(element) }) {
             return true
         }
 
         self.log("[TypingService] Trying approach 3: Insert text at insertion point")
-        if self.insertTextAtInsertionPoint(element, text, isOutputValid: isOutputValid) {
+        if self.insertTextAtInsertionPoint(element, text, isOutputValid: { isOutputValid() && isAXCandidateValid(element) }) {
             return true
         }
 

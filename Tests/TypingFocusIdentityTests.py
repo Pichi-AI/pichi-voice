@@ -19,6 +19,7 @@ parser.add_argument('--rewrite-reference', default='', help='Project original Re
 parser.add_argument('--conditional-reference', default='', help='Compare earlier history/reprocess field binding without changing current delivery gates')
 parser.add_argument('--direct-reference', default='', help='Execute this earlier direct pipeline for the partial-output regression')
 parser.add_argument('--ownership-reference', default='', help='Execute this earlier coordinator for the newer-clipboard ownership regression')
+parser.add_argument('--ax-reference', default='', help='Execute this earlier direct AX candidate pipeline with current inert edges')
 parser.add_argument('--mutation', choices=['ambient_cancel', 'clipboard_focus', 'direct_focus', 'view_cancel','restored_forwarding'])
 args = parser.parse_args()
 def read(path, reference=''):
@@ -41,7 +42,7 @@ def method(text, name, static=False):
 def mutate(text, old, new, count=1):
     assert text.count(old) == count, (old,text.count(old))
     return text.replace(old,new)
-source = read('Sources/Fluid/Services/TypingService.swift',args.direct_reference)
+source = read('Sources/Fluid/Services/TypingService.swift',args.ax_reference or args.direct_reference)
 declarations = [block(source, '    struct '+name+' {') for name in ('CapturedFocusTarget','RecordingTargetContext')]
 declarations += [block(source, '    enum '+name+': '+base+' {') for name,base in [('DeliveryOutcome','Equatable'),('FocusPreparationResult','String')]]
 declarations += [block(read('Sources/Fluid/Services/TypingService.swift'),'    nonisolated enum DirectDispatchOutcome: Equatable, Sendable {')]
@@ -98,6 +99,8 @@ fixture+='@MainActor final class TypingService {\n'+'\n'.join(declarations+metho
     func waitForPhysicalModifiersToRelease(timeout: TimeInterval) async -> Bool { true }
     func postReturnKey(_ key: SettingsStore.SpokenSendKey, targetPID: pid_t) async -> Bool { syntheticAX.sendCount += 1; return true }
 }\n'''
+candidate=block(read('Sources/Fluid/Services/TypingService.swift'),'        let isAXCandidateValid: @Sendable @MainActor (AXUIElement) -> Bool = { candidate in')
+fixture+='extension TypingService { static func fixtureAXCandidatePredicate(_ requiredFocusTarget:CapturedFocusTarget?)->@Sendable @MainActor (AXUIElement)->Bool {\n'+candidate+'\n return isAXCandidateValid\n} }\n'
 fixture+='@MainActor struct DictationStopSnapshot { let target: TypingService.RecordingTargetContext?\n'+snapshot_methods+'\n}\n'
 asr=read('Sources/Fluid/Services/ASRService.swift')
 text_wrappers=list(re.finditer(r'(?m)^    func typeTextToActiveField\(',asr))
@@ -210,7 +213,7 @@ bundle=output/'FocusFixture.app'
 (bundle/'Contents/Resources').mkdir(parents=True,exist_ok=True)
 subprocess.run(['xcrun','xcstringstool','compile','Sources/Fluid/Localization/Localizable.xcstrings','--output-directory',str(bundle/'Contents/Resources'),'--language','en','--language','ru'],cwd=repo,check=True)
 binary=bundle/'Contents/MacOS/tests'
-flags=['-D','LEGACY_REWRITE'] if args.rewrite_reference else []
+flags=(['-D','LEGACY_REWRITE'] if args.rewrite_reference else [])+(['-D','LEGACY_AX'] if args.ax_reference or args.direct_reference else [])
 subprocess.run(['xcrun','swiftc','-swift-version','5','-default-isolation','MainActor','-parse-as-library',*flags,'-module-cache-path',str(output/'ModuleCache'),str(output/'ProductionFocusFixture.swift'),'-o',str(binary)],cwd=repo,check=True)
-run_flags=['--rewrite-only'] if args.rewrite_reference else (['--partial-direct-only'] if args.direct_reference else (['--clipboard-ownership-only'] if args.ownership_reference else (['--restored_forwarding'] if args.conditional_reference else (['--'+args.mutation] if args.mutation else []))))
+run_flags=['--ax-candidate-only'] if args.ax_reference else (['--rewrite-only'] if args.rewrite_reference else (['--partial-direct-only'] if args.direct_reference else (['--clipboard-ownership-only'] if args.ownership_reference else (['--restored_forwarding'] if args.conditional_reference else (['--'+args.mutation] if args.mutation else [])))))
 subprocess.run([str(binary),*run_flags],cwd=repo,check=True)

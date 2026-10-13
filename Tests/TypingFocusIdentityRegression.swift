@@ -25,6 +25,8 @@ nonisolated final class SyntheticAXBackend: @unchecked Sendable {
     var onEventConstruct: (() -> Void)?
     var onNativeEventPost: ((Bool) -> Void)?
     var allowAXWrites = true
+    var deniedAXWrites:Set<String> = []
+    var children:[String:[SyntheticAXElement]] = [:]
     let system = SyntheticAXElement("system", pid: 0, role: "AXSystemWide")
 }
 nonisolated(unsafe) var syntheticAX = SyntheticAXBackend()
@@ -61,6 +63,9 @@ nonisolated func AXUIElementCopyAttributeValue(_ element: AXUIElement, _ attribu
     case kAXSubroleAttribute: value = element.subrole as NSString; return .success
     case kAXValueAttribute: value = (syntheticAX.values[element.id] ?? "") as NSString; return .success
     case kAXSelectedTextRangeAttribute: value = AXValue(range:CFRange(location:0,length:0)); return .success
+    case kAXChildrenAttribute:
+        guard let children=syntheticAX.children[element.id] else { return .failure }
+        value=children as NSArray; return .success
     default: return .failure
     }
 }
@@ -76,7 +81,7 @@ nonisolated func AXUIElementSetAttributeValue(_ element: AXUIElement, _ attribut
         syntheticAX.onSetFocus?()
         if !syntheticAX.refusesRestore { syntheticAX.focus = element }
     } else if [kAXValueAttribute,kAXSelectedTextAttribute].contains(attribute as String) {
-        guard syntheticAX.allowAXWrites else { return .failure }
+        guard syntheticAX.allowAXWrites, !syntheticAX.deniedAXWrites.contains(element.id) else { return .failure }
         syntheticAX.values[element.id] = value as? String ?? ""
         syntheticAX.insertions.append(element.id)
     }
@@ -577,7 +582,48 @@ nonisolated final class UserDefaults: @unchecked Sendable {
             check(PichiLocalization.text(TextDeliveryFailure.userFacingDetail(forMessage:TextDeliveryFailure.partialInsertion.userFacingMessage!)!)==detail,"Partial recovery copy warns before reinserting the complete transcript")
         }
     }
+    static func axCandidateBoundaries() async {
+        let a=SyntheticAXElement("A",pid:42), b=SyntheticAXElement("B",pid:42)
+        reset(a); SettingsStore.shared.textInsertionMode = .standard
+        syntheticAX.allowCGEvents=false; syntheticAX.deniedAXWrites=["A"]
+        syntheticAX.children["app"]=[b,a]
+        let exact=TypingService.CapturedFocusTarget(pid:42,window:nil,element:a)
+        let result=await TypingService().typeOutputPlanInstantly(.plain("bound AX marker"),preferredTargetPID:42,textReadyAt:nil,requiredFocusTarget:exact)
+        check(syntheticAX.values["B"]==nil,"A focused captured field cannot authorize a different hierarchy AX candidate; actual insertions: \(syntheticAX.insertions)")
+        check(syntheticAX.values["A"]=="bound AX marker" && result == .commandPosted && syntheticPoster.postCount==1,"Unwritable captured A may use safe clipboard A after zero AX effects")
+        PasteDeliveryCoordinator.shared.runPendingSettlementForTesting()
+        #if !LEGACY_AX
+        reset(a)
+        let predicate=TypingService.fixtureAXCandidatePredicate(exact)
+        let stale=TypingService().tryAllTextInsertionMethods(b,"stale candidate marker",isOutputValid:{ TypingService.isExactFocusTargetActive(exact) },isAXCandidateValid:{ candidate in MainActor.assumeIsolated { predicate(candidate) } })
+        check(!stale && syntheticAX.values["B"]==nil && syntheticAX.insertions.isEmpty,"An already-selected stale B cannot write after actual focus returns to captured A")
+        for failure in ["pid","invalid"] {
+            reset(a)
+            let element=failure=="pid" ? SyntheticAXElement("A",pid:77):a
+            if failure=="invalid" { syntheticAX.removed=["A"] }
+            let written=TypingService().tryAllTextInsertionMethods(element,"invalid candidate",isOutputValid:{true},isAXCandidateValid:{ candidate in MainActor.assumeIsolated { predicate(candidate) } })
+            check(!written && syntheticAX.insertions.isEmpty,"Actual candidate PID/error validation denies an invalid write handle")
+        }
+        reset(a); SettingsStore.shared.textInsertionMode = .standard
+        syntheticAX.allowCGEvents=false; syntheticAX.deniedAXWrites=["A"]; syntheticAX.children["app"]=[b,a]
+        let unbound=await TypingService().typeOutputPlanInstantly(.plain("legacy hierarchy marker"),preferredTargetPID:42,textReadyAt:nil)
+        check(unbound == .commandPosted && syntheticAX.values["B"]=="legacy hierarchy marker" && syntheticPoster.postCount==0,"An unbound legacy request preserves existing hierarchy strategy compatibility")
+        reset(a); SettingsStore.shared.textInsertionMode = .standard; syntheticAX.allowCGEvents=false
+        let writable=await TypingService().typeOutputPlanInstantly(.plain("bound exact AX marker"),preferredTargetPID:42,textReadyAt:nil,requiredFocusTarget:exact)
+        check(writable == .commandPosted && syntheticAX.values["A"]=="bound exact AX marker" && syntheticPoster.postCount==0,"A writable exact captured AX candidate still uses direct insertion normally")
+        let secure=SyntheticAXElement("secure",pid:42,subrole:"AXSecureTextField")
+        reset(secure); SettingsStore.shared.textInsertionMode = .standard; syntheticAX.allowCGEvents=false
+        let secureTarget=TypingService.CapturedFocusTarget(pid:42,window:nil,element:secure)
+        let normalSecure=await TypingService().typeOutputPlanInstantly(.plain("normal secure marker"),preferredTargetPID:42,textReadyAt:nil,requiredFocusTarget:secureTarget)
+        check(normalSecure == .commandPosted && syntheticAX.values["secure"]=="normal secure marker","Candidate identity validation does not introduce explicit-send security restrictions into normal typing")
+        #endif
+    }
     static func main() async {
+        if CommandLine.arguments.contains("--ax-candidate-only") {
+            await axCandidateBoundaries()
+            print("AX candidate regression: \(checks) checks PASS")
+            return
+        }
         if CommandLine.arguments.contains("--partial-direct-only") {
             await partialDirectBoundaries()
             print("Partial direct regressions: \(checks) checks PASS")
@@ -670,6 +716,7 @@ nonisolated final class UserDefaults: @unchecked Sendable {
         await clipboardAndDirectBoundaries()
         await restoredCallerBoundaries()
         await partialDirectBoundaries()
+        await axCandidateBoundaries()
         await ClipboardTargetBackupFixtureTests.run(check:check)
         #if !LEGACY_REWRITE
         await viewCancellation()
