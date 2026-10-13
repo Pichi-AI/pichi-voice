@@ -74,6 +74,13 @@ final class WhisperProvider: TranscriptionProvider {
         return self.ready
     }
 
+    var supportsWordTimings: Bool {
+        self.stateLock.withLock {
+            guard let maximum = self.model?.capabilities.maxTimestampKind else { return false }
+            return maximum == .word || maximum == .token
+        }
+    }
+
     private var selectedModel: SettingsStore.SpeechModel {
         self.modelOverride ?? SettingsStore.shared.selectedSpeechModel
     }
@@ -352,7 +359,14 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func transcribe(_ samples: [Float], languageCode: String?) async throws -> ASRTranscriptionResult {
-        let minSamples = 16_000
+        let transcript = try await self.run(samples, languageCode: languageCode, timestamps: .segment)
+        let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ASRTranscriptionResult(text: fullText, confidence: 1.0)
+    }
+
+    private func run(_ samples: [Float], languageCode: String?, timestamps: TimestampKind) async throws -> Transcript {
+        try Task.checkCancellation()
+        let minSamples = 1
         guard samples.count >= minSamples else {
             throw NSError(
                 domain: "WhisperProvider",
@@ -369,17 +383,41 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
+        guard samples.allSatisfy(\.isFinite) else {
+            throw NSError(domain: "WhisperProvider", code: -10, userInfo: [NSLocalizedDescriptionKey: "The audio contains invalid PCM samples."])
+        }
+
         let resolvedLanguageCode = self.resolvedLanguageCode(explicit: languageCode)
-        let transcript = try await session.run(
-            samples,
-            options: Self.runOptions(languageCode: resolvedLanguageCode)
+        // A capture stop may leave less than one second of speech. Pad inside the
+        // inference adapter so the sink keeps the original physical clock and PCM
+        // bound; no temporary WAV or fabricated final duration is needed.
+        let inferenceSamples = samples.count < 16_000
+            ? samples + [Float](repeating: 0, count: 16_000 - samples.count)
+            : samples
+        return try await session.run(
+            inferenceSamples,
+            options: Self.runOptions(languageCode: resolvedLanguageCode, timestamps: timestamps)
         )
-        let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ASRTranscriptionResult(text: fullText, confidence: 1.0)
     }
 
-    static func runOptions(languageCode: String?) -> RunOptions {
-        RunOptions(timestamps: .segment, language: languageCode == "auto" ? nil : languageCode)
+    func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+        guard self.supportsWordTimings else { return try (await self.transcribe(samples), []) }
+        let transcript = try await self.run(samples, languageCode: nil, timestamps: .word)
+        let duration = Double(samples.count) / 16_000
+        let words = transcript.words.compactMap { word -> ASRWordTiming? in
+            let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let start = Double(word.t0Ms) / 1000
+            let end = Double(word.t1Ms) / 1000
+            guard !text.isEmpty, start >= 0, end > start, end <= duration + 1e-6 else { return nil }
+            return ASRWordTiming(text: text, start: start, end: end)
+        }
+        // Partial timing evidence must not lose wording from an unaligned tail.
+        return (ASRTranscriptionResult(text: transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)),
+                words.count == transcript.words.count ? words : [])
+    }
+
+    static func runOptions(languageCode: String?, timestamps: TimestampKind = .segment) -> RunOptions {
+        RunOptions(timestamps: timestamps, language: languageCode == "auto" ? nil : languageCode)
     }
 
     func resolvedLanguageCode(explicit: String? = nil) -> String? {
