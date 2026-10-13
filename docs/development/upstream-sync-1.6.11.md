@@ -109,6 +109,15 @@ The automated test host was built using `build-for-testing` with isolated `.buil
 
 The initial test host launched from the Documents worktree stalled in dyld before XCTest began. A separately frozen signed runtime under local task artifact storage launched, but a later test stalled opening its source-relative WAV fixture in Documents. The parent moved only this task's worktree into local Codex worktree storage and rebuilt there. No OS permission or trust setting was changed. The exact operating-system cause was not established. Earlier stalled attempts are not counted as test passes.
 
+## Public-safe visual evidence
+
+The committed before/after images contain only the synthetic fixture sentence and standard UI labels. They are native AppKit/SwiftUI renders from the frozen test hosts; they do not establish real microphone capture. Normal app screenshots remain ignored because they contain local app context.
+
+| Case | Before | Final |
+| --- | --- | --- |
+| Russian small overlay | [Overlapping label](../../.github/screenshots/upstream-1.6.11-mute-small-before.png) | [Width-aware icon](../../.github/screenshots/upstream-1.6.11-mute-small-after.png) |
+| Light translucent pill | [Unbacked icon](../../.github/screenshots/upstream-1.6.11-mute-pill-before.png) | [Theme-backed icon](../../.github/screenshots/upstream-1.6.11-mute-pill-after.png) |
+
 ## Independent review
 
 The independent reviewer inspected the final integrated application code at `41a009a25360696e17843b59bc2535def0980391`, compared against both input histories, ran portable checks and reported no remaining material findings after the bounded timeline and localized overlay fixes. Review included extension-point reuse, common model/brand/language hardcoding, duplicated pipelines, immutable artifact selection, cancellation, resource ownership, source registration, identity boundaries and upstream merge impact. Review itself did not exercise hardware or model inference.
