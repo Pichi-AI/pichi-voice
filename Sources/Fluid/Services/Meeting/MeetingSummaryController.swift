@@ -22,15 +22,22 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
 }
 
 nonisolated enum MeetingSummaryInput {
+    /// Shared template input/prompt contract for remote and on-device saved results.
+    static let currentPromptVersion = 2
+
     /// The capture language is source metadata, independent of the app's interface language.
     /// Unknown/automatic codes must not turn Locale's default language into an output request.
-    static func transcriptLanguageDescription(_ languageCode: String) -> String {
+    static func transcriptLanguageName(_ languageCode: String) -> String? {
         let code = Locale.LanguageCode(languageCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
         guard Locale.LanguageCode.isoLanguageCodes.contains(code),
               ![Locale.LanguageCode.unidentified, .uncoded, .multiple, .unavailable].contains(code),
               let name = Locale(identifier: "en_US_POSIX").localizedString(forLanguageCode: code.identifier)
-        else { return "Infer from the spoken transcript text" }
+        else { return nil }
         return "\(name) (\(code.identifier))"
+    }
+
+    static func transcriptLanguageDescription(_ languageCode: String) -> String {
+        self.transcriptLanguageName(languageCode) ?? "Infer from the spoken transcript text"
     }
 
     static func transcript(for session: MeetingSession) -> String {
@@ -205,9 +212,11 @@ final class MeetingSummaryController: ObservableObject {
         }
 
         /// Summaries saved before providers were recorded came from the earlier on-device
-        /// model, which was withdrawn for accuracy; they stay hidden.
+        /// model, which was withdrawn for accuracy; they stay hidden. Older input/prompt
+        /// contracts also require regeneration; their stored text is not deleted.
         func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
-            self.providerID != nil && self.transcriptHash == transcriptHash && self.promptHash == promptHash
+            self.providerID != nil && self.promptVersion == MeetingSummaryInput.currentPromptVersion
+                && self.transcriptHash == transcriptHash && self.promptHash == promptHash
         }
     }
 
@@ -313,7 +322,8 @@ final class MeetingSummaryController: ObservableObject {
                         transcript: transcript,
                         kind: kind,
                         route: route,
-                        customInstructions: instructions
+                        customInstructions: instructions,
+                        languageCode: session.languageCode
                     )
                     try Task.checkCancellation()
                     guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
@@ -326,7 +336,7 @@ final class MeetingSummaryController: ObservableObject {
                         providerID: route.providerID,
                         providerName: route.providerName,
                         configurationHash: route.configurationHash,
-                        promptVersion: 1,
+                        promptVersion: MeetingSummaryInput.currentPromptVersion,
                         generatedAt: Date(),
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil
                     )
@@ -398,7 +408,7 @@ final class MeetingSummaryController: ObservableObject {
                         providerID: MeetingSummaryOnDevice.providerID,
                         providerName: MeetingSummaryOnDevice.providerName,
                         configurationHash: MeetingSummaryInput.fingerprint("\(MeetingSummaryOnDevice.providerID)|\(model.id)|\(thinking)"),
-                        promptVersion: 1,
+                        promptVersion: MeetingSummaryInput.currentPromptVersion,
                         generatedAt: Date(),
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
                         modelName: model.displayName
