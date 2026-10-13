@@ -139,6 +139,18 @@ struct MeetingCapturePCMTransportTests {
         try require(normal.1 == 3 && normal.2 == 0 && normal.3 == 1, "serial recognition and checkpoint ownership")
         try require(!consumer.enqueue(try sample(frames: 1, startFrame: 9_000)), "finish closes intake")
 
+        let initialProbe = Probe()
+        let initial = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.5, maximumPendingSeconds: 1,
+            initialChunkSeconds: 0.25,
+            recognize: { samples, start in initialProbe.begin(samples, at: start); return MeetingPCMTranscriptBatch(segments: [], speakers: []) },
+            checkpoint: { _ in initialProbe.checkpoint() }, failure: { _ in initialProbe.failed() })
+        for start in stride(from: 0, to: 12_000, by: 4_000) {
+            try require(initial.enqueue(try sample(frames: 4_000, startFrame: start)), "bounded startup PCM accepted")
+        }
+        try await initial.finish()
+        try require(initialProbe.snapshot.0.map(\.1) == [4_000, 8_000], "only the initial window uses the shorter startup cadence")
+        try require(initialProbe.snapshot.0.map(\.0) == [0, 0.25], "startup transition preserves complete contiguous media time")
+
         let latch = Latch()
         let overloadedProbe = Probe()
         let diagnostics = DiagnosticProbe()

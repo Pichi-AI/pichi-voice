@@ -9,6 +9,7 @@ extension MeetingProcessingPipeline {
     nonisolated static func makeMemoryAudioConsumer(
         chunkSeconds: Double = 12,
         maximumPendingSeconds: Double = 24,
+        initialChunkSeconds: Double? = nil,
         recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
         finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)? = nil,
@@ -17,6 +18,7 @@ extension MeetingProcessingPipeline {
     ) throws -> any MeetingMemoryAudioConsuming {
         try MeetingPipelineMemoryAudioConsumer(chunkSeconds: chunkSeconds,
                                               maximumPendingSeconds: maximumPendingSeconds,
+                                              initialChunkSeconds: initialChunkSeconds,
                                               recognize: recognize, checkpoint: checkpoint, finalize: finalize, diagnostic: diagnostic, failure: failure)
     }
 }
@@ -48,6 +50,8 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
 
     private let lock = NSLock()
     private let chunkFrames: Int
+    private let initialChunkFrames: Int
+    private var emittedInitialWindow = false
     private let maximumPendingFrames: Int
     private let recognize: @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch
     private let checkpoint: @Sendable (MeetingPCMTranscriptBatch) async throws -> Void
@@ -65,7 +69,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private var worker: Task<Void, Never>?
     private var finishTask: Task<Void, Error>?
 
-    init(chunkSeconds: Double, maximumPendingSeconds: Double,
+    init(chunkSeconds: Double, maximumPendingSeconds: Double, initialChunkSeconds: Double?,
          recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
          checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
          finalize: (@Sendable () async throws -> MeetingPCMTranscriptBatch?)?,
@@ -76,7 +80,12 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
               maximumPendingSeconds >= chunkSeconds, maximumPendingSeconds <= 120 else {
             throw MeetingMemoryAudioError.invalidBudget
         }
+        let initial = initialChunkSeconds ?? chunkSeconds
+        guard initial.isFinite, initial >= 0.25, initial <= chunkSeconds else {
+            throw MeetingMemoryAudioError.invalidBudget
+        }
         self.chunkFrames = Int((chunkSeconds * 16_000).rounded())
+        self.initialChunkFrames = Int((initial * 16_000).rounded())
         self.maximumPendingFrames = Int((maximumPendingSeconds * 16_000).rounded())
         self.recognize = recognize
         self.checkpoint = checkpoint
@@ -124,12 +133,14 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             self.pendingFrames += frameCount
             var position = 0
             while position < frameCount {
+                let windowFrames = self.emittedInitialWindow ? self.chunkFrames : self.initialChunkFrames
                 if self.tail.isEmpty { self.tailStart = start + Double(position) / 16_000 }
-                let count = min(self.chunkFrames - self.tail.count, frameCount - position)
+                let count = min(windowFrames - self.tail.count, frameCount - position)
                 self.tail.append(contentsOf: UnsafeBufferPointer(start: data.advanced(by: position), count: count))
                 position += count
-                if self.tail.count == self.chunkFrames {
+                if self.tail.count == windowFrames {
                     self.jobs.append(Job(samples: self.tail, start: self.tailStart))
+                    self.emittedInitialWindow = true
                     self.tail = []
                     self.tail.reserveCapacity(self.chunkFrames)
                 }
