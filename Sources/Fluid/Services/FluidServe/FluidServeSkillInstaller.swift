@@ -43,6 +43,7 @@ nonisolated enum FluidServeSkillInstaller {
     enum InstallError: LocalizedError, Equatable {
         case foreignSkill(String)
         case toolMissing
+        case recoveryLimit
 
         var errorDescription: String? {
             switch self {
@@ -50,6 +51,8 @@ nonisolated enum FluidServeSkillInstaller {
                 return AppBrand.format("A different %@ skill is already at %@. FluidVoice left it untouched.", FluidServeSkillInstaller.skillName, path)
             case .toolMissing:
                 return AppBrand.format("This build of FluidVoice does not include %@.", FluidServeMeetings.toolName)
+            case .recoveryLimit:
+                return PichiLocalization.text("The skill folder contains too many saved entries. Review and clean up its recovery files before updating the skill.")
             }
         }
     }
@@ -84,6 +87,7 @@ nonisolated enum FluidServeSkillInstaller {
     }
 
     private static let maximumSkillBytes = 64 * 1024
+    static let maximumSkillEntries = 128
 
     private static func directory(for agent: Agent, home: URL, create: Bool = false) throws -> FluidServeFileBoundary.Directory {
         let root = try FluidServeFileBoundary.Directory.open(home)
@@ -112,6 +116,10 @@ nonisolated enum FluidServeSkillInstaller {
         let file = self.skillFile(for: agent, home: home)
         do {
             let directory = try self.directory(for: agent, home: home, create: true)
+            guard flock(directory.descriptor, LOCK_EX | LOCK_NB) == 0 else { throw InstallError.foreignSkill(file.path) }
+            // Reserve one directory entry for atomic preparation. Recoveries are
+            // never deleted automatically, so disk growth remains bounded.
+            _ = try directory.names(maximumEntries: self.maximumSkillEntries - 1)
             let opened = try directory.read("SKILL.md", maximumBytes: self.maximumSkillBytes)
             if let opened, !FluidServeSkill.isOurs(String(data: opened.data, encoding: .utf8) ?? "", ownerBundleIdentifier: AppBrand.bundleIdentifier) {
                 throw InstallError.foreignSkill(file.path)
@@ -119,7 +127,8 @@ nonisolated enum FluidServeSkillInstaller {
             let bytes = Data(self.skillDocument(toolPath: toolPath).utf8)
             guard bytes.count <= self.maximumSkillBytes else { throw InstallError.foreignSkill(file.path) }
             try directory.publish(bytes, name: "SKILL.md", replacing: opened)
-        } catch { throw InstallError.foreignSkill(file.path) }
+        } catch FluidServeFileBoundary.Rejection.limitExceeded { throw InstallError.recoveryLimit }
+        catch { throw InstallError.foreignSkill(file.path) }
     }
 
     static func remove(for agent: Agent, home: URL, fileManager: FileManager = .default) throws {
@@ -128,10 +137,11 @@ nonisolated enum FluidServeSkillInstaller {
             let directory: FluidServeFileBoundary.Directory
             do { directory = try self.directory(for: agent, home: home) }
             catch FluidServeFileBoundary.Rejection.missing { return }
+            guard flock(directory.descriptor, LOCK_EX | LOCK_NB) == 0 else { throw InstallError.foreignSkill(file.path) }
             guard let opened = try directory.read("SKILL.md", maximumBytes: self.maximumSkillBytes) else { return }
             guard FluidServeSkill.isOurs(String(data: opened.data, encoding: .utf8) ?? "", ownerBundleIdentifier: AppBrand.bundleIdentifier),
                   directory.matches("SKILL.md", identity: opened.identity) else { throw InstallError.foreignSkill(file.path) }
-            let parked = ".fluidserve-remove-" + UUID().uuidString
+            let parked = ".fluidserve-recovery-" + UUID().uuidString
             guard renameatx_np(directory.descriptor, "SKILL.md", directory.descriptor, parked, UInt32(RENAME_EXCL)) == 0 else { throw InstallError.foreignSkill(file.path) }
             let retained = directory.matches(parked, identity: opened.identity)
                 ? try? directory.read(parked, maximumBytes: self.maximumSkillBytes) : nil
@@ -141,13 +151,8 @@ nonisolated enum FluidServeSkillInstaller {
                 _ = renameatx_np(directory.descriptor, parked, directory.descriptor, "SKILL.md", UInt32(RENAME_EXCL))
                 throw InstallError.foreignSkill(file.path)
             }
-            guard unlinkat(directory.descriptor, parked, 0) == 0 else { throw InstallError.foreignSkill(file.path) }
-            if (try? directory.names(maximumEntries: 1).isEmpty) == true {
-                let root = try FluidServeFileBoundary.Directory.open(home)
-                let skills = try root.child(agent.homeFolderName).child("skills")
-                let current = try skills.child(self.skillName)
-                if current.identity == directory.identity { _ = unlinkat(skills.descriptor, self.skillName, AT_REMOVEDIR) }
-            }
+            // Removal revokes the agent's discoverable SKILL.md. Keep the
+            // parked data and directory for explicit owner-managed recovery.
         } catch { throw InstallError.foreignSkill(file.path) }
     }
 

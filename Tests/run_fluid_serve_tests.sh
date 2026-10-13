@@ -33,3 +33,12 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" "
 "$task_test_dir/skill-tests"
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" "$@" Tests/FluidServeContainmentTests.swift -o "$task_test_dir/containment-tests"
 "$task_test_dir/containment-tests"
+# Permanent deletion by a mutable name cannot prove which inode is removed.
+python3 - <<'PYNODELETE'
+from pathlib import Path
+for name in ['FluidServeFileBoundary.swift', 'FluidServeSkillInstaller.swift']:
+    source = Path('Sources/Fluid/Services/FluidServe', name).read_text()
+    for operation in ['unlinkat(', 'unlink(', 'removeItem(']:
+        assert operation not in source, f"Unsafe permanent cleanup reintroduced in {name}: {operation}"
+print('FluidServe no-permanent-cleanup source checks passed')
+PYNODELETE

@@ -34,9 +34,32 @@ struct FluidServeSkillContainmentTests {
         check(FluidServeSkillInstaller.status(for: agent, toolPath: tool + "-moved", home: valid) == .installed, "Owned update remains available")
         check(try Data(contentsOf: validFile) != first, "Update writes the new canonical instruction document")
         try FluidServeSkillInstaller.remove(for: agent, home: valid)
-        check(!manager.fileExists(atPath: validFile.deletingLastPathComponent().path), "Owned removal cleans its empty skill folder")
+        check(!manager.fileExists(atPath: validFile.path), "Removal revokes the discoverable skill")
+        let recoveries = try manager.contentsOfDirectory(at: validFile.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+        check(recoveries.count == 2, "Update and removal retain recoverable entries")
+        let recoveryBytes = try recoveries.map { try Data(contentsOf: $0) }
+        check(recoveryBytes.contains(first), "Old document bytes are recoverable after update")
+        check(recoveryBytes.contains(Data(FluidServeSkillInstaller.skillDocument(toolPath: tool + "-moved").utf8)), "Removed document bytes are recoverable")
+        check(FluidServeSkillInstaller.status(for: agent, toolPath: tool, home: valid) == .notInstalled, "Recovery entries do not keep the skill installed")
         try FluidServeSkillInstaller.remove(for: agent, home: valid)
         checks += 1
+
+        // Ordinary entry-count limit bounds retained storage without deleting it.
+        let bounded = try home("bounded")
+        let boundedFile = FluidServeSkillInstaller.skillFile(for: agent, home: bounded)
+        try manager.createDirectory(at: boundedFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for index in 0..<(FluidServeSkillInstaller.maximumSkillEntries - 1) {
+            try Data("retained".utf8).write(to: boundedFile.deletingLastPathComponent().appendingPathComponent(".fluidserve-recovery-\(index)"))
+        }
+        try FluidServeSkillInstaller.install(for: agent, toolPath: tool, home: bounded)
+        let boundedBefore = try Data(contentsOf: boundedFile)
+        do { try FluidServeSkillInstaller.install(for: agent, toolPath: tool + "-new", home: bounded); preconditionFailure("Recovery limit was ignored") }
+        catch FluidServeSkillInstaller.InstallError.recoveryLimit { checks += 1 }
+        check(try Data(contentsOf: boundedFile) == boundedBefore, "Over-limit update keeps the active skill")
+        check(try manager.contentsOfDirectory(atPath: boundedFile.deletingLastPathComponent().path).count == FluidServeSkillInstaller.maximumSkillEntries, "No extra recovery is created beyond the entry budget")
+        try FluidServeSkillInstaller.remove(for: agent, home: bounded)
+        check(!manager.fileExists(atPath: boundedFile.path), "Removal remains available at the recovery limit")
+        check(try manager.contentsOfDirectory(atPath: boundedFile.deletingLastPathComponent().path).count == FluidServeSkillInstaller.maximumSkillEntries, "Removal retains all bounded entries")
 
         let foreign = base.appendingPathComponent("foreign")
         try manager.createDirectory(at: foreign, withIntermediateDirectories: true)

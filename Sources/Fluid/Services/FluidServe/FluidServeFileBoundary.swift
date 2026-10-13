@@ -146,19 +146,18 @@ nonisolated enum FluidServeFileBoundary {
                 && metadata.st_mode & S_IFMT == S_IFREG && metadata.st_nlink == 1 && Identity(metadata) == identity
         }
 
-        /// Atomic publication without replacing an unknown leaf. A raced foreign
-        /// entry is restored after swap, or retained under the temporary name if
-        /// another writer has occupied the original name; it is never deleted.
+        /// Atomic publication without permanently deleting by a mutable name.
+        /// Old, failed and raced entries remain recoverable until explicit owner
+        /// cleanup. The caller bounds the number/size of retained skill entries.
         func publish(_ data: Data, name: String, replacing file: File?) throws {
             guard Self.validName(name) else { throw Rejection.unsafe }
-            let temporary = ".fluidserve-write-" + UUID().uuidString
+            let temporary = ".fluidserve-recovery-" + UUID().uuidString
             let descriptor = openat(self.descriptor, temporary, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
             guard descriptor >= 0 else { throw Rejection.io }
             defer { close(descriptor) }
             var metadata = stat()
             guard fstat(descriptor, &metadata) == 0 else { throw Rejection.io }
             let newIdentity = Identity(metadata)
-            defer { if self.matches(temporary, identity: newIdentity) { _ = unlinkat(self.descriptor, temporary, 0) } }
             var written = 0
             while written < data.count {
                 let count = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress!.advanced(by: written), data.count - written) }
@@ -179,7 +178,6 @@ nonisolated enum FluidServeFileBoundary {
                     }
                     throw Rejection.changed
                 }
-                guard unlinkat(self.descriptor, temporary, 0) == 0 else { throw Rejection.io }
             } else {
                 guard renameatx_np(self.descriptor, temporary, self.descriptor, name, UInt32(RENAME_EXCL)) == 0 else { throw Rejection.changed }
             }

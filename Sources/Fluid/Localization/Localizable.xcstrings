@@ -49118,6 +49118,23 @@
           }
         }
       }
+    },
+    "The skill folder contains too many saved entries. Review and clean up its recovery files before updating the skill.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The skill folder contains too many saved entries. Review and clean up its recovery files before updating the skill."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В папке навыка слишком много сохраненных записей. Просмотрите и очистите файлы восстановления перед обновлением навыка."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -262,7 +262,9 @@ final class FluidServeTests: XCTestCase {
 
         try FluidServeSkillInstaller.remove(for: agent, home: self.home)
         XCTAssertEqual(FluidServeSkillInstaller.status(for: agent, toolPath: moved, home: self.home), .notInstalled)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: file.deletingLastPathComponent().path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path).count, 2,
+                       "Update/removal recovery entries are retained for explicit owner cleanup")
         XCTAssertNoThrow(try FluidServeSkillInstaller.remove(for: agent, home: self.home), "Removing twice is harmless")
     }
 
