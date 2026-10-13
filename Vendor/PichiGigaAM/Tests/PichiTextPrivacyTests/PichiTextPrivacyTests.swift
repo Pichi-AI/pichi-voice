@@ -99,6 +99,55 @@ final class PichiTextPrivacyTests: XCTestCase {
         do { _ = try await task.value; XCTFail("must cancel") } catch { XCTAssertTrue(error is CancellationError) }
     }
 
+    func testCaselessNameRulesRequirePersonEvidenceAndKeepPharmaNumbers() throws {
+        // This deterministic layer must still work when the real tiny-news NER
+        // produces no person spans for lower-case CTC output.
+        for fixture in PIIRussianASRFixtures.positives {
+            let expected = (fixture.text as NSString).range(of: fixture.name)
+            let result = try PIIRedactor.redact(fixture.text, ner: [])
+            XCTAssertTrue(result.spans.contains { $0.range == expected }, fixture.text)
+            XCTAssertFalse(result.text.contains(fixture.name), fixture.text)
+        }
+        for text in PIIRussianASRFixtures.negatives {
+            XCTAssertEqual(try PIIRedactor.redact(text, ner: []).text, text)
+        }
+        // The name dictionary cannot greedily cross punctuation or conjunctions.
+        XCTAssertEqual(try PIIRedactor.redact("иван и анна", ner: []).text, "[ИМЯ] и [ИМЯ]")
+        XCTAssertEqual(try PIIRedactor.redact("🙂 иван петрович сидоров", ner: []).text, "🙂 [ИМЯ]")
+    }
+
+    func testCaselessRussianASRNativeBenchmark() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_PII_TEST_MODEL_DIRECTORY"] else { throw XCTSkip("Set isolated public artifact directory for native inference") }
+        let runtime = PIINERRuntime()
+        try await runtime.load(directory: URL(fileURLWithPath: path, isDirectory: true))
+        var truePositives = 0
+        var falsePositives = 0
+        var falseNegatives = 0
+        for fixture in PIIRussianASRFixtures.positives {
+            let result = try PIIRedactor.redact(fixture.text, ner: await runtime.tag(fixture.text))
+            let expected = (fixture.text as NSString).range(of: fixture.name)
+            let exact = result.spans.filter { $0.range == expected }.count
+            truePositives += exact
+            falseNegatives += 1 - exact
+            falsePositives += result.spans.count - exact
+            XCTAssertEqual(exact, 1, fixture.text)
+        }
+        for text in PIIRussianASRFixtures.negatives {
+            let result = try PIIRedactor.redact(text, ner: await runtime.tag(text))
+            falsePositives += result.spans.count
+            XCTAssertEqual(result.text, text)
+        }
+        var englishMasked = 0
+        for fixture in PIIRussianASRFixtures.englishDiagnostics {
+            let result = try PIIRedactor.redact(fixture.text, ner: await runtime.tag(fixture.text))
+            if result.spans.contains(where: { $0.range == (fixture.text as NSString).range(of: fixture.name) }) { englishMasked += 1 }
+        }
+        // English observations are diagnostic, not an assertion that leaks are
+        // correct behavior or that a Russian model protects English names.
+        print("PII CTC synthetic benchmark: RU TP=\(truePositives), FP=\(falsePositives), FN=\(falseNegatives); \(PIIRussianASRFixtures.negatives.count) negative texts; English exact names \(englishMasked)/\(PIIRussianASRFixtures.englishDiagnostics.count)")
+        await runtime.unload()
+    }
+
     /// Opt-in native ONNX smoke test on approved public weights. Ordinary tests
     /// never download weights. A skipped test is not model verification.
     func testPublicModelNativeInference() async throws {

@@ -24,6 +24,13 @@ is a small local candidate, not a claim of universal best quality. Synthetic
 tests confirm its native execution and selected cases, not production recall
 or performance on a particular iPad. Review exported text when needed.
 
+The tiny-news model misses many names in lower-case, punctuation-free ASR text.
+The existing generic Russian first-name lexicon, explicit person context and
+patronymic/surname morphology therefore supplement model predictions. Inflected
+first-name guesses require adjacent person evidence; a bare lower-case surname
+suffix does not mask ordinary words. This layer is still fallible, especially
+for names absent from the lexicon or without recognizable morphology/context.
+
 Text redaction does not redact retained audio recordings. If audio storage is
 enabled, the recording retains voices and spoken personal information.
 

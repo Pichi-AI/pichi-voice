@@ -63,11 +63,11 @@ public enum PIIRedactor {
     private static let end = #"(?![\p{L}\p{N}])"#
     // These are precision guards also present in the Transcribe detector. They
     // are not a name dictionary or a substitute for real token classification.
-    private static let nonNames = Set("аспирин инсулин витамин пенициллин анальгин дофамин серотонин адреналин мелатонин кофеин никотин протеин проверь проведи изучите сделай готов хорошо спасибо здравствуйте русский английский".split(separator: " ").map(String.init))
+    private static let nonNames = Set("аспирин инсулин витамин пенициллин анальгин метформин оземпик лизиноприл метотрексат дофамин серотонин адреналин мелатонин кофеин никотин протеин проверь проведи изучите сделай готов хорошо спасибо здравствуйте русский английский".split(separator: " ").map(String.init))
 
     public static func redact(_ text: String, ner: [PIINERSpan]) throws -> PIIRedactionResult {
         guard text.utf16.count <= PIIWordPieceTokenizer.maximumInputUTF16 else { throw TextPrivacyError.inputTooLong }
-        var entities = try structured(text)
+        var entities = try structured(text) + PIIRussianNameHeuristics.detect(text)
         let utf16 = Array(text.utf16)
         for span in ner {
             guard span.range.location >= 0, span.range.length > 0,
