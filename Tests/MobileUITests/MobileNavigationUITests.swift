@@ -67,6 +67,56 @@ final class MobileNavigationUITests: XCTestCase {
         capture("02-current-meeting")
     }
 
+    func testSectionNavigationSwitchesImmediatelyFromSettingsDetails() throws {
+        let destinations = ["general", "recording", "models", "privacy"]
+        for detail in destinations {
+            openNavigation("settings", title: "Settings")
+            XCTAssertTrue(app.buttons["settings.\(detail)"].waitForExistence(timeout: 5))
+            app.buttons["settings.\(detail)"].tap()
+            let visibleDetail = app.descendants(matching: .any)["settings.\(detail).detail"].firstMatch
+            XCTAssertTrue(visibleDetail.waitForExistence(timeout: 5))
+            capture("settings-\(detail)-opened")
+            if detail == "recording" { XCTAssertFalse(app.buttons["settings.recording.done"].exists) }
+
+            openNavigation("meetings", title: "Meetings")
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5), "A pushed \(detail) view must not cover Meetings")
+            XCTAssertTrue(app.buttons["meeting.start"].isHittable)
+            capture("settings-\(detail)-to-meetings")
+            openNavigation("history", title: "History")
+            XCTAssertFalse(app.buttons["meeting.start"].exists)
+            XCTAssertTrue(app.descendants(matching: .any)["history.list"].firstMatch.waitForExistence(timeout: 5))
+            capture("settings-\(detail)-to-history")
+
+            openNavigation("settings", title: "Settings")
+            XCTAssertTrue(visibleDetail.waitForExistence(timeout: 5), "Returning to Settings preserves its own detail")
+            let back = app.navigationBars.buttons["Settings"].firstMatch
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+            XCTAssertTrue(app.buttons["settings.\(detail)"].waitForExistence(timeout: 5))
+            capture("settings-\(detail)-back-to-root")
+        }
+    }
+
+    func testRotatingDeepSettingsAndClosingRecordingSheet() throws {
+        openNavigation("settings", title: "Settings")
+        app.buttons["settings.models"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["settings.models.detail"].firstMatch.waitForExistence(timeout: 5))
+        XCUIDevice.shared.orientation = .landscapeLeft
+        waitForOrientation(portrait: false)
+        capture("models-landscape")
+        openNavigation("meetings", title: "Meetings")
+        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+        app.buttons["meeting.settings"].tap()
+        let done = app.buttons["settings.recording.done"]
+        XCTAssertTrue(done.waitForExistence(timeout: 5))
+        capture("recording-settings-sheet")
+        done.tap()
+        XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["meeting.start"].isHittable)
+        openNavigation("history", title: "History")
+        capture("sheet-closed-history")
+    }
+
     func testRussianSettingsAndModelsInDarkAppearance() throws {
         app.terminate()
         app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", "dark"]
