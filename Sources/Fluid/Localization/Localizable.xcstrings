@@ -85,8 +85,7 @@
           }
         }
       }
-    }
-,
+    },
     "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
       "extractionState": "manual",
       "localizations": {
@@ -47346,6 +47345,210 @@
           "stringUnit": {
             "state": "translated",
             "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки продукта, а не измеренная точность распознавания. Для этого компактного экспорта INT8 не проводилась оценка WER или тест скорости на процессоре."
+          }
+        }
+      }
+    },
+    "Hugging Face (default)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hugging Face (default)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hugging Face (по умолчанию)"
+          }
+        }
+      }
+    },
+    "Imported model folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported model folder"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортированная папка модели"
+          }
+        }
+      }
+    },
+    "Model source: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model source: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Источник модели: %@"
+          }
+        }
+      }
+    },
+    "Use %@ model (default)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use %@ model (default)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать модель с %@ (по умолчанию)"
+          }
+        }
+      }
+    },
+    "Other options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие варианты"
+          }
+        }
+      }
+    },
+    "Other model options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other model options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие варианты модели"
+          }
+        }
+      }
+    },
+    "Import model folder...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import model folder..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать папку модели..."
+          }
+        }
+      }
+    },
+    "Download the default model or import a supported local model folder.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the default model or import a supported local model folder."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачайте модель по умолчанию или импортируйте папку с поддерживаемой локальной моделью."
+          }
+        }
+      }
+    },
+    "Changing model source...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changing model source..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Смена источника модели..."
+          }
+        }
+      }
+    },
+    "Model Source Change Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model Source Change Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сменить источник модели"
+          }
+        }
+      }
+    },
+    "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите папку. Для публичной модели в ней должны быть файлы v3_e2e_ctc.int8.onnx и v3_e2e_ctc_vocab.txt. Для нашей модели E2E нужны v3_e2e_ctc_eou_v5.fp16.onnx и тот же файл словаря. Импортируются только поддерживаемые экспорты с соответствующими контрольными суммами."
+          }
+        }
+      }
+    },
+    "This speech model does not support changing its model source.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This speech model does not support changing its model source."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой модели распознавания нельзя сменить источник модели."
           }
         }
       }

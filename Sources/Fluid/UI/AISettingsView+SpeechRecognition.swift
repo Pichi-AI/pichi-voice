@@ -220,6 +220,12 @@ extension VoiceEngineSettingsView {
                             .help("Recommended system RAM, not measured model memory usage. The size above is disk space.")
                     }
 
+                    if let source = model.modelFolderSourceLabel {
+                        Label(PichiLocalization.format("Model source: %@", PichiLocalization.text(source)), systemImage: "internaldrive")
+                            .font(self.theme.typography.bodySmall)
+                            .foregroundStyle(self.voiceEngineSecondaryText)
+                    }
+
                     // Memory warning for large models
                     if let memoryWarning = model.memoryWarning {
                         HStack(spacing: 6) {
@@ -343,7 +349,7 @@ extension VoiceEngineSettingsView {
             } else if self.viewModel.importingModel == model {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.mini)
-                    Text(PichiLocalization.text(self.viewModel.isCancellingModelImport ? "Cancelling…" : "Importing..."))
+                    Text(PichiLocalization.text(self.viewModel.isCancellingModelImport ? "Cancelling…" : (self.viewModel.isRestoringDefaultModelSource ? "Changing model source..." : "Importing...")))
                         .font(self.theme.typography.bodySmall)
                         .foregroundStyle(self.voiceEngineSecondaryText)
                     Button(PichiLocalization.text(self.viewModel.isCancellingModelImport ? "Cancelling…" : "Cancel")) {
@@ -539,15 +545,21 @@ extension VoiceEngineSettingsView {
                 .frame(width: model.requiresExternalArtifacts ? 150 : 120, alignment: .trailing)
             }
             if model.supportsFolderImport && model.supportsAutomaticDownload {
-                Button {
-                    self.viewModel.importSpeechModel(model)
+                Menu {
+                    if let source = model.defaultDownloadSourceName {
+                        Button(PichiLocalization.format("Use %@ model (default)", source)) {
+                            self.viewModel.useDefaultSpeechModelSource(model)
+                        }
+                    }
+                    Button(PichiLocalization.text("Import model folder...")) {
+                        self.viewModel.importSpeechModel(model)
+                    }
                 } label: {
-                    Image(systemName: "folder.badge.plus")
-                        .font(self.theme.typography.body)
+                    Text(PichiLocalization.text("Other options"))
+                        .font(self.theme.typography.bodySmall)
                 }
-                .buttonStyle(.plain)
-                .help(PichiLocalization.text("Import model folder"))
-                .accessibilityLabel(PichiLocalization.text("Import model folder"))
+                .help(PichiLocalization.text("Download the default model or import a supported local model folder."))
+                .accessibilityLabel(PichiLocalization.text("Other model options"))
                 .disabled(self.viewModel.areSpeechModelActionsBlocked)
             }
         }
