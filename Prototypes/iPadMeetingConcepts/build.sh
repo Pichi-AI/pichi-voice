@@ -15,6 +15,7 @@ shared_sources=(
     "$repo_dir/Sources/Fluid/UI/MeetingUILocalization.swift"
     "$repo_dir/Sources/Fluid/UI/Visualization/AudioWaveformBars.swift"
     "$repo_dir/Sources/Fluid/Services/AudioSpectrumMeter.swift"
+    "$repo_dir/Sources/Fluid/Services/Meeting/MeetingAudioRetentionPolicy.swift"
 )
 
 write_info() {

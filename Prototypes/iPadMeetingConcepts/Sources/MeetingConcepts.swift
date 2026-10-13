@@ -1,6 +1,9 @@
 import SwiftUI
 
-enum PrototypeScreen: String { case ready, active, processing, completed, settings, privacy, models, history }
+enum PrototypeScreen: String {
+    case ready, active, processing, completed, settings, privacy, models, history
+    case recordingSettings = "recording-settings"
+}
 
 struct PrototypeRoot: View {
     let options: PrototypeOptions
@@ -8,12 +11,8 @@ struct PrototypeRoot: View {
     @State private var currentMeetingState: PrototypeScreen
     @State private var selectedSessionID = 1
     @State private var saveAudio = true
-    @State private var diarization = true
-    @State private var includePlace = false
-    @State private var paused = false
-    @State private var showEnrollment = false
-    @State private var showValidation = false
-    @State private var showHistory = false
+    @State private var recordedWithAudio = true
+    @State private var retentionPolicy: MeetingAudioRetentionPolicy = .days7
     @State private var showExport = false
     @State private var showCopy = false
     @StateObject private var replay = MeetingLiveReplayController()
@@ -23,16 +22,17 @@ struct PrototypeRoot: View {
     private var theme: PrototypeTheme { PrototypeTheme(dark: options.dark) }
     private var data: SyntheticFixtures { .shared }
 
-    init(options: PrototypeOptions) {
+    init(options: PrototypeOptions, replay injectedReplay: MeetingLiveReplayController? = nil) {
         self.options = options
         self._screen = State(initialValue: options.screen)
         self._currentMeetingState = State(initialValue: [.ready, .processing, .completed].contains(options.screen) ? options.screen : .active)
         self._saveAudio = State(initialValue: options.saveAudio)
+        self._recordedWithAudio = State(initialValue: options.saveAudio)
+        let controller = injectedReplay ?? MeetingLiveReplayController()
         if let time = options.replayTime {
-            let controller = MeetingLiveReplayController()
             controller.renderFrame(at: time)
-            self._replay = StateObject(wrappedValue: controller)
         }
+        self._replay = StateObject(wrappedValue: controller)
     }
 
     private var displayedSession: SyntheticFixtures.Session {
@@ -45,15 +45,17 @@ struct PrototypeRoot: View {
     }
 
     private func showMeetingSetup() {
+        guard currentMeetingState == .completed else { return }
         processingTask?.cancel()
         currentMeetingState = .ready
         showCurrentMeeting()
     }
 
     private func startMeetingPreview() {
+        guard currentMeetingState == .ready else { return }
+        recordedWithAudio = saveAudio
         processingTask?.cancel()
         currentMeetingState = .active
-        paused = false
         completedReplayDuration = nil
         showCurrentMeeting()
         if options.exportPath == nil { Task { await replay.restart() } }
@@ -62,13 +64,12 @@ struct PrototypeRoot: View {
     private func finishMeetingPreview() {
         currentMeetingState = .processing
         processingIndex = 0
-        paused = false
         showCurrentMeeting()
         processingTask?.cancel()
         processingTask = Task { @MainActor in
             await replay.stop()
             completedReplayDuration = replay.currentTime
-            for index in 0..<4 {
+            for index in processingStages.indices {
                 guard !Task.isCancelled else { return }
                 processingIndex = index
                 do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
@@ -95,20 +96,6 @@ struct PrototypeRoot: View {
             .font(theme.font(.body))
             .tint(theme.accent)
         }
-        .sheet(isPresented: $showEnrollment) { enrollmentSheet }
-        .sheet(isPresented: $showHistory) {
-            GeometryReader { geometry in
-                VStack(spacing: 0) {
-                    sheetHeader("history") { showHistory = false }
-                    historyList(width: geometry.size.width)
-                }
-            }
-            .frame(minWidth: 320, idealWidth: 360, maxWidth: 550, minHeight: 540)
-            .background(theme.color("windowBackground"))
-        }
-        .alert(Copy.text("device_validation"), isPresented: $showValidation) {
-            Button(Copy.text("close"), role: .cancel) {}
-        } message: { Text(Copy.text("validation_detail")) }
         .alert(Copy.text("export"), isPresented: $showExport) {
             Button(Copy.text("close"), role: .cancel) {}
         } message: { Text(Copy.text("export_detail")) }
@@ -116,7 +103,11 @@ struct PrototypeRoot: View {
             Button(Copy.text("close"), role: .cancel) {}
         } message: { Text(Copy.text("copy_preview_detail")) }
         .task {
+            replay.hasActiveMeetingPreview = currentMeetingState == .active
             if screen == .active && options.exportPath == nil && options.replayTime == nil { await replay.start() }
+        }
+        .onChange(of: currentMeetingState) { _, state in
+            replay.hasActiveMeetingPreview = state == .active
         }
         .onDisappear {
             processingTask?.cancel()
@@ -205,11 +196,6 @@ struct PrototypeRoot: View {
                 navRow("settings", icon: "gearshape", selected: isSettings) { screen = .settings }
             }
             Spacer()
-            VStack(alignment: .leading, spacing: 10) {
-                Label(Copy.text("local_only"), systemImage: "lock.shield")
-                    .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                Text(Copy.text("prototype")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
-            }.padding(.bottom, 24)
         }
         .padding(.horizontal, 16)
         .frame(maxHeight: .infinity)
@@ -218,7 +204,12 @@ struct PrototypeRoot: View {
 
     private var isHistory: Bool { screen == .history || (screen == .completed && selectedSessionID != 1) }
     private var isMeeting: Bool { [.ready, .active, .processing, .completed].contains(screen) && !isHistory }
-    private var isSettings: Bool { [.settings, .privacy, .models].contains(screen) }
+    private var isSettings: Bool { [.settings, .privacy, .models, .recordingSettings].contains(screen) }
+    private var displayedMeetingHasAudio: Bool {
+        selectedSessionID == 1 ? recordedWithAudio : displayedSession.hasAudio
+    }
+    // This fixture has no installed speaker model or diarization evidence.
+    private var processingStages: [String] { ["Saving", "Transcribing", "Finalizing"] }
     private var divider: some View { Rectangle().fill(theme.color("separator")).frame(height: 1) }
     private var columnDivider: some View { Rectangle().fill(theme.color("separator")).frame(width: 1) }
 
@@ -229,7 +220,7 @@ struct PrototypeRoot: View {
                     Label(Copy.text("history"), systemImage: "chevron.left")
                         .font(theme.font(.body)).frame(minHeight: 44)
                 }.buttonStyle(.plain).foregroundStyle(theme.accent)
-            } else if screen == .privacy || screen == .models {
+            } else if screen == .privacy || screen == .models || screen == .recordingSettings {
                 Button { screen = .settings } label: {
                     Label(Copy.text("settings"), systemImage: "chevron.left")
                         .font(theme.font(.body)).frame(minHeight: 44)
@@ -238,54 +229,17 @@ struct PrototypeRoot: View {
                 theme.brand.logo.resizable().scaledToFit().frame(width: 28, height: 28)
                 Text(theme.brand.profile.meetingName).font(theme.font(.section))
             } else {
-                Text(Copy.text(screen == .settings ? "settings" : "offline_meeting"))
+                Text(screen == .settings ? Copy.text("Settings") : theme.brand.profile.meetingName)
                     .font(theme.font(.section))
             }
             Spacer(minLength: 8)
-            if !compact { Text(Copy.text("prototype")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText")) }
-            if !isSettings {
-                iconButton("plus", label: "new_meeting") { showMeetingSetup() }
-                if compact { iconButton("clock", label: "history") { showHistory = true } }
+            if !isSettings && currentMeetingState == .completed {
+                iconButton("plus", label: "New Meeting") { showMeetingSetup() }
             }
         }
         .padding(.horizontal, compact ? 16 : 24)
         .frame(height: 68)
         .background(theme.color("toolbarBackground"))
-    }
-
-    private func historyList(width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(Copy.text("history")).font(theme.font(.title))
-                Spacer()
-                iconButton("plus", label: "new_meeting") { showMeetingSetup(); showHistory = false }
-            }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 16)
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                Text(Copy.text("search_meetings"))
-            }
-            .font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .padding(.horizontal, 12)
-            .background(theme.color("windowBackground"), in: RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 16)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    caption("today").padding(.top, 24).padding(.horizontal, 10)
-                    historyRow(data.sessions[0], selected: isMeeting && selectedSessionID == 1, active: currentMeetingState != .completed)
-                    caption("previously").padding(.top, 18).padding(.horizontal, 10)
-                    ForEach(data.sessions.dropFirst()) { session in
-                        historyRow(session, selected: screen == .completed && session.id == selectedSessionID, active: false)
-                    }
-                }.padding(.horizontal, 12)
-            }
-            Spacer(minLength: 0)
-            Label(Copy.text("demo_data"), systemImage: "sparkles")
-                .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                .padding(20)
-        }
-        .frame(width: width, alignment: .topLeading)
-        .background(theme.color("contentBackground"))
     }
 
     private func historyRow(_ session: SyntheticFixtures.Session, selected: Bool, active: Bool) -> some View {
@@ -296,7 +250,6 @@ struct PrototypeRoot: View {
                 selectedSessionID = session.id
                 screen = .completed
             }
-            showHistory = false
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -307,7 +260,7 @@ struct PrototypeRoot: View {
                 }
                 Text(session.title).font(theme.font(.section)).multilineTextAlignment(.leading)
                 Text(session.time).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                if selected && active { Text(Copy.text(saveAudio ? "audio_and_text" : "text_only")).font(theme.font(.caption)).foregroundStyle(theme.accent) }
+
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
@@ -326,6 +279,7 @@ struct PrototypeRoot: View {
         case .settings: settingsScreen(narrow: narrow)
         case .privacy: privacyScreen(narrow: narrow)
         case .models: modelsScreen(narrow: narrow)
+        case .recordingSettings: recordingSettingsScreen(narrow: narrow)
         case .history:
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -340,26 +294,24 @@ struct PrototypeRoot: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 14) {
-                    tag("offline_meeting", icon: "mic")
                     Text(Copy.text("Be in the conversation.")).font(theme.font(.display))
-                    Text(Copy.text("Record your meeting. Come back to every word.")).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
-                }.padding(.top, generous ? 42 : 14)
+                    Text(Copy.text("Record your meeting. Come back to every word."))
+                        .font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
+                }
                 surface {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text(Copy.text("meeting_title")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                        Text(data.sessions[0].title).font(theme.font(.title))
-                        divider
-                        infoLine("mic", title: "microphone", value: "built_in_mic")
-                        infoLine("lock", title: "retention", value: saveAudio ? "audio_and_text" : "text_only")
-                        Button { screen = .settings } label: { Label(Copy.text("change_settings"), systemImage: "slider.horizontal.3").font(theme.font(.body)) }
-                            .buttonStyle(.plain).foregroundStyle(theme.accent).frame(minHeight: 44)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(Copy.text("In-person meeting.")).font(theme.font(.title))
+                        Text(Copy.text("Your mic will record the room."))
+                            .font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
+                        primaryButton("Start Recording", icon: "record.circle") { startMeetingPreview() }
+                        Button { screen = .recordingSettings } label: {
+                            Label(Copy.text("More settings…"), systemImage: "gearshape")
+                                .font(theme.font(.body)).frame(minHeight: 44)
+                        }.buttonStyle(.plain).foregroundStyle(theme.accent)
                     }
                 }
-                primaryButton("Start Recording", icon: "record.circle") { startMeetingPreview() }
-                Text(Copy.text("local_capture_mobile_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                Label(Copy.text("participant_consent"), systemImage: "person.2")
+                Label(Copy.text("local_capture_mobile_detail"), systemImage: "lock")
                     .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                Text(Copy.text("ready_mock_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
             }
             .frame(maxWidth: generous ? 620 : 730)
             .padding(narrow ? 20 : 32)
@@ -380,7 +332,7 @@ struct PrototypeRoot: View {
                     HStack {
                         Text(Copy.text(screen == .completed ? "Transcript" : "Live transcript")).font(theme.font(.section))
                         Spacer()
-                        if !narrow { tag(screen == .completed ? "speaker_result" : "preliminary", icon: screen == .completed ? "person.2" : "text.bubble") }
+
                     }
                     ForEach(displayedUtterances) { utterance in
                         transcriptRow(utterance, narrow: narrow, generous: generous)
@@ -388,7 +340,7 @@ struct PrototypeRoot: View {
                     if screen == .active {
                         HStack(spacing: 10) {
                             Image(systemName: "text.bubble")
-                            Text(Copy.text(paused ? "paused_preview" : "listening_preview"))
+                            Text(Copy.text("listening_preview"))
                         }.font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
                         Text(Copy.text("speaker_after_recording"))
                             .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
@@ -405,7 +357,7 @@ struct PrototypeRoot: View {
     }
 
     private func processingScreen(narrow: Bool) -> some View {
-        let stages = ["Saving", "Identifying speakers", "Transcribing", "Finalizing"]
+        let stages = processingStages
         return VStack(alignment: .leading, spacing: 24) {
             Label(Copy.text("Preparing your transcript"), systemImage: "hourglass")
                 .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
@@ -426,7 +378,7 @@ struct PrototypeRoot: View {
     private func meetingHeading(narrow: Bool, generous: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                tag(screen == .completed ? "completed" : paused ? "paused" : "Recording", icon: screen == .completed ? "checkmark.circle" : "record.circle")
+                tag(screen == .completed ? "completed" : "Recording", icon: screen == .completed ? "checkmark.circle" : "record.circle")
                 Spacer()
                 Text(screen == .active && (options.exportPath == nil || options.replayTime != nil) ? elapsedReplayText : completedDurationText)
                     .font(.system(size: 17, weight: .medium, design: .monospaced))
@@ -438,10 +390,6 @@ struct PrototypeRoot: View {
                 Label(Copy.text("In-room meeting"), systemImage: "person.2")
                 if !narrow { Text("•"); Text(displayedSession.time) }
             }.font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-            HStack(spacing: 8) {
-                tag(saveAudio ? "audio_and_text" : "text_only", icon: "lock")
-                if !narrow { tag("local_only", icon: "ipad") }
-            }
             if screen == .completed {
                 Text(Copy.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
                     .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
@@ -483,17 +431,17 @@ struct PrototypeRoot: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
-                    Text(screen == .completed ? PichiLocalization.format("Speaker %lld", Int64(utterance.owner ? 1 : 2)) : Copy.text("Microphone"))
+                    Text(screen == .completed ? selectedSessionID == 1 ? Copy.text("Unknown speaker") : PichiLocalization.format("Speaker %lld", Int64(utterance.owner ? 1 : 2)) : Copy.text("Microphone"))
                         .font(theme.font(.caption, weight: .semibold))
-                        .foregroundStyle(screen == .completed && utterance.owner ? theme.accent : theme.color("secondaryText"))
+                        .foregroundStyle(screen == .completed && selectedSessionID != 1 && utterance.owner ? theme.accent : theme.color("secondaryText"))
                     if narrow { Text(utterance.time).font(.system(size: 12, design: .monospaced)).foregroundStyle(theme.color("tertiaryText")) }
                     if screen == .completed && !narrow {
                         Spacer()
                         Button { showCopy = true } label: { Label(Copy.text("action.edit"), systemImage: "pencil").font(theme.font(.caption)).frame(minHeight: 44) }
-                            .buttonStyle(.plain).foregroundStyle(theme.accent)
-                        if saveAudio {
+                            .buttonStyle(.plain).foregroundStyle(theme.accent).disabled(true)
+                        if displayedMeetingHasAudio {
                             Button { showCopy = true } label: { Label(Copy.text("Audio"), systemImage: "play.fill").font(theme.font(.caption)).frame(minHeight: 44) }
-                                .buttonStyle(.plain).foregroundStyle(theme.accent)
+                                .buttonStyle(.plain).foregroundStyle(theme.accent).disabled(true)
                         }
                     }
                 }
@@ -572,7 +520,9 @@ struct PrototypeRoot: View {
                 pageHeading("settings", subtitle: "settings_subtitle")
                 surface {
                     VStack(spacing: 20) {
-                        settingsDestination("models", detail: "models_subtitle", icon: "square.stack.3d.up", destination: .models)
+                        settingsDestination("Recording", detail: "recording_mobile_subtitle", icon: "waveform", destination: .recordingSettings)
+                        divider
+                        settingsDestination("Voice Engine", detail: "models_subtitle", icon: "square.stack.3d.up", destination: .models)
                         divider
                         settingsDestination("privacy", detail: "privacy_subtitle", icon: "hand.raised", destination: .privacy)
                     }
@@ -596,6 +546,39 @@ struct PrototypeRoot: View {
         }.buttonStyle(.plain)
     }
 
+    private func recordingSettingsScreen(narrow: Bool) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                pageHeading("Recording", subtitle: "recording_mobile_subtitle")
+                caption("Audio sources")
+                surface {
+                    VStack(alignment: .leading, spacing: 18) {
+                        infoLine("person.2", title: "Meeting type", value: "In-room")
+                        divider
+                        infoLine("mic", title: "Microphone", value: "built_in_mic")
+                    }
+                }
+                caption("Speaker labels")
+                surface {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(Copy.text("Identify each speaker")).font(theme.font(.section))
+                        Text(Copy.text("Speaker labels are added after recording."))
+                            .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+                        Text(Copy.text("Not downloaded"))
+                            .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+                        DisclosureGroup(Copy.text("Model details")) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Nemotron 3 Diarization · ~200 MB")
+                                Text(Copy.text("speaker_model_mobile_detail"))
+                            }.font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+                                .padding(.top, 8)
+                        }
+                    }
+                }
+            }.frame(maxWidth: 760).padding(narrow ? 20 : 32).frame(maxWidth: .infinity)
+        }
+    }
+
     private func privacyScreen(narrow: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -604,29 +587,24 @@ struct PrototypeRoot: View {
                     VStack(alignment: .leading, spacing: 20) {
                         settingRow("save_audio", description: "save_audio_detail", icon: "waveform", value: $saveAudio, narrow: narrow)
                         divider
-                        Label(Copy.text(saveAudio ? "audio_and_text_detail" : "text_only_detail"), systemImage: "lock.shield")
+                        Text(Copy.text(saveAudio ? "audio_and_text_detail" : "text_only_detail"))
                             .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 surface {
-                    VStack(alignment: .leading, spacing: 20) {
-                        settingRow("recognize_speakers", description: "recognize_speakers_detail", icon: "person.2", value: $diarization, narrow: narrow)
-                        divider
-                        HStack(alignment: .top, spacing: 16) {
-                            tileIcon("person.crop.circle")
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text(Copy.text("my_voice")).font(theme.font(.section))
-                                Text(Copy.text("my_voice_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                                Button { showEnrollment = true } label: { Label(Copy.text("setup_voice"), systemImage: "arrow.right").font(theme.font(.body)).frame(minHeight: 44) }
-                                    .buttonStyle(.plain).foregroundStyle(theme.accent)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(Copy.text("Keep recordings")).font(theme.font(.section))
+                        Text(Copy.text("Includes past meetings. Transcripts are always kept."))
+                            .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+                        Picker(Copy.text("Keep audio"), selection: $retentionPolicy) {
+                            ForEach(MeetingAudioRetentionPolicy.allCases, id: \.self) { policy in
+                                Text(Copy.text(policy.displayName)).tag(policy)
                             }
-                            Spacer(minLength: 0)
-                        }
+                        }.pickerStyle(.menu).labelsHidden().frame(minHeight: 44)
+                            .accessibilityLabel(Copy.text("Audio retention"))
                     }
                 }
-                surface { settingRow("add_place", description: "add_place_detail", icon: "location", value: $includePlace, narrow: narrow) }
-                Text(Copy.text("privacy_mock_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
             }.frame(maxWidth: 760).padding(narrow ? 20 : 32).frame(maxWidth: .infinity)
         }
     }
@@ -634,37 +612,22 @@ struct PrototypeRoot: View {
     private func modelsScreen(narrow: Bool) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                pageHeading("models", subtitle: "models_subtitle")
-                surface {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Label(Copy.text("benchmark_needed"), systemImage: "ipad").font(theme.font(.section))
-                        Text(Copy.text("benchmark_detail")).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
-                    }
-                }
+                pageHeading("Voice Engine", subtitle: "models_subtitle")
                 ForEach(data.speechModels) { model in
-                    modelCard(name: model.name, subtitle: model.detailKey, icon: model.symbol, language: model.languageKey, size: model.size)
-                }
-                Text(Copy.text("models_mock_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
-            }.frame(maxWidth: 760).padding(narrow ? 20 : 32).frame(maxWidth: .infinity)
-        }
-    }
-
-    private func modelCard(name: String, subtitle: String, icon: String, language: String, size: String) -> some View {
-        surface {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 16) {
-                    tileIcon(icon)
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(name).font(theme.font(.title))
-                        Text(Copy.text(language)).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+                    surface {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(model.name).font(theme.font(.title))
+                            Text(Copy.text(model.languageKey)).font(theme.font(.caption))
+                                .foregroundStyle(theme.color("secondaryText"))
+                            Text(model.size).font(theme.font(.caption))
+                                .foregroundStyle(theme.color("secondaryText"))
+                            Text(Copy.text("Not downloaded")).font(theme.font(.caption))
+                                .foregroundStyle(theme.color("secondaryText"))
+                            secondaryButton("Download", icon: "arrow.down.circle") {}.disabled(true)
+                        }
                     }
-                    Spacer()
                 }
-                Text(Copy.text(subtitle)).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
-                Text(size).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                HStack { tag("candidate", icon: "flask"); Spacer() }
-                secondaryButton("device_validation", icon: "arrow.down.circle") { showValidation = true }
-            }
+            }.frame(maxWidth: 760).padding(narrow ? 20 : 32).frame(maxWidth: .infinity)
         }
     }
 
@@ -799,31 +762,4 @@ struct PrototypeRoot: View {
         }
     }
 
-    private func sheetHeader(_ key: String, action: @escaping () -> Void) -> some View {
-        HStack {
-            Text(Copy.text(key)).font(theme.font(.title))
-            Spacer()
-            iconButton("xmark", label: "close", action: action)
-        }.padding(20)
-    }
-
-    private var enrollmentSheet: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sheetHeader("my_voice") { showEnrollment = false }
-            ScrollView {
-              VStack(alignment: .leading, spacing: 24) {
-                tileIcon("person.wave.2")
-                Text(Copy.text("enrollment_title")).font(theme.font(.display))
-                Text(Copy.text("enrollment_detail")).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
-                surface { Text(Copy.text("enrollment_phrase")).font(theme.font(.title)).lineSpacing(6) }
-                Text(Copy.text("enrollment_privacy")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                primaryButton("enrollment_continue", icon: "checkmark") { showEnrollment = false }
-                Text(Copy.text("enrollment_mock")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
-              }.padding(24)
-            }
-        }
-        .frame(minWidth: 320, idealWidth: 580, maxWidth: 580, minHeight: 400, idealHeight: 700)
-        .background(theme.color("windowBackground"))
-        .foregroundStyle(theme.color("primaryText"))
-    }
 }

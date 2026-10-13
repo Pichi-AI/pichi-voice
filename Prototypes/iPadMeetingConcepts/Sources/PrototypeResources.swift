@@ -118,7 +118,7 @@ struct SyntheticFixtures: Decodable {
         let title: String
         let time: String
         let duration: String
-        let place: String
+        let hasAudio: Bool
     }
     struct SpeechModel: Decodable, Identifiable {
         let id: String

@@ -959,13 +959,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "You decide what remains after a conversation."
+            "value": "Audio storage and retention."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Вы решаете, что остаётся после разговора."
+            "value": "Сохранение аудио и срок хранения."
           }
         }
       }
@@ -993,13 +993,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "On by default. Turn off to keep text only."
+            "value": "Enabled by default. Applies to new meetings."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Включено по умолчанию. Выключите, чтобы сохранять только текст."
+            "value": "Включено по умолчанию. Применяется к новым встречам."
           }
         }
       }
@@ -1503,13 +1503,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Speech models and privacy settings."
+            "value": "Recording, speech recognition and privacy."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Модели распознавания и параметры приватности."
+            "value": "Запись, распознавание речи и приватность."
           }
         }
       }
@@ -1850,6 +1850,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Закрыть прототип"
+          }
+        }
+      }
+    },
+    "recording_mobile_subtitle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone recording and speaker labels."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись с микрофона и метки говорящих."
+          }
+        }
+      }
+    },
+    "speaker_model_mobile_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloads once (about 200 MB) and stays on this device. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загружается один раз (около 200 МБ) и хранится на этом устройстве. Для расшифровки Parakeet нужна эта модель; GigaAM может завершить расшифровку без определения участников."
           }
         }
       }

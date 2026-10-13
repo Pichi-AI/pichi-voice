@@ -52,6 +52,7 @@ struct PrototypeOptions {
 
 #if os(macOS)
 import AppKit
+import Combine
 
 /// Native preview controls stay outside the simulated device canvas.
 /// One stable root preserves meeting/navigation state while its logical size changes.
@@ -59,9 +60,15 @@ import AppKit
 final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegate, NSWindowDelegate {
     @Published private(set) var canvasSize: CGSize
     @Published private(set) var isKeyWindow = false
+    let replay = MeetingLiveReplayController()
     private weak var window: NSWindow?
     private let landscapeSize: CGSize
     private static let rotateItem = NSToolbarItem.Identifier("prototype.rotate")
+    private static let playbackItem = NSToolbarItem.Identifier("prototype.playback")
+    private static let restartItem = NSToolbarItem.Identifier("prototype.restart")
+    private weak var playbackItem: NSToolbarItem?
+    private weak var restartItem: NSToolbarItem?
+    private var replayObservation: AnyCancellable?
 
     init(size: CGSize) {
         canvasSize = size
@@ -97,6 +104,13 @@ final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegat
         orientationItem.submenu = orientationMenu
         menu.addItem(orientationItem)
         NSApp.mainMenu = menu
+        replayObservation = replay.$isPlaying.combineLatest(replay.$hasActiveMeetingPreview, replay.$isFinished)
+            .sink { [weak self] playing, active, finished in
+                self?.playbackItem?.label = Copy.text(playing ? "demo_pause" : "demo_play")
+                self?.playbackItem?.image = NSImage(systemSymbolName: playing ? "pause" : "play", accessibilityDescription: nil)
+                self?.playbackItem?.isEnabled = active && !finished
+                self?.restartItem?.isEnabled = active
+            }
         fitWindow()
     }
 
@@ -115,6 +129,16 @@ final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegat
         fitWindow()
     }
 
+    @objc private func togglePlayback(_ sender: Any?) {
+        guard replay.hasActiveMeetingPreview, !replay.isFinished else { return }
+        Task { if replay.isPlaying { await replay.pause() } else { await replay.resume() } }
+    }
+
+    @objc private func restartPlayback(_ sender: Any?) {
+        guard replay.hasActiveMeetingPreview else { return }
+        Task { await replay.restart() }
+    }
+
     private func fitWindow() {
         guard let window, let screen = window.screen ?? NSScreen.main else { return }
         let available = screen.visibleFrame.insetBy(dx: 20, dy: 20)
@@ -127,7 +151,7 @@ final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegat
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.rotateItem]
+        [.flexibleSpace, Self.playbackItem, Self.restartItem, Self.rotateItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -136,13 +160,30 @@ final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegat
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        guard identifier == Self.rotateItem else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = Copy.text("preview_rotate")
-        item.toolTip = Copy.text("preview_orientation")
-        item.image = NSImage(systemSymbolName: "rotate.right", accessibilityDescription: item.label)
         item.target = self
-        item.action = #selector(rotate(_:))
+        switch identifier {
+        case Self.rotateItem:
+            item.label = Copy.text("preview_rotate")
+            item.toolTip = Copy.text("preview_orientation")
+            item.image = NSImage(systemSymbolName: "rotate.right", accessibilityDescription: item.label)
+            item.action = #selector(rotate(_:))
+        case Self.playbackItem:
+            item.autovalidates = false
+            item.label = Copy.text("demo_play")
+            item.image = NSImage(systemSymbolName: "play", accessibilityDescription: item.label)
+            item.action = #selector(togglePlayback(_:))
+            item.isEnabled = false
+            playbackItem = item
+        case Self.restartItem:
+            item.autovalidates = false
+            item.label = Copy.text("replay_demo")
+            item.image = NSImage(systemSymbolName: "arrow.counterclockwise", accessibilityDescription: item.label)
+            item.action = #selector(restartPlayback(_:))
+            item.isEnabled = false
+            restartItem = item
+        default: return nil
+        }
         return item
     }
 
@@ -159,7 +200,7 @@ private struct PrototypeNativeCanvas: View {
         GeometryReader { geometry in
             let size = preview.canvasSize
             let scale = min(1, geometry.size.width / size.width, geometry.size.height / size.height)
-            PrototypeRoot(options: options)
+            PrototypeRoot(options: options, replay: preview.replay)
                 .frame(width: size.width, height: size.height)
                 .scaleEffect(scale)
                 .frame(width: size.width * scale, height: size.height * scale)
@@ -177,12 +218,11 @@ struct PrototypeApp {
     @MainActor static func main() {
         let options = PrototypeOptions()
         let app = NSApplication.shared
-        let view = PrototypeRoot(options: options)
-            .frame(width: options.width, height: options.height)
-            .environment(\.locale, Locale(identifier: options.language))
-            .environment(\.colorScheme, options.dark ? .dark : .light)
-
         if let exportPath = options.exportPath {
+            let view = PrototypeRoot(options: options)
+                .frame(width: options.width, height: options.height)
+                .environment(\.locale, Locale(identifier: options.language))
+                .environment(\.colorScheme, options.dark ? .dark : .light)
             // Offscreen view render: useful for concept comparison, not a device screenshot.
             // ImageRenderer omits AppKit-backed scroll views. Attach the hosting view to
             // an offscreen native window and cache its complete view tree instead.

@@ -9,6 +9,7 @@ final class MeetingLiveReplayController: ObservableObject {
     @Published private(set) var isFinished = false
     @Published private(set) var currentTime: TimeInterval = 0
     @Published private(set) var delivery: Delivery = .partial
+    @Published var hasActiveMeetingPreview = false
 
     enum Delivery: String, Decodable { case partial, buffered }
 
@@ -190,8 +191,7 @@ struct PrototypeLiveTranscriptView: View {
             HStack(spacing: 12) {
                 Text(PichiLocalization.text("Live transcript", locale: locale)).font(theme.font(.section))
                 Spacer(minLength: 0)
-                Text(Copy.text("live_demo"))
-                    .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+
             }
             if rows.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -205,26 +205,6 @@ struct PrototypeLiveTranscriptView: View {
                 MeetingLiveBubbleScrollList(rows: rows, documentStyle: true)
                     .environment(\.theme, PrototypeCaptionTheme(theme))
                     .frame(minHeight: 120, maxHeight: .infinity)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text(Copy.text(rows.isEmpty ? "live_demo_empty" : replay.delivery == .buffered ? "buffered_demo" : replay.hasPartial ? "live_partial" : "live_committed"))
-                    .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: compact ? 12 : 16) {
-                    Button {
-                        Task { if replay.isPlaying { await replay.pause() } else { await replay.resume() } }
-                    } label: {
-                        Label(Copy.text(replay.isPlaying ? "demo_pause" : "demo_play"), systemImage: replay.isPlaying ? "pause" : "play")
-                            .font(theme.font(.caption)).frame(minHeight: 44)
-                    }
-                    .disabled(!replay.isAvailable || replay.isFinished)
-                    Spacer(minLength: 0)
-                    Button { Task { await replay.restart() } } label: {
-                        Label(Copy.text("replay_demo"), systemImage: "arrow.counterclockwise")
-                            .font(theme.font(.caption)).frame(minHeight: 44)
-                    }.disabled(!replay.isAvailable)
-                }
-                .buttonStyle(.plain).foregroundStyle(theme.accent)
             }
         }
     }
