@@ -522,8 +522,7 @@ struct SettingsView: View {
                                 Button("Check for Updates") {
                                     self.updater.checkForUpdatesManually()
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
+                                .buttonStyle(AccentButtonStyle(compact: true))
                                 .controlSize(.regular)
                                 .disabled(!AppBrand.updatesEnabled || self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
 
@@ -647,8 +646,7 @@ struct SettingsView: View {
                                         } label: {
                                             Label("Grant Access", systemImage: "mic.fill")
                                         }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(self.theme.palette.accent)
+                                        .buttonStyle(AccentButtonStyle(compact: true))
                                         .controlSize(.regular)
                                     } else if self.asr.micStatus == .denied {
                                         Button {
@@ -1043,8 +1041,7 @@ struct SettingsView: View {
                                     Button("Open Accessibility Settings") {
                                         self.openAccessibilitySettings()
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(self.theme.palette.accent)
+                                    .buttonStyle(AccentButtonStyle(compact: true))
                                     .controlSize(.regular)
                                 }
 
@@ -2020,8 +2017,7 @@ struct SettingsView: View {
                 Button(action: self.exportBackup) {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(self.theme.palette.accent)
+                .buttonStyle(AccentButtonStyle(compact: true))
                 .controlSize(.regular)
 
                 Button(action: self.importBackup) {

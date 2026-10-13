@@ -22,6 +22,55 @@ struct UIContrastTests {
             configuration.label.foregroundStyle(.white)
         }
     }
+    @MainActor
+    private final class ConstructionObservations {
+        var roles = [ButtonRole?]()
+        var enabled = [Bool]()
+        var trigger: (() -> Void)?
+        var activations = 0
+    }
+    private struct ConstructionInspectionStyle: PrimitiveButtonStyle {
+        let observations: ConstructionObservations
+        @Environment(\.isEnabled) private var isEnabled
+        func makeBody(configuration: Configuration) -> some View {
+            self.observations.roles.append(configuration.role)
+            self.observations.enabled.append(self.isEnabled)
+            self.observations.trigger = configuration.trigger
+            // Materialize the style body. A transparent configuration.label
+            // identity is elided by the nonactivating image renderer.
+            return configuration.label.padding(4).background(.yellow)
+        }
+    }
+
+    @MainActor
+    static func verifyConstruction() {
+        if #available(macOS 26, *) {
+            for role: ButtonRole? in [nil, .cancel, .destructive] {
+                for enabled in [false, true] {
+                    let observations = ConstructionObservations()
+                    let button = FluidGlassProminentActionStyle.pairedLabelButton(role: role, foreground: .black, action: { observations.activations += 1 }) {
+                        Label("Native construction", systemImage: "xmark")
+                    }
+                    .buttonStyle(ConstructionInspectionStyle(observations: observations))
+                    .disabled(!enabled)
+                    let renderer = ImageRenderer(content: button.padding(12).background(.white).appTheme(.light))
+                    precondition(renderer.cgImage != nil, "Construction renderer must produce an image")
+                    precondition(!observations.roles.isEmpty && observations.roles.allSatisfy { $0 == role }, "Production Button preserves native role")
+                    precondition(!observations.enabled.isEmpty && observations.enabled.allSatisfy { $0 == enabled }, "Production Button preserves enabled environment")
+                    precondition(observations.activations == 0, "Constructing/rendering a native Button never invokes its action")
+                    if enabled {
+                        // Configuration.trigger forwards the actual Button action.
+                        // It intentionally bypasses input handling, so disabled
+                        // physical/AX presses remain the parent's native E2E check.
+                        precondition(observations.trigger != nil)
+                        observations.trigger?()
+                        precondition(observations.activations == 1, "Native trigger forwards the supplied action exactly once")
+                    }
+                }
+            }
+            print("Actual native Button construction: 6 role/enabled checks and 3 enabled trigger-forwarding checks passed")
+        }
+    }
     static func components(_ color: Color) -> [Double] {
         let rgb = NSColor(color).usingColorSpace(.sRGB)!
         return [Double(rgb.redComponent), Double(rgb.greenComponent), Double(rgb.blueComponent)]
@@ -140,6 +189,16 @@ struct UIContrastTests {
                                 directory: directory, expectedForeground: foreground, labelOnly: true)
                             try self.verify(CopyToastFixture(), name: "toast-\(suffix)", theme: theme, scheme: scheme,
                                 textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
+                            for (roleName, control) in [
+                                ("microphone", AnyView(MicrophonePermissionFixture())),
+                                ("accessibility", AnyView(AccessibilityPermissionFixture())),
+                                ("backup", AnyView(BackupPrimaryActionFixture())),
+                                ("updates", AnyView(UpdatePrimaryActionFixture())),
+                            ] {
+                                try self.verify(control, name: "settings-\(roleName)-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
+                            }
+                            actionChecks += 4
                             if #available(macOS 26, *) {
                                 // Exercise the real production Button constructor, not
                                 // the fallback style. An inherited white foreground
@@ -154,6 +213,26 @@ struct UIContrastTests {
                                 try self.verify(button, name: "native-label-boundary-\(suffix)", theme: theme, scheme: scheme,
                                     textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
                                 actionChecks += 1
+                                let secondary = SecondaryGlassLabelFixture(role: nil, tone: nil)
+                                    .buttonStyle(InheritedWhiteInkRenderer())
+                                    .padding(14)
+                                    .background(theme.palette.elevatedCardBackground)
+                                try self.verify(secondary, name: "secondary-label-boundary-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+                                    expectedForeground: theme.palette.primaryText, labelOnly: true)
+                                let destructive = SecondaryGlassLabelFixture(role: .destructive, tone: nil)
+                                    .buttonStyle(InheritedWhiteInkRenderer()).padding(14)
+                                    .background(theme.palette.elevatedCardBackground)
+                                try self.verify(destructive, name: "secondary-destructive-label-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+                                    expectedForeground: theme.palette.primaryText, labelOnly: true)
+                                let tone = SecondaryGlassLabelFixture(role: .destructive, tone: .red)
+                                    .buttonStyle(InheritedWhiteInkRenderer()).padding(14)
+                                    .background(theme.palette.elevatedCardBackground)
+                                try self.verify(tone, name: "secondary-tone-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+                                    expectedForeground: .red, labelOnly: true, requiredContrast: nil)
+                                actionChecks += 3
                             }
                             // Explicit semantic tones and live recording intentionally
                             // retain their existing white ink, independently of the accent.
@@ -173,6 +252,7 @@ struct UIContrastTests {
         }
         print("Actual delete, active badge and metric foreground: \(checks) native rendering checks passed")
         print("Actual fallback actions, toast and preserved semantic ink: \(actionChecks) rendering checks passed")
+        self.verifyConstruction()
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }

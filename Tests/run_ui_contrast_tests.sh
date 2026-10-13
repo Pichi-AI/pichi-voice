@@ -33,11 +33,32 @@ explore = snippet('Sources/Fluid/UI/ReleaseHighlightsView.swift',
                   '            }\n            .padding(.top, 18)')
 toast = snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
                 '                Text("Copied!")', '                    .padding()\n')
+settings = 'Sources/Fluid/UI/SettingsView.swift'
+microphone = snippet(settings, '                                        Button {\n                                            self.asr.requestMicAccess()',
+                     '                                    } else if self.asr.micStatus == .denied {')
+accessibility = snippet(settings, '                                    Button("Open Accessibility Settings") {',
+                        '                                }\n\n                                self.instructionsBox(')
+backup = snippet(settings, '                Button(action: self.exportBackup) {',
+                 '                Button(action: self.importBackup) {')
+updates = snippet(settings, '                                Button("Check for Updates") {',
+                  '                                Button("Release Notes") {')
+for control in [microphone, accessibility, backup, updates]:
+    assert control.count('.buttonStyle(AccentButtonStyle(compact: true))') == 1
+    assert '.buttonStyle(.borderedProminent)' not in control
 # Accessibility environment values are read-only in this SDK. These additional
 # fixtures select the EXACT production fallback ButtonStyle directly; this is
 # fallback evidence, never a claim that native glass was rasterized.
 glass = Path('Sources/Fluid/Theme/Components/FluidGlassControls.swift').read_text()
 assert 'content.buttonStyle(AccentButtonStyle(tone: self.tone))' in glass
+secondary = glass[glass.index('struct FluidGlassSecondaryActionStyle:'):glass.index('/// Native glass replaces an inherited foreground')]
+assert 'content.buttonStyle(FluidGlassSecondaryActionStyle(tone: self.tone))' in glass
+assert '.buttonStyle(.glass)' in secondary and '.buttonStyle(.glassProminent)' not in secondary
+assert '.tint(.clear)' in secondary, 'Secondary glass must override the inherited accent tint'
+assert 'role: configuration.role' in secondary and 'action: configuration.trigger' in secondary
+assert 'Button(role: role, action: action)' in glass, 'Native Button must retain role and activation'
+foreground_lines = [line.strip() for line in secondary.splitlines() if line.strip().startswith('let foreground = ')]
+assert len(foreground_lines) == 1
+secondary_foreground = foreground_lines[0].replace('configuration.role', 'self.role')
 def fallback(control):
     assert control.count('.fluidGlassAction(prominent: true)') == 1
     return control.replace('.fluidGlassAction(prominent: true)', '.buttonStyle(AccentButtonStyle())')
@@ -69,6 +90,21 @@ with Path(sys.argv[1]).open('a') as output:
     output.write('struct CopyToastFixture: View {\n'
         '    @Environment(\\.theme) private var theme\n'
         '    var body: some View {\n' + toast + '\n    }\n}\n')
+    for name, control, dependencies in [
+        ('MicrophonePermissionFixture', microphone, 'private struct ASR { func requestMicAccess() {} }; private let asr = ASR()'),
+        ('AccessibilityPermissionFixture', accessibility, 'private func openAccessibilitySettings() {}'),
+        ('BackupPrimaryActionFixture', backup, 'private func exportBackup() {}'),
+        ('UpdatePrimaryActionFixture', updates, 'private struct Updater { let isCheckingForUpdates = false; let isUpdateInProgress = false; func checkForUpdatesManually() {} }; private let updater = Updater()'),
+    ]:
+        output.write('struct ' + name + ': View {\n    ' + dependencies + '\n'
+            '    var body: some View {\n' + control + '\n    }\n}\n')
+    output.write('struct SecondaryGlassLabelFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n'
+        '    let role: ButtonRole?\n    let tone: Color?\n'
+        '    var body: some View {\n        ' + secondary_foreground + '\n'
+        '        return FluidGlassProminentActionStyle.pairedLabelButton(role: self.role, foreground: foreground, action: {}) {\n'
+        '            Label("Remove file", systemImage: "xmark")\n'
+        '        }\n    }\n}\n')
 PY
 
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \

@@ -155,15 +155,33 @@ private struct FluidGlassActionModifier: ViewModifier {
                     .tint(self.tone ?? self.theme.palette.accent)
                     .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             } else {
-                content.buttonStyle(.glass).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
+                content.buttonStyle(FluidGlassSecondaryActionStyle(tone: self.tone))
+                    .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             }
         } else {
             if self.prominent {
                 content.buttonStyle(AccentButtonStyle(tone: self.tone))
             } else {
-                content.buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight))
+                content.buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight, foreground: self.tone ?? self.theme.palette.primaryText))
             }
         }
+    }
+}
+
+/// Secondary glass uses neutral material, independently of the inherited accent
+/// tint. Keep its theme/semantic ink inside the native button's actual label.
+@available(macOS 26, *)
+struct FluidGlassSecondaryActionStyle: PrimitiveButtonStyle {
+    let tone: Color?
+    @Environment(\.theme) private var theme
+
+    func makeBody(configuration: Configuration) -> some View {
+        let foreground = self.tone ?? self.theme.palette.primaryText
+        return FluidGlassProminentActionStyle.pairedLabelButton(role: configuration.role,
+                                                               foreground: foreground,
+                                                               action: configuration.trigger) { configuration.label }
+            .buttonStyle(.glass)
+            .tint(.clear)
     }
 }
 
