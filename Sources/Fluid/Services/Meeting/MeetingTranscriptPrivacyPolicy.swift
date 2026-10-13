@@ -30,10 +30,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 copy.speakers[i].identityCandidates[j].source = try await redactor.redact(copy.speakers[i].identityCandidates[j].source)
             }
         }
-        for i in copy.transcriptSegments.indices {
-            copy.transcriptSegments[i].text = try await redactor.redact(copy.transcriptSegments[i].text)
-            copy.transcriptSegments[i].originalText = nil
-        }
+        copy.transcriptSegments = try await self.redactedSegments(copy.transcriptSegments, using: redactor)
         for i in copy.events.indices {
             if let detail = copy.events[i].detail { copy.events[i].detail = try await redactor.redact(detail) }
         }
@@ -46,13 +43,11 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         return copy
     }
 
-    static func redactedBatch(_ batch: MeetingPCMTranscriptBatch, using redactor: any TranscriptTextRedacting) async throws -> MeetingPCMTranscriptBatch {
+    static func redactedBatch(_ batch: MeetingPCMTranscriptBatch, using redactor: any TranscriptTextRedacting,
+                              contextPrefixes: [MeetingAudioTrackID: String] = [:]) async throws -> MeetingPCMTranscriptBatch {
         var copy = batch
         if let source = copy.sourceTrack { copy.sourceTrack?.sourceDisplayName = try await redactor.redact(source.sourceDisplayName) }
-        for i in copy.segments.indices {
-            copy.segments[i].text = try await redactor.redact(copy.segments[i].text)
-            copy.segments[i].originalText = nil
-        }
+        copy.segments = try await self.redactedSegments(copy.segments, using: redactor, contextPrefixes: contextPrefixes)
         for i in copy.speakers.indices {
             copy.speakers[i].displayName = try await redactor.redact(copy.speakers[i].displayName)
             copy.speakers[i].diarizationEmbedding = nil
@@ -63,52 +58,122 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         return copy
     }
 
+    /// Preserve bounded linguistic context across adjacent utterances, then
+    /// project replacements back to each original segment. Context is inference
+    /// input only; it cannot add text, change timing, or enter a checkpoint.
+    private static func redactedSegments(_ segments: [MeetingTranscriptSegment], using redactor: any TranscriptTextRedacting,
+                                         contextPrefixes: [MeetingAudioTrackID: String] = [:]) async throws -> [MeetingTranscriptSegment] {
+        var copy = segments
+        let groups = Dictionary(grouping: segments.indices) { segments[$0].sourceTrackID }
+        for (trackID, indices) in groups {
+            let ordered = indices.sorted { a, b in
+                segments[a].start == segments[b].start ? a < b : segments[a].start < segments[b].start
+            }
+            let fragments = ordered.map { TextFragment(key: $0, text: segments[$0].text) }
+            let projected = try await self.projectedTexts(fragments, prefix: contextPrefixes[trackID] ?? "", separator: "\n", using: redactor)
+            for index in ordered {
+                copy[index].text = projected[index] ?? segments[index].text
+                copy[index].originalText = nil
+            }
+        }
+        return copy
+    }
+
+    private struct TextFragment {
+        let key: Int
+        let text: String
+    }
+
+    private static func projectedTexts(_ fragments: [TextFragment], prefix: String, separator: String = " ",
+                                       using redactor: any TranscriptTextRedacting) async throws -> [Int: String] {
+        guard prefix.utf16.count <= MeetingTranscriptPrivacyContext.maximumContextUTF16 else {
+            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+        }
+        var rangesByFragment: [Int: [TranscriptRedactedSpan]] = [:]
+        var cursor = 0
+        while cursor < fragments.count {
+            try Task.checkCancellation()
+            var text = cursor == 0 ? prefix : ""
+            var ranges: [(Int, NSRange)] = []
+            var end = cursor
+            while end < fragments.count {
+                let fragment = fragments[end]
+                let joiner = text.isEmpty ? "" : separator
+                guard text.utf16.count + joiner.utf16.count + fragment.text.utf16.count <= 60_000 else { break }
+                text += joiner
+                let range = NSRange(location: text.utf16.count, length: fragment.text.utf16.count)
+                text += fragment.text
+                ranges.append((fragment.key, range)); end += 1
+            }
+            guard end > cursor else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+            let output = try await redactor.redactWithSpans(text)
+            try Task.checkCancellation()
+            try self.validate(output, for: text)
+            for (key, range) in ranges {
+                for span in output.spans {
+                    let intersection = NSIntersectionRange(span.range, range)
+                    guard intersection.length > 0 else { continue }
+                    rangesByFragment[key, default: []].append(.init(
+                        range: NSRange(location: intersection.location - range.location, length: intersection.length),
+                        replacement: span.replacement))
+                }
+            }
+            if end == fragments.count { break }
+            // The overlap is bounded by the next inference window's character
+            // admission and keeps context for entities crossing window edges.
+            cursor = max(cursor + 1, end - 32)
+        }
+        var result: [Int: String] = [:]
+        for fragment in fragments {
+            if let spans = rangesByFragment[fragment.key], !spans.isEmpty {
+                result[fragment.key] = try self.replacing(fragment.text, spans: spans)
+            }
+        }
+        return result
+    }
+
+    private static func validate(_ output: TranscriptTextRedaction, for input: String) throws {
+        let units = Array(input.utf16)
+        for span in output.spans {
+            guard span.range.location >= 0, span.range.length > 0,
+                  span.range.location <= units.count, span.range.length <= units.count - span.range.location,
+                  !span.replacement.isEmpty,
+                  span.range.location == 0 || !(0xDC00...0xDFFF).contains(units[span.range.location]),
+                  NSMaxRange(span.range) == units.count || !(0xDC00...0xDFFF).contains(units[NSMaxRange(span.range)]) else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+        }
+        // A generic transformer must not claim redacted text while supplying
+        // incomplete offsets that would publish raw canonical word/segment text.
+        guard try self.replacing(input, spans: output.spans) == output.text else {
+            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+        }
+    }
+
+    private static func replacing(_ input: String, spans: [TranscriptRedactedSpan]) throws -> String {
+        let ordered = spans.sorted { $0.range.location < $1.range.location }
+        var merged: [TranscriptRedactedSpan] = []
+        for span in ordered {
+            guard span.range.location >= 0, span.range.length > 0,
+                  span.range.location <= input.utf16.count, span.range.length <= input.utf16.count - span.range.location,
+                  !span.replacement.isEmpty else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+            if let previous = merged.last, NSIntersectionRange(previous.range, span.range).length > 0 {
+                merged[merged.count - 1] = .init(range: NSUnionRange(previous.range, span.range), replacement: previous.replacement)
+            } else { merged.append(span) }
+        }
+        let output = NSMutableString(string: input)
+        for span in merged.reversed() { output.replaceCharacters(in: span.range, with: span.replacement) }
+        return output as String
+    }
+
     static func redactedEvidence(_ evidence: MeetingFinalTranscriptEvidence, using redactor: any TranscriptTextRedacting) async throws -> MeetingFinalTranscriptEvidence {
         var replacements: [String: String] = [:]
-        var rangesByUnit: [String: [TranscriptRedactedSpan]] = [:]
         let groups = Dictionary(grouping: evidence.units) { $0.analysisEpochID }
         for group in groups.values {
             let ordered = group.sorted { $0.analysisStart < $1.analysisStart }
-            var cursor = 0
-            while cursor < ordered.count {
-                var text = ""
-                var ranges: [(MeetingFinalTextUnit, NSRange)] = []
-                var end = cursor
-                while end < ordered.count {
-                    let unit = ordered[end]
-                    let separator = text.isEmpty ? "" : " "
-                    guard text.utf16.count + separator.utf16.count + unit.text.utf16.count <= 60_000 else { break }
-                    text += separator
-                    let range = NSRange(location: text.utf16.count, length: unit.text.utf16.count)
-                    text += unit.text
-                    ranges.append((unit, range)); end += 1
-                }
-                guard end > cursor else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
-                let output = try await redactor.redactWithSpans(text)
-                for (unit, range) in ranges {
-                    for span in output.spans {
-                        let intersection = NSIntersectionRange(span.range, range)
-                        guard intersection.length > 0 else { continue }
-                        let local = NSRange(location: intersection.location - range.location, length: intersection.length)
-                        let value = TranscriptRedactedSpan(range: local, replacement: span.replacement)
-                        if !(rangesByUnit[unit.id] ?? []).contains(value) { rangesByUnit[unit.id, default: []].append(value) }
-                    }
-                }
-                if end == ordered.count { break }
-                // Preserve context around boundaries without allowing unbounded input.
-                cursor = max(cursor + 1, end - 32)
-            }
-        }
-        for unit in evidence.units {
-            let ranges = (rangesByUnit[unit.id] ?? []).sorted { $0.range.location > $1.range.location }
-            guard !ranges.isEmpty else { continue }
-            let text = NSMutableString(string: unit.text)
-            var lastLocation = unit.text.utf16.count
-            for span in ranges where NSMaxRange(span.range) <= lastLocation {
-                text.replaceCharacters(in: span.range, with: span.replacement)
-                lastLocation = span.range.location
-            }
-            replacements[unit.id] = text as String
+            let fragments = ordered.indices.map { TextFragment(key: $0, text: ordered[$0].text) }
+            let projected = try await self.projectedTexts(fragments, prefix: "", using: redactor)
+            for (index, text) in projected { replacements[ordered[index].id] = text }
         }
         let units = evidence.units.map { unit in
             MeetingFinalTextUnit(id: unit.id, trackID: unit.trackID, analysisEpochID: unit.analysisEpochID,
@@ -120,5 +185,87 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                                                units: units, speakerActivity: evidence.speakerActivity,
                                                voiceProfiles: evidence.voiceProfiles,
                                                speakerSlotsContinueAcrossEpochs: evidence.speakerSlotsContinueAcrossEpochs)
+    }
+}
+
+/// One bounded context owner per frozen strict-memory attempt. The last segment
+/// waits for the next window's context instead of first publishing a possible
+/// entity fragment. Finish flushes it before the consumer's joined drain returns.
+/// This is fallible text detection, not a promise about every incomplete entity.
+actor MeetingTranscriptPrivacyContext {
+    nonisolated static let maximumContextUTF16 = 1_024
+    nonisolated static let maximumPendingUTF16 = 16_384
+    private let redactor: any TranscriptTextRedacting
+    private var trackID: MeetingAudioTrackID?
+    private var lastEnd: MeetingMediaTime?
+    private var prefix = ""
+    private var pending: MeetingTranscriptSegment?
+    private var pendingIsComplete = true
+    private var isProcessing = false
+    init(redactor: any TranscriptTextRedacting) { self.redactor = redactor }
+
+    func redact(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingPCMTranscriptBatch {
+        try Task.checkCancellation()
+        guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        isProcessing = true
+        defer { isProcessing = false }
+        let tracks = Set(batch.segments.map(\.sourceTrackID))
+        guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        let ordered = batch.segments.sorted { $0.start < $1.start }
+        let currentTrack = ordered.first?.sourceTrackID ?? batch.sourceTrack?.id
+        let sameTrack = currentTrack != nil && currentTrack == trackID
+        let forward = ordered.first.map { first in lastEnd.map { first.start.seconds + 0.001 >= $0.seconds } ?? true } ?? true
+        let continues = sameTrack && forward
+        if pending != nil, !ordered.isEmpty, !continues { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        let context = continues ? prefix : ""
+        guard let tail = ordered.last else {
+            return try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor)
+        }
+        guard tail.text.utf16.count <= Self.maximumPendingUTF16 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        var combined = batch
+        combined.segments = pending.map { [$0] + batch.segments } ?? batch.segments
+        combined.isComplete = combined.isComplete && pendingIsComplete
+        var safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(combined, using: redactor,
+            contextPrefixes: currentTrack.map { [$0: context] } ?? [:])
+        try Task.checkCancellation()
+        // A checkpoint receives all earlier complete segments, never this raw
+        // tail. Reusing its original ID later preserves normal store operations.
+        safe.segments.removeAll { $0.id == tail.id }
+        let published = combined.segments.filter { $0.id != tail.id }.sorted { $0.start < $1.start }
+        prefix = Self.suffix(([context] + published.map(\.text)).filter { !$0.isEmpty }.joined(separator: "\n"))
+        pending = tail; pending?.originalText = nil
+        pendingIsComplete = batch.isComplete
+        trackID = currentTrack; lastEnd = tail.end
+        return safe
+    }
+
+    func finish() async throws -> MeetingPCMTranscriptBatch? {
+        try Task.checkCancellation()
+        guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        guard let pending else { return nil }
+        isProcessing = true
+        defer { isProcessing = false }
+        let batch = MeetingPCMTranscriptBatch(segments: [pending], isComplete: pendingIsComplete)
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor,
+            contextPrefixes: [pending.sourceTrackID: prefix])
+        try Task.checkCancellation()
+        self.pending = nil; prefix = ""; trackID = nil; lastEnd = nil
+        return safe
+    }
+
+    private nonisolated static func suffix(_ text: String) -> String {
+        // Character iteration prevents a UTF-16 budget cut from bisecting an
+        // emoji/name; drop a truncated leading word rather than inventing one.
+        var suffix = ""
+        var count = 0
+        for character in text.reversed() {
+            let width = String(character).utf16.count
+            guard count + width <= Self.maximumContextUTF16 else { break }
+            suffix.insert(character, at: suffix.startIndex); count += width
+        }
+        if count < text.utf16.count, let separator = suffix.firstIndex(where: { $0.isWhitespace }) {
+            suffix = String(suffix[suffix.index(after: separator)...])
+        }
+        return suffix
     }
 }

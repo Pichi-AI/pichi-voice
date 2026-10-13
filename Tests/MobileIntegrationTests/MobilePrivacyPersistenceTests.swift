@@ -16,6 +16,60 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativePIIAcrossSegmentsAndStrictWindowsBeforePersistence() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_MOBILE_INFERENCE_ASSETS"] else {
+            throw XCTSkip("Requires explicitly staged public privacy artifacts")
+        }
+        let models = URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("models/privacy", isDirectory: true)
+        let installed = models.appendingPathComponent(PichiTranscriptPrivacyModelStore.descriptor.id, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: installed.appendingPathComponent("model_int8.onnx").path) else {
+            throw XCTSkip("Stage public privacy model under models/privacy/rubert-tiny-news-int8")
+        }
+        let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: models))
+        try await privacy.prepare()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MeetingSessionStore(rootDirectory: root)
+        var original = fixture()
+        let track = try XCTUnwrap(original.audioTracks.first?.id)
+        func segment(_ text: String, _ start: Int64) -> MeetingTranscriptSegment {
+            .init(id: UUID(), start: .init(value: start, timescale: 1), end: .init(value: start + 1, timescale: 1),
+                  sourceTrackID: track, speakerID: nil, text: text, originalText: text, revision: 1,
+                  status: .final, overlap: .none, completeness: .complete)
+        }
+        original.transcriptSegments = [segment("телефон", 0), segment("273 55 11", 1),
+            segment("дата рождения", 2), segment("12 мая 1980", 3), segment("домашний адрес", 4),
+            segment("улица Примерная дом 12", 5), segment("метформин 500 мг", 6)]
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedCopy(session: original, using: privacy)
+        XCTAssertEqual(safe.transcriptSegments.map(\.id), original.transcriptSegments.map(\.id))
+        XCTAssertEqual(safe.transcriptSegments.map(\.start), original.transcriptSegments.map(\.start))
+        XCTAssertEqual(safe.transcriptSegments.last?.text, "метформин 500 мг")
+        try await store.create(safe)
+        let loadedValue = try await store.load(id: safe.id)
+        let loaded = try XCTUnwrap(loadedValue)
+        for value in ["273 55 11", "12 мая 1980", "улица Примерная дом 12", "Иван Тестов"] {
+            XCTAssertFalse(String(decoding: try MeetingTranscriptExporter.json(for: loaded), as: UTF8.self).contains(value))
+        }
+
+        // A possible first-half phone remains in bounded RAM, and both halves
+        // are filtered before any strict checkpoint/export can observe them.
+        let context = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let first = try await context.redact(.init(segments: [segment("телефон 8 999", 0)]))
+        XCTAssertTrue(first.segments.isEmpty)
+        let second = try await context.redact(.init(segments: [segment("123 45 67", 8), segment("метотрексат 15 мг", 9)]))
+        let tail = try await context.finish()
+        var strict = safe
+        strict.transcriptSegments = first.segments + second.segments + (tail?.segments ?? [])
+        try await store.save(strict)
+        let strictValue = try await store.load(id: strict.id)
+        let saved = try XCTUnwrap(strictValue)
+        XCTAssertEqual(saved.transcriptSegments.last?.text, "метотрексат 15 мг")
+        let json = String(decoding: try MeetingTranscriptExporter.json(for: saved), as: UTF8.self)
+        XCTAssertFalse(json.contains("8 999")); XCTAssertFalse(json.contains("123 45 67"))
+        XCTAssertTrue(saved.transcriptSegments.allSatisfy { $0.originalText == nil })
+        try await privacy.unload()
+    }
+
     func testStrictTranscriptPersistsAndExportsWithoutAudioOrOriginalPII() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

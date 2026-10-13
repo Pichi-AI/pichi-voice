@@ -5,12 +5,14 @@ final class MeetingMemoryProcessingAttempt {
     let request: MeetingBackendRequest
     let runtime: any MeetingParakeetNemotronRunning
     let redactor: (any TranscriptTextRedacting)?
+    let privacyContext: MeetingTranscriptPrivacyContext?
     let checkpoint: @MainActor (MeetingPCMTranscriptBatch) async throws -> Void
     var consumer: (any MeetingMemoryAudioConsuming)?
     init(request: MeetingBackendRequest, runtime: any MeetingParakeetNemotronRunning,
          redactor: (any TranscriptTextRedacting)?,
          checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) {
         self.request = request; self.runtime = runtime; self.redactor = redactor; self.checkpoint = checkpoint
+        self.privacyContext = redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) }
     }
 }
 
@@ -51,18 +53,19 @@ extension MeetingProcessingPipeline {
         let configuration = attempt.request.configuration
         let attemptID = attempt.request.attemptID
         let trackID = track.id
-        let redactor = attempt.redactor
+        let privacyContext = attempt.privacyContext
         let checkpoint = attempt.checkpoint
         let consumer = try Self.makeMemoryAudioConsumer(
             recognize: { samples, offset in
                 try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
                     var batch = try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration)
                     batch.sourceTrack = track
-                    if let redactor { return try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor) }
+                    if let privacyContext { return try await privacyContext.redact(batch) }
                     return batch
                 }
             },
             checkpoint: { batch in try await checkpoint(batch) },
+            finalize: { try await privacyContext?.finish() },
             failure: { _ in
                 // Neither provider errors nor transcript content cross into durable diagnostics.
                 eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: trackID,
