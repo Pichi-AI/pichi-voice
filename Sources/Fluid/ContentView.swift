@@ -2731,7 +2731,8 @@ struct ContentView: View {
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
         streamHandler: PrivateAIStreamHandler? = nil,
         benchmarkID: String? = nil,
-        stopSnapshot: DictationStopSnapshot? = nil
+        stopSnapshot: DictationStopSnapshot? = nil,
+        client: LLMClient = .shared
     ) async throws -> AITextProcessingResult {
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             throw MeetingModelResidencyError.busy
@@ -2742,6 +2743,9 @@ struct ContentView: View {
         let appInfo = stopSnapshot?.appInfo ?? self.recordingAppInfo ?? self.getCurrentAppInfo()
         let route: DictationProviderRoute
         if let stopSnapshot {
+            // Stop-time admission is immutable across ASR finalization. Never
+            // re-read credentials or re-verify against later preferences here.
+            guard stopSnapshot.usesAI else { throw AIProcessingError.noVerifiedProvider }
             route = stopSnapshot.route
         } else if let overrideProviderID, let overrideModel {
             route = DictationProviderRoute.resolve(
@@ -2755,6 +2759,11 @@ struct ContentView: View {
                 dictationSlot: dictationSlot,
                 appBundleID: appInfo.bundleId
             )
+        }
+        if stopSnapshot == nil {
+            guard DictationAIPostProcessingGate.isProviderConfigured(route: route, settings: SettingsStore.shared) else {
+                throw AIProcessingError.noVerifiedProvider
+            }
         }
         self.appBench(
             "ai_route_resolved elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - routeStartedAt) * 1000).rounded()))"
@@ -2941,7 +2950,7 @@ struct ContentView: View {
         let response: LLMClient.Response
         if enableStreaming {
             do {
-                response = try await LLMClient.shared.call(config)
+                response = try await client.call(config)
             } catch {
                 guard DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error, baseURL: config.baseURL) else {
                     self.appBench("ai_streaming_fallback_skipped reason=transport_or_cancel")
@@ -2965,10 +2974,10 @@ struct ContentView: View {
                 )
                 fallbackConfig.providerOptions = config.providerOptions
                 DictationPostProcessingService.configureInteractiveLocalRequest(&fallbackConfig)
-                response = try await LLMClient.shared.call(fallbackConfig)
+                response = try await client.call(fallbackConfig)
             }
         } else {
-            response = try await LLMClient.shared.call(config)
+            response = try await client.call(config)
         }
 
         // Log thinking if present (for debugging)

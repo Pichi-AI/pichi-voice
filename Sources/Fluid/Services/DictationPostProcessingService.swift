@@ -1,5 +1,7 @@
 import Foundation
 
+/// An operational route. Credentials come from an authoritative loaded snapshot;
+/// cached UI presentation must never authorize a request or a stopped dictation.
 struct DictationProviderRoute: Equatable {
     let providerID: String
     let providerKey: String
@@ -70,7 +72,7 @@ struct DictationProviderRoute: Equatable {
 
     private static func build(settings: SettingsStore, selectedProviderID: String, configuredModel: String?, credentialSnapshot: [String: String]? = nil) -> Self {
         let selectedModels = settings.selectedModelByProvider
-        let providerKeys = credentialSnapshot ?? settings.providerAPIKeys
+        let providerKeys = credentialSnapshot ?? settings.loadedProviderAPIKeys ?? [:]
 
         if let saved = settings.savedProviders.first(where: { $0.id == selectedProviderID }) {
             let key = "custom:\(saved.id)"
@@ -153,7 +155,7 @@ struct DictationProviderRoute: Equatable {
     static func resolve(settings: SettingsStore, providerID: String, model: String) -> Self {
         let trimmedProviderID = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        let providerKeys = settings.providerAPIKeys
+        let providerKeys = settings.loadedProviderAPIKeys ?? [:]
         if let saved = settings.savedProviders.first(where: { $0.id == trimmedProviderID }) {
             let key = "custom:\(saved.id)"
             return Self(
