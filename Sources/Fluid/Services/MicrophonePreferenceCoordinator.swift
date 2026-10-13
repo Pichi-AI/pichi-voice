@@ -334,10 +334,11 @@ final class MicrophonePreferenceCoordinator: ObservableObject {
         }
     }
 
-    func inputDeviceForCapture() -> AudioDevice.Device? {
+    func inputDeviceForCapture(excluding excludedUIDs: Set<String> = []) -> AudioDevice.Device? {
         self.inputDeviceForCapture(
             availableInputs: self.devices.listInputDevices(),
-            defaultInputUID: self.devices.defaultInputDevice()?.uid
+            defaultInputUID: self.devices.defaultInputDevice()?.uid,
+            excluding: excludedUIDs
         )
     }
 

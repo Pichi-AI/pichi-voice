@@ -720,7 +720,17 @@ final class ASRService: ObservableObject {
     /// Test seam replacing the lazily wired production owner so scope tests use fake providers.
     var meetingASRPreparationOwnerForTesting: MeetingASRPreparationOwner?
     var meetingCaptureResidencyParticipantForTesting: MeetingModelParticipant?
+    /// Fake capture hardware must use the same injected device policy for selection and notices,
+    /// rather than retaining synthetic identities in the app's shared preference coordinator.
+    var microphonePreferenceCoordinatorForTesting: MicrophonePreferenceCoordinator?
     #endif
+
+    private var microphonePreferences: MicrophonePreferenceCoordinator {
+        #if DEBUG
+        if let injected = self.microphonePreferenceCoordinatorForTesting { return injected }
+        #endif
+        return AppServices.shared.microphonePreferenceCoordinator
+    }
     var isRunningOrStarting: Bool {
         self.isRunning || self.isStarting
     }
@@ -890,7 +900,7 @@ final class ASRService: ObservableObject {
             return
         }
 
-        AppServices.shared.microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+        self.microphonePreferences.reconcileMicrophoneSelection(
             availableInputs: snapshot.0,
             defaultInputUID: snapshot.1
         )
@@ -993,9 +1003,12 @@ final class ASRService: ObservableObject {
         { [weak self] invalidation in
             Task { @MainActor in
                 await self?.handleDirectCaptureFormatInvalidation(invalidation)
+                self?.recoveryFormatInvalidationDidFinishForTesting?()
             }
         }
     }
+
+    var recoveryFormatInvalidationDidFinishForTesting: (@MainActor () -> Void)?
 
     func configureAudioRouteRecoveryForTesting(
         controller: DirectCoreAudioLifecycleController,
@@ -1929,11 +1942,14 @@ final class ASRService: ObservableObject {
     }
 
     private func resolvedInputDeviceForCapture(
-        availableInputs: [AudioDevice.Device] = AudioDevice.listInputDevices(),
-        defaultInputUID: String? = AudioDevice.getDefaultInputDevice()?.uid,
+        availableInputs: [AudioDevice.Device]? = nil,
+        defaultInputUID: String? = nil,
         excluding excludedUIDs: Set<String> = []
     ) -> AudioDevice.Device? {
-        return AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture(
+        guard let availableInputs else {
+            return self.microphonePreferences.inputDeviceForCapture(excluding: excludedUIDs)
+        }
+        return self.microphonePreferences.inputDeviceForCapture(
             availableInputs: availableInputs,
             defaultInputUID: defaultInputUID,
             excluding: excludedUIDs
@@ -2092,7 +2108,7 @@ final class ASRService: ObservableObject {
                 self.audioStartAttemptInputName = device.name
                 self.audioStartAttemptIsBluetooth = device.isBluetooth
                 self.audioStartAttemptIsInternalMicrophone = device.isUnavailableWhenClamshellClosed
-                AppServices.shared.microphonePreferenceCoordinator.reportResolvedSelection(
+                self.microphonePreferences.reportResolvedSelection(
                     uid: device.uid,
                     name: device.name
                 )
@@ -2488,9 +2504,9 @@ final class ASRService: ObservableObject {
     }
 
     private func handleInputDeviceAvailabilityChanged(deviceID: AudioObjectID?) {
-        let resolvedInput = AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture()
+        let resolvedInput = self.microphonePreferences.inputDeviceForCapture()
         let preparedDeviceID = self.directAudioLifecycleController.snapshot.deviceID
-        let confirmedUID = AppServices.shared.microphonePreferenceCoordinator.confirmedActiveInputUID
+        let confirmedUID = self.microphonePreferences.confirmedActiveInputUID
         let activeSelectionChanged = self.isRunning && resolvedInput?.uid != confirmedUID
         let preparedSelectionChanged = self.hasPreparedAudioCapture && resolvedInput?.id != preparedDeviceID
         guard activeSelectionChanged || preparedSelectionChanged else { return }
@@ -2606,7 +2622,7 @@ final class ASRService: ObservableObject {
         }
         guard self.isTerminating == false else { return }
 
-        let microphonePreferenceCoordinator = AppServices.shared.microphonePreferenceCoordinator
+        let microphonePreferenceCoordinator = self.microphonePreferences
         microphonePreferenceCoordinator.reconcileMicrophoneSelection(
             availableInputs: initialInputSnapshot.0,
             defaultInputUID: initialInputSnapshot.1
@@ -3233,7 +3249,7 @@ final class ASRService: ObservableObject {
                             outcome: "first_pcm"
                         )
                     }
-                    AppServices.shared.microphonePreferenceCoordinator.confirmActiveSelection(
+                    self.microphonePreferences.confirmActiveSelection(
                         uid: self.audioStartAttemptInputUID,
                         name: self.audioStartAttemptInputName
                     )
@@ -3382,7 +3398,7 @@ final class ASRService: ObservableObject {
             }
 
             guard wasCancelled == false else { return .failed }
-            AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+            self.microphonePreferences.markActiveSelectionUnavailable()
 
             // Provide user-friendly error feedback
             let nsError = error as NSError
@@ -3580,7 +3596,7 @@ final class ASRService: ObservableObject {
             return
         }
 
-        let microphonePreferenceCoordinator = AppServices.shared.microphonePreferenceCoordinator
+        let microphonePreferenceCoordinator = self.microphonePreferences
         let resolvedInput: AudioDevice.Device?
         if request.reconcilesInputSelection {
             resolvedInput = microphonePreferenceCoordinator.reconcileMicrophoneSelection(
@@ -4915,7 +4931,7 @@ final class ASRService: ObservableObject {
     @discardableResult
     private func setEngineInputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
         DebugLogger.shared.debug("setEngineInputDevice() - Binding input to device ID: \(deviceID)", source: "ASRService")
-        AppServices.shared.microphonePreferenceCoordinator.reportResolvedSelection(
+        self.microphonePreferences.reportResolvedSelection(
             uid: deviceUID,
             name: deviceName
         )
@@ -5505,7 +5521,7 @@ final class ASRService: ObservableObject {
             return false
         }
 
-        AppServices.shared.microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+        self.microphonePreferences.reconcileMicrophoneSelection(
             availableInputs: snapshot.0,
             defaultInputUID: snapshot.1
         )
@@ -5644,7 +5660,7 @@ final class ASRService: ObservableObject {
                     return
                 }
                 if readiness == .ready {
-                    AppServices.shared.microphonePreferenceCoordinator.confirmActiveSelection(
+                    self.microphonePreferences.confirmActiveSelection(
                         uid: self.audioStartAttemptInputUID,
                         name: self.audioStartAttemptInputName
                     )
@@ -5708,7 +5724,7 @@ final class ASRService: ObservableObject {
         guard request.generation == self.audioRouteRecoveryGeneration,
               Task.isCancelled == false, self.isTerminating == false else { return }
         DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
-        AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+        self.microphonePreferences.markActiveSelectionUnavailable()
         let failedSessionID = self.benchmarkSessionID
         var expectedStartGeneration = self.audioCaptureStartGeneration
         let wasCapturing = self.isRunning || self.isStarting
@@ -5738,6 +5754,9 @@ final class ASRService: ObservableObject {
     private func handleDirectCaptureFormatInvalidation(
         _ invalidation: DirectCoreAudioLifecycleController.FormatInvalidation
     ) async {
+        // A native callback may already be queued when shutdown closes its owner.
+        // Reject it before publishing availability or restarting shared observers.
+        guard !self.isTerminating else { return }
         let captureSnapshot = self.directAudioLifecycleController.snapshot
         guard invalidation.generation == captureSnapshot.generation else {
             self.benchmarkLog(
@@ -6583,7 +6602,7 @@ final class ASRService: ObservableObject {
                 currentLivenessByUID != cachedLivenessByUID
             {
                 let microphonePreferenceCoordinator =
-                    AppServices.shared.microphonePreferenceCoordinator
+                    self.microphonePreferences
                 let migrationPending = microphonePreferenceCoordinator.needsMicrophonePriorityMigration
                 let resolvedInput = microphonePreferenceCoordinator.reconcileMicrophoneSelection(
                     availableInputs: currentDevices,
