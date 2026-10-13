@@ -4,6 +4,29 @@ import AVFoundation
 import XCTest
 
 final class HoldToMuteTests: XCTestCase {
+    func testLongTypingSessionBoundsTimelineAndRejectsOldDelayedMutedPackets() {
+        var timeline = DictationMuteTimeline()
+        let cycles = DictationMuteTimeline.maximumRetainedIntervals * 4
+        for cycle in 0..<cycles {
+            let start = UInt64(1000 + cycle * 100)
+            timeline.setMuted(true, at: start)
+            timeline.setMuted(false, at: start + 50)
+            XCTAssertLessThanOrEqual(timeline.retainedIntervalCount, DictationMuteTimeline.maximumRetainedIntervals)
+        }
+        XCTAssertTrue(timeline.hasExclusions)
+        // Eviction must never admit old PCM, including out-of-order delivery.
+        XCTAssertEqual(timeline.audibleRanges(in: 0..<20, packetHostTime: 1010, sampleRate: 1000, hostTicksPerSecond: 1000), [])
+        XCTAssertEqual(timeline.audibleRanges(in: 0..<20, packetHostTime: 0, sampleRate: 1000, hostTicksPerSecond: 1000), [])
+        let retiredEnd = UInt64(1000 + (cycles - DictationMuteTimeline.maximumRetainedIntervals - 1) * 100 + 50)
+        XCTAssertEqual(timeline.audibleRanges(in: 0..<40, packetHostTime: retiredEnd - 10, sampleRate: 1000, hostTicksPerSecond: 1000), [10..<40])
+        let latestStart = UInt64(1000 + (cycles - 1) * 100)
+        XCTAssertEqual(timeline.audibleRanges(in: 0..<200, packetHostTime: latestStart - 25, sampleRate: 1000, hostTicksPerSecond: 1000), [0..<25, 75..<200])
+        XCTAssertEqual(timeline.audibleRanges(in: 0..<10, packetHostTime: latestStart + 60, sampleRate: 1000, hostTicksPerSecond: 1000), [0..<10])
+        timeline = DictationMuteTimeline()
+        XCTAssertFalse(timeline.hasExclusions)
+        XCTAssertEqual(timeline.audibleRanges(in: 0..<20, packetHostTime: 1010, sampleRate: 1000, hostTicksPerSecond: 1000), [0..<20])
+    }
+
     func testTimelineRejectsClosedIntervalsAndKeepsSpeechOnBothSides() {
         var timeline = DictationMuteTimeline()
         timeline.setMuted(true, at: 1200)
