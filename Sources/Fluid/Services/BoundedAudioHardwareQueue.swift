@@ -6,7 +6,7 @@ import Foundation
 /// Interrupted hardware must finish serialized cleanup before another operation
 /// can be admitted. In particular, cancellation must not launch a second IOProc.
 final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
-    enum Failure: LocalizedError {
+    enum Failure: LocalizedError, Equatable {
         case timedOut
         case recovering
         case cleanupFailed
@@ -77,7 +77,7 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
             self.cleanupFailed = false
             return true
         }
-        if cleared { self.resumeAvailabilityWaitersIfReady() }
+        if cleared { self.resumeAvailabilityWaitersIfSettled() }
         return cleared
     }
 
@@ -90,6 +90,11 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
             await withCheckedContinuation { continuation in
                 self.lock.lock()
                 if cancellation.isCancelled {
+                    self.lock.unlock()
+                    continuation.resume(returning: false)
+                    return
+                }
+                if self.cleanupFailed {
                     self.lock.unlock()
                     continuation.resume(returning: false)
                     return
@@ -118,16 +123,16 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
         waiter.continuation.resume(returning: false)
     }
 
-    private func resumeAvailabilityWaitersIfReady() {
-        let waiters = self.lock.withLock {
-            guard self.recovering == false, self.cleanupFailed == false else { return [AvailabilityWaiter]() }
+    private func resumeAvailabilityWaitersIfSettled() {
+        let (waiters, available) = self.lock.withLock {
+            guard self.recovering == false else { return ([AvailabilityWaiter](), false) }
             let waiters = Array(self.availabilityWaiters.values)
             self.availabilityWaiters.removeAll(keepingCapacity: false)
-            return waiters
+            return (waiters, self.cleanupFailed == false)
         }
         for waiter in waiters {
             waiter.timer?.cancel()
-            waiter.continuation.resume(returning: true)
+            waiter.continuation.resume(returning: available)
         }
     }
 
@@ -219,7 +224,7 @@ final nonisolated class BoundedAudioHardwareQueue: @unchecked Sendable {
                 self.cleanupFailed = recovered == false
                 self.recovering = false
             }
-            if recovered { self.resumeAvailabilityWaitersIfReady() }
+            self.resumeAvailabilityWaitersIfSettled()
         }
         self.lock.unlock()
         for request in requests {

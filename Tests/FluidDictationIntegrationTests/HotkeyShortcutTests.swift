@@ -1523,6 +1523,101 @@ final class HotkeyShortcutTests: XCTestCase {
     }
 
     @MainActor
+    func testPendingPromptStartPreservesDifferentSelectionAndQueuedTapOrder() async throws {
+        for queueMatchingThirdTap in [false, true] {
+            let asr = ASRService()
+            var finishStart: CheckedContinuation<Void, Never>?
+            var selections: [SettingsStore.DictationPromptSelection] = []
+            var firstStartWasCancelled = false
+            let first = HotkeyShortcut(keyCode: 2, modifierFlags: .control)
+            let second = HotkeyShortcut(keyCode: 3, modifierFlags: .control)
+            let manager = GlobalHotkeyManager(
+                asrService: asr,
+                primaryShortcuts: [],
+                promptModeShortcut: first,
+                commandModeShortcut: nil,
+                rewriteModeShortcut: first,
+                promptShortcutAssignments: [(selection: .default, shortcut: first), (selection: .privateAI, shortcut: second)],
+                promptModeShortcutEnabled: false,
+                commandModeShortcutEnabled: false,
+                rewriteModeShortcutEnabled: false,
+                promptSelectionCallback: { selection in
+                    selections.append(selection)
+                    if selections.count == 1 {
+                        asr.configureDictationModeSwitchForTesting(ownedLease: nil, starting: true)
+                        await withCheckedContinuation { finishStart = $0 }
+                        firstStartWasCancelled = Task.isCancelled
+                        asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+                    }
+                },
+                isPromptModeRecordingProvider: { true },
+                isSessionLockedProvider: { false }
+            )
+            manager.setHotkeyMode(.toggle)
+            _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, modifiers: .maskControl))
+            for _ in 0..<20 { await Task.yield() }
+            XCTAssertNotNil(finishStart)
+            _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, keyCode: 3, modifiers: .maskControl))
+            if queueMatchingThirdTap {
+                _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown, modifiers: .maskControl))
+            }
+            for _ in 0..<20 { await Task.yield() }
+            XCTAssertEqual(selections, [.default], "Other prompt slots must wait for the current start")
+            finishStart?.resume()
+            for _ in 0..<40 { await Task.yield() }
+            XCTAssertFalse(firstStartWasCancelled, "A different slot, or a tap behind it, must not cancel the active start")
+            XCTAssertEqual(selections, queueMatchingThirdTap ? [.default, .privateAI, .default] : [.default, .privateAI])
+            asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+        }
+    }
+
+    @MainActor
+    func testPendingToggleStartDoesNotInterruptForeignRecordingMode() async throws {
+        let asr = ASRService()
+        var finishStart: CheckedContinuation<Void, Never>?
+        var isDictate = true
+        var starts = 0
+        var firstStartWasCancelled = false
+        let shortcut = HotkeyShortcut(keyCode: 2, modifierFlags: [.control, .command])
+        let manager = GlobalHotkeyManager(
+            asrService: asr,
+            primaryShortcuts: [shortcut],
+            promptModeShortcut: shortcut,
+            commandModeShortcut: nil,
+            rewriteModeShortcut: shortcut,
+            promptModeShortcutEnabled: false,
+            commandModeShortcutEnabled: false,
+            rewriteModeShortcutEnabled: false,
+            dictationModeCallback: {
+                starts += 1
+                if starts == 1 {
+                    asr.configureDictationModeSwitchForTesting(ownedLease: nil, starting: true)
+                    await withCheckedContinuation { finishStart = $0 }
+                    firstStartWasCancelled = Task.isCancelled
+                    asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+                }
+            },
+            isDictateRecordingProvider: { isDictate },
+            isSessionLockedProvider: { false }
+        )
+        manager.setHotkeyMode(.toggle)
+        _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+        _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertNotNil(finishStart)
+        isDictate = false
+        _ = try manager.handleKeyEvent(type: .keyDown, event: self.primaryReleaseTestEvent(type: .keyDown))
+        _ = try manager.handleKeyEvent(type: .keyUp, event: self.primaryReleaseTestEvent(type: .keyUp))
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(starts, 1)
+        finishStart?.resume()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertFalse(firstStartWasCancelled, "The pending action must not stop a recording mode it no longer owns")
+        XCTAssertEqual(starts, 2)
+        asr.configureDictationModeSwitchForTesting(ownedLease: nil)
+    }
+
+    @MainActor
     func testPrimaryRapidHoldRepressCancelsPreviousQueuedReleaseStop() async throws {
         let asr = ASRService()
         defer { asr.isRunning = false }

@@ -284,6 +284,7 @@ final class GlobalHotkeyManager: NSObject {
     private var recordingActionRevisions: [HotkeyHoldModeType: UInt64] = [:]
     private var pendingRecordingActionCounts: [HotkeyHoldModeType: Int] = [:]
     private var activeRecordingActionShortcuts: [HotkeyHoldModeType: HotkeyShortcut] = [:]
+    private var activeRecordingActionSelections: [HotkeyHoldModeType: SettingsStore.DictationPromptSelection] = [:]
     private var pendingRecordingActions: [HotkeyHoldModeType: Task<Void, Never>] = [:]
     private var primaryShortcuts: [HotkeyShortcut]
     private var promptModeShortcut: HotkeyShortcut
@@ -2547,6 +2548,7 @@ private extension GlobalHotkeyManager {
         self.recordingActionRevisions[type, default: 0] &+= 1
         self.pendingRecordingActionCounts[type] = 0
         self.activeRecordingActionShortcuts.removeValue(forKey: type)
+        self.activeRecordingActionSelections.removeValue(forKey: type)
         self.pendingRecordingActions.removeValue(forKey: type)?.cancel()
     }
 
@@ -2561,8 +2563,26 @@ private extension GlobalHotkeyManager {
         guard self.canTriggerRecordingAction(self.label(for: type)) else { return }
         let revision = self.recordingActionRevisions[type, default: 0]
         let previous = self.pendingRecordingActions[type]
+        // A matching toggle must interrupt a suspended capture start before joining it.
+        // Keep later taps queued, and do not treat a different prompt slot as a stop.
+        let interruptsPendingStart = self.hotkeyMode == .toggle
+            && self.asrService.isStarting && !self.asrService.isRunning
+            && previous != nil && self.pendingRecordingActionCounts[type] == 1
+            && self.activeRecordingActionShortcuts[type] != nil
+            && self.isRecordingTargetActive(for: type)
+            && self.activeRecordingActionSelections[type] == selection
+            && (shortcut.map { self.isRecordingShortcutConfigured($0, for: type, selection: selection) } ?? true)
+        if interruptsPendingStart { previous?.cancel() }
         self.pendingRecordingActionCounts[type, default: 0] += 1
         self.pendingRecordingActions[type] = Task { @MainActor [weak self] in
+            if interruptsPendingStart, let self,
+               self.recordingActionRevisions[type, default: 0] == revision,
+               self.asrService.isRunningOrStarting, self.isRecordingTargetActive(for: type)
+            {
+                await Task { @MainActor in
+                    await self.stopRecordingInternal(toggleStopRequestedAt: ProcessInfo.processInfo.systemUptime)
+                }.value
+            }
             await withTaskCancellationHandler {
                 await previous?.value
             } onCancel: {
@@ -2578,12 +2598,15 @@ private extension GlobalHotkeyManager {
                     }
                 }
             }
+            guard !interruptsPendingStart else { return }
             guard self.canTriggerRecordingAction(self.label(for: type)) else { return }
             if let shortcut, !self.isRecordingShortcutConfigured(shortcut, for: type, selection: selection) { return }
             self.activeRecordingActionShortcuts[type] = shortcut
+            self.activeRecordingActionSelections[type] = selection
             defer {
                 if self.recordingActionRevisions[type, default: 0] == revision {
                     self.activeRecordingActionShortcuts.removeValue(forKey: type)
+                    self.activeRecordingActionSelections.removeValue(forKey: type)
                 }
             }
             if self.hotkeyMode == .toggle, self.asrService.isRunningOrStarting, self.isRecordingTargetActive(for: type) {
