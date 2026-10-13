@@ -48,7 +48,9 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     private let download: Download
 
     init(directory: URL? = nil, downloadDescriptor: GigaAMModelDescriptor = GigaAMModelCatalog.downloadableModel,
-         download: @escaping Download = PichiGigaAMModelStore.downloadArtifact) {
+         download: @escaping Download = { source, maximumBytes, progress in
+             try await PichiGigaAMModelStore.downloadArtifact(source, maximumBytes: maximumBytes, progress: progress)
+         }) {
         self.overriddenDirectory = directory
         self.downloadDescriptor = downloadDescriptor
         self.download = download

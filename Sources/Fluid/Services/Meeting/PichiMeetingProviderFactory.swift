@@ -21,9 +21,9 @@ enum PichiMeetingProviderFactory {
     private nonisolated struct Registration: Sendable {
         let descriptor: MeetingBackendDescriptor
         let defaultLanguageCode: String
-        let providerFactory: @MainActor (MeetingFinalProcessingConfiguration) throws -> any TranscriptionProvider
-        let configurationSnapshot: @MainActor (String, String?, Bool) -> MeetingFinalProcessingConfiguration
-        let modelsExistOnDisk: @Sendable () -> Bool
+        let providerFactory: @MainActor @Sendable (MeetingFinalProcessingConfiguration) throws -> any TranscriptionProvider
+        let configurationSnapshot: @MainActor @Sendable (String, String?, Bool) -> MeetingFinalProcessingConfiguration
+        let modelsExistOnDisk: @MainActor @Sendable () -> Bool
         let liveAdmission: LiveAdmission
     }
 
@@ -62,7 +62,7 @@ enum PichiMeetingProviderFactory {
                 id: .whisperTiny,
                 version: "1",
                 execution: .local,
-                supportedLanguageCodes: Set(VoiceEngineLanguageCatalog.whisperLanguages.map(\.id)).union(["auto"]),
+                supportedLanguageCodes: VoiceEngineLanguageCatalog.whisperSupportedLanguageCodes.union(["auto"]),
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
                 supportedFinalPrecisions: [.word, .utterance],
                 resultContract: .canonicalEvidence,
@@ -140,7 +140,7 @@ enum PichiMeetingProviderFactory {
         self.registrations[modelID]?.defaultLanguageCode
     }
 
-    nonisolated static func registeredModelsExistOnDisk(for modelID: String) -> Bool? {
+    static func registeredModelsExistOnDisk(for modelID: String) -> Bool? {
         self.registrations[modelID]?.modelsExistOnDisk()
     }
 
