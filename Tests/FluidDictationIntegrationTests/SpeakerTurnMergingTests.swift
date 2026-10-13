@@ -576,7 +576,7 @@ final class FluidAudioProviderWordTimingTests: XCTestCase {
 extension MeetingSessionModelTests {
     private static let allowedExportKeys: Set<String> = [
         "schemaVersion", "title", "languageCode", "startedAt", "endedAt", "durationSeconds",
-        "mode", "applicationDisplayName", "speakers", "id", "displayName", "isLocalUser",
+        "mode", "applicationDisplayName", "applicationAudioScope", "speakers", "id", "displayName", "isLocalUser",
         "segments", "startSeconds", "endSeconds", "speakerID", "text", "revision", "status",
         "overlap", "completeness", "isLikelyEcho", "attributionState",
     ]
@@ -790,6 +790,19 @@ extension MeetingSessionModelTests {
         XCTAssertTrue(keys.contains("schemaVersion"))
         XCTAssertTrue(keys.contains("speakers"))
         XCTAssertTrue(keys.contains("segments"))
+    }
+
+    func testJSONExportIdentifiesSystemAudioWithoutAnApplicationIdentity() throws {
+        var session = MeetingModelFixture.makeSession()
+        session.applicationAudioScope = .systemAudio
+        session.capturedApplication = nil
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["applicationAudioScope"] as? String, "systemAudio")
+        XCTAssertNil(json["applicationDisplayName"])
+        var keys: Set<String> = []
+        self.collectDictionaryKeys(in: json, into: &keys)
+        XCTAssertTrue(keys.isSubset(of: Self.allowedExportKeys))
     }
 
     /// Belt-and-suspenders on top of the key-allowlist test above: even with diarization
