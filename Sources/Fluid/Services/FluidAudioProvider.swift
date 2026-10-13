@@ -704,6 +704,14 @@ final class FluidAudioProvider: TranscriptionProvider {
         try await self.transcribeFinal(samples)
     }
 
+    /// The library requires one second even when the meeting's final physical tail
+    /// is shorter. Pad only the inference input; capture duration and saved timing
+    /// remain the original PCM window. Ordinary dictation retains its existing policy.
+    private func meetingInferenceSamples(_ samples: [Float]) -> [Float] {
+        guard self.meetingOptions != nil, !samples.isEmpty, samples.count < 16_000 else { return samples }
+        return samples + [Float](repeating: 0, count: 16_000 - samples.count)
+    }
+
     func resetStreamingPreviewCache() {
         self.latestStreamingPreviewText = ""
         self.latestStreamingPreviewSampleCount = 0
@@ -746,7 +754,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                     "FluidAudioProvider: Incremental preview failed (\(error.localizedDescription)); using full preview",
                     source: "FluidAudioProvider"
                 )
-                result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+                result = try await fullPreviewManager.transcribe(self.meetingInferenceSamples(samples), source: AudioSource.microphone)
             }
         } else {
             if !self.usesIncrementalDictation
@@ -754,7 +762,7 @@ final class FluidAudioProvider: TranscriptionProvider {
             {
                 self.resetIncrementalSession()
             }
-            result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+            result = try await fullPreviewManager.transcribe(self.meetingInferenceSamples(samples), source: AudioSource.microphone)
         }
         try self.requireCurrentRecording(generation)
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1230,7 +1238,13 @@ final class FluidAudioProvider: TranscriptionProvider {
         guard !outcome.textMayBeCorrected, let tokenTimings = outcome.tokenTimings else {
             return (outcome.result, [])
         }
-        return (outcome.result, Self.makeWordTimings(from: tokenTimings))
+        let words = Self.makeWordTimings(from: tokenTimings)
+        let duration = Double(samples.count) / 16_000
+        guard words.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
+            // Incomplete timing evidence never truncates otherwise valid wording.
+            return (outcome.result, [])
+        }
+        return (outcome.result, words)
     }
 
     static func makeWordTimings(from tokenTimings: [TokenTiming]) -> [ASRWordTiming] {
@@ -1260,7 +1274,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let textMayBeCorrected = self.isWordBoostingActive || !profiles.isEmpty
         await manager.setPronunciationCustomizationEnabled(!profiles.isEmpty)
         do {
-            let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            let result = try await manager.transcribe(self.meetingInferenceSamples(samples), source: AudioSource.microphone)
             let features = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
             guard DictionaryMatcherExperiment.sharedFeaturesEnabled, let features, !profiles.isEmpty else {
