@@ -390,7 +390,7 @@ struct TranscriptionHistoryView: View {
             }
         }
         .padding(12)
-        .background(self.theme.palette.accent.opacity(isSelected ? 0.12 : 0), in: RoundedRectangle(cornerRadius: 14))
+        .background(isSelected ? self.theme.palette.elevatedCardBackground : self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14)
             .strokeBorder(isSelected ? self.theme.palette.accent.opacity(0.6) : self.theme.palette.cardBorder.opacity(0.25)))
         .contextMenu { self.entryActions(entry) }
@@ -578,7 +578,7 @@ struct TranscriptionHistoryView: View {
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                    .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
                 }
                 HistoryTextComparisonView(entry: entry, copy: self.copyToClipboard)
                     .id(entry.id)
@@ -633,7 +633,7 @@ struct TranscriptionHistoryView: View {
                 .font(.fluidSystem(size: 24, weight: .medium))
                 .foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 52, height: 52)
-                .background(self.theme.palette.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+                .background(self.theme.palette.elevatedCardBackground, in: RoundedRectangle(cornerRadius: 16))
             VStack(alignment: .leading, spacing: 5) {
                 Text("Dictation details").font(self.theme.typography.title)
                 Text(entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)

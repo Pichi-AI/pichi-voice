@@ -301,7 +301,7 @@ struct StatsShareSheet: View {
             .padding(.vertical, 6)
             .foregroundStyle(isOn ? self.theme.palette.accentText : self.theme.palette.secondaryText)
             .background(
-                isOn ? self.theme.palette.accent.opacity(0.14) : self.theme.palette.cardBackground,
+                isOn ? self.theme.palette.elevatedCardBackground : self.theme.palette.cardBackground,
                 in: Capsule()
             )
             .overlay(Capsule().strokeBorder(isOn ? self.theme.palette.accent.opacity(0.4) : self.theme.palette.cardBorder, lineWidth: 1))

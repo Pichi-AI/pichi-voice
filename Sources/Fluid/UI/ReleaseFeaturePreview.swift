@@ -36,7 +36,8 @@ struct ReleaseFeaturePreview: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             HStack(alignment: .top, spacing: 8) {
-                Circle().fill(self.theme.palette.accent.opacity(0.18))
+                Circle().fill(self.theme.palette.cardBackground)
+                    .overlay(Circle().stroke(self.theme.palette.accent.opacity(0.18), lineWidth: 1))
                     .frame(width: 19, height: 19)
                     .overlay(Text("A").font(.fluidSystem(size: 9, weight: .medium)).foregroundStyle(self.theme.palette.accentText))
                 VStack(alignment: .leading, spacing: 4) {
@@ -107,7 +108,8 @@ struct ReleaseFeaturePreview: View {
             Image(systemName: symbol)
                 .font(.system(size: 11)).foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 23, height: 23)
-                .background(self.theme.palette.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(self.theme.palette.accent.opacity(0.1), lineWidth: 1))
             Text(PichiLocalization.text(name)).font(.fluidSystem(size: 10, weight: .medium))
             Spacer(minLength: 0)
             Text(PichiLocalization.text(detail)).font(.fluidSystem(size: 8)).foregroundStyle(self.theme.palette.secondaryText)

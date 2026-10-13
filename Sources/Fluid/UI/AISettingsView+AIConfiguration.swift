@@ -742,7 +742,7 @@ extension AIEnhancementSettingsView {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.red.opacity(0.1))
+                        .fill(self.theme.palette.cardBackground)
                 )
             }
 
@@ -1308,7 +1308,7 @@ extension AIEnhancementSettingsView {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.red.opacity(0.1))
+                            .fill(self.theme.palette.cardBackground)
                     )
                 }
 
@@ -1397,7 +1397,7 @@ extension AIEnhancementSettingsView {
         .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.red.opacity(0.11))
+                .fill(self.theme.palette.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1410,7 +1410,7 @@ extension AIEnhancementSettingsView {
             HStack(alignment: .center, spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(self.theme.palette.accent.opacity(0.12))
+                        .fill(self.theme.palette.elevatedCardBackground)
                         .overlay(
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .stroke(self.theme.palette.accent.opacity(0.3), lineWidth: 1)
@@ -2313,7 +2313,7 @@ extension AIEnhancementSettingsView {
         }
         .font(.fluidSystem(.caption)).foregroundStyle(self.theme.palette.accentText)
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.fluidGreen.opacity(0.15))
+        .background(RoundedRectangle(cornerRadius: 8).fill(self.theme.palette.elevatedCardBackground)
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(
                 Color.fluidGreen.opacity(0.3),
                 lineWidth: 1

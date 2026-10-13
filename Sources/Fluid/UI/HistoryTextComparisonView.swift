@@ -54,7 +54,8 @@ struct HistoryTextComparisonView: View {
                     Text("AI enhanced").font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.accentText)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(self.theme.palette.accent.opacity(0.1), in: Capsule())
+                        .background(self.theme.palette.elevatedCardBackground, in: Capsule())
+                        .overlay(Capsule().stroke(self.theme.palette.accent.opacity(0.1), lineWidth: 1))
                 }
                 Spacer()
                 Button { self.copy(content) } label: { Image(systemName: "doc.on.doc") }
@@ -79,8 +80,8 @@ struct HistoryTextComparisonView: View {
         for run in runs {
             var part = AttributedString(run.text)
             if run.changed {
-                part.foregroundColor = isOriginal ? .red : .green
-                part.backgroundColor = (isOriginal ? Color.red : Color.green).opacity(0.1)
+                part.foregroundColor = self.theme.palette.readableText(isOriginal ? .red : .green)
+                part.backgroundColor = self.theme.palette.cardBackground
                 if isOriginal {
                     part.strikethroughStyle = .single
                 } else {

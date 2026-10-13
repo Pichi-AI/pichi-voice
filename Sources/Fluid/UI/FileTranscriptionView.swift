@@ -768,7 +768,7 @@ struct FileTranscriptionView: View {
         .padding()
         .background(
             RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
-                .fill(Color.red.opacity(0.12))
+                .fill(self.theme.palette.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
                         .stroke(Color.red.opacity(0.4), lineWidth: 1)
@@ -796,7 +796,7 @@ struct FileTranscriptionView: View {
         .padding()
         .background(
             RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
-                .fill(Color.red.opacity(0.12))
+                .fill(self.theme.palette.cardBackground)
                 .overlay(
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg, style: .continuous)
                         .stroke(Color.red.opacity(0.4), lineWidth: 1)

@@ -133,7 +133,7 @@ private struct StatsStreakDay: View {
                 .font(self.theme.typography.badge)
                 .foregroundStyle(self.words > 0 ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                 .frame(width: 24, height: 24)
-                .background(self.theme.palette.accent.opacity(self.words > 0 ? 0.15 : 0.04), in: Circle())
+                .background(self.theme.palette.elevatedCardBackground, in: Circle())
             Text(self.date.formatted(.dateTime.weekday(.narrow).locale(self.interfaceLocale)))
                 .font(self.theme.typography.captionSmall)
                 .foregroundStyle(self.theme.palette.secondaryText)

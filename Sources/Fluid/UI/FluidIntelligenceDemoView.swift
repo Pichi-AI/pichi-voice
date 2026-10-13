@@ -151,7 +151,8 @@ struct FluidIntelligenceDemoView: View {
             Text(text).font(self.theme.typography.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
         .padding(18).frame(maxWidth: .infinity, alignment: .leading)
-        .background(accented ? self.theme.palette.accent.opacity(0.07) : self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
+        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(accented ? self.theme.palette.accent.opacity(0.07) : .clear, lineWidth: 1))
     }
 
     private func activateSandbox(modelID: String) {

@@ -3403,7 +3403,7 @@ private struct ReplacementConfirmationToast: View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
             ZStack {
                 Circle()
-                    .fill(self.theme.palette.accent.opacity(0.14))
+                    .fill(self.theme.palette.elevatedCardBackground)
                     .frame(width: 58, height: 58)
 
                 Circle()
@@ -3620,7 +3620,8 @@ struct BoostTermRow: View {
                     .font(self.theme.typography.bodySmallStrong)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(strength.badgeColor.opacity(0.25)))
+                    .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
+                    .overlay(Capsule().stroke(strength.badgeColor.opacity(0.25), lineWidth: 1))
                     .foregroundStyle(self.theme.palette.readableText(strength.badgeColor))
             }
 

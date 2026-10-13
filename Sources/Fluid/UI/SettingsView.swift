@@ -2170,7 +2170,7 @@ struct SettingsView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill((warningStyle ? self.theme.palette.warning : self.theme.palette.accent).opacity(0.12))
+                .fill(self.theme.palette.cardBackground)
         )
     }
 
@@ -2318,7 +2318,7 @@ private extension SettingsView {
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.orange.opacity(0.2))
+                    .fill(self.theme.palette.elevatedCardBackground)
             )
     }
 

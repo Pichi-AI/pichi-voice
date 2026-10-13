@@ -394,7 +394,7 @@ extension AIEnhancementSettingsView {
                 .fontWeight(.semibold)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(Color.fluidGreen.opacity(0.2)))
+                .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
                 .foregroundStyle(self.theme.palette.accentText)
         }
     }

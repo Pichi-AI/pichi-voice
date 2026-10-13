@@ -346,7 +346,7 @@ struct DashboardView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(self.theme.palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(self.theme.palette.accent.opacity(0.18)))
     }
 
@@ -409,7 +409,7 @@ private struct DashboardRecentRow: View {
                     .foregroundStyle(self.copied ? self.theme.palette.accentText : self.theme.palette.secondaryText)
             }
             .padding(18)
-            .background(self.theme.palette.accent.opacity(self.hovered ? 0.06 : 0))
+            .background(self.hovered ? self.theme.palette.elevatedCardBackground : self.theme.palette.cardBackground)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

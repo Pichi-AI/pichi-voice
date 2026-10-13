@@ -155,7 +155,7 @@ extension VoiceEngineSettingsView {
                                     .fontWeight(.semibold)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
-                                    .background(Capsule().fill(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent.opacity(0.2) : .orange.opacity(0.2)))
+                                    .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
                                     .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accentText : self.theme.palette.readableText(self.theme.palette.warning))
                             }
 
@@ -192,7 +192,7 @@ extension VoiceEngineSettingsView {
                                 .font(self.theme.typography.bodySmallStrong)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Capsule().fill(self.theme.palette.accent.opacity(0.2)))
+                                .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
                                 .foregroundStyle(self.theme.palette.accentText)
                         }
 
@@ -234,7 +234,7 @@ extension VoiceEngineSettingsView {
                         .padding(.vertical, 4)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(.orange.opacity(0.1))
+                                .fill(self.theme.palette.cardBackground)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 6)
                                         .stroke(.orange.opacity(0.3), lineWidth: 1)
@@ -460,7 +460,7 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmallStrong)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 4)
-                            .background(Capsule().fill(self.theme.palette.accent.opacity(0.25)))
+                            .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
                             .foregroundStyle(self.theme.palette.primaryText)
                     } else {
                         Button("Activate") {

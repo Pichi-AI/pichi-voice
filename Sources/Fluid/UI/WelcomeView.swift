@@ -872,7 +872,7 @@ struct OnboardingFlowView: View {
             .frame(height: 34)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? self.theme.palette.accent.opacity(0.14) : self.theme.palette.primaryText.opacity(0.045))
+                    .fill(isSelected ? self.theme.palette.elevatedCardBackground : self.theme.palette.cardBackground)
             )
             .contentShape(Rectangle())
         }
@@ -1072,7 +1072,7 @@ struct OnboardingFlowView: View {
                                 .padding(.vertical, 6)
                                 .background(
                                     Capsule()
-                                        .fill(self.theme.palette.accent.opacity(0.12))
+                                        .fill(self.theme.palette.elevatedCardBackground)
                                         .overlay(Capsule().stroke(self.theme.palette.accent.opacity(0.24), lineWidth: 1))
                                 )
                                 .padding(.bottom, 18)
@@ -1136,7 +1136,7 @@ struct OnboardingFlowView: View {
                                     .padding(.vertical, 5)
                                     .background(
                                         Capsule()
-                                            .fill(self.theme.palette.warning.opacity(0.10))
+                                            .fill(self.theme.palette.elevatedCardBackground)
                                             .overlay(Capsule().stroke(self.theme.palette.warning.opacity(0.24), lineWidth: 1))
                                     )
                                     .padding(.top, 14)
@@ -2107,7 +2107,7 @@ struct OnboardingFlowView: View {
         return HStack(spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(isReady ? Color.green.opacity(0.16) : self.theme.palette.accent.opacity(0.12))
+                    .fill(self.theme.palette.elevatedCardBackground)
                     .frame(width: 46, height: 46)
 
                 if isReady {
@@ -2139,7 +2139,7 @@ struct OnboardingFlowView: View {
                     .padding(.vertical, 3)
                     .background(
                         Capsule()
-                            .fill((isReady ? Color.green : self.theme.palette.accent).opacity(0.12))
+                            .fill(self.theme.palette.elevatedCardBackground)
                     )
 
                 Text(LocalizedStringKey(subtitle))

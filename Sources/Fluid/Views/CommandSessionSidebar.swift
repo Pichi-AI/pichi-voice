@@ -153,7 +153,7 @@ struct CommandSessionSidebar: View {
             .padding(.horizontal, self.theme.metrics.spacing.md)
             .frame(maxWidth: .infinity, minHeight: Self.controlHeight, alignment: .leading)
             .background(
-                self.newSessionHovered && self.canChangeSession ? self.theme.palette.cardBorder.opacity(0.25) : .clear,
+                self.newSessionHovered && self.canChangeSession ? self.theme.palette.cardBackground : .clear,
                 in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
             )
             .contentShape(Rectangle())
@@ -368,7 +368,7 @@ struct CommandSessionSidebar: View {
                 .padding(.trailing, self.theme.metrics.spacing.xs)
             }
             .background(
-                self.selected ? self.theme.palette.cardBorder.opacity(0.55) : (self.showsActions ? self.theme.palette.cardBorder.opacity(0.25) : .clear),
+                self.selected ? self.theme.palette.elevatedCardBackground : (self.showsActions ? self.theme.palette.cardBackground : .clear),
                 in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
             )
             .contentShape(Rectangle())
