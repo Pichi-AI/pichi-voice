@@ -2319,6 +2319,34 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         XCTAssertFalse(harness.coordinator.hasPendingStart)
     }
 
+    func testMockStartReleasedBeforeEntryDoesNotParkTheOwnedTask() async throws {
+        let harness = self.makeHarness(blockStart: true)
+        await harness.capture.resumeStart()
+        let completed = self.expectation(description: "Start completes after its mock gate was released before entry")
+        var result: Result<MeetingSession, Error>?
+        let start = Task { @MainActor in
+            defer { completed.fulfill() }
+            do {
+                let session = try await harness.coordinator.startRecording(configuration: MeetingModelFixture.makeOnlineConfiguration())
+                result = .success(session)
+                return session
+            } catch {
+                result = .failure(error)
+                throw error
+            }
+        }
+        self.addTeardownBlock { @MainActor in
+            start.cancel()
+            await harness.capture.resumeStart()
+            _ = try? await start.value
+        }
+        await self.fulfillment(of: [completed], timeout: 2)
+        let session = try XCTUnwrap(result).get()
+        let snapshot = await harness.capture.snapshot()
+        XCTAssertEqual(snapshot.startCallCount, 1)
+        XCTAssertEqual(harness.coordinator.state, .recording(session.id))
+    }
+
     private func waitForMockStart(
         _ capture: FakeMeetingCaptureController,
         completedStart: @MainActor () -> Result<MeetingSession, Error>?
@@ -2760,6 +2788,7 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
     private var stopObservers: [CheckedContinuation<Void, Never>] = []
     private var blockedStarts: [CheckedContinuation<Void, Never>] = []
     private var blockedStops: [CheckedContinuation<Void, Never>] = []
+    private var startGateReleased = false
 
     init(blockStart: Bool, blockStop: Bool, failStop: Bool) {
         self.shouldBlockStart = blockStart
@@ -2778,7 +2807,7 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
         self.eventHandlers.append(eventHandler)
         self.startObservers.forEach { $0.resume() }
         self.startObservers = []
-        if self.shouldBlockStart {
+        if self.shouldBlockStart, !self.startGateReleased {
             await withCheckedContinuation { self.blockedStarts.append($0) }
         }
         return MeetingCaptureStartResult(
@@ -2819,6 +2848,7 @@ private actor FakeMeetingCaptureController: MeetingCaptureControlling {
     }
 
     func resumeStart() {
+        self.startGateReleased = true
         self.blockedStarts.forEach { $0.resume() }
         self.blockedStarts = []
     }
