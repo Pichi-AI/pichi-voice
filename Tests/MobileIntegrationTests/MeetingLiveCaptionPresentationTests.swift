@@ -92,6 +92,10 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         let shrink = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 600, contentOffset: 300)
         XCTAssertTrue(shrink.fallbackFollowPreference(after: bottomBeforeShrink,
             currentlyFollowing: true, upwardDrag: false), "iOS 17 layout shrink must not look like an upward drag")
+        var heightPublishedBeforeClamp = shrink
+        heightPublishedBeforeClamp.contentOffset = bottomBeforeShrink.contentOffset
+        XCTAssertTrue(shrink.fallbackFollowPreference(after: heightPublishedBeforeClamp,
+            currentlyFollowing: true, upwardDrag: false), "A later offset-only clamp belongs to the previous layout change")
         let userScrolled = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 600, contentOffset: 150)
         XCTAssertFalse(userScrolled.layoutChanged(from: before))
         XCTAssertTrue(userScrolled.offsetChanged(from: before))
@@ -199,6 +203,13 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                 scroll.contentSize.height < beforeShrink - 100 && self.nearBottom(scroll)
             }
             capture(host, step: "06-content-shrink-following", scheme: scheme)
+            let shrunkHeight = scroll.contentSize.height
+            host.model.rows = Array(host.model.rows.dropLast()) + wordRows(count: 100)
+                + [row("Новый текст после изменения размера.", partial: true)]
+            try await settle(host, "Following must remain active after the previous content shrink") {
+                scroll.contentSize.height > shrunkHeight + 100 && self.nearBottom(scroll)
+            }
+            capture(host, step: "07-append-after-shrink", scheme: scheme)
         }
     }
 

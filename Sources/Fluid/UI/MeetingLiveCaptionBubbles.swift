@@ -233,8 +233,16 @@ struct MeetingCaptionScrollTracking: ViewModifier {
 
         func fallbackFollowPreference(after previous: Self, currentlyFollowing: Bool,
                                       upwardDrag: Bool) -> Bool {
-            followPreference(after: previous, currentlyFollowing: currentlyFollowing,
-                userIsScrolling: upwardDrag || !layoutChanged(from: previous), upwardDrag: upwardDrag)
+            // Preferences can publish a new height before UIKit clamps the old offset.
+            // The later offset-only clamp is still layout, not a scroll to older text.
+            let clampedToBottom: Bool
+            if let contentHeight, let viewportHeight, let contentOffset,
+               let previousOffset = previous.contentOffset {
+                let bottomOffset = max(0, contentHeight - viewportHeight)
+                clampedToBottom = previousOffset > bottomOffset + 0.5 && abs(contentOffset - bottomOffset) < 2
+            } else { clampedToBottom = false }
+            return followPreference(after: previous, currentlyFollowing: currentlyFollowing,
+                userIsScrolling: upwardDrag || (!layoutChanged(from: previous) && !clampedToBottom), upwardDrag: upwardDrag)
         }
 
         func followPreference(after previous: Self, currentlyFollowing: Bool,
