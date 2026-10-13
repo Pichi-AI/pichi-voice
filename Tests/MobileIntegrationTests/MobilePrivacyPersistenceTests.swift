@@ -47,6 +47,13 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         XCTAssertTrue(joinedWords.contains("метформин 500 мг"))
         XCTAssertEqual(safeWords.segments.map(\.id), words.map(\.id))
         XCTAssertEqual(safeWords.segments.map(\.start), words.map(\.start))
+        let cardAndAmount = "карта 3782 822463 10005 1008 рублей метформин 500 мг"
+        let amountWords = cardAndAmount.split(separator: " ").enumerated().map { segment(String($0.element), Int64($0.offset)) }
+        let safeAmount = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: amountWords), using: privacy)
+        XCTAssertEqual(safeAmount.segments.suffix(5).map(\.text), ["1008", "рублей", "метформин", "500", "мг"])
+        for privatePart in ["3782", "822463", "10005"] {
+            XCTAssertFalse(safeAmount.segments.map(\.text).joined(separator: " ").contains(privatePart))
+        }
         let wordAddress = "домашний адрес улица Примерная дом 12 квартира 7 метотрексат 15 мг"
         let addressWords = wordAddress.split(separator: " ").enumerated().map { segment(String($0.element), Int64($0.offset)) }
         let safeAddress = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: addressWords), using: privacy)

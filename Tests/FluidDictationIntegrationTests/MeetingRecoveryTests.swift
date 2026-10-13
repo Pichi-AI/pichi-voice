@@ -1755,6 +1755,11 @@ final class MeetingRecoveryTests: XCTestCase {
     }
 
     func testMissingModelBlocksCaptureAndClearsStartReservation() async throws {
+        let settingsName = "MissingMeetingModel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: settingsName))
+        defer { defaults.removePersistentDomain(forName: settingsName) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let capture = StubCaptureController()
@@ -1765,6 +1770,7 @@ final class MeetingRecoveryTests: XCTestCase {
             capture: capture,
             processing: StubProcessingController(),
             audioArbiter: StubArbiter(),
+            settings: settings,
             validateRecordingModels: { throw MeetingModelInstaller.InstallError.wrongPackage }
         )
         for _ in 0..<2 {

@@ -98,6 +98,18 @@ final class PichiTextPrivacyTests: XCTestCase {
         }
     }
 
+    func testUngroupedAmountsAfterValidCardArePreservedAtAllGroupLengths() throws {
+        let card = "3782 822463 10005"
+        for separator in [" ", "  "] {
+            for amount in ["1008 рублей", "123456 рублей", "1 008 рублей", "10 008 рублей", "0.50 руб", "1008 мг"] {
+                let input = "карта " + card + separator + amount
+                let result = try PIIRedactor.redact(input, ner: [])
+                XCTAssertEqual(result.text, "карта [КАРТА]" + separator + amount, input)
+                XCTAssertEqual(result.spans.first?.range, (input as NSString).range(of: card), input)
+            }
+        }
+    }
+
     func testNoBlindLongNumberDateLocationOrganizationOrMedicationRedaction() throws {
         let text = "Аспирин 500 мг и инсулин 10 единиц. В исследовании 123456 участников, дата 12.05.2026. Example Pharma в Москве."
         let source = text as NSString

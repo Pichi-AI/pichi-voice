@@ -170,10 +170,12 @@ public enum PIIRedactor {
             let suffix = source.substring(from: NSMaxRange(last))
             let hasAmountUnit = amountUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count)) != nil
             var amountSuffixStart = parts.count
-            if hasAmountUnit, (1...3).contains(last.length) {
+            if hasAmountUnit {
                 amountSuffixStart = parts.count - 1
-                while amountSuffixStart > 0, parts[amountSuffixStart - 1].length == 3 { amountSuffixStart -= 1 }
-                if amountSuffixStart > 0, (1...2).contains(parts[amountSuffixStart - 1].length) { amountSuffixStart -= 1 }
+                if last.length == 3 {
+                    while amountSuffixStart > 0, parts[amountSuffixStart - 1].length == 3 { amountSuffixStart -= 1 }
+                    if amountSuffixStart > 0, (1...2).contains(parts[amountSuffixStart - 1].length) { amountSuffixStart -= 1 }
+                }
             }
             var start = 0
             while start < parts.count {
@@ -188,8 +190,9 @@ public enum PIIRedactor {
                 if hasAmountUnit {
                     // A trailing explicit amount unit distinguishes a quantity
                     // from a PAN group, even if PAN + quantity also passes Luhn.
-                    // Grouped amounts use one leading 1..3-digit group followed
-                    // by three-digit groups. Unmarked ambiguous runs keep the
+                    // Ungrouped quantities have no three-digit size limit. Grouped
+                    // amounts use a short leading group and three-digit groups.
+                    // Unmarked ambiguous runs keep the
                     // longest valid boundary candidate instead of guessing.
                     for finish in validEnds where finish + 1 < parts.count && finish + 1 >= amountSuffixStart {
                         bestEnd = finish; break
