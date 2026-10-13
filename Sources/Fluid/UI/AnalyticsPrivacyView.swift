@@ -12,7 +12,7 @@ struct AnalyticsPrivacyView: View {
                         .font(.fluidSystem(size: 18, weight: .semibold))
                     Text(PichiLocalization.text(AnalyticsConfig.fromBundle().isConfigured ? "Daily activity and optional detailed analytics" : "Telemetry is disabled in this distribution"))
                         .font(.fluidSystem(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
 
                 Spacer()
@@ -76,7 +76,7 @@ struct AnalyticsPrivacyView: View {
     private var contactInfoView: some View {
         Text(self.contactInfoText)
             .font(.fluidSystem(size: 13))
-            .foregroundStyle(.primary)
+            .foregroundStyle(self.theme.palette.primaryText)
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 8)
@@ -92,7 +92,7 @@ struct AnalyticsPrivacyView: View {
         var text = AttributedString(PichiLocalization.text("For privacy questions, contact our support team."))
         if let range = text.range(of: PichiLocalization.text("support team")) {
             text[range].link = AppBrand.supportURL
-            text[range].foregroundColor = self.theme.palette.accent
+            text[range].foregroundColor = self.theme.palette.accentText
         }
 
         return text
@@ -101,17 +101,17 @@ struct AnalyticsPrivacyView: View {
     private func sectionTitle(_ text: String) -> some View {
         Text(PichiLocalization.text(text))
             .font(.fluidSystem(size: 12, weight: .semibold))
-            .foregroundStyle(self.theme.palette.accent)
+            .foregroundStyle(self.theme.palette.accentText)
             .padding(.top, 4)
     }
 
     private func bullet(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text("•")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
             Text(PichiLocalization.text(text))
                 .font(.fluidSystem(size: 13))
-                .foregroundStyle(.primary)
+                .foregroundStyle(self.theme.palette.primaryText)
             Spacer(minLength: 0)
         }
     }

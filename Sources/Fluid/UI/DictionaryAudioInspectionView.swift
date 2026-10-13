@@ -85,7 +85,7 @@ struct DictionaryAudioInspectionView: View {
                         Text("Recording \(index + 1)").font(self.theme.typography.caption)
                         Text(self.comparing ? "…" : self.scoreText(index))
                             .font(self.theme.typography.bodyStrong).monospacedDigit()
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundStyle(self.theme.palette.accentText)
                     }
                 }
             }
@@ -188,7 +188,7 @@ struct DictionaryAudioInspectionView: View {
                 Text("Recording \(index + 1)").font(self.theme.typography.bodyStrong)
                 Spacer()
                 Text(self.comparing ? "…" : self.scoreText(index)).monospacedDigit()
-                    .font(self.theme.typography.bodyStrong).foregroundStyle(self.theme.palette.accent)
+                    .font(self.theme.typography.bodyStrong).foregroundStyle(self.theme.palette.accentText)
             }
             if let audio = self.references[index] {
                 Text(PichiLocalization.format("Full %.2f s · trained section %.2f–%.2f s", audio.duration, audio.selectedStart, audio.selectedEnd))

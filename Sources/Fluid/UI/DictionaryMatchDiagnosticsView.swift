@@ -49,7 +49,7 @@ struct DictionaryMatchDiagnosticsView: View {
                             Text(sample.score.map { String(format: "%.3f", $0) } ?? "—")
                                 .monospacedDigit()
                                 .font(self.theme.typography.bodyStrong)
-                                .foregroundStyle((sample.score ?? -.infinity) >= Float(self.threshold) ? self.theme.palette.accent : self.theme.palette.primaryText)
+                                .foregroundStyle((sample.score ?? -.infinity) >= Float(self.threshold) ? self.theme.palette.accentText : self.theme.palette.primaryText)
                         }
                     }
                 }

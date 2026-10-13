@@ -58,7 +58,7 @@ struct StatsHighlightsView: View {
     private func sectionHeading(_ title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(PichiLocalization.text(title)).font(self.theme.typography.sectionTitle)
-            Text(PichiLocalization.text(subtitle)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            Text(PichiLocalization.text(subtitle)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 
@@ -114,7 +114,7 @@ struct StatsHighlightsView: View {
                     Spacer(minLength: 4)
                     Text("\(milestones.filter(\.achieved).count)/\(milestones.count)")
                         .font(self.theme.typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
                 HStack(spacing: 16) {
                     self.progressRing(fraction: fraction, color: color, icon: next == nil ? "checkmark" : icon)
@@ -126,7 +126,7 @@ struct StatsHighlightsView: View {
                             .minimumScaleFactor(0.75)
                         Text(PichiLocalization.text(unit))
                             .font(self.theme.typography.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -135,7 +135,7 @@ struct StatsHighlightsView: View {
                         .font(self.theme.typography.bodySmallStrong)
                     Text(next == nil ? PichiLocalization.text("Look how far your voice has taken you.") : PichiLocalization.format("%@ to go · %lld%% there", (target - value).formatted(), Int(fraction * 100)))
                         .font(self.theme.typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(2)
                         .frame(minHeight: 30, alignment: .topLeading)
                 }
@@ -176,7 +176,7 @@ struct StatsHighlightsView: View {
                 if self.snapshot.topAppUsage.isEmpty {
                     Label("Dictate into an app to see it here.", systemImage: "app.dashed")
                         .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .frame(maxWidth: .infinity, minHeight: 220, alignment: .center)
                 } else {
                     VStack(spacing: 14) {
@@ -202,7 +202,7 @@ struct StatsHighlightsView: View {
                     Spacer()
                     Text("\(sessions.formatted()) · \(Int((share * 100).rounded()))%")
                         .font(self.theme.typography.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .monospacedDigit()
                 }
                 GeometryReader { geometry in
@@ -249,9 +249,8 @@ struct StatsHighlightsView: View {
                 self.sectionHeading("Your golden hour", subtitle: self.hourCaption)
                 Chart(Array(self.snapshot.hourlySessions.enumerated()), id: \.offset) { hour, count in
                     BarMark(x: .value(PichiLocalization.text("Hour"), hour), y: .value(PichiLocalization.text("Dictations"), count))
-                        .foregroundStyle(count > 0 && count == self.snapshot.hourlySessions.max() ? self.theme.palette.warning : self.theme.palette.accent.opacity(0.4))
+                        .foregroundStyle(count > 0 && count == self.snapshot.hourlySessions.max() ? self.theme.palette.warning : self.theme.palette.accentText)
                         .cornerRadius(3)
-                        .opacity(self.hoveredHour == nil && self.pinnedHour == nil || hour == (self.hoveredHour ?? self.pinnedHour) ? 1 : 0.35)
                         .accessibilityLabel("\(hour):00")
                         .accessibilityValue(PichiLocalization.format("%lld dictations", count))
                 }
@@ -289,7 +288,7 @@ struct StatsHighlightsView: View {
     private func smallMetric(value: String, title: String, icon: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Label(value, systemImage: icon).font(self.theme.typography.bodyStrong)
-            Text(PichiLocalization.text(title)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 
@@ -329,7 +328,7 @@ struct StatsHighlightsView: View {
                 HStack {
                     Image(systemName: icon).font(self.theme.typography.titleIcon).foregroundStyle(color)
                     Spacer()
-                    Text("PERSONAL BEST").font(self.theme.typography.badge).foregroundStyle(.secondary)
+                    Text("PERSONAL BEST").font(self.theme.typography.badge).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 Text(value.formatted())
                     .font(self.theme.typography.displayTitle)
@@ -338,7 +337,7 @@ struct StatsHighlightsView: View {
                     .minimumScaleFactor(0.7)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(PichiLocalization.text(title)).font(self.theme.typography.bodySmallStrong)
-                    Text(PichiLocalization.text(unit)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text(PichiLocalization.text(unit)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

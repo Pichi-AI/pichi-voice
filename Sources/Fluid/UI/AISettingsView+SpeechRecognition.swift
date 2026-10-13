@@ -156,7 +156,7 @@ extension VoiceEngineSettingsView {
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
                                     .background(Capsule().fill(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent.opacity(0.2) : .orange.opacity(0.2)))
-                                    .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accent : .orange)
+                                    .foregroundStyle(badge == AppBrand.text("FluidVoice Pick") ? self.theme.palette.accentText : .orange)
                             }
 
                             Spacer()
@@ -193,7 +193,7 @@ extension VoiceEngineSettingsView {
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(Capsule().fill(self.theme.palette.accent.opacity(0.2)))
-                                .foregroundStyle(self.theme.palette.accent)
+                                .foregroundStyle(self.theme.palette.accentText)
                         }
 
                         Text(LocalizedStringKey(model.languageSupport))
@@ -312,7 +312,7 @@ extension VoiceEngineSettingsView {
                         HStack(spacing: 4) {
                             Image(systemName: "target")
                                 .font(.fluidSystem(size: 11))
-                                .foregroundStyle(Color.fluidGreen)
+                                .foregroundStyle(self.theme.palette.accentText)
                             Text("Acc \(Int(model.accuracyPercent * 100))%")
                                 .font(self.theme.typography.bodyStrong)
                                 .foregroundStyle(self.voiceEngineSecondaryText)
@@ -687,18 +687,20 @@ extension VoiceEngineSettingsView {
             }
         }
         .frame(width: 280, height: 420)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.cardBackground)
     }
 
     private func whisperLanguagePickerRow(title: String, isSelected: Bool) -> some View {
         HStack(spacing: 8) {
             Text(PichiLocalization.text(title))
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.primary)
+                .foregroundStyle(self.theme.palette.primaryText)
             Spacer(minLength: 12)
             if isSelected {
                 Image(systemName: "checkmark")
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
             }
         }
         .contentShape(Rectangle())
@@ -708,7 +710,7 @@ extension VoiceEngineSettingsView {
 
     private func languageChipLabel(_ title: String) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "globe").foregroundStyle(self.theme.palette.accent)
+            Image(systemName: "globe").foregroundStyle(self.theme.palette.accentText)
             Text(PichiLocalization.text(title)).lineLimit(1)
             FluidDropdownChevron()
         }
@@ -756,12 +758,12 @@ extension VoiceEngineSettingsView {
                         HStack(spacing: 8) {
                             Text(language.displayName)
                                 .font(self.theme.typography.bodySmall)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(self.theme.palette.primaryText)
                             Spacer(minLength: 12)
                             if language == self.settings.selectedNemotronLanguage {
                                 Image(systemName: "checkmark")
                                     .font(self.theme.typography.bodySmall)
-                                    .foregroundStyle(self.theme.palette.accent)
+                                    .foregroundStyle(self.theme.palette.accentText)
                             }
                         }
                         .contentShape(Rectangle())
@@ -774,6 +776,8 @@ extension VoiceEngineSettingsView {
             .padding(.vertical, 6)
         }
         .frame(width: 260, height: 532)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.cardBackground)
     }
 
     var modelStatusView: some View {
@@ -786,7 +790,7 @@ extension VoiceEngineSettingsView {
                         .foregroundStyle(self.voiceEngineSecondaryText)
                 }
             } else if self.viewModel.asr.isAsrReady {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.fluidGreen).font(self.theme.typography.bodySmall)
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(self.theme.palette.accentText).font(self.theme.typography.bodySmall)
                 Text("Ready").font(self.theme.typography.bodySmall).foregroundStyle(self.voiceEngineSecondaryText)
 
                 Button(action: { Task { await self.viewModel.deleteModels() } }) {
@@ -799,7 +803,7 @@ extension VoiceEngineSettingsView {
                 }
                 .buttonStyle(.plain)
             } else if self.viewModel.asr.modelsExistOnDisk {
-                Image(systemName: "doc.fill").foregroundStyle(self.theme.palette.accent).font(self.theme.typography.bodySmall)
+                Image(systemName: "doc.fill").foregroundStyle(self.theme.palette.accentText).font(self.theme.typography.bodySmall)
                 Text("Cached")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.voiceEngineSecondaryText)
@@ -826,7 +830,7 @@ extension VoiceEngineSettingsView {
                             .font(self.theme.typography.bodySmall)
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                     }
 
                     Button(action: { Task { await self.viewModel.downloadModels() } }) {

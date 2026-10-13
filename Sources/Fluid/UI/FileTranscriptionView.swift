@@ -229,7 +229,7 @@ struct FileTranscriptionView: View {
                 HStack {
                     Image(systemName: "doc.fill")
                         .font(.fluidSystem(.title2))
-                        .foregroundColor(self.theme.palette.accent)
+                        .foregroundColor(self.theme.palette.accentText)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(fileURL.lastPathComponent)
@@ -239,7 +239,7 @@ struct FileTranscriptionView: View {
 
                         Text(PichiLocalization.text(self.selectedFileIsVideo ? "Video file" : "Audio file"))
                             .font(self.theme.typography.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(self.theme.palette.secondaryText)
                     }
 
                     Spacer()
@@ -300,7 +300,7 @@ struct FileTranscriptionView: View {
                                     ? "Available for audio files only"
                                     : "Identify who said what (downloads speaker models on first use)"))
                                     .font(self.theme.typography.caption)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(self.theme.palette.secondaryText)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -347,7 +347,7 @@ struct FileTranscriptionView: View {
                 HStack(spacing: self.theme.metrics.spacing.lg) {
                     Image(systemName: "doc.badge.plus")
                         .font(self.theme.typography.titleIcon)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                         Text(PichiLocalization.text(self.isDropTargeted ? "Drop to select file" : "Transcribe a file"))
                             .font(self.theme.typography.sectionTitle)
@@ -377,7 +377,7 @@ struct FileTranscriptionView: View {
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.lg)
                         .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 5]))
                         .allowsHitTesting(false)
-                        .foregroundColor(self.theme.palette.accent.opacity(self.isDropTargeted ? 0.7 : 0.3))
+                        .foregroundColor(self.isDropTargeted ? self.theme.palette.accentText : self.theme.palette.cardBorder)
                 )
                 .onDrop(of: [.fileURL], isTargeted: self.$isDropTargeted) { providers in
                     self.handleDrop(providers: providers)
@@ -415,7 +415,7 @@ struct FileTranscriptionView: View {
 
                 Text(self.transcriptionService.status.text(language: PichiInterfaceLanguage(rawValue: self.interfaceLocale.identifier) ?? .russian))
                     .font(self.theme.typography.bodySmall)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(self.theme.palette.secondaryText)
             }
         }
         .padding()
@@ -719,7 +719,7 @@ struct FileTranscriptionView: View {
                         ForEach(entry.speakerSegments) { segment in
                             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
                                 HStack {
-                                    Text(segment.speaker).foregroundStyle(self.theme.palette.accent)
+                                    Text(segment.speaker).foregroundStyle(self.theme.palette.accentText)
                                     Text(segment.timestampText).foregroundStyle(self.theme.palette.secondaryText)
                                 }
                                 .font(self.theme.typography.captionStrong)

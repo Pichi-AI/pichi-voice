@@ -83,7 +83,7 @@ struct OverlayAppearanceEditor: View {
                                     Image(systemName: "checkmark.circle.fill")
                                 }
                             }
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
                             .frame(minHeight: 30)
                         }
                         .padding(9)

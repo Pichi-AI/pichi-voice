@@ -29,7 +29,7 @@ struct AddProviderSheet<Logo: View>: View {
                         self.logo(self.draft.providerID, self.draft.name)
                     } else {
                         Image(systemName: "square.stack.3d.up")
-                            .font(.fluidSystem(size: 26)).foregroundStyle(FluidBrandColors.blue)
+                            .font(.fluidSystem(size: 26)).foregroundStyle(self.theme.palette.accentText)
                             .frame(width: 48, height: 48)
                     }
                     VStack(alignment: .leading, spacing: 6) {
@@ -83,14 +83,14 @@ struct AddProviderSheet<Logo: View>: View {
                                 } label: {
                                     HStack(spacing: 14) {
                                         Image(systemName: "server.rack").font(.fluidSystem(size: 24))
-                                            .foregroundStyle(FluidBrandColors.blue).frame(width: 38, height: 38)
+                                            .foregroundStyle(self.theme.palette.accentText).frame(width: 38, height: 38)
                                         VStack(alignment: .leading, spacing: 5) {
                                             Text("Custom Provider").font(self.theme.typography.bodyStrong)
                                             Text("Your service or server")
                                                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                                         }
                                         Spacer()
-                                        Image(systemName: "plus").foregroundStyle(FluidBrandColors.blue)
+                                        Image(systemName: "plus").foregroundStyle(self.theme.palette.accentText)
                                     }.padding(16).contentShape(RoundedRectangle(cornerRadius: 16))
                                 }
                                 .buttonStyle(ProviderChoiceStyle())

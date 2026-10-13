@@ -227,7 +227,7 @@ struct SettingsView: View {
                         // Section header
                         Label("App Settings", systemImage: "power")
                             .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         VStack(spacing: 16) {
                             // Launch at startup
@@ -503,7 +503,7 @@ struct SettingsView: View {
                                 HStack(spacing: 10) {
                                     Label("Update available · \(version)", systemImage: "arrow.down.circle")
                                         .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.theme.palette.accent)
+                                        .foregroundStyle(self.theme.palette.accentText)
                                         .fixedSize(horizontal: false, vertical: true)
 
                                     Spacer()
@@ -617,7 +617,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             Label("Microphone Permission", systemImage: "mic.fill")
                                 .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(self.theme.palette.primaryText)
 
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack(spacing: 10) {
@@ -683,7 +683,7 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Label(self.selectedSection == .shortcuts ? "Shortcuts" : "Dictation behavior", systemImage: self.selectedSection == .shortcuts ? "keyboard" : "mic")
                                 .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(self.theme.palette.primaryText)
 
                             Spacer()
 
@@ -1081,7 +1081,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Text Formatting", systemImage: "textformat")
                             .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         VStack(spacing: 16) {
                             self.settingsToggleRow(
@@ -1215,7 +1215,7 @@ struct SettingsView: View {
                         HStack {
                             Label("Audio Devices", systemImage: "speaker.wave.2.fill")
                                 .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(self.theme.palette.primaryText)
 
                             Spacer()
 
@@ -1587,7 +1587,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Debug Settings", systemImage: "ladybug.fill")
                             .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         VStack(alignment: .leading, spacing: 8) {
                             self.settingsToggleRow(
@@ -1997,7 +1997,7 @@ struct SettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "externaldrive.fill")
                 .font(.fluidSystem(.headline))
-                .foregroundStyle(.primary)
+                .foregroundStyle(self.theme.palette.primaryText)
                 .frame(width: 24, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -2145,7 +2145,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "info.circle.fill")
-                    .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
+                    .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accentText)
                     .font(.fluidSystem(.caption))
                 Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodySmallStrong)
@@ -2157,12 +2157,12 @@ struct SettingsView: View {
                     HStack(alignment: .top, spacing: 8) {
                         Text("\(index + 1).")
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
+                            .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accentText)
                             .fontWeight(.semibold)
                             .frame(width: 16, alignment: .trailing)
                         Text((try? AttributedString(markdown: step)) ?? AttributedString(step))
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
                     }
                 }
             }
@@ -2454,15 +2454,15 @@ private extension SettingsView {
     }
 
     var settingsTitleText: Color {
-        Color(nsColor: .labelColor)
+        self.theme.palette.primaryText
     }
 
     var settingsSecondaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.90) : self.theme.palette.primaryText.opacity(0.82)
+        self.theme.palette.primaryText
     }
 
     var settingsTertiaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.85) : self.theme.palette.secondaryText
+        self.theme.palette.secondaryText
     }
 
     var microphonePrioritySection: some View {
@@ -2483,7 +2483,7 @@ private extension SettingsView {
                     }
                     .buttonStyle(.plain)
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .disabled(self.isMicrophonePriorityEditingDisabled)
                 }
             }
@@ -2540,7 +2540,7 @@ private extension SettingsView {
         return HStack(spacing: 10) {
             Image(systemName: "line.3.horizontal")
                 .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(self.settingsTertiaryText.opacity(self.isMicrophonePriorityEditingDisabled ? 0.35 : 0.72))
+                .foregroundStyle(self.settingsTertiaryText)
                 .frame(width: 18, height: 30)
                 .contentShape(Rectangle())
                 .onDrag {
@@ -2866,7 +2866,7 @@ struct FillerWordsEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Filler words to remove:")
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
 
             // Word chips
             FlowLayout(spacing: 6) {
@@ -3158,7 +3158,7 @@ struct AnalyticsConfirmationView: View {
         var text = AttributedString(PichiLocalization.text("For privacy questions, contact our support team."))
         if let range = text.range(of: PichiLocalization.text("support team")) {
             text[range].link = AppBrand.supportURL
-            text[range].foregroundColor = self.theme.palette.accent
+            text[range].foregroundColor = self.theme.palette.accentText
         }
 
         return text
@@ -3171,7 +3171,7 @@ struct AnalyticsConfirmationView: View {
 
             Text("We never collect audio, transcription text, prompts, or other personal information.")
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
@@ -3186,7 +3186,7 @@ struct AnalyticsConfirmationView: View {
 
             Text(self.contactInfoText)
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .textSelection(.enabled)
 
             Divider()
@@ -3207,6 +3207,8 @@ struct AnalyticsConfirmationView: View {
         }
         .padding(20)
         .frame(width: 420)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.contentBackground)
     }
 }
 

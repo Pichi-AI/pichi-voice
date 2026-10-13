@@ -29,7 +29,7 @@ struct ReleaseFeaturePreview: View {
     private var meeting: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 7) {
-                Image(systemName: "waveform").foregroundStyle(self.theme.palette.accent)
+                Image(systemName: "waveform").foregroundStyle(self.theme.palette.accentText)
                 Text("Product catch-up").font(.fluidSystem(size: 11, weight: .semibold))
                 Spacer(minLength: 0)
                 Text("12:48").font(.fluidSystem(size: 9, design: .monospaced))
@@ -38,7 +38,7 @@ struct ReleaseFeaturePreview: View {
             HStack(alignment: .top, spacing: 8) {
                 Circle().fill(self.theme.palette.accent.opacity(0.18))
                     .frame(width: 19, height: 19)
-                    .overlay(Text("A").font(.fluidSystem(size: 9, weight: .medium)).foregroundStyle(self.theme.palette.accent))
+                    .overlay(Text("A").font(.fluidSystem(size: 9, weight: .medium)).foregroundStyle(self.theme.palette.accentText))
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Let’s get the next release ready.")
                         .font(.fluidSystem(size: 10))
@@ -49,7 +49,7 @@ struct ReleaseFeaturePreview: View {
             VStack(alignment: .leading, spacing: 5) {
                 Label("Summary", systemImage: "sparkles")
                     .font(.fluidSystem(size: 9, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                 Text("Review features. Prepare the release.")
                     .font(.fluidSystem(size: 9)).foregroundStyle(self.theme.palette.secondaryText)
             }
@@ -80,7 +80,7 @@ struct ReleaseFeaturePreview: View {
 
     private func stat(_ value: String, label: String, symbol: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Image(systemName: symbol).font(.system(size: 10)).foregroundStyle(self.theme.palette.accent)
+            Image(systemName: symbol).font(.system(size: 10)).foregroundStyle(self.theme.palette.accentText)
             Text(value).font(.fluidSystem(size: 16, weight: .semibold, design: .rounded))
             Text(PichiLocalization.text(label)).font(.fluidSystem(size: 6, weight: .medium)).foregroundStyle(self.theme.palette.secondaryText)
         }
@@ -105,7 +105,7 @@ struct ReleaseFeaturePreview: View {
     private func model(_ name: String, detail: String, symbol: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
-                .font(.system(size: 11)).foregroundStyle(self.theme.palette.accent)
+                .font(.system(size: 11)).foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 23, height: 23)
                 .background(self.theme.palette.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
             Text(PichiLocalization.text(name)).font(.fluidSystem(size: 10, weight: .medium))

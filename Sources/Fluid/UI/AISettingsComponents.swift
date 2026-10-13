@@ -71,7 +71,7 @@ struct LiquidBar: View {
                     .foregroundStyle(self.color)
                 Text(PichiLocalization.text(self.label))
                     .font(self.theme.typography.tinyStrong)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             // Liquid Container (Capsule Glass)

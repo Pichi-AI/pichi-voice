@@ -50,7 +50,7 @@ struct StatsTodayHero: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Text(self.words == 0 ? PichiLocalization.text("Make a little space for your next big thought.") : PichiLocalization.format("%@ words captured, without the typing.", self.words.formatted()))
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }
@@ -66,11 +66,11 @@ struct StatsTodayHero: View {
                     .monospacedDigit()
                 Text(PichiLocalization.formattedStreakUnit(days: self.streak))
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
             Text(PichiLocalization.text(self.streak == 0 ? "Your next streak starts with today." : "One day at a time. Look how far you've come."))
                 .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 ForEach(Array(self.activity.enumerated()), id: \.element.date) { index, day in
@@ -92,11 +92,11 @@ struct StatsTodayHero: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(self.nextTarget.map { PichiLocalization.format("%@ spoken. Let's make it %@.", self.words.formatted(), $0.formatted()) } ?? PichiLocalization.format("%@ words spoken. Keep your ideas coming.", self.words.formatted()))
                     .font(self.theme.typography.statement)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                 Spacer(minLength: 12)
                 Text("\(Int(self.progress * 100))%")
                     .font(self.theme.typography.title)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .monospacedDigit()
             }
             GeometryReader { geometry in
@@ -112,7 +112,7 @@ struct StatsTodayHero: View {
             .accessibilityValue(PichiLocalization.format("%lld percent", Int(self.progress * 100)))
             Label("\(self.sessions.formatted()) dictations", systemImage: "waveform")
                 .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .padding(.top, 4)
         }
     }
@@ -131,19 +131,19 @@ private struct StatsStreakDay: View {
         VStack(spacing: 6) {
             Image(systemName: self.words > 0 ? "checkmark" : "minus")
                 .font(self.theme.typography.badge)
-                .foregroundStyle(self.words > 0 ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                .foregroundStyle(self.words > 0 ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                 .frame(width: 24, height: 24)
                 .background(self.theme.palette.accent.opacity(self.words > 0 ? 0.15 : 0.04), in: Circle())
             Text(self.date.formatted(.dateTime.weekday(.narrow).locale(self.interfaceLocale)))
                 .font(self.theme.typography.captionSmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
         .contentShape(Rectangle())
         .overlay(alignment: self.tooltipAlignment) {
             if self.isHovered {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(self.date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().locale(self.interfaceLocale)))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                     Text("\(self.words.formatted()) words")
                         .font(self.theme.typography.captionStrong)
                 }

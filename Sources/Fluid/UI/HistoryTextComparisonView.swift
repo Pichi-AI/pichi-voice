@@ -14,7 +14,7 @@ struct HistoryTextComparisonView: View {
             if self.entry.wasAIProcessed {
                 HStack {
                     if self.showChanges, let message = self.comparisonMessage {
-                        Text(PichiLocalization.text(message)).foregroundStyle(.secondary)
+                        Text(PichiLocalization.text(message)).foregroundStyle(self.theme.palette.secondaryText)
                             .lineLimit(1).help(PichiLocalization.text(message))
                     }
                     Spacer()
@@ -52,13 +52,13 @@ struct HistoryTextComparisonView: View {
                 Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong)
                 if !isOriginal, self.entry.wasAIProcessed {
                     Text("AI enhanced").font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(self.theme.palette.accent.opacity(0.1), in: Capsule())
                 }
                 Spacer()
                 Button { self.copy(content) } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .buttonStyle(.plain).foregroundStyle(self.theme.palette.secondaryText)
                     .help(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
                     .accessibilityLabel(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
             }

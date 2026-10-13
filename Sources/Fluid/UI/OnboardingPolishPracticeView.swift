@@ -85,7 +85,7 @@ struct OnboardingPolishPracticeView: View {
             HStack(spacing: 8) {
                 Image(systemName: self.isRunning ? "waveform" : "sparkles")
                     .font(.fluidSystem(size: 15, weight: .medium))
-                    .foregroundStyle(self.blue)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .symbolEffect(.variableColor, options: .repeating, isActive: self.isRunning && self.isActive && self.scenePhase == .active && !self.reduceMotion)
                     .accessibilityHidden(true)
                 Text(PichiLocalization.text(self.status))

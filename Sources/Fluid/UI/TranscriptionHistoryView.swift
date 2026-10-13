@@ -202,7 +202,7 @@ struct TranscriptionHistoryView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .font(.fluidSystem(size: 13, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
 
             TextField("Search transcriptions...", text: self.$searchQuery)
                 .textFieldStyle(.plain)
@@ -214,7 +214,7 @@ struct TranscriptionHistoryView: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.fluidSystem(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
                 .buttonStyle(.plain)
             }
@@ -292,7 +292,7 @@ struct TranscriptionHistoryView: View {
                             HistoryAppIcon(appName: entry.appName)
                             Spacer(minLength: 4)
                             Text(self.relativeDate(entry.timestamp))
-                                .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                                .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                         }
                         .padding(.trailing, 36)
                         .frame(minHeight: 28)
@@ -318,13 +318,13 @@ struct TranscriptionHistoryView: View {
                             if self.settings.showHistoryPerformanceMetrics, let speed = entry.aiTokensPerSecond {
                                 Text(TranscriptionHistoryEntry.formattedTokensPerSecond(speed, compact: true))
                                     .font(self.theme.typography.captionStrong)
-                                    .foregroundStyle(self.theme.palette.accent)
+                                    .foregroundStyle(self.theme.palette.accentText)
                                     .monospacedDigit()
                                     .fixedSize()
                                     .help(PichiLocalization.text("AI generation speed, in tokens per second—not total processing time"))
                             }
                         }
-                        .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                         .padding(.trailing, 76)
                         .frame(minHeight: 28)
                     }
@@ -368,7 +368,7 @@ struct TranscriptionHistoryView: View {
                 .font(self.theme.typography.body)
                 .labelStyle(.iconOnly)
                 .frame(width: 64)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .opacity(showsActions ? 1 : 0)
                 .allowsHitTesting(showsActions)
                 .accessibilityHidden(!showsActions)
@@ -383,7 +383,7 @@ struct TranscriptionHistoryView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(entry.isStarred ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                .foregroundStyle(entry.isStarred ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                 .help(PichiLocalization.text(entry.isStarred ? "Unpin transcription" : "Pin transcription"))
                 .accessibilityLabel(PichiLocalization.text(entry.isStarred ? "Unpin transcription" : "Pin transcription"))
                 .accessibilityIdentifier("History.Pin.\(entry.id.uuidString)")
@@ -495,16 +495,16 @@ struct TranscriptionHistoryView: View {
 
             Image(systemName: self.emptyStateIcon)
                 .font(.fluidSystem(size: 36, weight: .light))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(self.theme.palette.tertiaryText)
 
             VStack(spacing: 4) {
                 Text(PichiLocalization.text(self.emptyStateTitle))
                     .font(.fluidSystem(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 Text(PichiLocalization.text(self.emptyStateMessage))
                     .font(.fluidSystem(size: 12))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
                     .multilineTextAlignment(.center)
             }
 
@@ -525,7 +525,7 @@ struct TranscriptionHistoryView: View {
                 // Stats
                 Text(self.filteredEntries.count == 1 ? PichiLocalization.text("1 entry") : PichiLocalization.format("%lld entries", self.filteredEntries.count))
                     .font(.fluidSystem(size: 11, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
 
                 Spacer()
 
@@ -536,7 +536,7 @@ struct TranscriptionHistoryView: View {
                     } label: {
                         Text("Clear All")
                             .font(.fluidSystem(size: 11, weight: .medium))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                     }
                     .buttonStyle(.plain)
                     .opacity(0.8)
@@ -631,12 +631,12 @@ struct TranscriptionHistoryView: View {
         HStack(spacing: 14) {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.fluidSystem(size: 24, weight: .medium))
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 52, height: 52)
                 .background(self.theme.palette.accent.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
             VStack(alignment: .leading, spacing: 5) {
                 Text("Dictation details").font(self.theme.typography.title)
-                Text(entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                Text(entry.timestamp.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(self.interfaceLocale))).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }
@@ -690,10 +690,10 @@ struct TranscriptionHistoryView: View {
 
     private func metadataItem(icon: String, label: String, value: String) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: icon).font(.fluidSystem(size: 18)).foregroundStyle(self.theme.palette.accent)
+            Image(systemName: icon).font(.fluidSystem(size: 18)).foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 5) {
-                Text(PichiLocalization.text(label)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                Text(PichiLocalization.text(label)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 Text(value).font(self.theme.typography.bodyStrong).monospacedDigit()
             }
             Spacer(minLength: 0)
@@ -777,11 +777,11 @@ struct TranscriptionHistoryView: View {
         VStack(spacing: 16) {
             Image(systemName: "text.quote")
                 .font(.fluidSystem(size: 40, weight: .light))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(self.theme.palette.tertiaryText)
 
             Text("Select a transcription")
                 .font(.fluidSystem(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(self.theme.palette.contentBackground)
@@ -817,7 +817,7 @@ private struct TranscriptionFeedbackReportSheet: View {
                     .font(.fluidSystem(size: 18, weight: .semibold))
                 Text("Help improve our model. Only the example shown below will be sent.")
                     .font(.fluidSystem(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             self.feedbackField(title: "Raw Text", text: self.$inputText, height: 88)
@@ -895,7 +895,7 @@ private struct TranscriptionFeedbackReportSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(PichiLocalization.text(title))
                 .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .textCase(.uppercase)
 
             TextEditor(text: text)

@@ -467,11 +467,11 @@ struct OnboardingFlowView: View {
             HStack {
                 Text("Step \(self.step.rawValue + 1) of \(Step.allCases.count)")
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                 Spacer()
                 Text(PichiLocalization.text(self.step.title))
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
             }
 
             ProgressView(value: self.progressValue)
@@ -607,7 +607,7 @@ struct OnboardingFlowView: View {
 
                             Text("We'll show the best voice engines for it.")
                                 .font(.fluidSystem(size: 15, weight: .medium))
-                                .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.bottom, 26)
 
                             LazyVGrid(
@@ -633,7 +633,7 @@ struct OnboardingFlowView: View {
 
                             Text("You can change this later in Voice Engine settings.")
                                 .font(.fluidSystem(size: 12, weight: .medium))
-                                .foregroundStyle(self.theme.palette.primaryText.opacity(0.44))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.top, 18)
                         }
                         .frame(maxWidth: .infinity)
@@ -690,7 +690,7 @@ struct OnboardingFlowView: View {
             HStack(spacing: 10) {
                 Image(systemName: "globe")
                     .font(.fluidSystem(size: 17, weight: .semibold))
-                    .foregroundStyle(isSelected ? self.theme.palette.accent : self.theme.palette.primaryText.opacity(0.72))
+                    .foregroundStyle(isSelected ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                     .frame(width: 22)
 
                 Text(language.localizedDisplayName(locale: self.locale))
@@ -704,7 +704,7 @@ struct OnboardingFlowView: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(.fluidSystem(size: 12, weight: .bold))
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                 }
             }
             .padding(.horizontal, 15)
@@ -762,7 +762,7 @@ struct OnboardingFlowView: View {
             HStack(spacing: 10) {
                 Image(systemName: "ellipsis")
                     .font(.fluidSystem(size: 18, weight: .bold))
-                    .foregroundStyle(isSelected ? self.theme.palette.accent : self.theme.palette.primaryText.opacity(self.isShowingAllLanguages ? 0.78 : 0.72))
+                    .foregroundStyle(isSelected ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                     .frame(width: 22)
 
                 Text(isSelected
@@ -777,7 +777,7 @@ struct OnboardingFlowView: View {
 
                 Image(systemName: self.isShowingAllLanguages ? "chevron.up" : "chevron.down")
                     .font(.fluidSystem(size: 10, weight: .bold))
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.46))
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
             .padding(.horizontal, 15)
             .frame(width: 166, height: 58)
@@ -808,13 +808,13 @@ struct OnboardingFlowView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.fluidSystem(size: 13, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.48))
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 TextField(
                     "",
                     text: self.$languageSearchText,
                     prompt: Text("Search supported languages")
-                        .foregroundStyle(self.theme.palette.primaryText.opacity(0.42))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 )
                 .textFieldStyle(.plain)
                 .font(.fluidSystem(size: 14, weight: .medium))
@@ -865,7 +865,7 @@ struct OnboardingFlowView: View {
                 if isSelected {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.fluidSystem(size: 13, weight: .bold))
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                 }
             }
             .padding(.horizontal, 10)
@@ -1061,13 +1061,13 @@ struct OnboardingFlowView: View {
 
                             Text(self.recommendedModelReasonText)
                                 .font(.fluidSystem(size: 15, weight: .medium))
-                                .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .multilineTextAlignment(.center)
                                 .padding(.bottom, 14)
 
                             Text(self.selectedOnboardingLanguage?.localizedDisplayName(locale: self.locale) ?? "")
                                 .font(.fluidSystem(size: 13, weight: .semibold))
-                                .foregroundStyle(self.theme.palette.accent)
+                                .foregroundStyle(self.theme.palette.accentText)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
                                 .background(
@@ -1144,7 +1144,7 @@ struct OnboardingFlowView: View {
 
                             Text("You can switch models later in Voice Engine settings.")
                                 .font(.fluidSystem(size: 12, weight: .medium))
-                                .foregroundStyle(self.theme.palette.primaryText.opacity(0.44))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.top, self.isModelPreparationInProgress ? 8 : 18)
                         }
                         .frame(maxWidth: .infinity)
@@ -1197,7 +1197,7 @@ struct OnboardingFlowView: View {
 
                             Text("Two quick permissions make dictation work anywhere.")
                                 .font(.fluidSystem(size: 15, weight: .medium))
-                                .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.bottom, 28)
 
                             VStack(spacing: 14) {
@@ -1238,7 +1238,7 @@ struct OnboardingFlowView: View {
                                 if !self.isAccessibilityReady {
                                     Text(AppBrand.text("Already enabled it? FluidVoice will update when macOS confirms access."))
                                         .font(.fluidSystem(size: 12, weight: .medium))
-                                        .foregroundStyle(self.theme.palette.primaryText.opacity(0.42))
+                                        .foregroundStyle(self.theme.palette.secondaryText)
                                         .padding(.top, 2)
                                 }
                             }
@@ -1296,7 +1296,7 @@ struct OnboardingFlowView: View {
 
                             Text("Now let's try it out.")
                                 .font(.fluidSystem(size: 15, weight: .medium))
-                                .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.bottom, 28)
 
                             if let language = self.selectedOnboardingLanguage {
@@ -1426,7 +1426,7 @@ struct OnboardingFlowView: View {
                     .font(.fluidSystem(size: 8, weight: .bold))
             }
             .font(.fluidSystem(size: 11, weight: .semibold))
-            .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+            .foregroundStyle(self.theme.palette.secondaryText)
             .padding(.horizontal, 10)
             .frame(height: 24)
             .background(
@@ -1611,7 +1611,7 @@ struct OnboardingFlowView: View {
 
                 Image(systemName: "info.circle")
                     .font(self.theme.typography.sectionTitle)
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.58))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(width: 24, height: 24)
                     .contentShape(Circle())
                     .accessibilityLabel(self.onboardingModelTooltip(for: route))
@@ -1624,7 +1624,7 @@ struct OnboardingFlowView: View {
             if isCompactModel {
                 Text(PichiLocalization.text(model.languageSupport))
                     .font(self.theme.typography.bodySmallStrong)
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             self.onboardingModelMetadataRow(badgeText: route.badgeText)
@@ -1647,12 +1647,12 @@ struct OnboardingFlowView: View {
             HStack(spacing: 10) {
                 Image(systemName: "internaldrive")
                     .font(self.theme.typography.sectionTitle)
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(width: 22)
 
                 Text("Download size")
                     .font(self.theme.typography.bodySmallStrong)
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 Spacer()
 
@@ -1818,7 +1818,7 @@ struct OnboardingFlowView: View {
 
                     Text("Cancelling...")
                         .font(self.theme.typography.captionStrong)
-                        .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
             } else if self.asr.isDownloadingModel || self.asr.hasActiveModelDownload,
                       self.asr.modelPreparationPhase == .downloading,
@@ -1830,7 +1830,7 @@ struct OnboardingFlowView: View {
                 HStack(spacing: 6) {
                     Text(PichiLocalization.text(self.asr.modelPreparationStatusText))
                         .font(self.theme.typography.captionStrong)
-                        .foregroundStyle(self.theme.palette.primaryText.opacity(0.56))
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                 }
@@ -1846,7 +1846,7 @@ struct OnboardingFlowView: View {
                             : (self.isImportingModel ? "Importing..." : self.asr.modelPreparationStatusText)
                     ))
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.62))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                 }
@@ -1886,7 +1886,7 @@ struct OnboardingFlowView: View {
 
                 Text(PichiLocalization.text(label))
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.66))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
             }
@@ -1925,7 +1925,7 @@ struct OnboardingFlowView: View {
 
             Text("\(Int(fillPercent * 100))%")
                 .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(fillPercent > 0 ? color : self.theme.palette.primaryText.opacity(0.48))
+                .foregroundStyle(fillPercent > 0 ? color : self.theme.palette.secondaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .contentTransition(.numericText())
@@ -2122,7 +2122,7 @@ struct OnboardingFlowView: View {
                         Text("\(stepNumber)")
                             .font(.fluidSystem(size: 10, weight: .bold))
                     }
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                 }
             }
 
@@ -2134,7 +2134,7 @@ struct OnboardingFlowView: View {
 
                 Text(LocalizedStringKey(resolvedStatusTitle))
                     .font(.fluidSystem(size: 10, weight: .bold))
-                    .foregroundStyle(isReady ? Color.green.opacity(0.92) : self.theme.palette.accent)
+                    .foregroundStyle(isReady ? Color.green.opacity(0.92) : self.theme.palette.accentText)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
                     .background(
@@ -2144,7 +2144,7 @@ struct OnboardingFlowView: View {
 
                 Text(LocalizedStringKey(subtitle))
                     .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.55))
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -2591,7 +2591,7 @@ private struct OnboardingMicrophoneSetupPanel: View {
         if let errorMessage, errorMessage.isEmpty == false {
             return ("Microphone unavailable", Color.orange)
         }
-        return ("Input level", self.theme.palette.primaryText.opacity(0.52))
+        return ("Input level", self.theme.palette.secondaryText)
     }
 
     var body: some View {
@@ -2602,7 +2602,7 @@ private struct OnboardingMicrophoneSetupPanel: View {
             HStack(spacing: 14) {
                 Text("Select your microphone")
                     .font(.fluidSystem(size: 12, weight: .semibold))
-                    .foregroundStyle(self.theme.palette.primaryText.opacity(0.58))
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 Spacer(minLength: 12)
 

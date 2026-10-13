@@ -4,7 +4,6 @@ import SwiftUI
 struct FluidModelShowcaseCard: View {
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @State private var hovered = false
@@ -43,7 +42,7 @@ struct FluidModelShowcaseCard: View {
                     if self.isSelected {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.fluidSystem(size: 18, weight: .semibold))
-                            .foregroundStyle(FluidBrandColors.blue)
+                            .foregroundStyle(self.theme.palette.accentText)
                             .accessibilityLabel(PichiLocalization.text("Selected"))
                     }
                 }
@@ -79,14 +78,7 @@ struct FluidModelShowcaseCard: View {
             .padding(self.theme.metrics.spacing.xl)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .background {
-                self.shape.fill(self.colorScheme == .dark ? Color(red: 0.025, green: 0.04, blue: 0.095) : self.theme.palette.elevatedCardBackground)
-                if !self.reduceTransparency {
-                    self.shape.fill(LinearGradient(
-                        colors: [FluidBrandColors.blue.opacity(self.isPreview ? 0.16 : 0.08), .clear],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
-                }
+                self.shape.fill(self.theme.palette.elevatedCardBackground)
             }
             .overlay {
                 self.shape.strokeBorder(
@@ -151,7 +143,7 @@ struct FluidModelMetrics: View {
         let presentation = PrivateAIModelPresentation.forModel(id: self.modelID)
         if let intelligence = presentation.intelligence, let speed = presentation.speed {
             VStack(spacing: self.theme.metrics.spacing.xs) {
-                FluidModelMetric(label: "Intelligence", value: intelligence, tint: FluidBrandColors.blue, compact: true)
+                FluidModelMetric(label: "Intelligence", value: intelligence, tint: self.theme.palette.accentText, compact: true)
                 FluidModelMetric(label: "Speed", value: speed, tint: .teal, compact: true)
             }
             .frame(width: AppTheme.Metrics.Showcase.compactMetricWidth)
