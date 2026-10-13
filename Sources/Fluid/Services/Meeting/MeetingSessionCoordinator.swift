@@ -138,6 +138,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private var liveTranscriptionCoordinator: MeetingLiveTranscriptionCoordinator?
+    private var liveTranscriptionTeardownTask: Task<Void, Never>?
     private let livePrivacyPublication = MeetingLivePrivacyPublication()
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
@@ -2221,12 +2222,22 @@ final class MeetingSessionCoordinator: ObservableObject {
     /// Must complete before any code path that calls into `processing.process`, so both live
     /// engines' CoreML models are released before the batch pipeline's `ensureAsrReady()` loads.
     private func tearDownLiveTranscription() async {
+        if let pending = self.liveTranscriptionTeardownTask {
+            await pending.value
+            return
+        }
         // Close callback admission before suspension. A queued update must not
         // start new privacy work while the canceled worker is being joined.
         let coordinator = self.liveTranscriptionCoordinator
         self.liveTranscriptionCoordinator = nil
-        await self.livePrivacyPublication.stop()
-        await coordinator?.stop()
+        let publication = self.livePrivacyPublication
+        let cleanup = Task { @MainActor in
+            await publication.stop()
+            await coordinator?.stop()
+        }
+        self.liveTranscriptionTeardownTask = cleanup
+        await cleanup.value
+        self.liveTranscriptionTeardownTask = nil
         self.liveTranscript = .empty
     }
 
