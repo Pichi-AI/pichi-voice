@@ -30,7 +30,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 copy.speakers[i].identityCandidates[j].source = try await redactor.redact(copy.speakers[i].identityCandidates[j].source)
             }
         }
-        copy.transcriptSegments = try await self.redactedSegments(copy.transcriptSegments, using: redactor)
+        copy.transcriptSegments = try await self.redactedSegments(copy.transcriptSegments, using: redactor).segments
         for i in copy.events.indices {
             if let detail = copy.events[i].detail { copy.events[i].detail = try await redactor.redact(detail) }
         }
@@ -44,10 +44,19 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     }
 
     static func redactedBatch(_ batch: MeetingPCMTranscriptBatch, using redactor: any TranscriptTextRedacting,
-                              contextPrefixes: [MeetingAudioTrackID: String] = [:]) async throws -> MeetingPCMTranscriptBatch {
+                              contextPrefixes: [MeetingAudioTrackID: String] = [:],
+                              provisionalPreviewID: UUID? = nil,
+                              provisionalSegmentIDs: Set<UUID> = []) async throws -> MeetingPCMTranscriptBatch {
         var copy = batch
         if let source = copy.sourceTrack { copy.sourceTrack?.sourceDisplayName = try await redactor.redact(source.sourceDisplayName) }
-        copy.segments = try await self.redactedSegments(copy.segments, using: redactor, contextPrefixes: contextPrefixes)
+        let projection = try await self.redactedSegments(copy.segments, using: redactor, contextPrefixes: contextPrefixes,
+                                                        provisionalSegmentIDs: provisionalSegmentIDs)
+        copy.segments = projection.segments
+        copy.livePreview = nil
+        if let id = provisionalPreviewID, let text = projection.provisionalText, !text.isEmpty,
+           let first = batch.segments.filter({ provisionalSegmentIDs.contains($0.id) }).min(by: { $0.start < $1.start }) {
+            copy.livePreview = .init(id: id, text: text, start: first.start.seconds)
+        }
         for i in copy.speakers.indices {
             copy.speakers[i].displayName = try await redactor.redact(copy.speakers[i].displayName)
             copy.speakers[i].diarizationEmbedding = nil
@@ -69,7 +78,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             var fragments = indices.map { TextFragment(key: $0, text: copy.utterances[$0].text) }
             let partialKey = copy.utterances.count
             if let partial = copy.partials[source] { fragments.append(.init(key: partialKey, text: partial.text)) }
-            let safe = try await self.projectedTexts(fragments, prefix: "", using: redactor)
+            let safe = try await self.projectedTexts(fragments, prefix: "", using: redactor).canonical
             for index in indices { copy.utterances[index].text = safe[index] ?? copy.utterances[index].text }
             if var partial = copy.partials[source] {
                 partial.text = safe[partialKey] ?? partial.text
@@ -90,10 +99,17 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     /// Preserve bounded linguistic context across adjacent utterances, then
     /// project replacements back to each original segment. Context is inference
     /// input only; it cannot add text, change timing, or enter a checkpoint.
+    private struct SegmentProjection {
+        let segments: [MeetingTranscriptSegment]
+        let provisionalText: String?
+    }
+
     private static func redactedSegments(_ segments: [MeetingTranscriptSegment], using redactor: any TranscriptTextRedacting,
-                                         contextPrefixes: [MeetingAudioTrackID: String] = [:]) async throws -> [MeetingTranscriptSegment] {
+                                         contextPrefixes: [MeetingAudioTrackID: String] = [:],
+                                         provisionalSegmentIDs: Set<UUID> = []) async throws -> SegmentProjection {
         var copy = segments
         let groups = Dictionary(grouping: segments.indices) { segments[$0].sourceTrackID }
+        var provisionalText: String?
         for (trackID, indices) in groups {
             let ordered = indices.sorted { a, b in
                 segments[a].start == segments[b].start ? a < b : segments[a].start < segments[b].start
@@ -101,11 +117,17 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             let fragments = ordered.map { TextFragment(key: $0, text: segments[$0].text) }
             let projected = try await self.projectedTexts(fragments, prefix: contextPrefixes[trackID] ?? "", using: redactor)
             for index in ordered {
-                copy[index].text = projected[index] ?? segments[index].text
+                copy[index].text = projected.canonical[index] ?? segments[index].text
                 copy[index].originalText = nil
             }
+            // A display prefix belongs to one source. Never join unrelated source contexts.
+            if groups.count == 1, !provisionalSegmentIDs.isEmpty, let preview = projected.provisional {
+                provisionalText = ordered.filter { provisionalSegmentIDs.contains(segments[$0].id) }
+                    .map { preview[$0] ?? "" }.filter { !$0.isEmpty }.joined(separator: " ")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
         }
-        return copy
+        return .init(segments: copy, provisionalText: provisionalText)
     }
 
     private struct TextFragment {
@@ -113,12 +135,18 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         let text: String
     }
 
+    private struct TextProjection {
+        let canonical: [Int: String]
+        let provisional: [Int: String]?
+    }
+
     private static func projectedTexts(_ fragments: [TextFragment], prefix: String, separator: String = " ",
-                                       using redactor: any TranscriptTextRedacting) async throws -> [Int: String] {
+                                       using redactor: any TranscriptTextRedacting) async throws -> TextProjection {
         guard prefix.utf16.count <= MeetingTranscriptPrivacyContext.maximumContextUTF16 else {
             throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
         }
         var rangesByFragment: [Int: [TranscriptRedactedSpan]] = [:]
+        var provisional: [Int: String]?
         var cursor = 0
         while cursor < fragments.count {
             try Task.checkCancellation()
@@ -138,6 +166,24 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
             let output = try await redactor.redactWithSpans(text)
             try Task.checkCancellation()
             try self.validate(output, for: text)
+            // Strict held text fits one admission window. A multi-window transformation has
+            // no single adapter-approved prefix, so canonical projection remains available
+            // but provisional display fails closed rather than splicing separate approvals.
+            if cursor == 0, end == fragments.count, let limit = output.provisionalSafeUTF16 {
+                var approved: [Int: String] = [:]
+                let source = text as NSString
+                for (key, range) in ranges where range.location < limit {
+                    let admitted = NSRange(location: range.location, length: min(NSMaxRange(range), limit) - range.location)
+                    let spans = output.spans.compactMap { span -> TranscriptRedactedSpan? in
+                        let intersection = NSIntersectionRange(span.range, admitted)
+                        guard intersection.length > 0 else { return nil }
+                        return .init(range: NSRange(location: intersection.location - admitted.location, length: intersection.length),
+                                     replacement: span.replacement)
+                    }
+                    approved[key] = try self.replacing(source.substring(with: admitted), spans: spans)
+                }
+                provisional = approved
+            }
             for (key, range) in ranges {
                 for span in output.spans {
                     let intersection = NSIntersectionRange(span.range, range)
@@ -158,7 +204,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 result[fragment.key] = try self.replacing(fragment.text, spans: spans)
             }
         }
-        return result
+        return .init(canonical: result, provisional: provisional)
     }
 
     private static func validate(_ output: TranscriptTextRedaction, for input: String) throws {
@@ -169,6 +215,13 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                   !span.replacement.isEmpty,
                   span.range.location == 0 || !(0xDC00...0xDFFF).contains(units[span.range.location]),
                   NSMaxRange(span.range) == units.count || !(0xDC00...0xDFFF).contains(units[NSMaxRange(span.range)]) else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+        }
+        if let limit = output.provisionalSafeUTF16 {
+            guard limit >= 0, limit <= units.count,
+                  limit == units.count || !(0xDC00...0xDFFF).contains(units[limit]),
+                  !output.spans.contains(where: { $0.range.location < limit && NSMaxRange($0.range) > limit }) else {
                 throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
             }
         }
@@ -201,7 +254,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         for group in groups.values {
             let ordered = group.sorted { $0.analysisStart < $1.analysisStart }
             let fragments = ordered.indices.map { TextFragment(key: $0, text: ordered[$0].text) }
-            let projected = try await self.projectedTexts(fragments, prefix: "", using: redactor)
+            let projected = try await self.projectedTexts(fragments, prefix: "", using: redactor).canonical
             for (index, text) in projected { replacements[ordered[index].id] = text }
         }
         let units = evidence.units.map { unit in
@@ -305,13 +358,16 @@ actor MeetingTranscriptPrivacyContext {
     private var pending: [MeetingTranscriptSegment] = []
     private var pendingIsComplete = true
     private var isProcessing = false
+    private let provisionalPreviewID = UUID()
+    private var lastSafePreview: MeetingLivePartial?
     init(redactor: any TranscriptTextRedacting) { self.redactor = redactor }
 
     func redact(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingPCMTranscriptBatch {
-        try Task.checkCancellation()
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         isProcessing = true
-        defer { isProcessing = false }
+        var completed = false
+        defer { if !completed { lastSafePreview = nil }; isProcessing = false }
+        try Task.checkCancellation()
         let tracks = Set(batch.segments.map(\.sourceTrackID))
         guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         let ordered = batch.segments.sorted { $0.start < $1.start }
@@ -322,7 +378,15 @@ actor MeetingTranscriptPrivacyContext {
         if !pending.isEmpty, !ordered.isEmpty, !continues { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         let context = continues ? prefix : ""
         guard let last = ordered.last else {
-            return try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor)
+            var safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(batch, using: redactor)
+            try Task.checkCancellation()
+            // An empty forward window has no new hypothesis to invalidate the
+            // already approved display. No-source silence belongs to this owned
+            // attempt; an explicitly different source never inherits its preview.
+            if !pending.isEmpty, currentTrack == nil || continues { safe.livePreview = lastSafePreview }
+            lastSafePreview = safe.livePreview
+            completed = true
+            return safe
         }
         var combined = batch
         combined.segments = pending + batch.segments
@@ -343,7 +407,8 @@ actor MeetingTranscriptPrivacyContext {
         let tail = Array(combinedOrdered.suffix(heldCount))
         let heldIDs = Set(tail.map(\.id))
         var safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(combined, using: redactor,
-            contextPrefixes: currentTrack.map { [$0: context] } ?? [:])
+            contextPrefixes: currentTrack.map { [$0: context] } ?? [:],
+            provisionalPreviewID: self.provisionalPreviewID, provisionalSegmentIDs: heldIDs)
         try Task.checkCancellation()
         // A checkpoint receives earlier complete segments, never any word from
         // this raw lexical tail. Its stable IDs later use normal store operations.
@@ -353,12 +418,15 @@ actor MeetingTranscriptPrivacyContext {
         pending = tail.map { segment in var copy = segment; copy.originalText = nil; return copy }
         pendingIsComplete = combined.isComplete
         trackID = currentTrack; lastEnd = last.end
+        lastSafePreview = safe.livePreview
+        completed = true
         return safe
     }
 
     func finish() async throws -> MeetingPCMTranscriptBatch? {
-        try Task.checkCancellation()
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
+        lastSafePreview = nil
+        try Task.checkCancellation()
         guard !pending.isEmpty else { return nil }
         isProcessing = true
         defer { isProcessing = false }

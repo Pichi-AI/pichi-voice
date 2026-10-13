@@ -4,16 +4,35 @@ import PichiTextPrivacy
 private struct StructuredPrivacyRedactor: TranscriptTextRedacting {
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let output = try PIIRedactor.redact(text, ner: [])
-        return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) })
+        return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) },
+                     provisionalSafeUTF16: try PIIRedactor.provisionalSafePrefix(in: text, ner: [], redactedSpans: output.spans))
     }
 }
 
+#if !PII_POLICY_STANDALONE
 private actor NativePrivacyRedactor: TranscriptTextRedacting {
     let runtime = PIINERRuntime()
     func prepare(_ directory: URL) async throws { try await runtime.load(directory: directory) }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
-        let output = try PIIRedactor.redact(text, ner: await runtime.tag(text))
+        let ner = try await runtime.tag(text)
+        let output = try PIIRedactor.redact(text, ner: ner)
+        return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) },
+                     provisionalSafeUTF16: try PIIRedactor.provisionalSafePrefix(in: text, ner: ner, redactedSpans: output.spans))
+    }
+}
+#endif
+
+private struct UnsupportedPreviewRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let output = try PIIRedactor.redact(text, ner: [])
         return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) })
+    }
+}
+
+private struct InvalidPreviewRedactor: TranscriptTextRedacting {
+    let limit: Int
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        .init(text: text, spans: [], provisionalSafeUTF16: limit)
     }
 }
 
@@ -70,12 +89,16 @@ struct MeetingPrivacyContextTests {
     static func main() async throws {
         try await suite(using: StructuredPrivacyRedactor())
         try await liveSuite(using: StructuredPrivacyRedactor())
+        try await provisionalSuite(using: StructuredPrivacyRedactor())
+        #if !PII_POLICY_STANDALONE
         if let path = ProcessInfo.processInfo.environment["PICHI_PII_TEST_MODEL_DIRECTORY"] {
             let native = NativePrivacyRedactor()
             try await native.prepare(URL(fileURLWithPath: path, isDirectory: true))
             try await suite(using: native)
             try await liveSuite(using: native)
+            try await provisionalSuite(using: native)
         }
+        #endif
         try await liveDeliverySuite()
         let track = UUID()
         let invalid = MeetingPCMTranscriptBatch(segments: [segment("🙂 Иван", track: track, start: 0)])
@@ -212,6 +235,123 @@ struct MeetingPrivacyContextTests {
         let boundedOutput = await updates.next()
         try check(boundedOutput?.0.utterances.count == 100 && boundedOutput?.0.utterances.first?.id == large.utterances[100].id, "bounded live rows changed identity")
         await publisher.stop()
+    }
+
+    static func provisionalSuite(using redactor: any TranscriptTextRedacting) async throws {
+        let track = UUID()
+        let benign = "Сегодня обсуждаем применение амоксициллина и переносимость назначенной терапии."
+        let original = segment(benign, track: track, start: 0)
+        let context = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let first = try await context.redact(.init(segments: [original]))
+        try check(first.segments.isEmpty, "preview released the canonical 32-token tail")
+        let preview = first.livePreview
+        try check(preview?.text.hasPrefix("Сегодня обсуждаем применение") == true, "short benign medical speech remained blank without a word whitelist")
+        try check(preview?.start == original.start.seconds, "preview lost its physical start time")
+        let silent = try await context.redact(.init(segments: []))
+        try check(silent.segments.isEmpty && silent.livePreview == preview, "silence erased an approved preview or released the canonical hold")
+        let next = segment("Обсуждаем инструкцию и схему применения препарата.", track: track, start: 8)
+        let second = try await context.redact(.init(segments: [next]))
+        try check(second.segments.isEmpty, "a preview changed durable admission")
+        if let updated = second.livePreview { try check(updated.id == preview?.id, "preview row identity changed between PCM windows") }
+        let final = try await context.finish()
+        let expected = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: [original, next]), using: redactor)
+        try check(final?.segments == expected.segments, "preview altered final wording, originalText, IDs or timestamps")
+        try check(final?.livePreview == nil, "canonical flush retained provisional display text")
+        let repeatedFinish = try await context.finish()
+        try check(repeatedFinish == nil, "preview duplicated final flush")
+        let englishContext = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let english = try await englishContext.redact(.init(segments: [segment(
+            "Today we discuss amoxicillin dosing and the tolerability of prescribed therapy.", track: track, start: 0)]))
+        try check(english.segments.isEmpty && english.livePreview?.text.hasPrefix("Today we discuss") == true,
+                  "short benign English medical speech remained blank without a word whitelist")
+        _ = try await englishContext.finish()
+
+        let cases: [([String], [String], String)] = [
+            (["телефон", "273", "55", "11", "метформин 500 мг"], ["273", "55", "11"], "метформин 500 мг"),
+            (["карта", "4111", "1111", "1111", "1111", "метформин 500 мг"], ["4111", "1111"], "метформин 500 мг"),
+            (["дата рождения", "12", "мая", "1980", "инсулин 10 единиц"], ["12", "мая", "1980"], "инсулин 10 единиц"),
+            (["домашний адрес", "улица", "Примерная", "дом", "12", "квартира", "7", "метотрексат 15 мг"], ["Примерная", "12", "7"], "метотрексат 15 мг"),
+            (["моя почта", "ivan", "dot", "petrov", "at", "example", "dot", "com", "метформин 500 мг"], ["ivan", "petrov", "example", "com"], "метформин 500 мг"),
+            (["доктор", "анна", "сергеевна", "кузнецова", "метотрексат 15 мг"], ["анна", "сергеевна", "кузнецова"], "метотрексат 15 мг"),
+            (["документ передали", "сидорову", "ивану", "петровичу", "лизиноприл 10 мг"], ["сидорову", "ивану", "петровичу"], "лизиноприл 10 мг"),
+            (["документ передали", "сидоро", "ву", "ивану", "петровичу", "метформин 500 мг"], ["сидоро", "ву", "ивану", "петровичу"], "метформин 500 мг"),
+            (["доктор", "ан", "на", "сергеев", "на", "кузнецо", "ва", "метотрексат 15 мг"], ["ан", "сергеев", "кузнецо"], "метотрексат 15 мг"),
+            (["Darragh", "Murphy", "discussed", "metformin 500 mg", "and", "the", "document"], ["Darragh", "Murphy"], "metformin 500 mg"),
+            (["доктор И.", "П.", "Сидоров", "метформин 500 мг"], ["И.", "П.", "Сидоров"], "метформин 500 мг"),
+            (["доктор С.", "обсуждает препарат и схему лечения", "метформин 500 мг"], ["С."], "метформин 500 мг"),
+            (["доктор john", "smith", "обсудил препарат и схему лечения", "метформин 500 мг"], ["john", "smith"], "метформин 500 мг"),
+            (["доктор", "львов", "сегодня обсуждает эффективность терапии", "метформин 500 мг"], ["львов"], "метформин 500 мг"),
+            (["мой номер", "девятьсот", "шестнадцать", "двести", "метформин 500 мг"], ["девятьсот", "шестнадцать", "двести"], "метформин 500 мг"),
+            (["Передаю контакт alex", "дефис", "work сегодня для проверки надежного подключения", "метформин 500 мг"], ["alex", "work"], "метформин 500 мг"),
+            (["Передаю контакт alex", "нижнее подчёркивание", "work сегодня для проверки надежного подключения", "метформин 500 мг"], ["alex", "work"], "метформин 500 мг"),
+            (["Передаю контакт ALEX", "ДЕФИС", "WORK сегодня для проверки надежного подключения", "метформин 500 мг"], ["ALEX", "WORK"], "метформин 500 мг"),
+            (["Sending contact alex", "underscore", "work today for checking reliable connectivity", "metformin 500 mg"], ["alex", "work"], "metformin 500 mg"),
+            (["Sending contact ALEX", "HYPHEN", "WORK today for checking reliable connectivity", "metformin 500 mg"], ["ALEX", "WORK"], "metformin 500 mg"),
+            (["Анна 500 мг обсуждает переносимость терапии и схему лечения.", "метформин 500 мг"], ["Анна"], "метформин 500 мг"),
+            (["доктор Сидоров 500 мг обсуждает переносимость терапии и схему лечения.", "метформин 500 мг"], ["Сидоров"], "метформин 500 мг"),
+            (["сидоров 1980 г. обсуждал применение препарата сегодня.", "метформин 500 мг"], ["сидоров"], "метформин 500 мг"),
+        ]
+        for (pieces, sensitive, medication) in cases {
+            let streaming = MeetingTranscriptPrivacyContext(redactor: redactor)
+            var input: [MeetingTranscriptSegment] = []
+            var durable: [MeetingTranscriptSegment] = []
+            for (index, piece) in pieces.enumerated() {
+                let row = segment(piece, track: track, start: index * 8)
+                input.append(row)
+                let update = try await streaming.redact(.init(segments: [row]))
+                durable += update.segments
+                let displayed = update.livePreview?.text ?? ""
+                for value in sensitive { try check(!displayed.contains(value), "private candidate escaped an intermediate preview: \(value)") }
+                try check(update.segments.isEmpty, "a short provisional stream released durable text")
+            }
+            let tail = try await streaming.finish()
+            durable += tail?.segments ?? []
+            let reference = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: input), using: redactor)
+            try check(durable == reference.segments, "preview changed canonical projection")
+            try check(durable.map(\.text).joined(separator: " ").contains(medication), "preview policy mutated a medication/dose in canonical text")
+            try check(tail?.livePreview == nil, "finish failed to clear candidate preview")
+        }
+
+        let unsupported = MeetingTranscriptPrivacyContext(redactor: UnsupportedPreviewRedactor())
+        let hidden = try await unsupported.redact(.init(segments: [original]))
+        try check(hidden.livePreview == nil && hidden.segments.isEmpty, "unsupported redactor exposed raw held text")
+        for limit in [-1, 1, 100_000] {
+            let invalid = MeetingTranscriptPrivacyContext(redactor: InvalidPreviewRedactor(limit: limit))
+            do {
+                _ = try await invalid.redact(.init(segments: [segment("🙂 документ инструкция", track: track, start: 0)]))
+                throw Failure.assertion("invalid preview prefix was accepted")
+            } catch is MeetingPrivacyPublicationError { }
+            let invalidTail = try await invalid.finish()
+            try check(invalidTail == nil, "failed preview transformation mutated held state")
+        }
+        let candidateText = "Сегодня к нам приехал qX для обсуждения терапии."
+        let candidateRange = (candidateText as NSString).range(of: "qX")
+        let lowConfidence = try PIIRedactor.provisionalSafePrefix(in: candidateText,
+            ner: [.init(range: candidateRange, label: "PER", score: 0.2)], redactedSpans: [])
+        try check((lowConfidence ?? 0) <= candidateRange.location, "short low-confidence/mixed-script NER candidate was treated as safe")
+        let doseText = "Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения."
+        let doseContext = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let doseSegment = segment(doseText, track: track, start: 0)
+        let doseUpdate = try await doseContext.redact(.init(segments: [doseSegment]))
+        let evaluatedDose = try await redactor.redactWithSpans(doseText)
+        try check(doseUpdate.segments.isEmpty, "dose preview released the durable hold")
+        if (evaluatedDose.provisionalSafeUTF16 ?? 0) > 0 {
+            try check(doseUpdate.livePreview?.text.hasPrefix("Амоксициллин 500 мг") == true,
+                      "approved numeric dose prefix did not reach provisional display")
+        } else {
+            try check(doseUpdate.livePreview == nil, "withheld native person candidate reached provisional display")
+        }
+        let doseTail = try await doseContext.finish()
+        let doseReference = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: [doseSegment]), using: redactor)
+        try check(doseTail?.segments == doseReference.segments && doseTail?.livePreview == nil, "dose preview altered canonical text")
+        let doseRange = (doseText as NSString).range(of: "Амоксициллин")
+        let candidateDose = try PIIRedactor.provisionalSafePrefix(in: doseText,
+            ner: [.init(range: doseRange, label: "PER", score: 0.2)], redactedSpans: [])
+        try check(candidateDose == 0, "numeric dose evidence overrode an actual native person candidate")
+        let decimalDose = "Амоксициллин 0.5 мг обсуждаем переносимость терапии и схему применения."
+        let decimalLimit = try PIIRedactor.provisionalSafePrefix(in: decimalDose, ner: [], redactedSpans: [])
+        try check((decimalLimit ?? 0) > (decimalDose as NSString).range(of: "мг").location,
+                  "decimal dose punctuation was mistaken for a private email fragment")
     }
 
     static func suite(using redactor: any TranscriptTextRedacting) async throws {

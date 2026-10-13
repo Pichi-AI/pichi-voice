@@ -17,6 +17,13 @@ struct TranscriptRedactedSpan: Sendable, Equatable {
 struct TranscriptTextRedaction: Sendable, Equatable {
     let text: String
     let spans: [TranscriptRedactedSpan]
+    /// Optional adapter-approved prefix in the original UTF-16 input. This is
+    /// display-only eligibility from the same evaluation, never a durable flush.
+    /// Unsupported redactors leave it nil; empty spans do not authorize preview.
+    let provisionalSafeUTF16: Int?
+    init(text: String, spans: [TranscriptRedactedSpan], provisionalSafeUTF16: Int? = nil) {
+        self.text = text; self.spans = spans; self.provisionalSafeUTF16 = provisionalSafeUTF16
+    }
 }
 
 extension TranscriptTextRedacting {

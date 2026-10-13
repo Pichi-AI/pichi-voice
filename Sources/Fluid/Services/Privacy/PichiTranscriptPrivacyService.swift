@@ -160,7 +160,9 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
         let spans = try await runtime.tag(text)
         try Task.checkCancellation()
         let result = try PIIRedactor.redact(text, ner: spans)
-        return .init(text: result.text, spans: result.spans.map { .init(range: $0.range, replacement: $0.replacement) })
+        return .init(text: result.text, spans: result.spans.map { .init(range: $0.range, replacement: $0.replacement) },
+                     provisionalSafeUTF16: try PIIRedactor.provisionalSafePrefix(in: text, ner: spans,
+                                                                                redactedSpans: result.spans))
     }
 
     func unload() async throws {

@@ -115,6 +115,36 @@ enum PIIRussianNameHeuristics {
         }
         return entities
     }
+
+    /// Preview admission is more conservative than durable name precision. A
+    /// partial first name or an isolated inflected surname must wait for context.
+    /// Reuse this detector's vocabulary/morphology instead of a second name list.
+    static func provisionalCandidates(_ text: String, doseQualifiedWords: Set<NSRange> = []) -> [NSRange] {
+        let source = text as NSString
+        let matches = token.matches(in: text, range: NSRange(location: 0, length: source.length))
+        let words = matches.map { source.substring(with: $0.range).lowercased() }
+        let shortGrammar = Set("на по за от до из со во не ни но он мы вы ты ее её я и а у о в к с".split(separator: " ").map(String.init))
+        let splitEndings = Set("ву ва ве вым вых вич вичу вича вна вну вной ович евич овна евна".split(separator: " ").map(String.init))
+        var result: [NSRange] = []
+        for index in words.indices {
+            let word = words[index]
+            guard !blocked.contains(word), !shortGrammar.contains(word) else { continue }
+            let partialFirstName = word.count >= 2 && firstNames.contains(where: { $0.hasPrefix(word) })
+            // An explicit numeric dose and unit can disambiguate surname-shaped
+            // medication words. First-name and patronymic evidence still wins.
+            let candidate = nameLemma(word) != nil || partialFirstName
+                || (surnameLike(word) && !doseQualifiedWords.contains(matches[index].range))
+                || matching(patronymic, word) || splitEndings.contains(word)
+            guard candidate else { continue }
+            var range = matches[index].range
+            if splitEndings.contains(word), index > 0, !blocked.contains(words[index - 1]),
+               !shortGrammar.contains(words[index - 1]) {
+                range = NSUnionRange(matches[index - 1].range, range)
+            }
+            result.append(range)
+        }
+        return result
+    }
     private static let blocked = Set("""
     адреналин адресов азов анальгин апельсин армян аспирин багов баян бензин берлин бич близко блин вазелин вариантов ваших величина
     витамин внук вопросов врач всех высоко глубина глубоко годов голова городов господин готов готова готово гражданин громко далеко
