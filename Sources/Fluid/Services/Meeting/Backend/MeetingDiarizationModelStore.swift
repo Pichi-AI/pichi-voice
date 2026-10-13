@@ -181,7 +181,14 @@ final class MeetingDiarizationModelStore: ObservableObject {
     nonisolated static func downloadAndInstall(
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> MeetingNemotronModelArtifact {
-        let destination = MeetingNemotronModelLocator.defaultPackageURL()
+        try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(), progress: progress)
+    }
+
+    /// The existing install operation can target an explicitly owned store. Test and
+    /// mobile preflight use the same pinned download and publication as desktop setup.
+    nonisolated static func downloadAndInstall(
+        to destination: URL, progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> MeetingNemotronModelArtifact {
         let staging = destination.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("download-\(MeetingNemotronModelLocator.cacheVersion)", isDirectory: true)
         let downloader = await HuggingFaceModelDownloader(
