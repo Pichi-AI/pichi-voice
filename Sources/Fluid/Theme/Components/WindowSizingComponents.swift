@@ -19,7 +19,11 @@ private struct FluidWindowSizingModifier: ViewModifier {
     let sizing: FluidWindowSizing
 
     func body(content: Content) -> some View {
-        content.background(FluidWindowSizingBridge(sizing: self.sizing))
+        // Hosting size probes must not turn a scrollable document's ideal height
+        // into the size of the whole navigation split view. Both columns use
+        // the actual window viewport, including during resize/full-screen transitions.
+        content.fluidViewport()
+            .background(FluidWindowSizingBridge(sizing: self.sizing))
     }
 }
 
@@ -128,6 +132,14 @@ final class FluidWindowSizingNSView: NSView {
 }
 
 extension View {
+    /// Navigation columns have their own hosting roots. Bound each root before
+    /// its scrollable children negotiate their document's ideal size.
+    func fluidViewport() -> some View {
+        GeometryReader { viewport in
+            self.frame(width: viewport.size.width, height: viewport.size.height, alignment: .topLeading)
+        }
+    }
+
     func fluidWindowSizing(_ sizing: FluidWindowSizing) -> some View {
         self.modifier(FluidWindowSizingModifier(sizing: sizing))
     }

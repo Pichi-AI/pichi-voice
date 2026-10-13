@@ -469,11 +469,13 @@ struct ContentView: View {
                 } else {
                     NavigationSplitView(columnVisibility: self.$columnVisibility) {
                         self.sidebarContent
+                            .fluidViewport()
                             .frame(minWidth: 264, maxWidth: 360)
                             .navigationSplitViewColumnWidth(min: 264, ideal: 300, max: 360)
                             .toolbar(removing: .sidebarToggle)
                     } detail: {
                         self.detailView
+                            .fluidViewport()
                             .onGeometryChange(for: CGFloat.self) { geometry in
                                 (geometry.size.width * 0.1).rounded()
                             } action: { inset in
