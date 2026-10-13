@@ -34,6 +34,13 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)? = nil
     ) async throws -> MeetingCaptureStartResult {
         try configuration.validate()
+        // The desktop runtime currently persists authoritative PCM chunks. It must refuse the
+        // new strict policy before constructing any writer until a memory consumer is wired.
+        guard configuration.audioStorageMode != .memoryOnly else {
+            throw MeetingCaptureError.captureStartFailed(
+                PichiLocalization.text("In-memory transcription is not available for this attempt.")
+            )
+        }
         guard self.activeCapture == nil, self.startingSessionID == nil, self.stopTask == nil else {
             throw MeetingCaptureError.captureAlreadyActive
         }
