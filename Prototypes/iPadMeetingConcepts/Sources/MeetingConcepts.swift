@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum PrototypeScreen: String { case ready, active, completed, settings, privacy, models, history }
+enum PrototypeScreen: String { case ready, active, processing, completed, settings, privacy, models, history }
 
 struct PrototypeRoot: View {
     let options: PrototypeOptions
@@ -15,6 +15,11 @@ struct PrototypeRoot: View {
     @State private var showValidation = false
     @State private var showHistory = false
     @State private var showExport = false
+    @State private var showCopy = false
+    @StateObject private var replay = MeetingLiveReplayController()
+    @State private var processingIndex = 0
+    @State private var processingTask: Task<Void, Never>?
+    @State private var completedReplayDuration: TimeInterval?
     private var theme: PrototypeTheme { PrototypeTheme(dark: options.dark) }
     private var data: SyntheticFixtures { .shared }
 
@@ -23,6 +28,11 @@ struct PrototypeRoot: View {
         self._screen = State(initialValue: options.screen)
         self._currentMeetingState = State(initialValue: [.ready, .completed].contains(options.screen) ? options.screen : .active)
         self._saveAudio = State(initialValue: options.saveAudio)
+        if let time = options.replayTime {
+            let controller = MeetingLiveReplayController()
+            controller.renderFrame(at: time)
+            self._replay = StateObject(wrappedValue: controller)
+        }
     }
 
     private var displayedSession: SyntheticFixtures.Session {
@@ -35,20 +45,37 @@ struct PrototypeRoot: View {
     }
 
     private func showMeetingSetup() {
+        processingTask?.cancel()
         currentMeetingState = .ready
         showCurrentMeeting()
     }
 
     private func startMeetingPreview() {
+        processingTask?.cancel()
         currentMeetingState = .active
         paused = false
+        completedReplayDuration = nil
         showCurrentMeeting()
+        if options.exportPath == nil { Task { await replay.restart() } }
     }
 
     private func finishMeetingPreview() {
-        currentMeetingState = .completed
+        currentMeetingState = .processing
+        processingIndex = 0
         paused = false
         showCurrentMeeting()
+        processingTask?.cancel()
+        processingTask = Task { @MainActor in
+            await replay.stop()
+            completedReplayDuration = replay.currentTime
+            for index in 0..<4 {
+                guard !Task.isCancelled else { return }
+                processingIndex = index
+                do { try await Task.sleep(for: .milliseconds(900)) } catch { return }
+            }
+            currentMeetingState = .completed
+            if screen == .processing { showCurrentMeeting() }
+        }
     }
 
     var body: some View {
@@ -85,6 +112,16 @@ struct PrototypeRoot: View {
         .alert(Copy.text("export"), isPresented: $showExport) {
             Button(Copy.text("close"), role: .cancel) {}
         } message: { Text(Copy.text("export_detail")) }
+        .alert(Copy.text("Copy"), isPresented: $showCopy) {
+            Button(Copy.text("close"), role: .cancel) {}
+        } message: { Text(Copy.text("copy_preview_detail")) }
+        .task {
+            if screen == .active && options.exportPath == nil { await replay.start() }
+        }
+        .onDisappear {
+            processingTask?.cancel()
+            Task { await replay.stop() }
+        }
     }
 
     // A: Native library structure. Three columns on a wide iPad, two in portrait,
@@ -92,22 +129,18 @@ struct PrototypeRoot: View {
     private func libraryLayout(width: CGFloat) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                if width >= 1000 {
+                if width >= 700 {
                     sidebar.frame(width: 220)
                     columnDivider
                 }
-                if width >= 700 && !isSettings {
-                    historyList(width: width >= 1000 ? 260 : 252)
-                    columnDivider
-                }
                 VStack(spacing: 0) {
-                    topBar(compact: width < 700, showBrand: width < 1000)
+                    topBar(compact: width < 700, showBrand: width < 700)
                     divider
                     mainContent(narrow: width < 700, generous: false)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            if width < 1000 { divider; bottomNavigation }
+            if width < 700 { divider; bottomNavigation }
         }
     }
 
@@ -183,7 +216,7 @@ struct PrototypeRoot: View {
         .background(theme.color("sidebarBackground"))
     }
 
-    private var isMeeting: Bool { [.ready, .active, .completed].contains(screen) }
+    private var isMeeting: Bool { [.ready, .active, .processing, .completed].contains(screen) }
     private var isSettings: Bool { [.settings, .privacy, .models].contains(screen) }
     private var divider: some View { Rectangle().fill(theme.color("separator")).frame(height: 1) }
     private var columnDivider: some View { Rectangle().fill(theme.color("separator")).frame(width: 1) }
@@ -283,6 +316,7 @@ struct PrototypeRoot: View {
         switch screen {
         case .ready: readyScreen(narrow: narrow, generous: generous)
         case .active, .completed: meetingScreen(narrow: narrow, generous: generous)
+        case .processing: processingScreen(narrow: narrow)
         case .settings: settingsScreen(narrow: narrow)
         case .privacy: privacyScreen(narrow: narrow)
         case .models: modelsScreen(narrow: narrow)
@@ -301,8 +335,8 @@ struct PrototypeRoot: View {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 14) {
                     tag("offline_meeting", icon: "mic")
-                    Text(Copy.text("ready_title")).font(theme.font(.display))
-                    Text(Copy.text("ready_subtitle")).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
+                    Text(Copy.text("Be in the conversation.")).font(theme.font(.display))
+                    Text(Copy.text("Record your meeting. Come back to every word.")).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
                 }.padding(.top, generous ? 42 : 14)
                 surface {
                     VStack(alignment: .leading, spacing: 18) {
@@ -316,7 +350,8 @@ struct PrototypeRoot: View {
                             .buttonStyle(.plain).foregroundStyle(theme.accent).frame(minHeight: 44)
                     }
                 }
-                primaryButton("start_meeting", icon: "mic.fill") { startMeetingPreview() }
+                primaryButton("Start Recording", icon: "record.circle") { startMeetingPreview() }
+                Text(Copy.text("local_capture_mobile_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                 Label(Copy.text("participant_consent"), systemImage: "person.2")
                     .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                 Text(Copy.text("ready_mock_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
@@ -332,14 +367,17 @@ struct PrototypeRoot: View {
             meetingHeading(narrow: narrow, generous: generous)
                 .padding(narrow ? 20 : 28)
             divider
-            ScrollView {
+            if screen == .active && (options.exportPath == nil || options.replayTime != nil) {
+                PrototypeLiveTranscriptView(replay: replay, theme: theme, compact: narrow)
+                    .padding(narrow ? 20 : 28)
+            } else { ScrollView {
                 VStack(alignment: .leading, spacing: generous ? 26 : 20) {
                     HStack {
-                        Text(Copy.text(screen == .completed ? "transcript" : "live_transcript")).font(theme.font(.section))
+                        Text(Copy.text(screen == .completed ? "Transcript" : "Live transcript")).font(theme.font(.section))
                         Spacer()
                         if !narrow { tag(screen == .completed ? "speaker_result" : "preliminary", icon: screen == .completed ? "person.2" : "text.bubble") }
                     }
-                    ForEach(data.utterances) { utterance in
+                    ForEach(displayedUtterances) { utterance in
                         transcriptRow(utterance, narrow: narrow, generous: generous)
                     }
                     if screen == .active {
@@ -352,7 +390,7 @@ struct PrototypeRoot: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }.padding(narrow ? 20 : generous ? 38 : 28)
-            }
+            } }
             divider
             meetingControls(narrow: narrow)
                 .padding(narrow ? 16 : 24)
@@ -361,19 +399,38 @@ struct PrototypeRoot: View {
         .background(theme.color("cardBackground"))
     }
 
+    private func processingScreen(narrow: Bool) -> some View {
+        let stages = ["Saving", "Identifying speakers", "Transcribing", "Finalizing"]
+        return VStack(alignment: .leading, spacing: 24) {
+            Label(Copy.text("Preparing your transcript"), systemImage: "hourglass")
+                .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+            Text(data.sessions[0].title).font(theme.font(.display))
+            Text(Copy.text("processing_mobile_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+            divider
+            ForEach(stages.indices, id: \.self) { index in
+                HStack(spacing: 16) {
+                    Image(systemName: index < processingIndex ? "checkmark.circle.fill" : index == processingIndex ? "circle.dotted" : "circle")
+                        .foregroundStyle(index < processingIndex ? theme.color("success") : theme.accent)
+                    Text(Copy.text(stages[index])).font(theme.font(.body, weight: .medium))
+                }.frame(minHeight: 44)
+            }
+            Spacer()
+        }.padding(narrow ? 20 : 32).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     private func meetingHeading(narrow: Bool, generous: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                tag(screen == .completed ? "completed" : paused ? "paused" : "recording", icon: screen == .completed ? "checkmark.circle" : "mic")
+                tag(screen == .completed ? "completed" : paused ? "paused" : "Recording", icon: screen == .completed ? "checkmark.circle" : "record.circle")
                 Spacer()
-                Text(displayedSession.duration)
-                    .font(.system(size: generous && !narrow ? 32 : 22, weight: .medium, design: .rounded))
+                Text(screen == .active && (options.exportPath == nil || options.replayTime != nil) ? elapsedReplayText : completedDurationText)
+                    .font(.system(size: 17, weight: .medium, design: .monospaced))
                     .monospacedDigit()
             }
             Text(displayedSession.title).font(theme.font(narrow ? .title : .display))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
-                Label(Copy.text("offline_meeting"), systemImage: "person.2")
+                Label(Copy.text("In-room meeting"), systemImage: "person.2")
                 if !narrow { Text("•"); Text(displayedSession.time) }
             }.font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
             HStack(spacing: 8) {
@@ -381,8 +438,31 @@ struct PrototypeRoot: View {
                 if !narrow { tag("local_only", icon: "ipad") }
             }
             if screen == .completed {
-                Text(Copy.text("completed_mock_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+                Text(Copy.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
+                    .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+            } else {
+                Label(Copy.text("Microphone"), systemImage: "mic")
+                    .font(theme.font(.caption)).foregroundStyle(theme.accent)
             }
+        }
+    }
+
+    private var elapsedReplayText: String {
+        let seconds = Int(replay.currentTime)
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var completedDurationText: String {
+        guard screen == .completed, selectedSessionID == 1, let time = completedReplayDuration else { return displayedSession.duration }
+        let seconds = Int(time)
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var displayedUtterances: [SyntheticFixtures.Utterance] {
+        guard screen == .completed, selectedSessionID == 1, completedReplayDuration != nil else { return data.utterances }
+        return replay.snapshot.utterances.enumerated().map { index, utterance in
+            let seconds = Int(utterance.start)
+            return .init(id: index, time: String(format: "%02d:%02d", seconds / 60, seconds % 60), owner: false, text: utterance.text)
         }
     }
 
@@ -395,10 +475,19 @@ struct PrototypeRoot: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
-                    Text(Copy.text(screen == .completed ? (utterance.owner ? "you" : "speaker_one") : "speech"))
+                    Text(screen == .completed ? PichiLocalization.format("Speaker %lld", Int64(utterance.owner ? 1 : 2)) : Copy.text("Microphone"))
                         .font(theme.font(.caption, weight: .semibold))
                         .foregroundStyle(screen == .completed && utterance.owner ? theme.accent : theme.color("secondaryText"))
                     if narrow { Text(utterance.time).font(.system(size: 12, design: .monospaced)).foregroundStyle(theme.color("tertiaryText")) }
+                    if screen == .completed && !narrow {
+                        Spacer()
+                        Button { showCopy = true } label: { Label(Copy.text("action.edit"), systemImage: "pencil").font(theme.font(.caption)).frame(minHeight: 44) }
+                            .buttonStyle(.plain).foregroundStyle(theme.accent)
+                        if saveAudio {
+                            Button { showCopy = true } label: { Label(Copy.text("Audio"), systemImage: "play.fill").font(theme.font(.caption)).frame(minHeight: 44) }
+                                .buttonStyle(.plain).foregroundStyle(theme.accent)
+                        }
+                    }
                 }
                 Text(utterance.text)
                     .font(theme.font(.body))
@@ -411,14 +500,19 @@ struct PrototypeRoot: View {
     }
 
     private func meetingControls(narrow: Bool) -> some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
+          if screen == .active {
+            Text(Copy.text("Speaker labels are added after recording."))
+                .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
+          }
+          HStack(spacing: 12) {
             if screen == .completed {
-                secondaryButton("new_meeting", icon: "plus") { showMeetingSetup() }
-                primaryButton("export", icon: "square.and.arrow.up") { showExport = true }
+                primaryButton("Copy", icon: "doc.on.doc") { showCopy = true }
+                secondaryButton("More", icon: "ellipsis") { showExport = true }
             } else {
-                secondaryButton(paused ? "resume" : "pause", icon: paused ? "play" : "pause") { paused.toggle() }
-                primaryButton(narrow ? "finish" : "finish_meeting", icon: "stop.fill") { finishMeetingPreview() }
+                primaryButton("Stop & Transcribe", icon: "stop.fill") { finishMeetingPreview() }
             }
+          }
         }
     }
 
@@ -428,7 +522,7 @@ struct PrototypeRoot: View {
             Text(displayedSession.title).font(theme.font(.title))
             if screen == .ready {
                 Text(Copy.text("ready_subtitle")).foregroundStyle(theme.color("secondaryText"))
-                primaryButton("start_meeting", icon: "mic.fill") { startMeetingPreview() }
+                primaryButton("Start Recording", icon: "record.circle") { startMeetingPreview() }
             } else {
                 HStack(spacing: 20) {
                     Text(displayedSession.duration).font(.system(size: 34, weight: .medium, design: .rounded)).monospacedDigit()
@@ -539,14 +633,15 @@ struct PrototypeRoot: View {
                         Text(Copy.text("benchmark_detail")).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
                     }
                 }
-                modelCard(name: "Whisper tiny / base", subtitle: "whisper_detail", icon: "globe", language: "ru_en")
-                modelCard(name: "GigaAM v3 INT8", subtitle: "gigaam_detail", icon: "waveform", language: "ru_only")
+                ForEach(data.speechModels) { model in
+                    modelCard(name: model.name, subtitle: model.detailKey, icon: model.symbol, language: model.languageKey, size: model.size)
+                }
                 Text(Copy.text("models_mock_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
             }.frame(maxWidth: 760).padding(narrow ? 20 : 32).frame(maxWidth: .infinity)
         }
     }
 
-    private func modelCard(name: String, subtitle: String, icon: String, language: String) -> some View {
+    private func modelCard(name: String, subtitle: String, icon: String, language: String, size: String) -> some View {
         surface {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 16) {
@@ -558,6 +653,7 @@ struct PrototypeRoot: View {
                     Spacer()
                 }
                 Text(Copy.text(subtitle)).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
+                Text(size).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                 HStack { tag("candidate", icon: "flask"); Spacer() }
                 secondaryButton("device_validation", icon: "arrow.down.circle") { showValidation = true }
             }

@@ -120,8 +120,17 @@ struct SyntheticFixtures: Decodable {
         let duration: String
         let place: String
     }
+    struct SpeechModel: Decodable, Identifiable {
+        let id: String
+        let name: String
+        let detailKey: String
+        let languageKey: String
+        let symbol: String
+        let size: String
+    }
     let utterances: [Utterance]
     let sessions: [Session]
+    let speechModels: [SpeechModel]
     static let shared: Self = {
         let url = Bundle.main.url(forResource: "synthetic-fixtures", withExtension: "json")!
         return try! JSONDecoder().decode(Self.self, from: Data(contentsOf: url))

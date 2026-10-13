@@ -54,5 +54,31 @@
       "duration": "12:34",
       "place": "Место не добавлено"
     }
+  ],
+  "speechModels": [
+    {
+      "id": "whisper-tiny",
+      "name": "Whisper Tiny",
+      "detailKey": "whisper_mobile_detail",
+      "languageKey": "ru_en",
+      "symbol": "globe",
+      "size": "Q8: ~43.9 MiB"
+    },
+    {
+      "id": "gigaam-v3-int8",
+      "name": "GigaAM v3 INT8",
+      "detailKey": "gigaam_detail",
+      "languageKey": "ru_only",
+      "symbol": "waveform",
+      "size": "INT8: ~214.5 MiB"
+    },
+    {
+      "id": "parakeet-tdt",
+      "name": "NVIDIA Parakeet TDT 0.6B v3",
+      "detailKey": "parakeet_mobile_detail",
+      "languageKey": "multilingual_25",
+      "symbol": "waveform",
+      "size": "Core ML: ~460.9 MiB"
+    }
   ]
 }

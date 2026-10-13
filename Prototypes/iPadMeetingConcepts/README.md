@@ -6,7 +6,7 @@ Design-only SwiftUI executable for choosing an iPad direction before implementin
 
 | Concept | Composition | Best use |
 | --- | --- | --- |
-| A | Native library: sidebar, meeting history and transcript. Portrait uses history plus detail; compact widths use one detail stack and destinations. | Recommended starting point for history, models and later feature expansion. |
+| A | Selected direction: sidebar plus current meeting. History is a separate destination, never a second column on Meetings. Compact widths use the same three destinations below the document. | Current recording flow, independent History and Settings. |
 | B | Focus: a quiet, centered conversation canvas with bottom navigation. | Viewing the current conversation with little surrounding chrome. |
 | C | Field dashboard: current meeting, recent meeting cards and storage summary. | Starting and reviewing several offline meetings through the day. |
 
@@ -20,8 +20,8 @@ Main navigation is **Meetings / History / Settings**. Speech models and privacy 
 
 - Audio retention is **on by default**, following the user's decision. `--audio-off` demonstrates the optional strict mode.
 - Strict text-only mode proposes **no audio files, including temporary files**. It requires bounded memory chunks, writing only text, no audio playback/reprocessing, and stopping capture if inference cannot keep up. This is not implemented by the prototype. Handling of application termination and incomplete text is a remaining implementation decision.
-- Russian and English have equal priority, including mixed speech in a single meeting. Whisper tiny/base is a multilingual candidate; GigaAM is a Russian-only candidate. No model is marked installed, compatible or fast on iPad.
-- Active rows are labelled **Speech**, never **You** or a known speaker. The current desktop live stream has capture-source identity rather than streaming diarization. Completed rows illustrate the desired future **You / Speaker 1** result, with an explicit concept note.
+- Mobile exposes speech recognition only: multilingual Whisper Tiny, Russian GigaAM v3 and multilingual NVIDIA Parakeet TDT 0.6B v3. No text enhancement or meeting summary provider/UI is included. No model is marked installed, compatible or fast on iPad.
+- Active rows use the existing neutral **Microphone** source label. Completed synthetic rows use the existing participant-number copy; an optional future self profile is separate from these example results.
 - Optional local voice enrollment is a flow preview only. Its personal profile would require an explicit delete action, separate ownership and storage policy. The preview creates no profile.
 - Optional location is a one-time start location, not continuous tracking. This fixture does not request location.
 - Recording UI is steady: a label, microphone symbol and timer, without blinking. The eventual app must preserve the system microphone indicator and background recording disclosures.
@@ -35,7 +35,7 @@ From this task's separate worktree:
 bash Prototypes/iPadMeetingConcepts/build.sh all
 ```
 
-Requires full Xcode. The script compiles a standalone Apple Silicon Mac preview and an arm64 iOS simulator executable against the installed SDK, targeting iOS 17. No production app target is changed. Compilation does not validate simulator rendering, real iPad memory, background capture, inference, battery, permissions or audio.
+Requires full Xcode. The script compiles a standalone Apple Silicon Mac preview and an arm64 iOS simulator executable against the installed SDK, targeting iOS 18. This permits using the unchanged shared renderer's `onScrollGeometryChange`. No production app target is changed. Compilation does not validate simulator rendering, real iPad memory, background capture, inference, battery, permissions or audio.
 
 Output stays under ignored `.build/ipad-meeting-concepts/`. The preview has its own `ai.pichi.voice.design.prototype` bundle identifier, no microphone/location permissions and no access to application storage. It is unsigned and has no capture behavior.
 
@@ -52,12 +52,13 @@ Options:
 | Flag | Values |
 | --- | --- |
 | `--layout` | `A`, `B`, `C` |
-| `--screen` | `ready`, `active`, `completed`, `settings`, `privacy`, `models`, `history` |
+| `--screen` | `ready`, `active`, `processing`, `completed`, `settings`, `privacy`, `models`, `history` |
 | `--width`, `--height` | Suggested content sizes: 1194 x 834, 834 x 1194, 550 x 834, 390 x 844 |
 | `--dark` | Dark appearance from the brand package |
 | `--audio-off` | Start this fixture with strict text-only selected; default remains audio on |
 | `--language` | `ru` or `en`; other resource languages can be added without application language branches |
 | `--export` | Absolute PNG path for a 2x offscreen SwiftUI concept render |
+| `--replay-time` | Synthetic replay time for deterministic source-renderer concept frames; no microphone or inference |
 
 Example concept export:
 
@@ -75,3 +76,11 @@ The parent integrated this prototype into `codex/ipad-voice-design` and compiled
 Independent review found compact enrollment content needed scrolling and the history sheet needed an adaptive width. Both were corrected. Fixture navigation now preserves the current meeting state and selects the requested history item. Frozen preview bundles may include `Contents/Resources/preview-arguments.json`, an array of the documented flags, so the UI inspector can launch a scenario directly. Explicit command-line flags take priority. Frozen copies and screenshot evidence remain in ignored `.build/` storage.
 
 The implementation plan is in [ipad-voice-plan.md](../../docs/development/ipad-voice-plan.md), and the sourced list of 45 iPad generations/sizes with preliminary suitability is in [ipad-device-matrix.md](../../docs/development/ipad-device-matrix.md).
+
+## Live animation and direct reuse
+
+The 42-second `live-replay.json` fixture publishes phrase hypotheses and buffered groups through the unchanged production `MeetingLiveTranscriptSnapshot` and `MeetingLiveBubbleComposer`. The view is the unchanged `MeetingLiveBubbleScrollList(documentStyle: true)`: stable UUID through partial/final, in-place text corrections, immediate final foreground, opacity insertion over 0.2 seconds, Reduce Motion and the existing 80-point follow threshold. No copied row/scroll implementation is used.
+
+The build compiles six existing source files directly: `MeetingLiveModels.swift`, its `MeetingEchoDetector.swift`/`MeetingPCMFormatContract.swift` helper dependencies, `MeetingLiveCaptionBubbles.swift`, `PichiLocalization.swift` and `MeetingUILocalization.swift`. `PrototypeCaptionTheme` supplies only the renderer's theme members from the portable brand package because the full production theme still imports AppKit. The original String Catalog is merged into the preview bundle at build time; product phrases retain their existing translations. The explicit preview language uses a volatile defaults domain and does not persist preferences.
+
+Replay is an interface illustration, not measured iPad ASR performance. Stop follows the existing saving/participant identification/transcription/finalization/result flow with synthetic stage timing. Capture, speaker inference, audio playback and editing are not implemented here. The finished current-meeting text comes from the replay's committed phrases and retains its duration. Replay cancellation is joined, and navigation to History/Settings preserves the current meeting.

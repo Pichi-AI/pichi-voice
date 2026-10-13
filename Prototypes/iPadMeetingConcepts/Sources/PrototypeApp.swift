@@ -9,6 +9,7 @@ struct PrototypeOptions {
     var language = "ru"
     var exportPath: String?
     var saveAudio = true
+    var replayTime: TimeInterval?
 
     init(arguments: [String] = CommandLine.arguments) {
         // Frozen native preview bundles can carry a scenario without a shell launch.
@@ -35,6 +36,7 @@ struct PrototypeOptions {
             case "--height": height = max(500, CGFloat(Double(value) ?? 834))
             case "--language": language = value
             case "--export": exportPath = value
+            case "--replay-time": replayTime = Double(value)
             default: break
             }
             index += 2
@@ -42,6 +44,9 @@ struct PrototypeOptions {
         if let path = Bundle.main.path(forResource: language, ofType: "lproj"), let bundle = Bundle(path: path) {
             Copy.bundle = bundle
         }
+        // Only the design process: the unchanged production renderer uses this UI preference.
+        // A volatile domain makes --language explicit without persisting app settings.
+        UserDefaults.standard.setVolatileDomain([PichiInterfaceLanguage.defaultsKey: language], forName: UserDefaults.argumentDomain)
     }
 }
 

@@ -71,6 +71,18 @@ final class MeetingLiveReplayController: ObservableObject {
     var isAvailable: Bool { fixture != nil }
     var hasPartial: Bool { !snapshot.partials.isEmpty }
 
+    /// Deterministic design rendering only, through the same event application as playback.
+    func renderFrame(at time: TimeInterval) {
+        guard !isPlaying, playbackTask == nil, time.isFinite, fixture != nil else { return }
+        snapshot = .empty.settingAvailability(.available)
+        eventIndex = 0
+        isFinished = false
+        elapsedBeforeResume = max(0, time)
+        resumedAt = clock.now
+        advanceToClockTime()
+        resumedAt = nil
+    }
+
     func start() async { await restart() }
 
     func restart() async {

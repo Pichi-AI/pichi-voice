@@ -6,6 +6,14 @@ repo_dir="$(cd "$prototype_dir/../.." && pwd)"
 output_dir="$repo_dir/.build/ipad-meeting-concepts"
 mode="${1:-all}"
 mkdir -p "$output_dir"
+shared_sources=(
+    "$repo_dir/Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift"
+    "$repo_dir/Sources/Fluid/Services/Meeting/MeetingEchoDetector.swift"
+    "$repo_dir/Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift"
+    "$repo_dir/Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift"
+    "$repo_dir/Sources/Fluid/Localization/PichiLocalization.swift"
+    "$repo_dir/Sources/Fluid/UI/MeetingUILocalization.swift"
+)
 
 write_info() {
     local info_path="$1"
@@ -23,7 +31,7 @@ info={
     'CFBundleLocalizations':['en','ru'],
 }
 if sys.argv[2]=='ios':
-    info.update(LSRequiresIPhoneOS=True, MinimumOSVersion='17.0', UIDeviceFamily=[1,2],
+    info.update(LSRequiresIPhoneOS=True, MinimumOSVersion='18.0', UIDeviceFamily=[1,2],
         UISupportedInterfaceOrientations=['UIInterfaceOrientationPortrait','UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight'],
         UILaunchScreen={})
 else:
@@ -37,7 +45,16 @@ copy_resources() {
     mkdir -p "$resource_dir"
     cp "$repo_dir/Sources/Fluid/Branding/brand-package.json" "$resource_dir/brand-package.json"
     cp "$prototype_dir/Resources/synthetic-fixtures.json" "$resource_dir/synthetic-fixtures.json"
-    xcrun xcstringstool compile "$prototype_dir/Resources/Localizable.xcstrings" --output-directory "$resource_dir" --language en --language ru
+    cp "$prototype_dir/Resources/live-replay.json" "$resource_dir/live-replay.json"
+    mkdir -p "$output_dir/generated"
+    python3 - "$repo_dir/Sources/Fluid/Localization/Localizable.xcstrings" "$prototype_dir/Resources/Localizable.xcstrings" "$output_dir/generated/Localizable.xcstrings" <<'PY'
+import json,sys
+with open(sys.argv[1]) as file: production=json.load(file)
+with open(sys.argv[2]) as file: prototype=json.load(file)
+production['strings']={**prototype['strings'], **production['strings']}
+with open(sys.argv[3],'w') as file: json.dump(production,file,ensure_ascii=False)
+PY
+    xcrun xcstringstool compile "$output_dir/generated/Localizable.xcstrings" --output-directory "$resource_dir" --language en --language ru
 }
 
 if [[ "$mode" == "all" || "$mode" == "mac" ]]; then
@@ -45,7 +62,7 @@ if [[ "$mode" == "all" || "$mode" == "mac" ]]; then
     mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
     xcrun --sdk macosx swiftc -parse-as-library -target arm64-apple-macos15.0 \
         -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
-        "$prototype_dir"/Sources/*.swift -o "$app_dir/Contents/MacOS/MeetingConcepts"
+        "$prototype_dir"/Sources/*.swift "${shared_sources[@]}" -o "$app_dir/Contents/MacOS/MeetingConcepts"
     write_info "$app_dir/Contents/Info.plist" mac
     copy_resources "$app_dir/Contents/Resources"
     printf 'Compiled native Mac design preview: %s\n' "$app_dir"
@@ -54,9 +71,9 @@ fi
 if [[ "$mode" == "all" || "$mode" == "ios" ]]; then
     app_dir="$output_dir/ios-simulator/MeetingConcepts.app"
     mkdir -p "$app_dir"
-    xcrun --sdk iphonesimulator swiftc -parse-as-library -target arm64-apple-ios17.0-simulator \
+    xcrun --sdk iphonesimulator swiftc -parse-as-library -target arm64-apple-ios18.0-simulator \
         -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
-        "$prototype_dir"/Sources/*.swift -o "$app_dir/MeetingConcepts"
+        "$prototype_dir"/Sources/*.swift "${shared_sources[@]}" -o "$app_dir/MeetingConcepts"
     write_info "$app_dir/Info.plist" ios
     copy_resources "$app_dir"
     printf 'Compiled iOS simulator design preview: %s\n' "$app_dir"

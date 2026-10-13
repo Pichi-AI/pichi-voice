@@ -1513,6 +1513,244 @@
           }
         }
       }
+    },
+    "live_demo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interface demo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Демонстрация"
+          }
+        }
+      }
+    },
+    "live_demo_unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Demo is unavailable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Демонстрация недоступна."
+          }
+        }
+      }
+    },
+    "replay_demo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replay demo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторить демо"
+          }
+        }
+      }
+    },
+    "demo_play": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Play demo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить демо"
+          }
+        }
+      }
+    },
+    "demo_pause": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause demo"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пауза демо"
+          }
+        }
+      }
+    },
+    "buffered_demo": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Buffered example: phrases arrive together. Timings are illustrative."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пример обработки фрагментов: фразы приходят вместе. Время условное."
+          }
+        }
+      }
+    },
+    "live_partial": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preliminary phrase. It can change when recognition updates."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предварительная фраза. Она может измениться при следующем обновлении распознавания."
+          }
+        }
+      }
+    },
+    "live_committed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phrase committed. This demo does not record the microphone."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фраза закреплена. Эта демонстрация не записывает микрофон."
+          }
+        }
+      }
+    },
+    "processing_mobile_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Processing the meeting on this device. This interface demo does not run recognition."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обработка встречи на этом устройстве. В демонстрации распознавание не запускается."
+          }
+        }
+      }
+    },
+    "local_capture_mobile_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stored on this iPad. Position your microphone so everyone can be heard."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранится на этом iPad. Расположите микрофон так, чтобы было слышно всех."
+          }
+        }
+      }
+    },
+    "copy_preview_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The completed transcript is a synthetic interface example. Copy and editing use the existing meeting service in the app."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Готовая расшифровка здесь синтетическая. Копирование и правки в приложении будут использовать существующий сервис встреч."
+          }
+        }
+      }
+    },
+    "whisper_mobile_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Smallest multilingual model in the current app catalog. Tiny Q8 is the first iPad candidate; not the English-only .en variant."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Самая маленькая мультиязычная модель в текущем каталоге приложения. Для iPad сначала проверяем Tiny Q8, без англоязычного варианта .en."
+          }
+        }
+      }
+    },
+    "parakeet_mobile_detail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Multilingual v3 supports Russian and English. iPad memory, background execution and mixed-language accuracy require device validation."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мультиязычная v3 поддерживает русский и английский. Память iPad, работу в фоне и точность смешанной речи проверим на устройстве."
+          }
+        }
+      }
+    },
+    "multilingual_25": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "25 languages, including Russian and English"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "25 языков, включая русский и английский"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
