@@ -4692,7 +4692,8 @@ final class SettingsStore: ObservableObject {
 
     // Include hesitation sounds in both languages regardless of the interface language.
     // Words such as "ну", "это" and "типа", and the unit "мм", must remain opt-in.
-    static let defaultFillerWords = SettingsStore.legacyDefaultFillerWords + [
+    // Keep the first multilingual preset unchanged as the second migration's snapshot.
+    private static let initialMultilingualDefaultFillerWords = SettingsStore.legacyDefaultFillerWords + [
         "э",
         "ээ",
         "эээ",
@@ -4708,13 +4709,23 @@ final class SettingsStore: ObservableObject {
         "хмм",
     ]
 
+    static let defaultFillerWords = SettingsStore.initialMultilingualDefaultFillerWords + ["э-мм"]
+
     static func migrateFillerWordDefaultsIfNeeded(defaults: UserDefaults) {
-        guard !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV1) else { return }
-        // Upgrade only the unchanged old defaults. An empty or customized list is intentional.
-        if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.legacyDefaultFillerWords {
+        if !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV1) {
+            // Upgrade only the unchanged old defaults. An empty or customized list is intentional.
+            if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.legacyDefaultFillerWords {
+                defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
+            }
+            defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV1)
+        }
+
+        guard !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV2) else { return }
+        // Existing installations may already have completed the first migration.
+        if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.initialMultilingualDefaultFillerWords {
             defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
         }
-        defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV1)
+        defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV2)
     }
 
     var fillerWords: [String] {
@@ -6120,6 +6131,7 @@ private extension SettingsStore {
         // Filler Words
         static let fillerWords = "FillerWords"
         static let fillerWordDefaultsMigrationV1 = "FillerWordDefaultsMigrationV1"
+        static let fillerWordDefaultsMigrationV2 = "FillerWordDefaultsMigrationV2"
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
         static let autoConvertPunctuationEnabled = "AutoConvertPunctuationEnabled"
         static let literalDictationFormattingEnabled = "LiteralDictationFormattingEnabled"
