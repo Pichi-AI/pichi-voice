@@ -173,7 +173,7 @@ struct CommandModeView: View {
             }
             Button { self.toggleHistory(isWide: isWide) } label: {
                 Label("Sessions", systemImage: historyVisible ? "rectangle.righthalf.inset.filled" : "sidebar.right")
-                    .foregroundStyle(historyVisible ? self.theme.palette.accent : self.theme.palette.primaryText)
+                    .foregroundStyle(historyVisible ? self.theme.palette.accentText : self.theme.palette.primaryText)
             }
             .help(PichiLocalization.text(historyVisible ? "Hide sessions" : "Show sessions"))
             .accessibilityLabel(PichiLocalization.text(historyVisible ? "Hide sessions" : "Show sessions"))
@@ -457,7 +457,7 @@ struct CommandModeView: View {
                         Image(systemName: self.ownsASRRecording ? "stop.fill" : "arrow.up")
                             .font(.fluidSystem(size: 17, weight: .semibold))
                             .frame(width: 24, height: 24)
-                            .foregroundStyle(self.theme.palette.windowBackground)
+                            .foregroundStyle(self.theme.palette.foreground(on: self.theme.palette.primaryText))
                     }
                     .fluidGlassAction(prominent: true, circular: true, tone: self.theme.palette.primaryText)
                     .disabled(self.ownsASRRecording ? self.isASRStopPending : !self.canSubmitCommand)

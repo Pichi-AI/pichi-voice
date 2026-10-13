@@ -2,13 +2,15 @@ import SwiftUI
 
 struct CommandShimmerText: View {
     let text: String
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: self.reduceMotion)) { timeline in
             let duration = 1.15
             let progress = timeline.date.timeIntervalSinceReferenceDate
                 .truncatingRemainder(dividingBy: duration) / duration
-            let center = CGFloat(progress)
+            let center = self.reduceMotion ? 0.5 : CGFloat(progress)
             let leadingEdge = max(0, center - 0.18)
             let trailingEdge = min(1, center + 0.18)
 
@@ -17,11 +19,11 @@ struct CommandShimmerText: View {
                 .foregroundStyle(
                     LinearGradient(
                         stops: [
-                            .init(color: Color.secondary.opacity(0.42), location: 0),
-                            .init(color: Color.secondary.opacity(0.42), location: leadingEdge),
-                            .init(color: Color.primary.opacity(0.98), location: center),
-                            .init(color: Color.secondary.opacity(0.42), location: trailingEdge),
-                            .init(color: Color.secondary.opacity(0.42), location: 1),
+                            .init(color: self.theme.palette.secondaryText, location: 0),
+                            .init(color: self.theme.palette.secondaryText, location: leadingEdge),
+                            .init(color: self.theme.palette.primaryText, location: center),
+                            .init(color: self.theme.palette.secondaryText, location: trailingEdge),
+                            .init(color: self.theme.palette.secondaryText, location: 1),
                         ],
                         startPoint: .leading,
                         endPoint: .trailing

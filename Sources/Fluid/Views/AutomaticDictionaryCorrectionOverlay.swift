@@ -669,7 +669,17 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
     @State private var isDismissHovered = false
     @State private var progress: CGFloat = 1
 
-    private var accent: Color { self.settings.accentColor }
+    private var accent: Color {
+        if self.settings.accentColorOption == .brand {
+            return Color(hex: AppBrand.profile.accentDark) ?? self.settings.accentColor
+        }
+        return self.settings.accentColor
+    }
+
+    /// This overlay owns a fixed black surface, independently of the main window's palette.
+    private var accentText: Color {
+        AppTheme.Palette.contrastingInk(on: self.accent) == .black ? self.accent : .white
+    }
 
     var body: some View {
         Group {
@@ -812,7 +822,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                 if self.session.isReady {
                     Label(AppBrand.text("FluidVoice got it right 3 times in a row."), systemImage: "checkmark.circle.fill")
                         .font(.fluidSystem(size: 10.5, weight: .medium))
-                        .foregroundStyle(self.accent)
+                        .foregroundStyle(self.accentText)
                 } else {
                     VStack(alignment: .leading, spacing: 5) {
                         self.trainingInstruction(number: 1, text: "Press Start once.")
@@ -829,12 +839,12 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                         progress: self.session.readinessProgress,
                         total: CustomDictionaryTrainingMerge.readyCoveredCount,
                         isReady: self.session.isReady,
-                        accent: self.accent
+                        accent: self.accentText
                     )
 
                     Text(self.overlayReadinessCaption)
                         .font(.fluidSystem(size: 10.5, weight: .medium))
-                        .foregroundStyle(self.session.isReady ? self.accent : .white.opacity(0.58))
+                        .foregroundStyle(self.session.isReady ? self.accentText : .white.opacity(0.58))
                         .fixedSize(horizontal: false, vertical: true)
 
                     Spacer(minLength: 8)
@@ -895,7 +905,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Text("\(number)")
                 .font(.fluidSystem(size: 10.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(self.accent)
+                .foregroundStyle(self.accentText)
                 .frame(width: 14)
 
             Text(PichiLocalization.text(text, locale: self.interfaceLocale))
@@ -913,7 +923,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
                     .frame(width: 38, height: 38)
                 Image(systemName: "checkmark")
                     .font(.fluidSystem(size: 15, weight: .bold))
-                    .foregroundStyle(self.accent)
+                    .foregroundStyle(self.accentText)
             }
 
             VStack(alignment: .leading, spacing: 3) {
@@ -1011,7 +1021,7 @@ private struct AutomaticDictionaryCorrectionOverlayView: View {
             if self.session.isReady {
                 Label("Ready", systemImage: "checkmark.circle.fill")
                     .font(.fluidSystem(size: 10.5, weight: .semibold))
-                    .foregroundStyle(self.accent)
+                    .foregroundStyle(self.accentText)
             }
         }
         .padding(.horizontal, 10)
@@ -1131,7 +1141,7 @@ private struct CorrectionOverlayActionButton: View {
         Button(action: self.action) {
             Label(PichiLocalization.text(self.title, locale: self.interfaceLocale), systemImage: self.systemImage)
                 .font(.fluidSystem(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(self.isEnabled ? 0.94 : 0.42))
+                .foregroundStyle(self.foreground)
                 .frame(maxWidth: .infinity)
                 .frame(height: 36)
                 .background(self.background)
@@ -1165,9 +1175,19 @@ private struct CorrectionOverlayActionButton: View {
         }
         switch self.style {
         case .accent:
-            return self.accent.opacity(self.isHovered ? 1 : 0.9)
+            return self.accent
         case .secondary:
             return Color.white.opacity(self.isHovered ? 0.1 : 0.045)
+        }
+    }
+
+    private var foreground: Color {
+        guard self.isEnabled else { return .white.opacity(0.62) }
+        switch self.style {
+        case .accent:
+            return AppTheme.Palette.contrastingInk(on: self.accent)
+        case .secondary:
+            return .white.opacity(0.94)
         }
     }
 
@@ -1215,12 +1235,16 @@ private struct CorrectionOverlayRecordButton: View {
         Button(action: self.action) {
             Label(PichiLocalization.text(self.title, locale: self.interfaceLocale), systemImage: self.isStop ? "stop.fill" : "mic.fill")
                 .font(.fluidSystem(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(self.isEnabled ? 0.95 : 0.4))
+                .foregroundStyle(self.isEnabled ? AppTheme.Palette.contrastingInk(on: self.buttonColor) : .white.opacity(0.62))
                 .padding(.horizontal, 13)
                 .frame(height: 36)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(self.buttonColor.opacity(self.isEnabled ? (self.isHovered ? 1 : 0.9) : 0.25))
+                        .fill(self.isEnabled ? self.buttonColor : self.buttonColor.opacity(0.25))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(Color.white.opacity(self.isHovered ? 0.3 : 0.16), lineWidth: 1)
+                        }
                 )
         }
         .buttonStyle(.plain)
