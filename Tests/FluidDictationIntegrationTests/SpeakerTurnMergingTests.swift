@@ -2006,6 +2006,7 @@ private enum MeetingModelFixture {
         MeetingCaptureConfiguration(
             mode: .onlineCall,
             title: "Design sync",
+            languageCode: "en",
             platform: MeetingPlatformProfile(identifier: "zoom", displayName: "Zoom", version: 1),
             application: MeetingApplicationIdentity(
                 bundleIdentifier: "us.zoom.xos",
@@ -2210,6 +2211,32 @@ private enum MeetingModelFixture {
 
 @MainActor
 final class MeetingSessionCoordinatorTests: XCTestCase {
+    func testHarnessPinsEnglishBackendWhenAmbientSelectionIsRussianOnly() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["SelectedSpeechModel", "MeetingTranscriptionBackendID"]
+        let original = keys.map { defaults.object(forKey: $0) }
+        self.addTeardownBlock { @MainActor in
+            for (key, value) in zip(keys, original) {
+                if let value { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
+        SettingsStore.shared.selectedSpeechModel = .gigaam
+        SettingsStore.shared.meetingTranscriptionBackendID = .gigaam
+
+        let harness = self.makeHarness()
+        XCTAssertEqual(defaults.string(forKey: keys[0]), MeetingFinalProcessingConfiguration.defaultASRModel)
+        XCTAssertEqual(SettingsStore.shared.meetingTranscriptionBackendID, .productionDefault)
+        let session = try await harness.coordinator.startRecording(
+            configuration: MeetingModelFixture.makeOnlineConfiguration()
+        )
+        XCTAssertEqual(session.languageCode, "en")
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.productionDefault.rawValue)
+        let snapshot = await harness.capture.snapshot()
+        XCTAssertEqual(snapshot.startCallCount, 1)
+        XCTAssertEqual(harness.arbiter.acquireCallCount, 1)
+    }
+
     func testConcurrentStartCreatesExactlyOneSessionAndCapture() async throws {
         let harness = self.makeHarness(blockStart: true)
         let configuration = MeetingModelFixture.makeOnlineConfiguration()
@@ -2484,6 +2511,13 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         failStop: Bool = false,
         failingSaveState: MeetingSessionState? = nil
     ) -> MeetingCoordinatorHarness {
+        let defaults = UserDefaults.standard
+        let keys = ["SelectedSpeechModel", "MeetingTranscriptionBackendID"]
+        // The fake capture/processing contract is English, independent of persisted app selection.
+        // Preserve raw absence as well as values before a settings getter can migrate a selection.
+        let original = keys.map { defaults.object(forKey: $0) }
+        SettingsStore.shared.selectedSpeechModel = .parakeetTDTv2
+        SettingsStore.shared.meetingTranscriptionBackendID = .productionDefault
         let store = FakeMeetingSessionStore(failingSaveState: failingSaveState)
         let capture = FakeMeetingCaptureController(
             blockStart: blockStart,
@@ -2492,13 +2526,23 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         )
         let processing = FakeMeetingProcessingController()
         let arbiter = FakeMeetingAudioActivityArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store,
+            capture: capture,
+            processing: processing,
+            audioArbiter: arbiter
+        )
+        self.addTeardownBlock { @MainActor in
+            await capture.resumeStart()
+            await capture.resumeStop()
+            await coordinator.shutdownForTermination()
+            for (key, value) in zip(keys, original) {
+                if let value { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
+        }
         return MeetingCoordinatorHarness(
-            coordinator: MeetingSessionCoordinator(
-                store: store,
-                capture: capture,
-                processing: processing,
-                audioArbiter: arbiter
-            ),
+            coordinator: coordinator,
             store: store,
             capture: capture,
             processing: processing,
