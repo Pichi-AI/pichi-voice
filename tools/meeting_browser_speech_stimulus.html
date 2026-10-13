@@ -1,0 +1,106 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Browser speech capture test</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 48rem; margin: 4rem auto; padding: 0 2rem; }
+  button { font: inherit; margin: .5rem .5rem .5rem 0; padding: .8rem; }
+  audio { display: block; width: 100%; margin-top: 1rem; }
+  #status { min-height: 3rem; }
+</style>
+<h1>Browser speech capture test</h1>
+<p>Plays the local synthetic <code>speech.wav</code> from this server. The WebRTC
+  test sends it between two peers in this tab, then plays received audio, like a remote caller.
+  No microphone, camera, account, or external signaling service is used.</p>
+<button id="direct">Play local speech</button>
+<button id="rtc">Play received WebRTC speech</button>
+<p id="status" role="status">Ready. Start meeting capture before playback.</p>
+<audio id="output" controls></audio>
+<script>
+  const output = document.querySelector('#output');
+  const status = document.querySelector('#status');
+  const buttons = [...document.querySelectorAll('button')];
+  let cleanup = async () => {};
+  async function play(received) {
+    await cleanup();
+    buttons.forEach(button => button.disabled = true);
+    const resources = [];
+    cleanup = async () => {
+      output.pause();
+      output.srcObject = null;
+      output.removeAttribute('src');
+      for (const resource of resources) {
+        if (resource instanceof RTCPeerConnection) resource.close();
+        else await resource.close();
+      }
+    };
+    try {
+      if (!received) {
+        output.src = 'speech.wav';
+        output.onended = () => { status.textContent = 'Direct speech complete.'; buttons.forEach(button => button.disabled = false); };
+        await output.play();
+        status.textContent = 'Playing direct browser speech.';
+        return;
+      }
+      const context = new AudioContext();
+      resources.push(context);
+      await context.resume();
+      const buffer = await context.decodeAudioData(await (await fetch('speech.wav')).arrayBuffer());
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      const destination = context.createMediaStreamDestination();
+      source.connect(destination);
+      const sender = new RTCPeerConnection({ iceServers: [] });
+      const receiver = new RTCPeerConnection({ iceServers: [] });
+      resources.push(sender, receiver);
+      const pendingSender = [], pendingReceiver = [];
+      sender.onicecandidate = event => {
+        if (!event.candidate) return;
+        if (receiver.remoteDescription) receiver.addIceCandidate(event.candidate).catch(fail);
+        else pendingReceiver.push(event.candidate);
+      };
+      receiver.onicecandidate = event => {
+        if (!event.candidate) return;
+        if (sender.remoteDescription) sender.addIceCandidate(event.candidate).catch(fail);
+        else pendingSender.push(event.candidate);
+      };
+      const playing = new Promise((resolve, reject) => {
+        receiver.ontrack = async event => {
+          output.srcObject = event.streams[0];
+          try { await output.play(); resolve(); } catch (error) { reject(error); }
+        };
+      });
+      destination.stream.getTracks().forEach(track => sender.addTrack(track, destination.stream));
+      await sender.setLocalDescription(await sender.createOffer());
+      await receiver.setRemoteDescription(sender.localDescription);
+      for (const candidate of pendingReceiver) await receiver.addIceCandidate(candidate);
+      await receiver.setLocalDescription(await receiver.createAnswer());
+      await sender.setRemoteDescription(receiver.localDescription);
+      for (const candidate of pendingSender) await sender.addIceCandidate(candidate);
+      await playing;
+      // Wait for the local transport before advancing the deterministic speech buffer.
+      if (receiver.connectionState !== 'connected') {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('WebRTC connection timed out')), 5000);
+          receiver.onconnectionstatechange = () => {
+            if (receiver.connectionState === 'connected') { clearTimeout(timeout); resolve(); }
+            if (receiver.connectionState === 'failed') { clearTimeout(timeout); reject(new Error('WebRTC connection failed')); }
+          };
+        });
+      }
+      source.onended = () => {
+        status.textContent = 'Received WebRTC speech complete.';
+        buttons.forEach(button => button.disabled = false);
+      };
+      source.start();
+      status.textContent = 'Playing received WebRTC browser speech.';
+    } catch (error) { fail(error); }
+  }
+  function fail(error) {
+    status.textContent = `Playback failed: ${error.message}`;
+    buttons.forEach(button => button.disabled = false);
+    cleanup();
+  }
+  document.querySelector('#direct').onclick = () => play(false);
+  document.querySelector('#rtc').onclick = () => play(true);
+</script>
