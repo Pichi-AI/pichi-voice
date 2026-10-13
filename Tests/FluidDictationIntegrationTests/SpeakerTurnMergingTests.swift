@@ -2241,10 +2241,23 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         let harness = self.makeHarness(blockStart: true)
         let configuration = MeetingModelFixture.makeOnlineConfiguration()
 
+        var firstStartResult: Result<MeetingSession, Error>?
         let firstStart = Task { @MainActor in
-            try await harness.coordinator.startRecording(configuration: configuration)
+            do {
+                let session = try await harness.coordinator.startRecording(configuration: configuration)
+                firstStartResult = .success(session)
+                return session
+            } catch {
+                firstStartResult = .failure(error)
+                throw error
+            }
         }
-        await harness.capture.waitForStartCall()
+        self.addTeardownBlock { @MainActor in
+            firstStart.cancel()
+            await harness.capture.resumeStart()
+            _ = try? await firstStart.value
+        }
+        try await self.waitForMockStart(harness.capture) { firstStartResult }
 
         let duplicateStart = Task { @MainActor in
             try await harness.coordinator.startRecording(configuration: configuration)
@@ -2273,6 +2286,52 @@ final class MeetingSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(storeSnapshot.createCallCount, 1)
         XCTAssertEqual(harness.arbiter.acquireCallCount, 1)
         XCTAssertEqual(harness.coordinator.state, .recording(session.id))
+    }
+
+    func testMockStartWaitSurfacesAdmissionFailureWithoutWaitingForCapture() async throws {
+        let harness = self.makeHarness(blockStart: true)
+        var configuration = MeetingModelFixture.makeOnlineConfiguration()
+        configuration.application = nil
+        var result: Result<MeetingSession, Error>?
+        let start = Task { @MainActor in
+            do {
+                let session = try await harness.coordinator.startRecording(configuration: configuration)
+                result = .success(session)
+                return session
+            } catch {
+                result = .failure(error)
+                throw error
+            }
+        }
+        self.addTeardownBlock { @MainActor in
+            start.cancel()
+            await harness.capture.resumeStart()
+            _ = try? await start.value
+        }
+        do {
+            try await self.waitForMockStart(harness.capture) { result }
+            XCTFail("A rejected Start must surface its original failure before capture begins")
+        } catch {
+            XCTAssertEqual(error as? MeetingModelValidationError, .missingOnlineApplication)
+        }
+        let snapshot = await harness.capture.snapshot()
+        XCTAssertEqual(snapshot.startCallCount, 0)
+        XCTAssertFalse(harness.coordinator.hasPendingStart)
+    }
+
+    private func waitForMockStart(
+        _ capture: FakeMeetingCaptureController,
+        completedStart: @MainActor () -> Result<MeetingSession, Error>?
+    ) async throws {
+        for _ in 0..<400 {
+            if await capture.snapshot().startCallCount > 0 { return }
+            if let result = completedStart() {
+                _ = try result.get()
+                throw MeetingCoordinatorTestError.captureStartNotReached
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        throw MeetingCoordinatorTestError.captureStartNotReached
     }
 
     func testConcurrentStopJoinsOneFinalizationAndPersistsLegalStateOrder() async throws {
@@ -2570,6 +2629,7 @@ private struct MeetingCoordinatorHarness {
 
 private enum MeetingCoordinatorTestError: Error, Equatable {
     case rejectedSave(MeetingSessionState)
+    case captureStartNotReached
 }
 
 private actor FakeMeetingSessionStore: MeetingSessionStoring {
