@@ -431,6 +431,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         var isReady = false
         var prepareCalls = 0
         var timedSampleCounts: [Int] = []
+        var releaseCalls = 0
+        func releaseResidency() async { releaseCalls += 1; isReady = false }
         func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
             self.prepareCalls += 1
             self.isReady = true
@@ -446,6 +448,98 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
                 [.init(text: "Scoped", start: 0.1, end: 0.4), .init(text: "provider", start: 0.4, end: 0.8)]
             )
         }
+    }
+
+    @MainActor private final class PCMPreviewObservation { var batch: MeetingPCMTranscriptBatch? }
+
+    private func makeNativePCMPreviewFixture() throws -> (service: ASRService, lease: ASRActivityLease,
+        provider: NativeScopeProvider, owner: MeetingASRPreparationOwner,
+        runtime: MeetingParakeetNemotronRuntime, configuration: MeetingFinalProcessingConfiguration) {
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        let provider = NativeScopeProvider()
+        let owner = MeetingASRPreparationOwner(isActiveLease: { $0 == lease }, isUserDownloadInProgress: { false },
+            retireDictationResources: { _ in }, makeProvider: { _ in provider },
+            prepareProvider: { prepared, _, progress in try await prepared.prepare(progressHandler: progress) },
+            drainExecutor: { _ in })
+        service.meetingASRPreparationOwnerForTesting = owner
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou",
+            asrArtifactFingerprint: "synthetic-preview-artifact", languageCode: "ru", speakerLabelsEnabled: false)
+        return (service, lease, provider, owner,
+            MeetingParakeetNemotronRuntime(asrServiceProvider: { service }, modelLocator: StubModelLocator()), configuration)
+    }
+
+    func testNativePCMPreviewAfterASRDrainReusesWordTimesAndOneInference() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        defer { fixture.service.releaseExclusiveActivity(fixture.lease) }
+        let attempt = UUID(); let track = UUID()
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let observed = PCMPreviewObservation()
+        let result = try await fixture.runtime.recognizePCM(samples: [Float](repeating: 0, count: 16_000),
+            offset: 8, trackID: track, attemptID: attempt, configuration: fixture.configuration,
+            preview: { batch in
+                await MainActor.run {
+                    XCTAssertFalse(fixture.owner.isClaimed, "ASR weights must be drained before preview or speaker phases")
+                    XCTAssertEqual(fixture.provider.releaseCalls, 1)
+                    observed.batch = batch
+                }
+            })
+        let preview = try XCTUnwrap(observed.batch)
+        XCTAssertFalse(preview.isComplete)
+        XCTAssertTrue(preview.speakers.isEmpty)
+        XCTAssertTrue(preview.segments.allSatisfy { $0.speakerID == nil && $0.attributionState == .unassigned && $0.status == .provisional })
+        XCTAssertEqual(preview.segments.map(\.text), ["Scoped", "provider"])
+        XCTAssertEqual(preview.segments.map { $0.start.seconds }, [8.1, 8.4])
+        XCTAssertEqual(preview.segments.map(\.id), result.segments.map(\.id))
+        XCTAssertEqual(preview.segments.map(\.text), result.segments.map(\.text))
+        XCTAssertTrue(result.isComplete)
+        XCTAssertTrue(result.segments.allSatisfy { $0.status == .final })
+        XCTAssertEqual(fixture.provider.prepareCalls, 1)
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [16_000])
+    }
+
+    func testNativePCMObserverRefusalPropagatesAfterOneDrainedASRPass() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        defer { fixture.service.releaseExclusiveActivity(fixture.lease) }
+        let attempt = UUID(); let marker = CocoaError(.userCancelled)
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        do {
+            _ = try await fixture.runtime.recognizePCM(samples: [Float](repeating: 0, count: 16_000),
+                offset: 0, trackID: UUID(), attemptID: attempt, configuration: fixture.configuration,
+                preview: { _ in throw marker })
+            XCTFail("A refused display observation cannot produce canonical output")
+        } catch { XCTAssertEqual(error as? CocoaError, marker) }
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [16_000])
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
+        XCTAssertFalse(fixture.owner.isClaimed)
+    }
+
+    func testNativePCMPreviewCancellationJoinsObserverBeforeReleasingWindow() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        defer { fixture.service.releaseExclusiveActivity(fixture.lease) }
+        let attempt = UUID(); let track = UUID(); let latch = Latch()
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let reached = expectation(description: "Preview reached after ASR")
+        let operation = Task {
+            try await fixture.runtime.recognizePCM(samples: [Float](repeating: 0, count: 16_000),
+                offset: 0, trackID: track, attemptID: attempt, configuration: fixture.configuration,
+                preview: { _ in reached.fulfill(); await latch.wait() })
+        }
+        await fulfillment(of: [reached], timeout: 2)
+        operation.cancel()
+        do {
+            _ = try await fixture.runtime.recognizePCM(samples: [Float](repeating: 0, count: 16_000),
+                offset: 1, trackID: track, attemptID: attempt, configuration: fixture.configuration)
+            XCTFail("Cancelled observer must still own its window until it returns")
+        } catch { XCTAssertEqual(error as? MeetingParakeetNemotronRuntimeError, .concurrentPCMWindow) }
+        await latch.open()
+        do { _ = try await operation.value; XCTFail("Cancelled observation cannot produce canonical output") }
+        catch is CancellationError { }
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [16_000])
+        XCTAssertFalse(fixture.owner.isClaimed)
+        _ = try await fixture.runtime.recognizePCM(samples: [Float](repeating: 0, count: 16_000),
+            offset: 1, trackID: track, attemptID: attempt, configuration: fixture.configuration)
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [16_000, 16_000], "Fresh window can run after the cancellation joined")
     }
 
     /// Deliberately has no architecture guard: generic ASR must also work in the Intel host,

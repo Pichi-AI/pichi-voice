@@ -69,6 +69,11 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 protocol MeetingParakeetNemotronRunning: Sendable {
     nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
                                  attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch
+    /// A display-only speech observation after the ASR scope has drained, before attribution.
+    /// The owner must apply privacy and generation checks; this batch is not a durable result.
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch
     nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws
     nonisolated func speakerVoiceProfiles(
         samples: [MeetingSpeakerVoiceSamples]
@@ -90,6 +95,15 @@ extension MeetingParakeetNemotronRunning {
     nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
                                  attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
         throw MeetingPCMInputError.unsupportedRuntime
+    }
+
+    /// Existing injected runtimes keep their original final operation without claiming an
+    /// early observation. Concrete adapters can implement the additive preview capability.
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+        try await self.recognizePCM(samples: samples, offset: offset, trackID: trackID,
+                                    attemptID: attemptID, configuration: configuration)
     }
 
     nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws {

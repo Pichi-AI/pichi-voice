@@ -13,7 +13,9 @@ import FluidAudio
 //   phase begins — the loaded-set sequence is none -> Nemotron -> drained -> Parakeet -> drained.
 // - Prepared-provider ASR: one `ASRService.withPreparedMeetingASR` scope per attempt, with the heavy body
 //   bounced off the main actor so materialization and inference never block the UI.
-// - Optional local WeSpeaker encoding between those phases, using bounded voice excerpts.
+// - Optional local WeSpeaker encoding in its own phase, using bounded voice excerpts.
+// - Strict PCM runs one ASR phase first, then observes provisional speech before the
+//   separate Nemotron/voice phases. File-backed orchestration retains its original order.
 //
 // Parakeet does ASR only; Nemotron does diarization only. Neither capability sees anything beyond
 // the request the host froze.
@@ -244,6 +246,15 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         samples: [Float], offset: TimeInterval, trackID: UUID, attemptID: UUID,
         configuration: MeetingFinalProcessingConfiguration
     ) async throws -> MeetingPCMTranscriptBatch {
+        try await self.recognizePCM(samples: samples, offset: offset, trackID: trackID,
+                                    attemptID: attemptID, configuration: configuration, preview: nil)
+    }
+
+    func recognizePCM(
+        samples: [Float], offset: TimeInterval, trackID: UUID, attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration,
+        preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?
+    ) async throws -> MeetingPCMTranscriptBatch {
         guard !samples.isEmpty, samples.count <= 320_000, samples.allSatisfy(\.isFinite),
               offset.isFinite, offset >= 0, offset <= 31_536_000 else {
             throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
@@ -259,7 +270,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             try await DebugLogger.$pipelineID.withValue(pipelineID) {
                 try await self.recognizePCMPhases(samples: samples, offset: offset, trackID: trackID,
                                                  attemptID: attemptID, configuration: configuration,
-                                                 priorProfiles: prior.profiles, priorSpeakers: prior.speakers)
+                                                 priorProfiles: prior.profiles, priorSpeakers: prior.speakers,
+                                                 preview: preview)
             }
         }
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
@@ -268,11 +280,37 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private func recognizePCMPhases(
         samples: [Float], offset: TimeInterval, trackID: UUID, attemptID: UUID,
         configuration: MeetingFinalProcessingConfiguration,
-        priorProfiles: [MeetingSpeakerVoiceProfile], priorSpeakers: [MeetingSessionSpeaker]
+        priorProfiles: [MeetingSpeakerVoiceProfile], priorSpeakers: [MeetingSessionSpeaker],
+        preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?
     ) async throws -> MeetingPCMTranscriptBatch {
         try Task.checkCancellation()
         let duration = Double(samples.count) / 16_000
         let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: Int((offset * 16_000).rounded()))
+        // Strict capture needs speech before expensive attribution. The prepared ASR scope
+        // has released its weights when it returns. Retain only this bounded text/timing output
+        // and reuse it for the canonical assembly after the separate speaker phases.
+        let phase = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { session in
+            let output = try await session.transcribeWithTimings(samples)
+            return MeetingParakeetPhaseResult(outputs: [.init(epochID: epoch, text: output.result.text,
+                                                              words: output.words, sampleRate: 16_000,
+                                                              sampleCount: samples.count, spanSamples: [])])
+        }
+        try Task.checkCancellation()
+        guard phase.outputs.count == 1, let output = phase.outputs.first else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+        if let preview {
+            let units = MeetingParakeetNemotronBackend.pcmUnits(result: ASRTranscriptionResult(text: output.text),
+                words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [])
+            var observation = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat)
+                .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: offset, duration: duration,
+                    units: units, identityLinks: [], priorSpeakers: [])
+            observation.isComplete = false
+            for index in observation.segments.indices { observation.segments[index].status = .provisional }
+            try Task.checkCancellation()
+            try await preview(observation)
+            try Task.checkCancellation()
+        }
         var activity: [MeetingBackendSpeakerActivity] = []
         var currentProfiles: [MeetingSpeakerVoiceProfile] = []
         if configuration.speakerLabelsEnabled {
@@ -305,16 +343,6 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             }
         }
         try Task.checkCancellation()
-        let phase = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { session in
-            let output = try await session.transcribeWithTimings(samples)
-            return MeetingParakeetPhaseResult(outputs: [.init(epochID: epoch, text: output.result.text,
-                                                              words: output.words, sampleRate: 16_000,
-                                                              sampleCount: samples.count, spanSamples: [])])
-        }
-        try Task.checkCancellation()
-        guard phase.outputs.count == 1, let output = phase.outputs.first else {
-            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
-        }
         let allProfiles = priorProfiles + currentProfiles
         let allowedTokens = Set(allProfiles.map(\.token))
         let links = MeetingSpeakerVoiceMatcher.links(profiles: allProfiles, allowedTokens: allowedTokens)
@@ -333,7 +361,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         return batch
     }
 
-    /// Runs between Nemotron and ASR, so the additional encoder never overlaps their residency.
+    /// Runs in its own phase, so the additional encoder never overlaps ASR or Nemotron residency.
     /// Only short, admitted single-speaker excerpts reach this local model; no audio is uploaded.
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
         let began = ContinuousClock.now
