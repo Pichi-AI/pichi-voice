@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
+import UIKit
 @testable import PichiVoiceMobile
 import XCTest
 
@@ -55,6 +56,78 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
 
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
+    func testPhysicalMicrophoneThroughLiveGigaAMPrivacyAndExport() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires an explicitly enabled physical microphone and speaker test")
+        #else
+        guard ProcessInfo.processInfo.environment["PICHI_PHYSICAL_MEETING_E2E"] == "1" else {
+            throw XCTSkip("Explicitly enable physical meeting recording with public synthetic speech playback")
+        }
+        guard AVAudioSession.sharedInstance().outputVolume > 0.05 else {
+            throw XCTSkip("Physical speech replay requires audible iPad output volume")
+        }
+        let assets = try MobileInferenceTestAssets.resolve()
+        let name = "PhysicalMeetingE2E.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { defaults.removePersistentDomain(forName: name); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        settings.meetingSaveAudio = true
+        settings.meetingSpeakerLabelsEnabled = false
+        settings.meetingPIIRedactionEnabled = true
+        let store = MeetingSessionStore(rootDirectory: root)
+        let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: assets.appendingPathComponent("models/privacy")))
+        let services = AppServices(store: store, settings: settings, privacy: privacy)
+        let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent("audio/ru.wav"))
+        player.numberOfLoops = 1
+        var backgroundObserved = false
+        do {
+            let configuration = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom, title: "Physical synthetic speech")
+            let recording = try await services.meetingSessionCoordinator.startRecording(configuration: configuration)
+            XCTAssertEqual(recording.audioStorageMode, .retainedFiles)
+            let readyDeadline = ProcessInfo.processInfo.systemUptime + 20
+            while services.meetingSessionCoordinator.liveTranscript.availability != .available,
+                  ProcessInfo.processInfo.systemUptime < readyDeadline {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            XCTAssertEqual(services.meetingSessionCoordinator.liveTranscript.availability, .available)
+            // Test-only audible fixture replay. The real selected microphone receives it;
+            // there is no injected PCM or microphone implementation in this composition.
+            try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
+            XCTAssertTrue(player.play())
+            print("[PHYSICAL_MEETING_E2E] synthetic_speech_started")
+            for _ in 0..<25 {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                backgroundObserved = backgroundObserved || UIApplication.shared.applicationState == .background
+            }
+            player.stop()
+            let live = services.meetingSessionCoordinator.liveTranscript
+            XCTAssertFalse(live.utterances.isEmpty && live.partials.values.allSatisfy { $0.text.isEmpty }, "Actual microphone speech must appear before recording stops")
+            if ProcessInfo.processInfo.environment["PICHI_PHYSICAL_MEETING_BACKGROUND"] == "1" {
+                XCTAssertTrue(backgroundObserved, "The host app must actually enter the background during speech recognition")
+            }
+            let completed = try await services.meetingSessionCoordinator.stopAndTranscribe()
+            XCTAssertEqual(completed.state, .completed)
+            XCTAssertFalse(completed.transcriptSegments.isEmpty)
+            XCTAssertTrue(completed.hasFinalizedAudio)
+            XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
+            let saved = try await store.load(id: completed.id)
+            XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
+            let payload = try MeetingSharePayload.transcript(data: MeetingTranscriptExporter.json(for: completed), title: completed.title, fileExtension: "json")
+            payload.cleanup()
+            await services.asr.shutdownForTermination()
+            try await privacy.unload()
+        } catch {
+            player.stop()
+            await services.meetingSessionCoordinator.shutdownForTermination()
+            await services.asr.shutdownForTermination()
+            try? await privacy.unload()
+            throw error
+        }
+        #endif
+    }
+
     func testStrictMeetingThroughActualMobileCompositionPersistsAndExports() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let input = try AVAudioFile(forReading: assets.appendingPathComponent("audio/ru.wav"))
