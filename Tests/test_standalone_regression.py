@@ -209,18 +209,18 @@ class StandaloneRunnerTests(unittest.TestCase):
 
     def test_term_during_marker_write_is_deferred_then_joined(self):
         probe = self.worker_probe()
-        original = Path.write_text
+        original = RUNNER.owned_file
         delivered = False
 
         def terminate_in_marker(path, *args, **options):
             nonlocal delivered
-            if path.name == RUNNER.PROCESS_MARKER and not delivered:
+            if path.name == RUNNER.PROCESS_MARKER and args and args[0] & os.O_CREAT and not delivered:
                 self.wait_for_worker()
                 delivered = True
                 os.kill(os.getpid(), signal.SIGTERM)
             return original(path, *args, **options)
 
-        with patch.object(Path, "write_text", terminate_in_marker), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+        with patch.object(RUNNER, "owned_file", terminate_in_marker), patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
             status, report, _ = self.run_probes([probe])
         self.assertTrue(delivered)
         self.assertEqual(status, 143)
@@ -249,6 +249,97 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(report["results"][0]["cleanupError"], "synthetic cleanup failure")
         self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
         self.assertTrue((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def test_cleanup_inspection_failure_cannot_replace_original_term(self):
+        class Process:
+            pid = 123456
+            returncode = -signal.SIGTERM
+            def wait(self):
+                raise RUNNER.RunTermination(signal.SIGTERM)
+        with patch.object(RUNNER.subprocess, "Popen", return_value=Process()), \
+             patch.object(RUNNER, "stop_process_group"), \
+             patch.object(RUNNER, "live_process_group", side_effect=OSError("synthetic ps failure")):
+            status, report, _ = self.run_probes([self.probe("term")])
+        self.assertEqual(status, 143)
+        self.assertEqual(report["results"][0]["exitCode"], -signal.SIGTERM)
+        self.assertEqual(report["results"][0]["inspectionError"], "synthetic ps failure")
+        self.assertTrue((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def test_ordinary_cleanup_failure_keeps_known_child_exit(self):
+        class Process:
+            pid = 123456
+            returncode = 0
+            def wait(self): return 0
+        with patch.object(RUNNER.subprocess, "Popen", return_value=Process()), \
+             patch.object(RUNNER, "stop_process_group", side_effect=OSError("synthetic cleanup failure")), \
+             patch.object(RUNNER, "live_process_group", side_effect=[True, False]):
+            status, report, _ = self.run_probes([self.probe("cleanup")])
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["exitCode"], 0)
+        self.assertEqual(report["results"][0]["status"], "FAIL")
+
+    def test_term_during_final_report_is_recorded_as_143_failure(self):
+        original = Path.write_text
+        delivered = False
+
+        def interrupt_final_save(path, data, *args, **options):
+            nonlocal delivered
+            if path.name == "summary.json.tmp" and '"status": "PASS"' in data and not delivered:
+                delivered = True
+                os.kill(os.getpid(), signal.SIGTERM)
+            return original(path, data, *args, **options)
+
+        with patch.object(Path, "write_text", interrupt_final_save):
+            status, report, _ = self.run_probes([self.probe("complete")])
+        self.assertTrue(delivered)
+        self.assertEqual(status, 143)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["runnerExitCode"], 143)
+
+    def test_term_during_handler_install_restores_original_handlers(self):
+        originals = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
+        original_set = signal.signal
+        delivered = False
+
+        def interrupt_install(number, handler):
+            nonlocal delivered
+            result = original_set(number, handler)
+            if number == signal.SIGTERM and callable(handler) and getattr(handler, "__name__", "") == "handle" and not delivered:
+                delivered = True
+                os.kill(os.getpid(), signal.SIGTERM)
+            return result
+
+        with patch.object(RUNNER.signal, "signal", interrupt_install), redirect_stdout(io.StringIO()):
+            status, report = RUNNER.run_suite(self.root, [self.probe("not-started", "touch wrongly-started")])
+        self.assertEqual(status, 143)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse((self.root / "wrongly-started").exists())
+        for number, handler in originals.items():
+            self.assertEqual(signal.getsignal(number), handler)
+
+    def test_symlinked_marker_and_lock_are_rejected_before_write(self):
+        (self.root / ".build").mkdir()
+        for name in (RUNNER.PROCESS_MARKER, "standalone-regression.lock"):
+            with self.subTest(name=name):
+                outside = self.root / f"unowned-{name}"
+                link = self.root / ".build" / name
+                link.unlink(missing_ok=True)
+                link.symlink_to(outside)
+                with self.assertRaisesRegex(ValueError, "regular file"):
+                    with RUNNER.run_lock(self.root):
+                        self.fail("A dangling ownership symlink must not be accepted")
+                self.assertFalse(outside.exists())
+                link.unlink()
+
+    def test_hardlinked_ownership_file_is_rejected_without_truncation(self):
+        (self.root / ".build").mkdir()
+        outside = self.root / "unowned-data"
+        outside.write_text("must stay unchanged")
+        marker = self.root / ".build" / RUNNER.PROCESS_MARKER
+        os.link(outside, marker)
+        with self.assertRaisesRegex(ValueError, "one link"):
+            RUNNER.owned_file(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        self.assertEqual(outside.read_text(), "must stay unchanged")
 
     def test_background_descendant_is_not_a_success_or_left_running(self):
         probe = self.worker_probe(wait=False)

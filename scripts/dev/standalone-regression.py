@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import platform
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,27 @@ import traceback
 CANCEL_GRACE_SECONDS = 2
 KILL_WAIT_SECONDS = 2
 PROCESS_MARKER = "standalone-regression.process.json"
+
+
+def owned_file(path, flags):
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError(f"Ownership file must be a regular file with one link: {path.name}")
+    descriptor = os.open(path, (flags & ~os.O_TRUNC) | os.O_NOFOLLOW, 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError(f"Ownership file changed: {path.name}")
+        if flags & os.O_TRUNC:
+            os.ftruncate(descriptor, 0)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 class RunTermination(BaseException):
@@ -71,10 +93,10 @@ def suite_signal_handlers():
                 deliver(number)
 
     originals = {number: signal.getsignal(number) for number in (signal.SIGINT, signal.SIGTERM)}
-    with defer_interrupts():
-        for number in originals:
-            signal.signal(number, handle)
     try:
+        with defer_interrupts():
+            for number in originals:
+                signal.signal(number, handle)
         yield protect_creation
     finally:
         with defer_interrupts():
@@ -112,19 +134,22 @@ def stop_process_group(process):
 def run_owned_process(command, root, stream, protect_creation):
     marker = root / ".build" / PROCESS_MARKER
     process = None
+    failure = None
     try:
         # Defer handler delivery rather than blocking OS signals: children must
         # inherit their normal signal mask. Record ownership before delivering.
         with protect_creation():
             process = subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL,
                                        stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
-            marker.write_text(json.dumps({"processGroup": process.pid}) + "\n")
+            with os.fdopen(owned_file(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC), "w") as output:
+                output.write(json.dumps({"processGroup": process.pid}) + "\n")
         code = process.wait()
         if live_process_group(process.pid):
             stop_process_group(process)
             return code, "Probe left unjoined descendant processes"
         return code, None
     except BaseException as error:
+        failure = error
         if process is not None:
             try:
                 stop_process_group(process)
@@ -133,8 +158,16 @@ def run_owned_process(command, root, stream, protect_creation):
             error.child_exit_code = process.returncode
         raise
     finally:
-        if process is not None and not live_process_group(process.pid):
-            marker.unlink(missing_ok=True)
+        if process is not None:
+            try:
+                if not live_process_group(process.pid):
+                    marker.unlink(missing_ok=True)
+            except (OSError, ValueError, subprocess.SubprocessError) as inspection_error:
+                if failure is not None:
+                    failure.inspection_error = str(inspection_error)
+                else:
+                    inspection_error.child_exit_code = process.returncode
+                    raise
 
 
 @dataclass(frozen=True)
@@ -214,15 +247,20 @@ def run_lock(root):
     if build.is_symlink():
         raise ValueError("Standalone build storage must belong to this worktree")
     build.mkdir(exist_ok=True)
-    with (build / "standalone-regression.lock").open("a") as lock:
+    with os.fdopen(owned_file(build / "standalone-regression.lock", os.O_RDWR | os.O_CREAT | os.O_APPEND), "a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise ValueError("A standalone regression run is already active in this worktree") from error
         try:
             marker = build / PROCESS_MARKER
-            if marker.exists():
-                group = json.loads(marker.read_text())["processGroup"]
+            try:
+                descriptor = owned_file(marker, os.O_RDONLY)
+            except FileNotFoundError:
+                pass
+            else:
+                with os.fdopen(descriptor, "r") as source:
+                    group = json.load(source)["processGroup"]
                 if live_process_group(group):
                     raise ValueError("A previous probe still owns this worktree's build storage")
                 marker.unlink()
@@ -236,12 +274,27 @@ def timestamp():
 
 
 def run_suite(root, probes, *, include_ui=False, revision="unknown", dirty=False):
-    with suite_signal_handlers() as protect_creation:
-        return _run_suite(root, probes, include_ui=include_ui, revision=revision, dirty=dirty,
-                          protect_creation=protect_creation)
+    state = {}
+    try:
+        with suite_signal_handlers() as protect_creation:
+            return _run_suite(root, probes, include_ui=include_ui, revision=revision, dirty=dirty,
+                              protect_creation=protect_creation, state=state)
+    except (KeyboardInterrupt, RunTermination) as error:
+        code = interruption_status(error)
+        if state:
+            report = state["report"]
+            report.update(status="FAIL", interrupted=True, runnerExitCode=code, reason="Run interrupted")
+            with defer_interrupts():
+                state["save"]()
+                (state["directory"] / "summary.txt").write_text(f"Status: FAIL\nRunner exit: {code}\nRun interrupted\n")
+        else:
+            report = {"status": "FAIL", "interrupted": True, "runnerExitCode": code,
+                      "reason": "Interrupted before suite started", "results": [],
+                      "counts": {"total": len(probes), "passed": 0, "failed": 0, "skipped": len(probes)}}
+        return code, report
 
 
-def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
+def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation, state):
     root = root.resolve()
     with run_lock(root):
         base = root / ".build/standalone-regression"
@@ -263,6 +316,7 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
             temporary.write_text(json.dumps(report, indent=2) + "\n")
             temporary.replace(directory / "summary.json")
 
+        state.update(report=report, directory=directory, save=save)
         save()
         interrupted = False
         interrupt_code = 130
@@ -294,8 +348,8 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
                             row.update(status="PASS" if code == 0 and not ownership_error else "FAIL", exitCode=code)
                             if ownership_error:
                                 row["reason"] = ownership_error
-                        except (OSError, subprocess.SubprocessError) as error:
-                            row.update(status="FAIL", reason=str(error))
+                        except (OSError, ValueError, subprocess.SubprocessError) as error:
+                            row.update(status="FAIL", reason=str(error), exitCode=getattr(error, "child_exit_code", None))
                             stream.write(f"Runner error: {error}\n".encode())
                             stream.write(traceback.format_exc().encode())
                             if (root / ".build" / PROCESS_MARKER).exists():
@@ -306,6 +360,8 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
                                        runnerExitCode=interrupt_code, reason="interrupted")
                             if hasattr(error, "cleanup_error"):
                                 row["cleanupError"] = error.cleanup_error
+                            if hasattr(error, "inspection_error"):
+                                row["inspectionError"] = error.inspection_error
                             interrupted = True
                     row["durationSeconds"] = round(time.monotonic() - start, 3)
                 print(f"{row['status']} {probe.name}", flush=True)
@@ -324,7 +380,7 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
                 (directory / row["log"]).write_text("SKIP: not run after interruption\n")
                 report["results"].append(row)
             save()
-        with defer_interrupts():
+        def finish():
             counts = report["counts"]
             report["interrupted"] = interrupted
             report["runnerExitCode"] = interrupt_code if interrupted else (0 if counts["passed"] and not counts["failed"] else 1)
@@ -340,7 +396,14 @@ def _run_suite(root, probes, *, include_ui, revision, dirty, protect_creation):
             lines += [f"{row['status']} {row['name']} exit={row['exitCode']} log={row['log']}" for row in report["results"]]
             (directory / "summary.txt").write_text("\n".join(lines) + "\n")
             print(lines[2], flush=True)
-            return report["runnerExitCode"], report
+        while True:
+            try:
+                with defer_interrupts():
+                    finish()
+                return report["runnerExitCode"], report
+            except (KeyboardInterrupt, RunTermination) as error:
+                interrupted = True
+                interrupt_code = interruption_status(error)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
