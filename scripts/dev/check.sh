@@ -37,4 +37,5 @@ for pichi_path in AGENTS.md .codex/config.toml .codex/hooks/session-start.py \
 done
 python3 -S scripts/dev/check-localization.py
 python3 -S Tests/test_localization_catalog.py
+bash Tests/run_upstream_sync_tests.sh
 printf '%s\n' 'Portable checks passed. macOS build and audio checks are separate.'
