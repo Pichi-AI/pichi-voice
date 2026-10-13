@@ -101,8 +101,11 @@ struct BrandProfileTests {
         let unsafeAccent = try self.invisibleAccentPackage(packaged, appearance: "light", background: "cardBackground")
         self.reject { _ = try store.importData(unsafeAccent) }
         for appearance in ["light", "dark"] {
-            let unsafePolarity = try self.oppositePolarityPackage(packaged, appearance: appearance)
+            let unsafePolarity = try self.mixedSurfacePackage(packaged, appearance: appearance)
             self.reject { _ = try store.importData(unsafePolarity) }
+            let unsafeHueBlend = try self.mixedSurfacePackage(packaged, appearance: appearance,
+                firstBackground: "#FE0020", secondBackground: "#009A20", foreground: "#000000")
+            self.reject { _ = try store.importData(unsafeHueBlend) }
         }
         precondition(store.current() == sizeable && store.revision == previousRevision)
         try self.require(try Data(contentsOf: active) == previousFile)
@@ -189,16 +192,18 @@ struct BrandProfileTests {
         return try JSONSerialization.data(withJSONObject: object)
     }
 
-    static func oppositePolarityPackage(_ packaged: BrandPackage, appearance: String) throws -> Data {
+    static func mixedSurfacePackage(_ packaged: BrandPackage, appearance: String,
+                                    firstBackground: String = "#000000", secondBackground: String = "#FFFFFF",
+                                    foreground: String = "#767676", accentForeground: String = "#FFFFFF") throws -> Data {
         var object = try JSONSerialization.jsonObject(with: packaged.encoded()) as! [String: Any]
         var profile = object["profile"] as! [String: Any]
         var theme = object["theme"] as! [String: Any]
-        var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, "#767676") })
+        var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, foreground) })
         for (index, background) in ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"].enumerated() {
-            colors[background] = index.isMultiple(of: 2) ? "#000000" : "#FFFFFF"
+            colors[background] = index.isMultiple(of: 2) ? firstBackground : secondBackground
         }
-        colors["accentForeground"] = "#FFFFFF"
-        profile[appearance == "light" ? "accentLight" : "accentDark"] = "#767676"
+        colors["accentForeground"] = accentForeground
+        profile[appearance == "light" ? "accentLight" : "accentDark"] = foreground
         theme[appearance] = ["colors": colors]
         object["profile"] = profile
         object["theme"] = theme
@@ -237,7 +242,7 @@ struct BrandProfileTests {
             }
         }
         for appearance in ["light", "dark"] {
-            let data = try self.oppositePolarityPackage(packaged, appearance: appearance)
+            let data = try self.mixedSurfacePackage(packaged, appearance: appearance)
             // Decode without validation only to establish the adversarial fixture:
             // every opaque pairing meets the old thresholds, including button ink.
             let unsafe = try JSONDecoder().decode(BrandPackage.self, from: data)
@@ -254,6 +259,25 @@ struct BrandProfileTests {
             // A black/white mixture can equal #767676 and erase all those roles.
             self.reject { _ = try BrandPackage.decode(data) }
         }
+        for appearance in ["light", "dark"] {
+            let data = try self.mixedSurfacePackage(packaged, appearance: appearance,
+                firstBackground: "#FE0020", secondBackground: "#009A20", foreground: "#000000")
+            let unsafe = try JSONDecoder().decode(BrandPackage.self, from: data)
+            let palette = appearance == "light" ? unsafe.theme!.light : unsafe.theme!.dark
+            for background in backgrounds {
+                // Endpoint contrast and consistent luminance polarity are both
+                // valid. The exact 50:50 sRGB mix nevertheless fails even 3:1.
+                precondition(BrandPalette.contrast("#000000", palette.colors[background]!) >= 4.5)
+                precondition(BrandPalette.luminance("#000000") < BrandPalette.luminance(palette.colors[background]!))
+            }
+            // Ink is outside even the RGB envelope's luminance interval;
+            // enforcing the ratio at its minimum is necessary, not only polarity.
+            precondition(BrandPalette.luminance("#000000") < BrandPalette.luminance("#000020"))
+            precondition(BrandPalette.contrast("#000000", "#000020") < 3)
+            precondition(BrandPalette.contrast("#000000", "#7F4D20") < 3)
+            precondition(BrandPalette.contrast(palette.colors["accentForeground"]!, "#000000") >= 4.5)
+            self.reject { _ = try BrandPackage.decode(data) }
+        }
         // The new standalone-accent rule must still permit readable portable
         // themes. Shipped and both bank packages are decoded earlier in main.
         for (background, foreground, accent) in [("#FFFFFF", "#000000", "#0000FF"), ("#000000", "#FFFFFF", "#00FFFF")] {
@@ -262,7 +286,7 @@ struct BrandProfileTests {
             colors["accentForeground"] = background
             try BrandPalette(colors: colors).validate(accent: accent)
         }
-        print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections, 2 opposite-polarity rejections and 2 readable palette checks passed")
+        print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections, 2 opposite-polarity rejections, 2 saturated-blend rejections and 2 readable palette checks passed")
     }
 
     static func verifyDiagnosticLogIsolation() throws {
