@@ -695,7 +695,7 @@ struct SidebarSearchField: View {
         .frame(height: 32)
         .background(
             RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                .fill(self.theme.palette.primaryText.opacity(0.08))
+                .fill(self.theme.palette.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
