@@ -65,3 +65,11 @@ mkdir -p .build/ipad-meeting-concepts/renders
 ```
 
 Offscreen exports are visual design artifacts, not device or interactive app screenshots. Save and inspect native screenshots after each interactive preview step, with the tested commit and scenario in their filenames, as required by AGENTS.md. The current machine's lack of an installed iOS simulator runtime is separate from SDK compilation; physical iPad and iPhone checks remain required.
+
+## Parent integration verification
+
+The parent integrated this prototype into `codex/ipad-voice-design` and compiled both SDK outputs there. Portable repository checks passed. Native Mac preview inspection covered A/B/C, a 390-point phone canvas, light/dark, privacy with audio on/off, voice-enrollment preview and completed speaker labels. These are native preview-host screenshots, not iPad execution or microphone evidence.
+
+Independent review found compact enrollment content needed scrolling and the history sheet needed an adaptive width. Both were corrected. Fixture navigation now preserves the current meeting state and selects the requested history item. Frozen preview bundles may include `Contents/Resources/preview-arguments.json`, an array of the documented flags, so the UI inspector can launch a scenario directly. Explicit command-line flags take priority. Frozen copies and screenshot evidence remain in ignored `.build/` storage.
+
+The implementation plan is in [ipad-voice-plan.md](../../docs/development/ipad-voice-plan.md), and the sourced list of 45 iPad generations/sizes with preliminary suitability is in [ipad-device-matrix.md](../../docs/development/ipad-device-matrix.md).

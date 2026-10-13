@@ -174,3 +174,5 @@ Speaker matching использует проверенные similarity threshol
 `bash scripts/dev/setup.sh` выполнен в этом worktree: portable checks и 6 проверок String Catalog прошли. Установлен Xcode 27.0 с iOS/macOS SDK. Simulator runtimes отсутствуют. UI-прототип можно скомпилировать под iOS SDK и смотреть как native SwiftUI preview на Mac; это не запуск на iPad и не проверка background microphone capture. Подробные команды и итоговая визуальная проверка находятся в `Prototypes/iPadMeetingConcepts/README.md`.
 
 Выбор UI остаётся за пользователем. По его исходному запросу подключение функциональных сервисов начинается после выбора варианта.
+
+Подготовлена [полная таблица моделей iPad](ipad-device-matrix.md): 20 моделей с 2021 года и 25 более старых. Целевой hardware профиль полного сценария предлагается от Air M1/8 ГБ, а iPad 9 служит проверкой нижней границы. Это предварительное решение о тестовой матрице, не измеренный минимум приложения.

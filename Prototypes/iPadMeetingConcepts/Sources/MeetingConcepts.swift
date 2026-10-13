@@ -5,6 +5,8 @@ enum PrototypeScreen: String { case ready, active, completed, privacy, models, h
 struct PrototypeRoot: View {
     let options: PrototypeOptions
     @State private var screen: PrototypeScreen
+    @State private var currentMeetingState: PrototypeScreen
+    @State private var selectedSessionID = 1
     @State private var saveAudio = true
     @State private var diarization = true
     @State private var includePlace = false
@@ -19,7 +21,34 @@ struct PrototypeRoot: View {
     init(options: PrototypeOptions) {
         self.options = options
         self._screen = State(initialValue: options.screen)
+        self._currentMeetingState = State(initialValue: [.ready, .completed].contains(options.screen) ? options.screen : .active)
         self._saveAudio = State(initialValue: options.saveAudio)
+    }
+
+    private var displayedSession: SyntheticFixtures.Session {
+        screen == .completed ? data.sessions.first(where: { $0.id == selectedSessionID }) ?? data.sessions[0] : data.sessions[0]
+    }
+
+    private func showCurrentMeeting() {
+        selectedSessionID = data.sessions[0].id
+        screen = currentMeetingState
+    }
+
+    private func showMeetingSetup() {
+        currentMeetingState = .ready
+        showCurrentMeeting()
+    }
+
+    private func startMeetingPreview() {
+        currentMeetingState = .active
+        paused = false
+        showCurrentMeeting()
+    }
+
+    private func finishMeetingPreview() {
+        currentMeetingState = .completed
+        paused = false
+        showCurrentMeeting()
     }
 
     var body: some View {
@@ -41,11 +70,13 @@ struct PrototypeRoot: View {
         }
         .sheet(isPresented: $showEnrollment) { enrollmentSheet }
         .sheet(isPresented: $showHistory) {
-            VStack(spacing: 0) {
-                sheetHeader("history") { showHistory = false }
-                historyList(width: 360)
+            GeometryReader { geometry in
+                VStack(spacing: 0) {
+                    sheetHeader("history") { showHistory = false }
+                    historyList(width: geometry.size.width)
+                }
             }
-            .frame(minWidth: 320, minHeight: 540)
+            .frame(minWidth: 320, idealWidth: 360, maxWidth: 550, minHeight: 540)
             .background(theme.color("windowBackground"))
         }
         .alert(Copy.text("device_validation"), isPresented: $showValidation) {
@@ -136,7 +167,7 @@ struct PrototypeRoot: View {
                 Text(theme.brand.profile.appName).font(theme.font(.section))
             }.padding(.top, 16)
             VStack(spacing: 8) {
-                navRow("meetings", icon: "waveform", selected: isMeeting) { screen = .active }
+                navRow("meetings", icon: "waveform", selected: isMeeting) { showCurrentMeeting() }
                 navRow("history", icon: "clock", selected: screen == .history) { screen = .history }
                 navRow("models", icon: "square.stack.3d.up", selected: screen == .models) { screen = .models }
                 navRow("privacy", icon: "hand.raised", selected: screen == .privacy) { screen = .privacy }
@@ -168,7 +199,7 @@ struct PrototypeRoot: View {
             }
             Spacer(minLength: 8)
             if !compact { Text(Copy.text("prototype")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText")) }
-            iconButton("plus", label: "new_meeting") { screen = .ready }
+            iconButton("plus", label: "new_meeting") { showMeetingSetup() }
             if compact { iconButton("clock", label: "history") { showHistory = true } }
         }
         .padding(.horizontal, compact ? 16 : 24)
@@ -181,7 +212,7 @@ struct PrototypeRoot: View {
             HStack {
                 Text(Copy.text("history")).font(theme.font(.title))
                 Spacer()
-                iconButton("plus", label: "new_meeting") { screen = .ready; showHistory = false }
+                iconButton("plus", label: "new_meeting") { showMeetingSetup(); showHistory = false }
             }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 16)
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
@@ -195,10 +226,10 @@ struct PrototypeRoot: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
                     caption("today").padding(.top, 24).padding(.horizontal, 10)
-                    historyRow(data.sessions[0], selected: screen == .active || screen == .ready, active: true)
+                    historyRow(data.sessions[0], selected: isMeeting && selectedSessionID == 1, active: currentMeetingState != .completed)
                     caption("previously").padding(.top, 18).padding(.horizontal, 10)
                     ForEach(data.sessions.dropFirst()) { session in
-                        historyRow(session, selected: screen == .completed && session.id == 2, active: false)
+                        historyRow(session, selected: screen == .completed && session.id == selectedSessionID, active: false)
                     }
                 }.padding(.horizontal, 12)
             }
@@ -213,14 +244,19 @@ struct PrototypeRoot: View {
 
     private func historyRow(_ session: SyntheticFixtures.Session, selected: Bool, active: Bool) -> some View {
         Button {
-            screen = active ? .active : .completed
+            if active {
+                showCurrentMeeting()
+            } else {
+                selectedSessionID = session.id
+                screen = .completed
+            }
             showHistory = false
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Image(systemName: active ? "mic" : "text.alignleft").foregroundStyle(theme.accent)
                     Spacer()
-                    Text(active ? Copy.text(screen == .ready ? "ready" : "in_progress") : session.duration)
+                    Text(active ? Copy.text(currentMeetingState == .ready ? "ready" : "in_progress") : session.duration)
                         .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                 }
                 Text(session.title).font(theme.font(.section)).multilineTextAlignment(.leading)
@@ -246,7 +282,7 @@ struct PrototypeRoot: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     pageHeading("history", subtitle: "history_subtitle")
-                    ForEach(data.sessions) { session in historyRow(session, selected: false, active: session.id == 1) }
+                    ForEach(data.sessions) { session in historyRow(session, selected: false, active: session.id == 1 && currentMeetingState != .completed) }
                 }.frame(maxWidth: 700).padding(narrow ? 20 : 32).frame(maxWidth: .infinity)
             }
         }
@@ -272,7 +308,7 @@ struct PrototypeRoot: View {
                             .buttonStyle(.plain).foregroundStyle(theme.accent).frame(minHeight: 44)
                     }
                 }
-                primaryButton("start_meeting", icon: "mic.fill") { screen = .active; paused = false }
+                primaryButton("start_meeting", icon: "mic.fill") { startMeetingPreview() }
                 Label(Copy.text("participant_consent"), systemImage: "person.2")
                     .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                 Text(Copy.text("ready_mock_detail")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
@@ -322,15 +358,15 @@ struct PrototypeRoot: View {
             HStack {
                 tag(screen == .completed ? "completed" : paused ? "paused" : "recording", icon: screen == .completed ? "checkmark.circle" : "mic")
                 Spacer()
-                Text(screen == .completed ? "24:18" : "08:42")
+                Text(displayedSession.duration)
                     .font(.system(size: generous && !narrow ? 32 : 22, weight: .medium, design: .rounded))
                     .monospacedDigit()
             }
-            Text(data.sessions[screen == .completed ? 1 : 0].title).font(theme.font(narrow ? .title : .display))
+            Text(displayedSession.title).font(theme.font(narrow ? .title : .display))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
                 Label(Copy.text("offline_meeting"), systemImage: "person.2")
-                if !narrow { Text("•"); Text(data.sessions[screen == .completed ? 1 : 0].time) }
+                if !narrow { Text("•"); Text(displayedSession.time) }
             }.font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
             HStack(spacing: 8) {
                 tag(saveAudio ? "audio_and_text" : "text_only", icon: "lock")
@@ -369,11 +405,11 @@ struct PrototypeRoot: View {
     private func meetingControls(narrow: Bool) -> some View {
         HStack(spacing: 12) {
             if screen == .completed {
-                secondaryButton("new_meeting", icon: "plus") { screen = .ready }
+                secondaryButton("new_meeting", icon: "plus") { showMeetingSetup() }
                 primaryButton("export", icon: "square.and.arrow.up") { showExport = true }
             } else {
                 secondaryButton(paused ? "resume" : "pause", icon: paused ? "play" : "pause") { paused.toggle() }
-                primaryButton(narrow ? "finish" : "finish_meeting", icon: "stop.fill") { screen = .completed; paused = false }
+                primaryButton(narrow ? "finish" : "finish_meeting", icon: "stop.fill") { finishMeetingPreview() }
             }
         }
     }
@@ -381,13 +417,13 @@ struct PrototypeRoot: View {
     private func dashboardCurrent(narrow: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack { caption(screen == .completed ? "last_meeting" : "current_meeting"); Spacer(); tag(screen == .ready ? "ready" : screen == .completed ? "completed" : "recording", icon: "mic") }
-            Text(data.sessions[screen == .completed ? 1 : 0].title).font(theme.font(.title))
+            Text(displayedSession.title).font(theme.font(.title))
             if screen == .ready {
                 Text(Copy.text("ready_subtitle")).foregroundStyle(theme.color("secondaryText"))
-                primaryButton("start_meeting", icon: "mic.fill") { screen = .active }
+                primaryButton("start_meeting", icon: "mic.fill") { startMeetingPreview() }
             } else {
                 HStack(spacing: 20) {
-                    Text(screen == .completed ? "24:18" : "08:42").font(.system(size: 34, weight: .medium, design: .rounded)).monospacedDigit()
+                    Text(displayedSession.duration).font(.system(size: 34, weight: .medium, design: .rounded)).monospacedDigit()
                     VStack(alignment: .leading, spacing: 8) {
                         Text(Copy.text("offline_meeting")).font(theme.font(.caption))
                         Text(Copy.text(saveAudio ? "audio_and_text" : "text_only")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
@@ -492,7 +528,7 @@ struct PrototypeRoot: View {
 
     private var bottomNavigation: some View {
         HStack(spacing: 0) {
-            bottomItem("meetings", icon: "waveform", selected: isMeeting) { screen = .active }
+            bottomItem("meetings", icon: "waveform", selected: isMeeting) { showCurrentMeeting() }
             bottomItem("history", icon: "clock", selected: screen == .history) { screen = .history }
             bottomItem("models", icon: "square.stack.3d.up", selected: screen == .models) { screen = .models }
             bottomItem("privacy", icon: "hand.raised", selected: screen == .privacy) { screen = .privacy }
@@ -631,9 +667,10 @@ struct PrototypeRoot: View {
     }
 
     private var enrollmentSheet: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 0) {
             sheetHeader("my_voice") { showEnrollment = false }
-            VStack(alignment: .leading, spacing: 24) {
+            ScrollView {
+              VStack(alignment: .leading, spacing: 24) {
                 tileIcon("person.wave.2")
                 Text(Copy.text("enrollment_title")).font(theme.font(.display))
                 Text(Copy.text("enrollment_detail")).font(theme.font(.body)).foregroundStyle(theme.color("secondaryText"))
@@ -641,10 +678,10 @@ struct PrototypeRoot: View {
                 Text(Copy.text("enrollment_privacy")).font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
                 primaryButton("enrollment_continue", icon: "checkmark") { showEnrollment = false }
                 Text(Copy.text("enrollment_mock")).font(theme.font(.caption)).foregroundStyle(theme.color("tertiaryText"))
-            }.padding(.horizontal, 24)
-            Spacer(minLength: 24)
+              }.padding(24)
+            }
         }
-        .frame(minWidth: 320, idealWidth: 580, minHeight: 620)
+        .frame(minWidth: 320, idealWidth: 580, maxWidth: 580, minHeight: 400, idealHeight: 700)
         .background(theme.color("windowBackground"))
         .foregroundStyle(theme.color("primaryText"))
     }
