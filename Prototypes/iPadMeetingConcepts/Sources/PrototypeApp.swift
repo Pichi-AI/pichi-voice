@@ -131,12 +131,18 @@ final class PrototypeWindowPreview: NSObject, ObservableObject, NSToolbarDelegat
 
     @objc private func togglePlayback(_ sender: Any?) {
         guard replay.hasActiveMeetingPreview, !replay.isFinished else { return }
-        Task { if replay.isPlaying { await replay.pause() } else { await replay.resume() } }
+        Task {
+            guard replay.hasActiveMeetingPreview, !replay.isFinished else { return }
+            if replay.isPlaying { await replay.pause() } else { await replay.resume() }
+        }
     }
 
     @objc private func restartPlayback(_ sender: Any?) {
         guard replay.hasActiveMeetingPreview else { return }
-        Task { await replay.restart() }
+        Task {
+            guard replay.hasActiveMeetingPreview else { return }
+            await replay.restart()
+        }
     }
 
     private func fitWindow() {

@@ -1,5 +1,7 @@
 import Foundation
 
+/// Applied retroactively from the current global setting. There is deliberately no per-session
+/// retention snapshot, so changing the setting re-evaluates every session's deadline immediately.
 nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sendable {
     case afterTranscription
     case days7

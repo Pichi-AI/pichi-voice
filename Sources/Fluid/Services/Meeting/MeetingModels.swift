@@ -825,8 +825,6 @@ nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
     var retainAudioUntil: Date?
 }
 
-/// Applied retroactively from the CURRENT global setting — deliberate: there is no per-session
-/// retention snapshot, so changing the setting re-evaluates every session's deadline immediately.
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 

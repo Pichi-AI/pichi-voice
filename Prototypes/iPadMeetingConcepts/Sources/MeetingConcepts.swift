@@ -46,6 +46,7 @@ struct PrototypeRoot: View {
 
     private func showMeetingSetup() {
         guard currentMeetingState == .completed else { return }
+        replay.hasActiveMeetingPreview = false
         processingTask?.cancel()
         currentMeetingState = .ready
         showCurrentMeeting()
@@ -56,12 +57,15 @@ struct PrototypeRoot: View {
         recordedWithAudio = saveAudio
         processingTask?.cancel()
         currentMeetingState = .active
+        replay.hasActiveMeetingPreview = true
         completedReplayDuration = nil
         showCurrentMeeting()
         if options.exportPath == nil { Task { await replay.restart() } }
     }
 
     private func finishMeetingPreview() {
+        guard currentMeetingState == .active else { return }
+        replay.hasActiveMeetingPreview = false
         currentMeetingState = .processing
         processingIndex = 0
         showCurrentMeeting()
@@ -105,9 +109,6 @@ struct PrototypeRoot: View {
         .task {
             replay.hasActiveMeetingPreview = currentMeetingState == .active
             if screen == .active && options.exportPath == nil && options.replayTime == nil { await replay.start() }
-        }
-        .onChange(of: currentMeetingState) { _, state in
-            replay.hasActiveMeetingPreview = state == .active
         }
         .onDisappear {
             processingTask?.cancel()
@@ -391,7 +392,7 @@ struct PrototypeRoot: View {
                 if !narrow { Text("•"); Text(displayedSession.time) }
             }.font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
             if screen == .completed {
-                Text(Copy.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
+                Text(Copy.text(selectedSessionID == 1 ? "speaker_labels_unavailable_mobile" : "Speaker labels are automatic and may not be exact. Click a name to fix it."))
                     .font(theme.font(.caption)).foregroundStyle(theme.color("secondaryText"))
             } else {
                 HStack(spacing: 12) {

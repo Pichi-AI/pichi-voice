@@ -1027,13 +1027,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Proposed strict mode: no audio files, including temporary files. Bounded memory buffers feed transcription. Audio cannot be replayed or reprocessed; recording must stop if processing cannot keep up."
+            "value": "Audio is not saved, including temporary files. Only the transcript remains. Playback and retranscription are unavailable."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Строгий режим: никаких аудиофайлов, включая временные. Для распознавания используются ограниченные буферы памяти. Аудио нельзя прослушать или обработать повторно; при перегрузке запись должна остановиться."
+            "value": "Аудио не сохраняется, включая временные файлы. Остаётся только расшифровка. Прослушивание и повторное распознавание недоступны."
           }
         }
       }
@@ -1884,6 +1884,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Загружается один раз (около 200 МБ) и хранится на этом устройстве. Для расшифровки Parakeet нужна эта модель; GigaAM может завершить расшифровку без определения участников."
+          }
+        }
+      }
+    },
+    "speaker_labels_unavailable_mobile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Automatic speaker separation was unavailable."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Автоматическое разделение участников было недоступно."
           }
         }
       }
