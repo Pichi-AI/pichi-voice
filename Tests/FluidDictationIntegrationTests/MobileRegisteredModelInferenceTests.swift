@@ -380,4 +380,76 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             throw error
         }
     }
+
+    func testDefaultEightSecondSpeakerWindowsForAllRegisteredModels() async throws {
+        let root = try self.assets()
+        let samples = try self.pcm("two-voices", in: root)
+        let speakerRoot = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
+        let package = speakerRoot.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let voicePackage = speakerRoot.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
+        let store = MeetingDiarizationModelStore(
+            canDownload: { true }, validate: { try MeetingModelInstaller.validate(package) },
+            install: { try await MeetingDiarizationModelStore.downloadAndInstall(to: package, progress: $0) },
+            validateVoice: { try MeetingSpeakerVoiceModelArtifacts.validate(at: voicePackage) },
+            installVoice: { try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(at: voicePackage, progress: $0) }
+        )
+        try await store.prepare(dependencies: [.speakerSeparation, .voiceMatching])
+        var report: [[String: Any]] = []
+        let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: reportDirectory, withIntermediateDirectories: true)
+        for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
+            let firstReportIndex = report.count
+            let installed = try await self.installedConfiguration(model: model, assets: root)
+            let configuration = MeetingFinalProcessingConfiguration(
+                asrModel: installed.asrModel, asrArtifactFingerprint: installed.asrArtifactFingerprint,
+                asrArtifactDirectory: installed.asrArtifactDirectory, languageCode: installed.languageCode,
+                diarizationFingerprint: MeetingProcessingCheckpoint.currentDiarizationFingerprint,
+                speakerLabelsEnabled: true
+            )
+            let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+            let lease = try service.acquireExclusiveActivity(.meeting)
+            defer { service.releaseExclusiveActivity(lease) }
+            do {
+                #if os(macOS)
+                try await service.retireDictationASRResourcesForMeeting(lease: lease)
+                #endif
+                let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service },
+                                                            modelLocator: MeetingNemotronModelLocator(injectedURL: package),
+                                                            voiceModelDirectory: voicePackage)
+                let track = UUID()
+                let attempt = UUID()
+                try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                    try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
+                }
+                for start in stride(from: 0, to: samples.count, by: 128_000) {
+                    let end = min(samples.count, start + 128_000)
+                    let input = Array(samples[start..<end])
+                    let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                        try await runtime.recognizePCM(samples: input, offset: Double(start) / 16_000, trackID: track,
+                                                       attemptID: attempt, configuration: configuration)
+                    }
+                    XCTAssertTrue(batch.segments.allSatisfy { $0.start.seconds >= Double(start) / 16_000 - 0.001 && $0.end.seconds <= Double(end) / 16_000 + 0.001 })
+                    report.append(["modelID": model.rawValue, "start": Double(start) / 16_000,
+                                   "end": Double(end) / 16_000, "speakerIDs": batch.speakers.map { $0.id.uuidString },
+                                   "assignedSegments": batch.segments.filter { $0.speakerID != nil }.count,
+                                   "ambiguousSegments": batch.segments.filter { $0.attributionState == .overlappingSpeakers }.count,
+                                   "unassignedSegments": batch.segments.filter { $0.attributionState == .unassigned }.count,
+                                   "text": batch.segments.map(\.text).joined(separator: " ")])
+                    try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                        .write(to: reportDirectory.appendingPathComponent("eight-second-speaker-windows.json"), options: .atomic)
+                }
+                XCTAssertFalse((report[firstReportIndex]["speakerIDs"] as? [String] ?? []).isEmpty,
+                               "The first single-voice window has sufficient measured identity evidence.")
+                if model != .whisperTiny {
+                    XCTAssertGreaterThan(report[firstReportIndex + 1]["assignedSegments"] as? Int ?? 0, 0,
+                                         "Word-timed adapters should label the second voice inside the transition window.")
+                }
+                await service.shutdownForTermination()
+            } catch {
+                await service.shutdownForTermination()
+                throw error
+            }
+        }
+        XCTAssertEqual(report.count, 9)
+    }
 }
