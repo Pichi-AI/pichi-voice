@@ -1338,7 +1338,7 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
                 isSessionLockedProvider: { false }
             )
             manager.setHotkeyMode(.toggle)
-            func tap() throws {
+            @MainActor func tap() throws {
                 for type in [CGEventType.keyDown, .keyUp] {
                     let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 2, keyDown: type == .keyDown))
                     event.type = type
