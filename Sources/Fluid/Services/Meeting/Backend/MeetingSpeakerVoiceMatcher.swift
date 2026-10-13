@@ -22,6 +22,7 @@ nonisolated struct MeetingSpeakerVoiceSamples: Sendable {
         }
         return Set(valid.map(\.slotIndex)).sorted().compactMap { slot in
             var ranges: [Range<Int>] = []
+            var singleSpeakerPieces: [Range<Int>] = []
             let candidates = valid.filter { $0.slotIndex == slot }
                 .sorted { $0.end - $0.start > $1.end - $1.start }.prefix(16)
             for segment in candidates {
@@ -42,6 +43,10 @@ nonisolated struct MeetingSpeakerVoiceSamples: Sendable {
                 for piece in pieces {
                     let start = max(0, Int(((piece.start + 0.16) * Double(self.sampleRate)).rounded(.up)))
                     let end = min(samples.count, Int(((piece.end - 0.16) * Double(self.sampleRate)).rounded(.down)))
+                    if end - start >= self.sampleRate / 2 {
+                        let energy = samples[start..<end].reduce(Double.zero) { $0 + Double($1) * Double($1) }
+                        if energy.isFinite, energy / Double(end - start) > 1e-8 { singleSpeakerPieces.append(start..<end) }
+                    }
                     if end - start >= 3 * self.sampleRate { ranges.append(start..<end) }
                 }
             }
@@ -65,10 +70,34 @@ nonisolated struct MeetingSpeakerVoiceSamples: Sendable {
                 }
                 if selected.count == 2 { break }
             }
-            guard selected.count == 2 else { return nil }
+            let clips: [[Float]]
+            if selected.count == 2 {
+                clips = selected.map { Array(samples[$0]) }
+            } else {
+                // Natural pauses can split ample clean voice evidence into pieces
+                // shorter than three seconds. Build two disjoint three-second excerpts
+                // from only this slot's admitted speech, keeping overlap/edges excluded.
+                // Identity distance/margin and minimum excerpt duration stay unchanged.
+                var excerpts: [[Float]] = []
+                var pending: [Float] = []
+                var consumedEnd = 0
+                for range in singleSpeakerPieces.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+                    var start = max(consumedEnd, range.lowerBound)
+                    while start < range.upperBound, excerpts.count < 2 {
+                        let end = min(range.upperBound, start + 3 * self.sampleRate - pending.count)
+                        pending.append(contentsOf: samples[start..<end])
+                        start = end
+                        if pending.count == 3 * self.sampleRate { excerpts.append(pending); pending.removeAll(keepingCapacity: true) }
+                    }
+                    consumedEnd = max(consumedEnd, range.upperBound)
+                    if excerpts.count == 2 { break }
+                }
+                guard excerpts.count == 2 else { return nil }
+                clips = excerpts
+            }
             return Self(
                 token: MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-\(slot)"),
-                clips: selected.map { Array(samples[$0]) }
+                clips: clips
             )
         }
     }

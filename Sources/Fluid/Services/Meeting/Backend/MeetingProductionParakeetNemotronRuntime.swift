@@ -119,15 +119,21 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
             finalizeOnCompletion: true
         )
         try Task.checkCancellation()
+        let physicalDuration = Double(samples.count) / 16_000
         return timeline.speakers
             .sorted { $0.key < $1.key }
             .flatMap { index, speaker in
                 speaker.finalizedSegments.compactMap { segment in
-                    guard segment.isFinalized, segment.endTime > segment.startTime else { return nil }
+                    // FluidAudio's finalize() promotes tentative segments into this
+                    // finalized list but leaves their old isFinalized flag untouched.
+                    // processComplete finalized the timeline; trust its finalized list.
+                    let start = max(0, min(physicalDuration, TimeInterval(segment.startTime)))
+                    let end = max(0, min(physicalDuration, TimeInterval(segment.endTime)))
+                    guard start.isFinite, end.isFinite, end > start else { return nil }
                     return MeetingNemotronSpeakerSegment(
                         slotIndex: index,
-                        start: TimeInterval(segment.startTime),
-                        end: TimeInterval(segment.endTime)
+                        start: start,
+                        end: end
                     )
                 }
             }

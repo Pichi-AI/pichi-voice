@@ -260,4 +260,92 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: reportDirectory.appendingPathComponent("buffered-live-inference.json"), options: .atomic)
     }
+
+    func testPinnedNemotronAndLocalWeSpeakerSeparateTwoSyntheticVoicesAcrossPCMWindows() async throws {
+        let root = try self.assets()
+        let samples = try self.pcm("two-voices", in: root)
+        let speakerRoot = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
+        let package = speakerRoot.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let voicePackage = speakerRoot.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
+        let store = MeetingDiarizationModelStore(
+            canDownload: { true },
+            validate: {
+                _ = try MeetingModelInstaller.validatedSilenceEmbedding(at: MeetingModelInstaller.silenceEmbeddingURL(besides: package))
+                return try MeetingModelInstaller.validate(package)
+            },
+            install: { progress in try await MeetingDiarizationModelStore.downloadAndInstall(to: package, progress: progress) },
+            validateVoice: { try MeetingSpeakerVoiceModelArtifacts.validate(at: voicePackage) },
+            installVoice: { progress in try await MeetingSpeakerVoiceModelArtifacts.ensureInstalled(at: voicePackage, progress: progress) }
+        )
+        // Same common resource preflight used by the mobile settings/start owner.
+        try await store.prepare(dependencies: [.speakerSeparation, .voiceMatching])
+        XCTAssertTrue(store.allSpeakerResourcesReady)
+        try MeetingSpeakerVoiceModelArtifacts.validate(at: voicePackage)
+        let installed = try await self.installedConfiguration(model: .parakeetTDT, assets: root)
+        let configuration = MeetingFinalProcessingConfiguration(
+            asrModel: installed.asrModel, asrArtifactFingerprint: installed.asrArtifactFingerprint,
+            asrArtifactDirectory: installed.asrArtifactDirectory, languageCode: "auto",
+            diarizationFingerprint: MeetingProcessingCheckpoint.currentDiarizationFingerprint,
+            speakerLabelsEnabled: true
+        )
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        do {
+            #if os(macOS)
+            try await service.retireDictationASRResourcesForMeeting(lease: lease)
+            #endif
+            let locator = MeetingNemotronModelLocator(injectedURL: package)
+            let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service }, modelLocator: locator,
+                                                        voiceModelDirectory: voicePackage)
+            let track = UUID()
+            let attempt = UUID()
+            let duration = Double(samples.count) / 16_000
+            let diagnostic = try await service.withMeetingModelResidency(attemptID: UUID(), acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.withNemotronDiarization(artifact: locator.locate()) { factory in
+                    let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+                    let diarizer = try await factory.makeDiarizer(epoch: epoch)
+                    let actual = try await diarizer.diarize(samples: samples)
+                    return MeetingNemotronPhaseResult(
+                        activity: actual.map { .init(token: .init(analysisEpochID: epoch, label: "slot-\($0.slotIndex)"), start: $0.start, end: $0.end) },
+                        voiceSamples: MeetingSpeakerVoiceSamples.collect(epoch: epoch, samples: samples, segments: actual)
+                    )
+                }
+            }
+            let diagnosticDirectory = root.appendingPathComponent("reports", isDirectory: true)
+            try FileManager.default.createDirectory(at: diagnosticDirectory, withIntermediateDirectories: true)
+            let diagnosticReport: [String: Any] = [
+                "activity": diagnostic.activity.map { ["slot": $0.token.label, "start": $0.start, "end": $0.end] as [String: Any] },
+                "eligibleVoiceSamples": diagnostic.voiceSamples.map { ["slot": $0.token.label, "clipLengths": $0.clips.map(\.count)] as [String: Any] },
+            ]
+            try JSONSerialization.data(withJSONObject: diagnosticReport, options: [.prettyPrinted, .sortedKeys])
+                .write(to: diagnosticDirectory.appendingPathComponent("two-voice-diarization-evidence.json"), options: .atomic)
+            let voiceProfiles = try await runtime.speakerVoiceProfiles(samples: diagnostic.voiceSamples)
+            XCTAssertEqual(voiceProfiles.count, diagnostic.voiceSamples.count)
+            let first = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.recognizePCM(samples: samples, offset: 0, trackID: track,
+                                               attemptID: attempt, configuration: configuration)
+            }
+            let second = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.recognizePCM(samples: samples, offset: duration, trackID: track,
+                                               attemptID: attempt, configuration: configuration)
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
+            try FileManager.default.createDirectory(at: reportDirectory, withIntermediateDirectories: true)
+            try encoder.encode([first.speakers, second.speakers]).write(to: reportDirectory.appendingPathComponent("two-voice-speakers.json"), options: .atomic)
+            try encoder.encode([first.segments, second.segments]).write(to: reportDirectory.appendingPathComponent("two-voice-segments.json"), options: .atomic)
+            XCTAssertGreaterThanOrEqual(first.speakers.count, 2, "Two public synthetic voices should yield distinct measured identities.")
+            XCTAssertTrue(first.speakers.allSatisfy { !$0.isLocalUser })
+            XCTAssertFalse(first.segments.filter { $0.speakerID != nil }.isEmpty)
+            XCTAssertTrue(Set(second.speakers.map(\.id)).isSubset(of: Set(first.speakers.map(\.id))),
+                          "Explicit local embedding evidence should reconnect the repeated voices, not slot equality.")
+            XCTAssertTrue(second.segments.allSatisfy { $0.start.seconds >= duration - 0.001 })
+            await service.shutdownForTermination()
+        } catch {
+            await service.shutdownForTermination()
+            throw error
+        }
+    }
 }
