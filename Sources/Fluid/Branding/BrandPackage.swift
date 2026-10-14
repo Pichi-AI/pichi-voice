@@ -202,6 +202,8 @@ nonisolated struct BrandLogo: Codable, Equatable, Sendable {
             guard let context = CGContext(data: nil, width: image.width, height: image.height,
                 bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue), let pixels = context.data else { return nil }
+            context.clear(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            context.setBlendMode(.copy)
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
             let rgba = UnsafeBufferPointer<UInt8>(start: pixels.assumingMemoryBound(to: UInt8.self),
                 count: context.bytesPerRow * image.height)
@@ -236,8 +238,10 @@ nonisolated struct BrandLogos: Codable, Equatable, Sendable {
     }
 
     /// The existing appearance/menu variants fall back to usable primary art.
+    /// Native menu selection can defer primary fallback until after checking a
+    /// trusted distribution asset. Other callers use the normal variant chain.
     /// Nil leaves the caller free to show its neutral, theme-aware locator.
-    func visibleData(for role: Role) -> Data? {
+    func visibleData(for role: Role, fallbackToPrimary: Bool = true) -> Data? {
         let preferred: BrandLogo?
         switch role {
         case .primary: preferred = nil
@@ -245,7 +249,8 @@ nonisolated struct BrandLogos: Codable, Equatable, Sendable {
         case .dark: preferred = self.dark
         case .menuBar: preferred = self.menuBar
         }
-        for logo in [preferred, self.primary].compactMap({ $0 }) {
+        let primary = role == .primary || fallbackToPrimary ? self.primary : nil
+        for logo in [preferred, primary].compactMap({ $0 }) {
             if let data = try? logo.visibleData() { return data }
         }
         return nil

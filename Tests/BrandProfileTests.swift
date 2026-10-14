@@ -400,7 +400,16 @@ struct BrandProfileTests {
         precondition(variants.visibleData(for: .light) == blackData)
         precondition(variants.visibleData(for: .dark) == whiteData)
         precondition(variants.visibleData(for: .menuBar) == blackData)
+        precondition(variants.visibleData(for: .menuBar, fallbackToPrimary: false) == blackData)
+        let primaryOnly = BrandLogos(primary: white)
+        // Explicit-only resolution lets the native owner check its packaged
+        // distribution asset before requesting primary artwork. Imports skip
+        // that trusted-asset branch, and still obtain their primary bytes.
+        precondition(primaryOnly.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
+        precondition(primaryOnly.visibleData(for: .primary) == whiteData)
+        precondition(primaryOnly.visibleData(for: .menuBar) == whiteData)
         let blankVariants = BrandLogos(primary: black, light: clear, dark: clear, menuBar: clear)
+        precondition(blankVariants.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
         for role in [BrandLogos.Role.primary, .light, .dark, .menuBar] {
             precondition(blankVariants.visibleData(for: role) == blackData)
             precondition(BrandLogos(primary: clear).visibleData(for: role) == nil)

@@ -24,7 +24,7 @@ struct PichiBrandMark: View {
             ?? NSImage(size: NSSize(width: 32, height: 32))
     }
 
-    private static func image(_ logos: BrandLogos?, role: BrandLogos.Role, key: String) -> NSImage? {
+    private static func image(_ logos: BrandLogos?, role: BrandLogos.Role, key: String, fallbackToPrimary: Bool = true) -> NSImage? {
         let revision = BrandPackageStore.shared.revision
         if self.imageRevision != revision {
             self.imageCache.removeAll()
@@ -33,7 +33,7 @@ struct PichiBrandMark: View {
         }
         if let image = self.imageCache[key] { return image }
         guard !self.unavailableImages.contains(key) else { return nil }
-        guard let data = logos?.visibleData(for: role), let image = NSImage(data: data) else {
+        guard let data = logos?.visibleData(for: role, fallbackToPrimary: fallbackToPrimary), let image = NSImage(data: data) else {
             self.unavailableImages.insert(key)
             return nil
         }
@@ -48,7 +48,9 @@ struct PichiBrandMark: View {
     }
 
     static var menuBarIcon: NSImage? {
-        let explicitMenuLogo = self.image(AppBrand.package.logos, role: .menuBar, key: "menuBar")
+        // A packaged distribution asset retains precedence over primary art.
+        // Imported packages have no distribution fallback and use their primary.
+        let explicitMenuLogo = self.image(AppBrand.package.logos, role: .menuBar, key: "menuBar", fallbackToPrimary: false)
         let source = explicitMenuLogo
             ?? (BrandPackageStore.shared.hasOverride ? self.customImage : AppBrand.distribution.menuBarAsset.flatMap { NSImage(named: $0) })
             ?? self.customImage
