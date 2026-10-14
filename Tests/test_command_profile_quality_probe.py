@@ -5,14 +5,19 @@ import json
 from pathlib import Path
 import runpy
 import unittest
+from unittest.mock import patch
 
 
-PROBE = runpy.run_path(str(Path(__file__).with_name('probe_command_profile_quality.py')))
+with patch('http.client.HTTPConnection', side_effect=AssertionError('Offline module load attempted HTTP')), \
+     patch('http.client.HTTPSConnection', side_effect=AssertionError('Offline module load attempted HTTPS')):
+    PROBE = runpy.run_path(str(Path(__file__).with_name('probe_command_profile_quality.py')))
 MODEL = 'synthetic-model:fixture'
 
 
 class CommandProfileQualityProbeTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch('http.client.HTTPConnection', side_effect=AssertionError('Offline evaluation attempted HTTP')))
+        self.enterContext(patch('http.client.HTTPSConnection', side_effect=AssertionError('Offline evaluation attempted HTTPS')))
         self.frames = [
             {'model': MODEL, 'message': {'content': 'Ёж'}, 'done': False},
             {'model': MODEL, 'message': {'content': 'ик ✅'}, 'done': False},
