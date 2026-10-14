@@ -141,7 +141,13 @@ struct StatsActivityView: View {
                     .foregroundStyle(self.hoveredDate == nil && self.selectedDate == nil || day.date == (self.hoveredDate ?? self.selectedDate) ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                     .cornerRadius(2)
             }
-            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day().locale(self.interfaceLocale)) } }
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                    AxisValueLabel(format: .dateTime.month(.abbreviated).day().locale(self.interfaceLocale))
+                        .font(self.theme.typography.captionSmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                }
+            }
             .chartYAxis(.hidden)
             .statsChartInteraction(onInspect: { x, proxy, pin in self.inspectDate(x, proxy: proxy, pin: pin) }, onExit: { self.hoveredDate = nil })
             .frame(height: 124)
@@ -200,8 +206,22 @@ struct StatsActivityView: View {
                 }
                 .statsChartInteraction(onInspect: { x, proxy, pin in self.inspectDate(x, proxy: proxy, pin: pin) }, onExit: { self.hoveredDate = nil })
                 .chartYScale(domain: 0...max(1, period.totalWords))
-                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day().locale(self.interfaceLocale)) } }
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                        AxisValueLabel(format: .dateTime.month(.abbreviated).day().locale(self.interfaceLocale))
+                            .font(self.theme.typography.captionSmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                        AxisGridLine().foregroundStyle(self.theme.palette.cardBorder)
+                        AxisTick().foregroundStyle(self.theme.palette.cardBorder)
+                        AxisValueLabel()
+                            .font(self.theme.typography.captionSmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                }
                 .frame(height: 150)
                 Text("Cumulative words · selected period")
                     .font(self.theme.typography.captionSmall)
@@ -253,7 +273,22 @@ struct StatsActivityView: View {
                     }
                 }, onExit: { self.hoveredWeekday = nil })
                 .chartYScale(domain: 0...max(1, period.peakWeekdayAverage))
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+                .chartXAxis {
+                    AxisMarks { _ in
+                        AxisValueLabel()
+                            .font(self.theme.typography.captionSmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                        AxisGridLine().foregroundStyle(self.theme.palette.cardBorder)
+                        AxisTick().foregroundStyle(self.theme.palette.cardBorder)
+                        AxisValueLabel()
+                            .font(self.theme.typography.captionSmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                }
                 .frame(height: 150)
                 Text("Average words per weekday · includes quiet days")
                     .font(self.theme.typography.captionSmall)

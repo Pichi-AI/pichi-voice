@@ -204,8 +204,7 @@ struct TranscriptionHistoryView: View {
                 .font(.fluidSystem(size: 13, weight: .medium))
                 .foregroundStyle(self.theme.palette.secondaryText)
 
-            TextField("Search transcriptions...", text: self.$searchQuery)
-                .textFieldStyle(.plain)
+            FluidSearchField(title: "Search transcriptions...", text: self.$searchQuery)
                 .font(.fluidSystem(size: 13))
 
             if !self.searchQuery.isEmpty {

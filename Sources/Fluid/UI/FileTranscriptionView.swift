@@ -512,8 +512,7 @@ struct FileTranscriptionView: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(self.theme.palette.secondaryText)
-                TextField("Search transcripts…", text: self.$searchQuery)
-                    .textFieldStyle(.plain)
+                FluidSearchField(title: "Search transcripts…", text: self.$searchQuery)
                     .accessibilityLabel(PichiLocalization.text("Search filenames and transcript text"))
                 if !self.searchQuery.isEmpty {
                     Button { self.searchQuery = "" } label: {

@@ -302,6 +302,64 @@ with Path(sys.argv[1]).open('a') as output:
     output.write('struct ProductionDashboardConstructionFixture: View {\n' + dependencies +
         '    var body: some View { self.quickActions(horizontal: self.horizontal).environment(\\.dashboardObservations, self.state.observations) }\n' +
         inspected_quick + inspected_key + '\n}\n')
+# Retain actual controls/Charts, axis formatting and shared font roles. Only
+# app-owned data/actions are inert; no copied prompt or axis implementation.
+import os, subprocess, hashlib, json
+ink_revision = os.environ.get('PICHI_NATIVE_INK_LEGACY_REVISION')
+ink_sources = {}
+def ink_source(path):
+    source = subprocess.check_output(['git', 'show', f'{ink_revision}:{path}'], text=True) if ink_revision else Path(path).read_text()
+    ink_sources[path] = hashlib.sha256(source.encode()).hexdigest()
+    return source
+def ink_snippet(path, start, end):
+    source = ink_source(path)
+    assert source.count(start) == 1, f'Expected one native ink production boundary: {start}'
+    first = source.index(start)
+    return source[first:source.index(end, first)]
+activity_path = 'Sources/Fluid/UI/StatsActivityView.swift'
+activity = ink_source(activity_path)
+history = ink_snippet('Sources/Fluid/UI/TranscriptionHistoryView.swift',
+    '    private var searchBar: some View {', '    // MARK: - Entry List')
+files = ink_snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
+    '            HStack(spacing: self.theme.metrics.spacing.sm) {\n                Image(systemName: "magnifyingglass")',
+    '            Divider()')
+def chart_block(source, start, height, offset=0):
+    first = source.index(start, offset)
+    last = source.index(f'.frame(height: {height})', first) + len(f'.frame(height: {height})')
+    return source[first:last]
+daily = chart_block(activity, '            Chart(period.days)', 124)
+growth = chart_block(activity, '                Chart(period.days)', 150, activity.index('private func growthCard'))
+rhythm = chart_block(activity, '                Chart(period.weekdays)', 150)
+hours = chart_block(ink_source('Sources/Fluid/UI/StatsHighlightsView.swift'),
+    '                Chart(Array(self.snapshot.hourlySessions.enumerated())', 140)
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\nimport Charts\n')
+    output.write('struct ProductionHistorySearchFixture: View {\n'
+        ' @Environment(\\.theme) private var theme\n @Binding var searchQuery: String\n'
+        ' var body: some View { self.searchBar }\n' + history + '}\n')
+    output.write('struct ProductionFilesSearchFixture: View {\n'
+        ' @Environment(\\.theme) private var theme\n @Binding var searchQuery: String\n'
+        ' var body: some View {\n' + files + '\n }\n}\n')
+    for name, code in [('Daily', daily), ('Growth', growth), ('Rhythm', rhythm), ('Hours', hours)]:
+        output.write('struct Production' + name + 'ChartFixture: View {\n'
+            ' @Environment(\\.theme) private var theme\n @Environment(\\.locale) private var interfaceLocale\n'
+            ' let period: StatsActivityPeriod\n'
+            ' @State private var hoveredDate: Date?\n @State private var selectedDate: Date?\n'
+            ' @State private var hoveredWeekday: String?\n @State private var pinnedWeekday: String?\n'
+            ' @State private var hoveredHour: Int?\n @State private var pinnedHour: Int?\n'
+            ' private let selected: StatsActivityPeriod.Day? = nil\n'
+            ' private struct Snapshot { let hourlySessions = (0..<24).map { $0 % 3 == 0 ? 0 : $0 + 3 } }\n'
+            ' private let snapshot = Snapshot()\n'
+            ' private func inspectDate(_ x: CGFloat, proxy: ChartProxy, pin: Bool) {}\n'
+            ' var body: some View {\n' + code + '\n }\n}\n')
+
+Path(sys.argv[1]).with_name('NativeInkProductionSource.json').write_text(json.dumps({
+    'sourceSHA256': ink_sources,
+    'sharedControlSHA256': hashlib.sha256(Path('Sources/Fluid/Theme/Components/FluidEditControls.swift').read_bytes()).hexdigest(),
+    'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', ink_revision], text=True).strip() if ink_revision else None,
+    'adapters': ['synthetic chart totals and selection', 'inert chart pointer callback'],
+    'visibleWindowOrApp': 'SKIP',
+}, indent=2) + '\n')
 import hashlib, json
 Path(sys.argv[1]).with_name('DashboardProductionSource.json').write_text(json.dumps({
     'source': dashboard_file, 'sha256': hashlib.sha256(dashboard.encode()).hexdigest(),
@@ -405,11 +463,13 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/UI/AISettingsComponents.swift \
     "$task_test_dir/ProductionLabels.swift" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
-    Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift -o "$task_test_dir/tests"
+    Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
+    Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
+    Tests/NativeInkTransitionTests.swift -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in
-    *" --overlay-captions-only "*|"  ")
+    *" --overlay-captions-only "*|*" --native-ink-only "*|"  ")
         xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
             --output-directory "$task_test_dir/OverlayCaptionFixture.app/Contents/Resources" --language en --language ru
         cp "$task_test_dir/tests" "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests"
@@ -417,12 +477,13 @@ case " $* " in
         ;;
 esac
 case " $* " in
-    *" --overlay-captions-only "*)
+    *" --overlay-captions-only "*|*" --native-ink-only "*)
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
         ;;
     "  ")
         "$task_test_dir/tests" "$task_test_dir"
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --overlay-captions-only
+        "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --native-ink-only
         ;;
     *) "$task_test_dir/tests" "$task_test_dir" "$@" ;;
 esac
