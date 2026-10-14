@@ -53,10 +53,7 @@ nonisolated enum MeetingLiveCaptionParagraphs {
         }
 
         static func separator(after previous: String?, before next: String) -> String {
-            guard let last = previous?.last, let first = next.first,
-                  !last.isWhitespace, !first.isWhitespace else { return "" }
-            if ".,;:!?…)]}»".contains(first) || "([{«".contains(last) { return "" }
-            return " "
+            MeetingTranscriptExporter.DisplayParagraph.separator(after: previous, before: next)
         }
     }
 
@@ -93,6 +90,7 @@ private extension MeetingLiveSpeaker {
 /// following and shows a jump-to-bottom button.
 struct MeetingLiveBubbleScrollList: View {
     let rows: [MeetingLiveBubbleComposer.Row]
+    var pending: MeetingPendingSpeechSnapshot = .empty
     var hidesPartialFromAccessibility = true
     var documentStyle = false
 
@@ -125,6 +123,10 @@ struct MeetingLiveBubbleScrollList: View {
                                     .transition(.opacity)
                             }
                         }
+                        if !self.pending.tokens.isEmpty {
+                            MeetingPendingSpeechView(pending: self.pending)
+                                .padding(.top, self.theme.metrics.spacing.xs)
+                        }
                         Color.clear.frame(height: 1).id(self.bottomAnchor).accessibilityHidden(true)
                     }
                     .background {
@@ -150,6 +152,9 @@ struct MeetingLiveBubbleScrollList: View {
                     onLayoutChange: { self.scrollToBottomIfPinned(proxy: proxy) }
                 ))
                 .onChange(of: self.rows) {
+                    self.scrollToBottomIfPinned(proxy: proxy)
+                }
+                .onChange(of: self.pending) {
                     self.scrollToBottomIfPinned(proxy: proxy)
                 }
                 .onAppear { self.scrollToBottomIfPinned(proxy: proxy) }
@@ -214,7 +219,7 @@ struct MeetingCaptionScrollTracking: ViewModifier {
         var isPinnedToBottom: Bool? {
             guard let contentBottom, let viewportHeight,
                   contentBottom.isFinite, viewportHeight.isFinite, viewportHeight > 0 else { return nil }
-            return contentBottom <= viewportHeight + 80
+            return contentBottom <= viewportHeight + 4
         }
 
         func offsetChanged(from previous: Self) -> Bool {

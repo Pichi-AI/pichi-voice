@@ -1,5 +1,77 @@
 import Darwin
 import Foundation
+import MachO
+
+/// Build identity comes from signed metadata and loaded code, never imported appearance
+/// or preferences. The bounded load-command copy performs no startup file I/O.
+nonisolated enum RuntimeBuildProvenance {
+    static func sanitizedSourceRevision(_ value: Any?) -> String {
+        guard let value = value as? String, value.utf8.count == 40,
+              value.utf8.allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }) else {
+            return "unavailable"
+        }
+        return value.lowercased()
+    }
+
+    static func line(sourceRevision: Any?) -> String {
+        #if DEBUG
+        let configuration = "Debug"
+        #else
+        let configuration = "Release"
+        #endif
+        // A test plug-in may remain on disk after testing. Only a loaded class counts.
+        let xctestLoaded = NSClassFromString("XCTestCase") != nil
+        let executable = _dyld_get_image_header(0)
+        let executableUUID = executable.flatMap { $0.pointee.filetype == MH_EXECUTE ? loadedUUID($0) : nil }
+        let marker: @convention(c) () -> Void = fileLoggerBuildImageMarker
+        var image = Dl_info()
+        let foundCodeImage = dladdr(unsafeBitCast(marker, to: UnsafeRawPointer.self), &image) != 0
+        let codeHeader = foundCodeImage ? image.dli_fbase.map { UnsafePointer($0.assumingMemoryBound(to: mach_header.self)) } : nil
+        let codeUUID = loadedUUID(codeHeader)
+        let codeKind = foundCodeImage && image.dli_fname != nil && String(cString: image.dli_fname).hasSuffix(".debug.dylib")
+            ? "debug-dylib" : (codeHeader == executable ? "executable" : "other")
+        return "[RUN] BUILDPROVENANCE Configuration=\(configuration) Diagnostics=\(DebugLogger.diagnosticsEnabled) XCTestLoaded=\(xctestLoaded) ExecutableUUID=\(executableUUID ?? "unavailable") CodeImageUUID=\(codeUUID ?? "unavailable") CodeImageKind=\(codeKind) SourceRevision=\(sanitizedSourceRevision(sourceRevision))"
+    }
+
+    private static func loadedUUID(_ header: UnsafePointer<mach_header>?) -> String? {
+        // dyld owns these validated, loaded headers. The main executable and this
+        // executing code image cannot be unloaded while this function runs.
+        guard let header, header.pointee.magic == MH_MAGIC_64 else { return nil }
+        let count = Int(header.pointee.ncmds)
+        let size = Int(header.pointee.sizeofcmds)
+        guard size >= 8, size <= 64 * 1024, count > 0, count <= size / 8 else { return nil }
+        let commands = UnsafeRawPointer(header).advanced(by: MemoryLayout<mach_header_64>.size)
+        return uuid(loadCommands: Data(bytes: commands, count: size), commandCount: count)
+    }
+
+    /// Checked parsing also accepts synthetic malformed commands in diagnostics tests.
+    static func uuid(loadCommands: Data, commandCount: Int) -> String? {
+        let bytes = [UInt8](loadCommands)
+        guard bytes.count <= 64 * 1024, commandCount > 0, commandCount <= bytes.count / 8 else { return nil }
+        func uint32(_ offset: Int) -> UInt32 {
+            (0..<4).reduce(0) { $0 | (UInt32(bytes[offset + $1]) << (8 * $1)) }
+        }
+        var offset = 0
+        var identifier: String?
+        for _ in 0..<commandCount {
+            guard offset <= bytes.count - 8 else { return nil }
+            let command = uint32(offset)
+            let size = Int(uint32(offset + 4))
+            guard size >= 8, size % 8 == 0, size <= bytes.count - offset else { return nil }
+            if command == LC_UUID {
+                guard size == MemoryLayout<uuid_command>.size, identifier == nil else { return nil }
+                let hex = bytes[(offset + 8)..<(offset + 24)].map { String(format: "%02X", $0) }
+                identifier = hex[0..<4].joined() + "-" + hex[4..<6].joined() + "-" + hex[6..<8].joined()
+                    + "-" + hex[8..<10].joined() + "-" + hex[10..<16].joined()
+            }
+            offset += size
+        }
+        guard offset == bytes.count else { return nil }
+        return identifier
+    }
+}
+
+private nonisolated func fileLoggerBuildImageMarker() {}
 
 /// A lightweight file-backed logger that mirrors in-app debug logs to disk for diagnostics.
 final nonisolated class FileLogger: @unchecked Sendable {
@@ -101,6 +173,7 @@ final nonisolated class FileLogger: @unchecked Sendable {
         let pid = ProcessInfo.processInfo.processIdentifier
         self.appendUnlocked(line: "[RUN] PID=\(pid) AppVersion=\(appVersion) Build=\(build) OS=\(osVersion)")
         self.appendUnlocked(line: "[RUN] Processed by \(Bundle.main.bundleIdentifier ?? "unknown")")
+        self.appendUnlocked(line: RuntimeBuildProvenance.line(sourceRevision: bundle.object(forInfoDictionaryKey: "AppSourceRevision")))
     }
 
     private func rotateIfNeeded(force: Bool) {

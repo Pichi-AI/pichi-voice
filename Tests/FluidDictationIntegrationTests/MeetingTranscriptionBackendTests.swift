@@ -1,3 +1,6 @@
+import AVFoundation
+import CoreMedia
+import PichiTextPrivacy
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -1707,3 +1710,215 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             expected: .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction), probe: probe)
     }
 }
+
+#if DEBUG
+/// The production strict pipeline selects scheduling from the registered descriptor and
+/// runtime capability, then applies the same privacy owner to progressive observations.
+@MainActor
+final class MeetingPCMProgressivePipelineTests: XCTestCase {
+    private final nonisolated class Runtime: MeetingParakeetNemotronRunning, @unchecked Sendable {
+        let supportsProgressivePCMInput: Bool
+        private let lock = NSLock()
+        private var sealedCount = 0
+        private var progressiveCount = 0
+        private var seenConfigurations: [MeetingFinalProcessingConfiguration] = []
+        var sealedCalls: Int { lock.withLock { sealedCount } }
+        var progressiveCalls: Int { lock.withLock { progressiveCount } }
+        var configurations: [MeetingFinalProcessingConfiguration] { lock.withLock { seenConfigurations } }
+        let sourceID = UUID()
+        init(progressive: Bool) { supportsProgressivePCMInput = progressive }
+        nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws { }
+        nonisolated func withPreparedASR(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+            body: nonisolated(nonsending) @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult) async throws -> MeetingParakeetPhaseResult {
+            // Preparation's body is empty and must not perform inference.
+            return try await body(EmptyASR())
+        }
+        private nonisolated struct EmptyASR: MeetingParakeetASRSession {
+            func transcribeWithTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+                XCTFail("PCM runtime fixture cannot call an independent ASR operation")
+                return (ASRTranscriptionResult(text: "", confidence: 0), [])
+            }
+        }
+        nonisolated func withNemotronDiarization(artifact: MeetingNemotronModelArtifact,
+            _ body: nonisolated(nonsending) @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult) async throws -> MeetingNemotronPhaseResult {
+            XCTFail("Speaker labels are disabled in this scheduling fixture")
+            throw MeetingModelResidencyError.unsupportedProvider
+        }
+        private func record(progressive: Bool, configuration: MeetingFinalProcessingConfiguration) {
+            lock.withLock {
+                if progressive { progressiveCount += 1 } else { sealedCount += 1 }
+                seenConfigurations.append(configuration)
+            }
+        }
+        private nonisolated func batch(frames: Int, offset: Double, track: UUID, provisional: Bool) -> MeetingPCMTranscriptBatch {
+            let text = "обсудим документ сегодня. продолжим встречу после перерыва. Иван Тестов просит копию документа после встречи."
+            return .init(segments: [.init(id: sourceID,
+                start: .init(value: Int64((offset * 16_000).rounded()), timescale: 16_000),
+                end: .init(value: Int64((offset * 16_000).rounded()) + Int64(frames), timescale: 16_000),
+                sourceTrackID: track, speakerID: nil, text: text, originalText: text, revision: 0,
+                status: provisional ? .provisional : .final, overlap: .none, completeness: .complete)],
+                isComplete: !provisional)
+        }
+        nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: UUID, attemptID: UUID,
+            configuration: MeetingFinalProcessingConfiguration,
+            preview: (nonisolated(nonsending) @Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+            record(progressive: false, configuration: configuration)
+            if let preview { try await preview(batch(frames: samples.count, offset: offset, track: trackID, provisional: true)) }
+            return batch(frames: samples.count, offset: offset, track: trackID, provisional: false)
+        }
+        nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+            trackID: UUID, attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+            preview: (nonisolated(nonsending) @Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+            record(progressive: true, configuration: configuration)
+            var frames = 0
+            while let update = try await window.next() {
+                frames = update.totalFrames
+                if !update.samples.isEmpty, let preview {
+                    try await preview(batch(frames: frames, offset: offset, track: trackID, provisional: true))
+                }
+                if update.isFinal { return batch(frames: frames, offset: offset, track: trackID, provisional: false) }
+            }
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+    }
+    private struct PersonRedactor: TranscriptTextRedacting {
+        let permitsProvisionalDisplay: Bool
+        func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+            let source = text as NSString
+            let range = source.range(of: "Иван Тестов")
+            let ner: [PIINERSpan] = range.location == NSNotFound ? [] : [.init(range: range, label: "PER", score: 1)]
+            // Only NER identity is synthetic. Canonical replacements and provisional
+            // admission use the same production adapter guard as the real privacy service.
+            let output = try PIIRedactor.redact(text, ner: ner)
+            return .init(text: output.text,
+                spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) },
+                provisionalSafeUTF16: permitsProvisionalDisplay
+                    ? try PIIRedactor.provisionalSafePrefix(in: text, ner: ner, redactedSpans: output.spans) : nil)
+        }
+    }
+    private struct RefusingRedactor: TranscriptTextRedacting {
+        struct Refused: Error {}
+        func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction { throw Refused() }
+    }
+    private final class Observations {
+        var previews: [MeetingLivePartial?] = []
+        var checkpoints: [MeetingPCMTranscriptBatch] = []
+    }
+    private func descriptor(policy: Bool) throws -> MeetingBackendDescriptor {
+        let original = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "whisper-tiny"))
+        return .init(id: original.id, version: original.version, execution: original.execution,
+            supportedLanguageCodes: original.supportedLanguageCodes, supportedTrackKinds: original.supportedTrackKinds,
+            supportedFinalPrecisions: original.supportedFinalPrecisions, resultContract: original.resultContract,
+            knownLimits: original.knownLimits, analysisSampleRate: original.analysisSampleRate,
+            diarizationDependencies: original.diarizationDependencies, supportedInputs: original.supportedInputs,
+            pcmObservationPolicy: policy ? original.pcmObservationPolicy : nil)
+    }
+    private func sample() throws -> CMSampleBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000, channels: 1, interleaved: false))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000))
+        buffer.frameLength = 48_000
+        let data = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0..<48_000 { data[index] = 0.1 }
+        return try MeetingCapturePCMConverter.sampleBuffer(buffer: buffer, presentationTime: .zero)
+    }
+    private func verifyScheduling(policy: Bool, capability: Bool, privacy: Bool,
+                                  refusingPrivacy: Bool = false, permitsProvisionalDisplay: Bool = true) async throws {
+        let runtime = Runtime(progressive: capability)
+        let registered = try descriptor(policy: policy)
+        let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .whisperTiny)
+        registry.register(.whisperTiny, descriptor: registered) { context in
+            MeetingProviderBackedBackend(descriptor: registered, providerModelID: "whisper-tiny",
+                runtimeFactory: context.parakeetNemotronRuntimeFactory)
+        }
+        let suite = "ProgressivePipeline.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.meetingModelParticipantsForTesting = []
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        addTeardownBlock { await MainActor.run { service.releaseExclusiveActivity(lease) } }
+        let observations = Observations()
+        let redactor: any TranscriptTextRedacting = refusingPrivacy ? RefusingRedactor() : PersonRedactor(permitsProvisionalDisplay: permitsProvisionalDisplay)
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { service }, settings: settings,
+            privacyRedactorProvider: { redactor }, backendRegistry: registry,
+            meetingRuntimeFactory: { _ in runtime }, prepareDiarizationDependencies: { _ in
+                XCTFail("Disabled speaker labels cannot prepare speaker weights")
+            })
+        let capture = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic", languageCode: "auto",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
+        var session = MeetingSession(configuration: capture, timebase: .init(startedHostTime: 0,
+            machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        session.audioStorageMode = .memoryOnly; session.recordingBackendID = MeetingBackendID.whisperTiny.rawValue
+        session.recordingASRArtifactFingerprint = "synthetic-pinned-artifact"
+        session.speakerLabelsEnabled = false; session.piiRedactionEnabled = privacy
+        let sessionID = session.id
+        addTeardownBlock { await pipeline.cancelMemoryAudio(sessionID: sessionID) }
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic", format: nil, timebase: session.timebase, health: .waiting, chunks: [])
+        try await pipeline.prepareMemoryAudio(session: session, sessionDirectory: URL(fileURLWithPath: "/synthetic-never-created"),
+            checkpoint: { observations.checkpoints.append($0) }, preview: { observations.previews.append($0) })
+        settings.selectedSpeechModel = .gigaam
+        let consumer = try await pipeline.memoryConsumer(for: session.id, track: track, eventHandler: { _ in })
+        XCTAssertTrue(consumer.enqueue(try sample()))
+        do {
+            try await consumer.finish()
+            if refusingPrivacy { XCTFail("A failed redactor must prevent all publication") }
+        } catch {
+            if !refusingPrivacy { throw error }
+            XCTAssertTrue(error is RefusingRedactor.Refused)
+        }
+        let progressiveCalls = runtime.progressiveCalls
+        let sealedCalls = runtime.sealedCalls
+        XCTAssertEqual(progressiveCalls, policy && capability ? 1 : 0)
+        XCTAssertEqual(sealedCalls, policy && capability ? 0 : 1)
+        let configurations = runtime.configurations
+        XCTAssertEqual(configurations.count, 1)
+        XCTAssertEqual(configurations.first?.asrModel, "whisper-tiny")
+        XCTAssertEqual(configurations.first?.asrArtifactFingerprint, "synthetic-pinned-artifact")
+        if refusingPrivacy {
+            XCTAssertTrue(observations.previews.isEmpty)
+            XCTAssertTrue(observations.checkpoints.isEmpty)
+        } else if privacy {
+            let shown = observations.previews.compactMap { $0?.text }
+            if permitsProvisionalDisplay {
+                XCTAssertFalse(shown.isEmpty, "An adapter-approved safe prefix reaches the UI")
+            } else {
+                XCTAssertTrue(shown.isEmpty, "Privacy without adapter approval cannot invent a display prefix")
+            }
+            XCTAssertTrue(shown.allSatisfy { !$0.contains("Иван") && !$0.contains("Тестов") })
+            let saved = observations.checkpoints.flatMap(\.segments)
+            XCTAssertEqual(saved.count, 1, "Privacy finalization checkpoints the held tail exactly once")
+            XCTAssertTrue(saved.allSatisfy { $0.originalText == nil && !$0.text.contains("Иван") && !$0.text.contains("Тестов") })
+            XCTAssertTrue(saved.first?.text.contains("[ИМЯ]") == true)
+            XCTAssertEqual(saved.first?.id, runtime.sourceID)
+            XCTAssertEqual(saved.first?.start.seconds, 0)
+            XCTAssertEqual(saved.first?.end.seconds, 3)
+        } else {
+            XCTAssertEqual(observations.checkpoints.flatMap(\.segments).count, 1)
+        }
+        await pipeline.cancelMemoryAudio(sessionID: session.id)
+        XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+    }
+    func testRegisteredPolicyAndRuntimeCapabilitySelectProgressiveInput() async throws {
+        try await verifyScheduling(policy: true, capability: true, privacy: false)
+    }
+    func testRegisteredPreferenceKeepsLegacyRuntimeOnSealedInput() async throws {
+        try await verifyScheduling(policy: true, capability: false, privacy: false)
+    }
+    func testRuntimeCapabilityWithoutRegisteredPolicyKeepsSealedInput() async throws {
+        try await verifyScheduling(policy: false, capability: true, privacy: false)
+    }
+    func testProgressivePreviewAndFinalCheckpointKeepStrictPIIGuards() async throws {
+        try await verifyScheduling(policy: true, capability: true, privacy: true)
+    }
+    func testProgressivePrivacyWithoutAdapterApprovalWithholdsProvisionalDisplay() async throws {
+        try await verifyScheduling(policy: true, capability: true, privacy: true, permitsProvisionalDisplay: false)
+    }
+    func testProgressivePrivacyFailureCannotPublishRawPreviewOrCheckpoint() async throws {
+        try await verifyScheduling(policy: true, capability: true, privacy: true, refusingPrivacy: true)
+    }
+}
+#endif

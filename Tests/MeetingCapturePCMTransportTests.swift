@@ -44,6 +44,31 @@ private final class DiagnosticProbe: @unchecked Sendable {
     var snapshot: [String] { lock.withLock { lines } }
 }
 
+private final class ProgressiveProbe: @unchecked Sendable {
+    struct Update: Sendable, Equatable {
+        let start: Double
+        let delta: Int
+        let total: Int
+        let final: Bool
+    }
+    private let lock = NSLock()
+    private var updates: [Update] = []
+    private var starts: [Double] = []
+    private var checkpoints = 0
+    private var failures = 0
+    private var returned = 0
+    private var finishReturned = false
+    func begin(_ start: Double) { lock.withLock { starts.append(start) } }
+    func record(_ update: MeetingPCMWindowUpdate, start: Double) {
+        lock.withLock { updates.append(Update(start: start, delta: update.samples.count, total: update.totalFrames, final: update.isFinal)) }
+    }
+    func checkpoint() { lock.withLock { checkpoints += 1 } }
+    func failed() { lock.withLock { failures += 1 } }
+    func didReturn() { lock.withLock { returned += 1 } }
+    func didFinish() { lock.withLock { finishReturned = true } }
+    var snapshot: ([Update], [Double], Int, Int, Int, Bool) { lock.withLock { (updates, starts, checkpoints, failures, returned, finishReturned) } }
+}
+
 @main
 struct MeetingCapturePCMTransportTests {
     static func require(_ condition: Bool, _ detail: String) throws {
@@ -245,6 +270,233 @@ struct MeetingCapturePCMTransportTests {
         do { try await wrongFormat.finish(); throw NSError(domain: "ExpectedInvalidPCM", code: 1) }
         catch MeetingMemoryAudioError.invalidPCM { }
         try require(wrongFormatProbe.snapshot.2 == 1, "malformed PCM emits one terminal event")
+        try await progressiveTransport()
         print("Meeting PCM transport: admission, conversion, ownership, timeline, bounded inference, overload, joined finish and checkpoint failure passed.")
     }
+
+    private static func awaitEntered(_ latch: Latch, _ detail: String) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if await latch.entered { return }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        try require(false, detail)
+    }
+
+    static func progressiveTransport() async throws {
+        // The initial preview and subsequent coalesced updates belong to ONE attribution window.
+        let probe = ProgressiveProbe()
+        let first = Latch()
+        let second = Latch()
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, start in
+                probe.begin(start)
+                var prefix: [Float] = []
+                while let update = try await window.next() {
+                    // No samples survive this callback. The accumulator is changed only after the
+                    // prior mock inference has joined, matching the native inference contract.
+                    prefix.append(contentsOf: update.samples)
+                    try require(prefix.count == update.totalFrames, "progressive delta frame accounting")
+                    try require(prefix.allSatisfy { abs($0 - 0.8) < 0.001 }, "immutable prefix survives subsequent microphone callbacks")
+                    probe.record(update, start: start)
+                    if start == 0 && update.totalFrames == 48_000 { await first.wait() }
+                    if start == 0 && update.totalFrames == 144_000 { await second.wait() }
+                }
+                probe.didReturn()
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in probe.checkpoint() }, failure: { _ in probe.failed() })
+        try require(consumer.enqueue(try sample(frames: 48_000)), "first three-second preview accepted")
+        try await awaitEntered(first, "progressive worker begins before twelve-second seal")
+        try require(probe.snapshot.1 == [0] && probe.snapshot.2 == 0, "open attribution window has one worker and no early checkpoint")
+        for start in [48_000, 96_000] {
+            try require(consumer.enqueue(try sample(frames: 48_000, startFrame: Int64(start))), "pending deltas accepted while inference owns prefix")
+        }
+        await first.release()
+        try await awaitEntered(second, "ready worker coalesces all six available seconds")
+        try require(probe.snapshot.0.map(\.delta) == [48_000, 96_000], "coalescing uses deltas, not repeated whole-prefix copies")
+        // One microphone callback crosses the attribution boundary, leaving a finite half-second
+        // next-window tail. Finish starts that next window even below the preview threshold.
+        try require(consumer.enqueue(try sample(frames: 56_000, startFrame: 144_000)), "cross-window PCM seals twelve seconds and preserves finite next-window tail")
+        let finish = Task { try await consumer.finish(); probe.didFinish() }
+        finish.cancel()
+        for _ in 0..<50 { await Task.yield() }
+        try require(!probe.snapshot.5, "cancelled finish caller still joins the progressive inference")
+        await second.release()
+        try await finish.value
+        let snapshot = probe.snapshot
+        try require(snapshot.1 == [0, 12] && snapshot.2 == 2 && snapshot.3 == 0 && snapshot.4 == 2,
+                    "one final checkpoint per attribution window, serial ownership and exact media offsets")
+        try require(snapshot.0.last == .init(start: 12, delta: 8_000, total: 8_000, final: true), "stop below three seconds seals every accepted frame")
+        let firstWindow = snapshot.0.filter { $0.start == 0 }
+        try require(firstWindow.map(\.delta).reduce(0, +) == 192_000 && firstWindow.last?.final == true,
+                    "growing three-to-twelve window forwards all frames exactly once")
+        try require(firstWindow.map(\.total).prefix(2) == [48_000, 144_000], "total frames describe attribution window, not inference delta")
+
+        // Finishing a prefix already delivered to inference must provide an empty final marker.
+        let emptyProbe = ProgressiveProbe()
+        let emptyLatch = Latch()
+        let emptyFinal = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, start in
+                emptyProbe.begin(start)
+                let initial = try await window.next()!
+                emptyProbe.record(initial, start: start)
+                await emptyLatch.wait()
+                let final = try await window.next()!
+                emptyProbe.record(final, start: start)
+                try require(final.samples.isEmpty && final.totalFrames == 48_000 && final.isFinal, "final empty update preserves previously decoded prefix")
+                try require(try await window.next() == nil, "next after final is nil")
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in emptyProbe.checkpoint() }, failure: { _ in emptyProbe.failed() })
+        _ = emptyFinal.enqueue(try sample(frames: 48_000))
+        try await awaitEntered(emptyLatch, "empty final fixture owns initial prefix")
+        let emptyFinish = Task { try await emptyFinal.finish() }
+        // finish closes synchronously once its task enters. New PCM must be rejected before releasing inference.
+        for _ in 0..<50 { await Task.yield() }
+        await emptyLatch.release()
+        try await emptyFinish.value
+        try require(emptyProbe.snapshot.2 == 1 && emptyProbe.snapshot.3 == 0, "empty seal checkpoints exactly once")
+
+        // Accepted PCM includes in-flight accumulator, pending deltas and the queued next window.
+        let overload = ProgressiveProbe()
+        let overloadLatch = Latch()
+        let overloadDiagnostic = DiagnosticProbe()
+        let bounded = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, start in
+                overload.begin(start)
+                if let update = try await window.next() { overload.record(update, start: start) }
+                await overloadLatch.wait()
+                _ = try await window.next()
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in overload.checkpoint() }, diagnostic: { overloadDiagnostic.record($0) }, failure: { _ in overload.failed() })
+        _ = bounded.enqueue(try sample(frames: 48_000))
+        try await awaitEntered(overloadLatch, "budget fixture owns initial accumulator")
+        for start in stride(from: 48_000, to: 384_000, by: 48_000) {
+            try require(bounded.enqueue(try sample(frames: 48_000, startFrame: Int64(start))), "exact twenty-four second budget remains accepted")
+        }
+        try require(!bounded.enqueue(try sample(frames: 1, startFrame: 384_000)), "one frame above twenty-four seconds terminates intake")
+        let overloadFinish = Task { try await bounded.finish(); overload.didFinish() }
+        for _ in 0..<50 { await Task.yield() }
+        try require(!overload.snapshot.5, "failure must join active inference before finish returns")
+        await overloadLatch.release()
+        do { try await overloadFinish.value; throw NSError(domain: "ExpectedProgressiveOverload", code: 1) }
+        catch MeetingMemoryAudioError.overload { }
+        try require(overload.snapshot.1.count == 1 && overload.snapshot.2 == 0 && overload.snapshot.3 == 1,
+                    "overflow cancels queued windows and cannot publish cancelled prefix")
+        try require(overloadDiagnostic.snapshot.count == 1
+                    && overloadDiagnostic.snapshot[0].contains("pendingFrames=384000")
+                    && overloadDiagnostic.snapshot[0].contains("budgetFrames=384000"), "progressive transport keeps original total PCM budget")
+
+        // A terminal microphone error wakes next() once and finish joins the recognizer cleanup.
+        let waiting = ProgressiveProbe()
+        let aboutToWait = Latch()
+        let cleanup = Latch()
+        let waitingConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, start in
+                waiting.begin(start)
+                _ = try await window.next()
+                await aboutToWait.wait()
+                do { _ = try await window.next(); throw NSError(domain: "ExpectedWaitFailure", code: 1) }
+                catch {
+                    waiting.didReturn()
+                    await cleanup.wait()
+                    throw error
+                }
+            }, checkpoint: { _ in waiting.checkpoint() }, failure: { _ in waiting.failed() })
+        _ = waitingConsumer.enqueue(try sample(frames: 48_000))
+        try await awaitEntered(aboutToWait, "first prefix before wait")
+        await aboutToWait.release()
+        for _ in 0..<50 { await Task.yield() }
+        try require(!waitingConsumer.enqueue(try sample(frames: 1, startFrame: 48_002)), "timeline failure wakes a pending progressive next")
+        try await awaitEntered(cleanup, "cancelled progressive waiter enters joined cleanup")
+        let waitingFinish = Task { try await waitingConsumer.finish(); waiting.didFinish() }
+        for _ in 0..<50 { await Task.yield() }
+        try require(!waiting.snapshot.5 && waiting.snapshot.4 == 1 && waiting.snapshot.3 == 1,
+                    "terminal failure wakes waiter exactly once without abandoning cleanup")
+        await cleanup.release()
+        do { try await waitingFinish.value; throw NSError(domain: "ExpectedProgressiveTimelineFailure", code: 1) }
+        catch MeetingMemoryAudioError.timelineDiscontinuity { }
+        try require(waiting.snapshot.2 == 0, "cancelled window cannot checkpoint")
+
+        // Provider cancellation of next closes its window and propagates through the same failure path.
+        let cancelled = ProgressiveProbe()
+        let cancelWait = Latch()
+        let cancelConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, _ in
+                _ = try await window.next()
+                let pending = Task { await cancelWait.wait(); return try await window.next() }
+                try await awaitEntered(cancelWait, "nested waiter owns window")
+                await cancelWait.release()
+                pending.cancel()
+                _ = try await pending.value
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in cancelled.checkpoint() }, failure: { _ in cancelled.failed() })
+        _ = cancelConsumer.enqueue(try sample(frames: 48_000))
+        // Wait for cancellation to finish before finish could seal the window successfully.
+        let cancellationDeadline = ProcessInfo.processInfo.systemUptime + 5
+        while cancelled.snapshot.3 == 0 && ProcessInfo.processInfo.systemUptime < cancellationDeadline {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        try require(cancelled.snapshot.3 == 1, "next cancellation propagates one terminal failure")
+        do { try await cancelConsumer.finish(); throw NSError(domain: "ExpectedProgressiveCancellation", code: 1) }
+        catch is CancellationError { }
+        try require(cancelled.snapshot.2 == 0, "next cancellation never persists unsealed prefix")
+
+        let shortProbe = ProgressiveProbe()
+        let shortFinalize = FinalizerProbe()
+        let finalizeLatch = Latch()
+        let short = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, start in
+                shortProbe.begin(start)
+                while let update = try await window.next() { shortProbe.record(update, start: start) }
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { batch in shortProbe.checkpoint(); await shortFinalize.saved(batch.segments) },
+            finalize: {
+                await shortFinalize.started()
+                await finalizeLatch.wait()
+                return MeetingPCMTranscriptBatch(segments: ["safe final privacy tail"], speakers: [])
+            }, failure: { _ in shortProbe.failed() })
+        try require(short.enqueue(try sample(frames: 24_001)), "first short window is accepted before preview threshold")
+        try require(shortProbe.snapshot.1.isEmpty, "no worker before initial preview threshold")
+        let shortFinish = Task { try await short.finish() }
+        try await awaitEntered(finalizeLatch, "short tail finishes before privacy finalizer")
+        shortFinish.cancel()
+        let repeatedShortFinish = Task { try await short.finish() }
+        try require(shortProbe.snapshot.0 == [.init(start: 0, delta: 24_001, total: 24_001, final: true)], "stop before initial preview transfers exact finite frame count")
+        try require(await shortFinalize.count == 1, "progressive finish shares one privacy finalizer")
+        await finalizeLatch.release()
+        try await shortFinish.value
+        try await repeatedShortFinish.value
+        try require(await shortFinalize.checkpoints == [[], ["safe final privacy tail"]], "progressive finalization joins and publishes protected tail once")
+
+        let early = ProgressiveProbe()
+        let earlyConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { _, _ in MeetingPCMTranscriptBatch(segments: [], speakers: []) },
+            checkpoint: { _ in early.checkpoint() }, failure: { _ in early.failed() })
+        _ = earlyConsumer.enqueue(try sample(frames: 48_000))
+        do { try await earlyConsumer.finish(); throw NSError(domain: "ExpectedUnconsumedWindow", code: 1) }
+        catch MeetingMemoryAudioError.invalidPCM { }
+        try require(early.snapshot.2 == 0 && early.snapshot.3 == 1, "provider cannot retire a window before consuming its final update")
+
+        let failedCheckpoint = ProgressiveProbe()
+        let checkpointConsumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, _ in
+                while let _ = try await window.next() { }
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in throw NSError(domain: "SyntheticProgressiveCheckpointFailure", code: 1) },
+            failure: { _ in failedCheckpoint.failed() })
+        _ = checkpointConsumer.enqueue(try sample(frames: 16_000))
+        do { try await checkpointConsumer.finish(); throw NSError(domain: "ExpectedProgressiveCheckpointFailure", code: 1) }
+        catch let error as NSError where error.domain == "SyntheticProgressiveCheckpointFailure" { }
+        try require(failedCheckpoint.snapshot.3 == 1, "progressive checkpoint failure follows existing terminal ownership path")
+
+        for invalidInterval in [Double.nan, 0.1, 13] {
+            do {
+                _ = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(previewIntervalSeconds: invalidInterval,
+                    recognize: { _, _ in MeetingPCMTranscriptBatch(segments: [], speakers: []) }, checkpoint: { _ in }, failure: { _ in })
+                throw NSError(domain: "ExpectedProgressiveBudgetError", code: 1)
+            } catch MeetingMemoryAudioError.invalidBudget { }
+        }
+        print("Progressive PCM: growing windows, delta coalescing, empty seal, exact budget, waiter cancellation and joined cleanup passed.")
+    }
+
 }

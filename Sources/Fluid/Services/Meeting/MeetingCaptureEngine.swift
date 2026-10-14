@@ -1040,7 +1040,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
             case .raw, .constructing, .ready:
                 break
             }
-            self.applicationWriter.enqueue(sampleBuffer, producerEpoch: streamToken.generation)
+            guard self.applicationWriter.enqueue(sampleBuffer, producerEpoch: streamToken.generation) else { return }
             self.liveAudioHandler?(.applicationAudio, sampleBuffer)
         case .microphone:
             #if DEBUG
@@ -1074,7 +1074,7 @@ private final nonisolated class ScreenCaptureMeetingRuntime: NSObject, MeetingCa
     }
 
     private func emitDirectRawMicrophone(_ sampleBuffer: CMSampleBuffer, producerEpoch: UInt64) {
-        self.microphoneWriter.enqueue(sampleBuffer, producerEpoch: producerEpoch)
+        guard self.microphoneWriter.enqueue(sampleBuffer, producerEpoch: producerEpoch) else { return }
         if self.microphoneTranscriptGate.observeAndAdmit(sampleBuffer) {
             self.liveAudioHandler?(.microphone, sampleBuffer)
         }
@@ -2142,7 +2142,7 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         let shouldAccept = !self.stopping
         self.stateLock.unlock()
         guard shouldAccept else { return }
-        self.writer.enqueue(sampleBuffer)
+        guard self.writer.enqueue(sampleBuffer) else { return }
         self.liveAudioHandler?(.microphone, sampleBuffer)
     }
 
@@ -4298,7 +4298,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                 defer { fence.endSample() }
                 switch gate.offer(sample) {
                 case .passthrough:
-                    microphoneWriter.enqueue(sample)
+                    guard microphoneWriter.enqueue(sample) else { return }
                     if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                 case .buffered, .aborted:
                     break
@@ -4376,8 +4376,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
     /// Paced flush: the writer's pending budget is 24 slots, a full 5s ring is ~50 buffers.
     private func flushBatch(_ samples: [CMSampleBuffer]) async {
         for (index, sample) in samples.enumerated() {
-            self.microphoneWriter.enqueue(sample)
-            if self.transcriptGate.observeAndAdmit(sample) {
+            if self.microphoneWriter.enqueue(sample), self.transcriptGate.observeAndAdmit(sample) {
                 self.liveAudioHandler?(.microphone, sample)
             }
             if index % 4 == 3 {
@@ -4818,7 +4817,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     defer { newFence.endSample() }
                     switch newGate.offer(sample) {
                     case .passthrough:
-                        microphoneWriter.enqueue(sample)
+                        guard microphoneWriter.enqueue(sample) else { return }
                         if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                     case .buffered, .aborted:
                         break
@@ -5168,7 +5167,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                         defer { candidateFence.endSample() }
                         switch candidateGate.offer(sample) {
                         case .passthrough:
-                            microphoneWriter.enqueue(sample)
+                            guard microphoneWriter.enqueue(sample) else { return }
                             if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                         case .buffered, .aborted:
                             break
@@ -5803,7 +5802,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     defer { candidateFence.endSample() }
                     switch candidateGate.offer(sample) {
                     case .passthrough:
-                        microphoneWriter.enqueue(sample)
+                        guard microphoneWriter.enqueue(sample) else { return }
                         if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                     case .buffered, .aborted:
                         break
@@ -6016,7 +6015,7 @@ private final nonisolated class VoiceProcessingMeetingRuntime: MeetingCaptureRun
                     defer { fence.endSample() }
                     switch gate.offer(sample) {
                     case .passthrough:
-                        microphoneWriter.enqueue(sample)
+                        guard microphoneWriter.enqueue(sample) else { return }
                         if transcriptGate.observeAndAdmit(sample) { liveAudioHandler?(.microphone, sample) }
                     case .buffered, .aborted:
                         break

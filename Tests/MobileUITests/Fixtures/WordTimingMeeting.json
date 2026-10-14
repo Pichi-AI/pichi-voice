@@ -1,0 +1,438 @@
+{
+  "schemaVersion": 1,
+  "id": "C2A6906B-356C-4D80-B963-E125DF244703",
+  "title": "Проверка слов и участников",
+  "languageCode": "ru",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-13T12:00:00Z",
+  "endedAt": "2026-10-13T12:00:30Z",
+  "updatedAt": "2026-10-13T12:00:30Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "completed",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "memoryOnly",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": []
+    }
+  ],
+  "speakers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000065",
+      "displayName": "Участник 1",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000066",
+      "displayName": "Участник 2",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000067",
+      "displayName": "Участник 3",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000068",
+      "displayName": "Участник 4",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000069",
+      "displayName": "Участник 5",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-00000000006A",
+      "displayName": "Участник 6",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-00000000006B",
+      "displayName": "Участник 7",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-00000000006C",
+      "displayName": "Участник 8",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-00000000006D",
+      "displayName": "Участник 9",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    }
+  ],
+  "transcriptSegments": [
+    {
+      "id": "00000000-0000-0000-0000-0000000003E9",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 0,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 300,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "Здравствуйте,",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003EA",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 400,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 700,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "давайте",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003EB",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 800,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1100,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "обсудим",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003EC",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 1200,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1500,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "инструкцию.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003ED",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 1600,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1900,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "После",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003EE",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 2000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 2300,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "встречи",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003EF",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 2400,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 2700,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "я",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003F0",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 2800,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 3100,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "пришлю",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000003F1",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 3200,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 3500,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "документ.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D1",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 10000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 11000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000066",
+      "text": "Синтетическая реплика 2.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D2",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 12000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 13000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000067",
+      "text": "Синтетическая реплика 3.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D3",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 14000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 15000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000068",
+      "text": "Синтетическая реплика 4.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D4",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 16000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 17000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000069",
+      "text": "Синтетическая реплика 5.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D5",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 18000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 19000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-00000000006A",
+      "text": "Синтетическая реплика 6.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D6",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 20000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 21000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-00000000006B",
+      "text": "Синтетическая реплика 7.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D7",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 22000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 23000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-00000000006C",
+      "text": "Синтетическая реплика 8.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-0000000007D8",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 24000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 25000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-00000000006D",
+      "text": "Синтетическая реплика 9.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned"
+    }
+  ],
+  "retention": {},
+  "processingAttempts": [],
+  "transcriptTimeDomain": "meetingRelative",
+  "transcriptIsComplete": true,
+  "speakerLabelsEnabled": true
+}

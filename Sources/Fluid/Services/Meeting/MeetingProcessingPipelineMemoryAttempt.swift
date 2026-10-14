@@ -9,6 +9,7 @@ final class MeetingMemoryProcessingAttempt {
     let privacyContext: MeetingTranscriptPrivacyContext?
     let checkpoint: @MainActor (MeetingPCMTranscriptBatch) async throws -> Void
     let preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?
+    let speechPreviewID = UUID()
     var consumer: (any MeetingMemoryAudioConsuming)?
     init(request: MeetingBackendRequest, descriptor: MeetingBackendDescriptor, runtime: any MeetingParakeetNemotronRunning,
          redactor: (any TranscriptTextRedacting)?,
@@ -141,6 +142,7 @@ extension MeetingProcessingPipeline {
         let privacyContext = attempt.privacyContext
         let checkpoint = attempt.checkpoint
         let publishPreview = attempt.preview
+        let speechPreviewID = attempt.speechPreviewID
         let observeSpeech: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?
         if let publishPreview {
             observeSpeech = { speech in
@@ -152,7 +154,8 @@ extension MeetingProcessingPipeline {
                 } else {
                     let ordered = speech.segments.sorted { $0.start < $1.start }
                     partial = ordered.first.map {
-                        MeetingLivePartial(id: $0.id, text: ordered.map(\.text).joined(separator: " "), start: $0.start.seconds)
+                        MeetingLivePartial(id: speechPreviewID, text: ordered.map(\.text).joined(separator: " "),
+                            start: $0.start.seconds, end: ordered.map { $0.end.seconds }.max())
                     }
                 }
                 try Task.checkCancellation()
@@ -165,38 +168,59 @@ extension MeetingProcessingPipeline {
         DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
             DebugLogger.shared.info("strict_capture session=\(sessionID) track=\(trackID) backend=\(attempt.descriptor.id.rawValue) model=\(configuration.asrModel) speakers=\(configuration.speakerLabelsEnabled) privacy=\(privacyContext != nil)", source: "MeetingMemoryAudio")
         }
-        let consumer = try Self.makeMemoryAudioConsumer(
-            initialChunkSeconds: 3,
-            recognize: { samples, offset in
-                try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
-                    let started = ProcessInfo.processInfo.systemUptime
-                    var batch = try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
-                        try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID, attemptID: attemptID, configuration: configuration, preview: observeSpeech)
-                    }
-                    batch.sourceTrack = track
-                    let recognized = ProcessInfo.processInfo.systemUptime
-                    if let privacyContext { batch = try await privacyContext.redact(batch) }
-                    let elapsed = Int((recognized - started) * 1000)
-                    let privacyElapsed = Int((ProcessInfo.processInfo.systemUptime - recognized) * 1000)
-                    DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
-                        DebugLogger.shared.info("stage=window offset=\(offset) frames=\(samples.count) runtimeMs=\(elapsed) privacyMs=\(privacyElapsed) publishedSegments=\(batch.segments.count)", source: "MeetingMemoryAudio")
-                    }
-                    return batch
-                }
-            },
-            checkpoint: { batch in try await checkpoint(batch) },
-            finalize: { try await privacyContext?.finish() },
-            diagnostic: { message in
-                DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
-                    DebugLogger.shared.info(message, source: "MeetingMemoryAudio")
-                }
-            },
-            failure: { _ in
-                // Neither provider errors nor transcript content cross into durable diagnostics.
-                eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: trackID,
-                                           detail: "In-memory transcription stopped. Completed text was preserved."))
+        let protect: @Sendable (MeetingPCMTranscriptBatch, TimeInterval, Double, Bool) async throws -> MeetingPCMTranscriptBatch = { input, offset, elapsed, progressive in
+            var batch = input
+            batch.sourceTrack = track
+            let recognized = ProcessInfo.processInfo.systemUptime
+            if let privacyContext { batch = try await privacyContext.redact(batch) }
+            let privacyElapsed = Int((ProcessInfo.processInfo.systemUptime - recognized) * 1000)
+            DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                DebugLogger.shared.info("stage=window offset=\(offset) elapsedMs=\(Int(elapsed * 1000)) progressive=\(progressive) privacyMs=\(privacyElapsed) publishedSegments=\(batch.segments.count)", source: "MeetingMemoryAudio")
             }
-        )
+            return batch
+        }
+        let finalize: @Sendable () async throws -> MeetingPCMTranscriptBatch? = { try await privacyContext?.finish() }
+        let diagnostic: @Sendable (String) -> Void = { message in
+            DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                DebugLogger.shared.info(message, source: "MeetingMemoryAudio")
+            }
+        }
+        let failure: @Sendable (Error) -> Void = { _ in
+            // Neither provider errors nor transcript content cross into durable diagnostics.
+            eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: trackID,
+                                       detail: "In-memory transcription stopped. Completed text was preserved."))
+        }
+        let consumer: any MeetingMemoryAudioConsuming
+        if let policy = attempt.descriptor.pcmObservationPolicy, runtime.supportsProgressivePCMInput {
+            consumer = try Self.makeProgressiveMemoryAudioConsumer(
+                initialPreviewSeconds: policy.initialSeconds, previewIntervalSeconds: policy.intervalSeconds,
+                recognize: { window, offset in
+                    try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
+                        let started = ProcessInfo.processInfo.systemUptime
+                        let batch = try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                            try await runtime.recognizePCM(window: window, offset: offset, trackID: trackID,
+                                attemptID: attemptID, configuration: configuration, preview: observeSpeech)
+                        }
+                        return try await protect(batch, offset, ProcessInfo.processInfo.systemUptime - started, true)
+                    }
+                }, checkpoint: { try await checkpoint($0) }, finalize: finalize,
+                diagnostic: diagnostic, failure: failure)
+        } else {
+            // Existing injected runtimes retain their sealed input contract. A scheduling
+            // preference does not falsely grant an unimplemented runtime capability.
+            consumer = try Self.makeMemoryAudioConsumer(initialChunkSeconds: 3,
+                recognize: { samples, offset in
+                    try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
+                        let started = ProcessInfo.processInfo.systemUptime
+                        let batch = try await DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
+                            try await runtime.recognizePCM(samples: samples, offset: offset, trackID: trackID,
+                                attemptID: attemptID, configuration: configuration, preview: observeSpeech)
+                        }
+                        return try await protect(batch, offset, ProcessInfo.processInfo.systemUptime - started, false)
+                    }
+                }, checkpoint: { try await checkpoint($0) }, finalize: finalize,
+                diagnostic: diagnostic, failure: failure)
+        }
         attempt.consumer = consumer
         return consumer
     }

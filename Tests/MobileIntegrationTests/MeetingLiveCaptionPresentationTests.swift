@@ -131,6 +131,9 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
                       "An explicit latest action must remain active during its animation")
         XCTAssertFalse(movingDown.followPreference(after: older, currentlyFollowing: false, userIsScrolling: true),
                        "A reader moving down through older text has not reached the bottom yet")
+        XCTAssertFalse(up.followPreference(after: movingDown, currentlyFollowing: false, userIsScrolling: true),
+                       "Twenty points above the bottom must not resume following")
+        XCTAssertFalse(up.fallbackFollowPreference(after: movingDown, currentlyFollowing: false, upwardDrag: false))
         XCTAssertTrue(bottom.followPreference(after: movingDown, currentlyFollowing: false, userIsScrolling: true))
     }
 }
@@ -139,6 +142,52 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testPendingWaveformsGrowAndBecomeRealTextInBothThemes() async throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let originalRows = wordRows(count: 260)
+            let host = try CaptionNativeHost(rows: originalRows, scheme: scheme)
+            defer { host.close() }
+            let scroll = try await captionScroll(in: host)
+            try await settle(host, "Initial transcript follows the bottom") { self.nearBottom(scroll) }
+            let originalHeight = scroll.contentSize.height
+            host.model.pending = pending(count: 12)
+            try await settle(host, "Pending audio appears after the real text") {
+                scroll.contentSize.height > originalHeight + 15 && self.nearBottom(scroll)
+            }
+            capture(host, step: "01-pending-waveforms", scheme: scheme)
+            let shortHeight = scroll.contentSize.height
+            host.model.pending = pending(count: 40)
+            try await settle(host, "New pending words wrap and remain visible") {
+                scroll.contentSize.height > shortHeight + 20 && self.nearBottom(scroll)
+            }
+            capture(host, step: "02-pending-growth", scheme: scheme)
+            XCTAssertEqual(host.model.rows, originalRows, "Visual placeholders must not enter transcript rows")
+
+            host.model.rows += [row("Распознанный текст. The real words replace pending audio.")]
+            host.model.pending = .empty
+            try await settle(host, "Approved text replaces the waveforms without losing following") { self.nearBottom(scroll) }
+            capture(host, step: "03-recognized-text", scheme: scheme)
+            XCTAssertEqual(host.model.rows.dropLast(), originalRows[...])
+            let beforeMoreAudio = scroll.contentSize.height
+            host.model.pending = pending(count: 32)
+            try await settle(host, "Following survives pending-to-text replacement") {
+                scroll.contentSize.height > beforeMoreAudio + 20 && self.nearBottom(scroll)
+            }
+            host.model.width *= 0.65
+            try await settle(host, "Pending audio follows after viewport reflow") {
+                abs(scroll.bounds.width - host.model.width) < 2 && self.nearBottom(scroll)
+            }
+            capture(host, step: "04-narrow-waveforms", scheme: scheme)
+        }
+    }
+
+    private func pending(count: Int) -> MeetingPendingSpeechSnapshot {
+        .init(tokens: (0..<count).map { index in
+            .init(id: UInt64(index + 1), source: .you, start: Double(index) * 0.4,
+                  end: Double(index + 1) * 0.4, widthHint: 0.55 + Double(index % 7) * 0.09, level: 0.65)
+        }, isCapturing: true, revision: UInt64(count))
+    }
+
     func testNativeWordRowsPartialCorrectionsAndReflowFollowLatestInBothThemes() async throws {
         for scheme in [ColorScheme.light, .dark] {
             let partialID = UUID()
@@ -238,6 +287,20 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                     && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
             }
             capture(host, step: "03-appended-while-paused", scheme: scheme)
+            let heightBeforePending = scroll.contentSize.height
+            host.model.pending = pending(count: 40)
+            try await settle(host, "Pending waveforms must also respect reading older text") {
+                scroll.contentSize.height > heightBeforePending + 20
+                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+            }
+            capture(host, step: "04-pending-while-paused", scheme: scheme)
+            scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll) - 20), animated: false)
+            try await settle(host, "Almost reaching the bottom does not resume following") { !self.nearBottom(scroll) }
+            scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll)), animated: false)
+            try await settle(host, "Reaching the actual bottom resumes following") { self.nearBottom(scroll) }
+            host.model.pending = pending(count: 64)
+            try await settle(host, "New pending audio follows after reaching the bottom") { self.nearBottom(scroll) }
+            capture(host, step: "05-bottom-resumes-pending", scheme: scheme)
         }
     }
 
@@ -344,6 +407,7 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
 @MainActor
 private final class CaptionNativeRows: ObservableObject {
     @Published var rows: [MeetingLiveBubbleComposer.Row]
+    @Published var pending: MeetingPendingSpeechSnapshot = .empty
     @Published var width: CGFloat
     let height: CGFloat
 
@@ -360,7 +424,7 @@ private struct CaptionNativeDocument: View {
         let theme = AppTheme.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme)
         ZStack {
             theme.palette.windowBackground
-            MeetingLiveBubbleScrollList(rows: model.rows, documentStyle: true)
+            MeetingLiveBubbleScrollList(rows: model.rows, pending: model.pending, documentStyle: true)
                 .frame(width: model.width, height: model.height)
                 .background(theme.palette.contentBackground)
         }
@@ -400,5 +464,115 @@ private final class CaptionNativeHost {
         window.rootViewController = nil
         window.windowScene = nil
         previousKeyWindow?.makeKey()
+    }
+}
+
+final class MeetingSavedTranscriptPresentationTests: XCTestCase {
+    private func session() -> MeetingSession {
+        MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic transcript",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1, firstPresentationTime: nil))
+    }
+
+    private func segment(_ text: String, track: UUID, start: Double, speaker: UUID? = nil,
+                         attribution: MeetingTranscriptAttributionState = .unassigned) -> MeetingTranscriptSegment {
+        .init(id: UUID(), start: .init(value: Int64(start * 1000), timescale: 1000),
+              end: .init(value: Int64((start + 0.4) * 1000), timescale: 1000), sourceTrackID: track,
+              speakerID: speaker, text: text, originalText: "Synthetic original", revision: 2,
+              status: .final, overlap: .none, completeness: .complete, attributionState: attribution)
+    }
+
+    func testWordFragmentsReadAsParagraphWithoutRewritingEvidence() {
+        let track = UUID()
+        let words = ["Здравствуйте", ",", "давайте", "обсудим", "[PERSON]", ".", "English", "response", "."]
+        let rows = words.enumerated().map { segment($0.element, track: track, start: Double($0.offset) / 2) }
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session())
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs[0].text, "Здравствуйте, давайте обсудим [PERSON]. English response.")
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        XCTAssertEqual(paragraphs[0].id, rows[0].id)
+        XCTAssertEqual(paragraphs[0].firstSegment.start, rows[0].start)
+    }
+
+    func testUnknownAttributionStatesFlowWithoutInventingASpeaker() {
+        let track = UUID()
+        var rows = [segment("Слова", track: track, start: 0),
+                    segment("при", track: track, start: 0.5, attribution: .overlappingSpeakers),
+                    segment("неуверенном", track: track, start: 1, attribution: .timingUncertain),
+                    segment("времени.", track: track, start: 1.5)]
+        rows[1].overlap = .ambiguous
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session())
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs[0].text, "Слова при неуверенном времени.")
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        XCTAssertTrue(paragraphs[0].segments.allSatisfy { $0.speakerID == nil })
+        XCTAssertEqual(paragraphs[0].segments.map(\.attributionState), rows.map(\.attributionState))
+    }
+
+    func testActualSpeakerIDsAndKnownToUnknownStateRemainBoundaries() {
+        let track = UUID(), firstID = UUID(), secondID = UUID()
+        var source = session()
+        source.speakers = [firstID, secondID].map {
+            .init(id: $0, displayName: "Same visible name", diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        let rows = [segment("First", track: track, start: 0, speaker: firstID, attribution: .assigned),
+                    segment("second", track: track, start: 0.5, speaker: secondID, attribution: .assigned),
+                    segment("uncertain", track: track, start: 1, speaker: secondID, attribution: .timingUncertain),
+                    segment("unknown", track: track, start: 1.5)]
+        XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: source).map(\.segments), rows.map { [$0] })
+    }
+
+    func testSourceStatusCompletenessAndPauseBoundariesRemainExplicit() {
+        let track = UUID()
+        var rows = [segment("Source", track: track, start: 0), segment("change", track: UUID(), start: 0.5),
+                    segment("status", track: track, start: 1), segment("completeness", track: track, start: 1.5),
+                    segment("pause", track: track, start: 6)]
+        rows[2].status = .provisional
+        rows[3].completeness = .incompleteTrack
+        XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: session()).count, rows.count)
+    }
+
+    func testLongWordStreamAndExplicitNewlinesStayBoundedAndLossless() {
+        let track = UUID()
+        var rows = (0..<600).map { segment("слово\($0)", track: track, start: Double($0) / 10) }
+        rows[80].text += "\n"
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session())
+        XCTAssertGreaterThan(paragraphs.count, 5)
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        XCTAssertTrue(paragraphs.allSatisfy { $0.text.count <= 530 })
+        XCTAssertEqual(Set(paragraphs.map(\.id)).count, paragraphs.count)
+        XCTAssertTrue(MeetingTranscriptExporter.displayParagraphs(for: [], in: session()).isEmpty)
+        XCTAssertTrue(paragraphs.contains { $0.segments.last?.id == rows[80].id })
+    }
+
+    func testParagraphPlaybackStartsAtFirstWordAndCoversEveryMember() throws {
+        let track = UUID()
+        let rows = [segment("One", track: track, start: 4), segment("two", track: track, start: 4.5),
+                    segment("three.", track: track, start: 5)]
+        var source = session(); source.transcriptSegments = rows
+        let range = try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: rows.map(\.id))
+        XCTAssertEqual(range.id, rows[0].id)
+        XCTAssertEqual(range.sourceTrackID, track)
+        XCTAssertEqual(range.start, rows[0].start)
+        XCTAssertEqual(range.end, rows.last?.end)
+        XCTAssertEqual(source.transcriptSegments, rows)
+        XCTAssertEqual(try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: [rows[1].id]), rows[1])
+    }
+
+    func testParagraphPlaybackRefusesStaleOrCrossBoundaryMemberSelections() throws {
+        let track = UUID()
+        let rows = [segment("One", track: track, start: 0), segment("two", track: track, start: 0.5)]
+        var source = session(); source.transcriptSegments = rows
+        for ids in [[], [UUID()], [rows[0].id, rows[0].id], rows.map(\.id).reversed().map { $0 }, [rows[0].id, UUID()]] {
+            XCTAssertThrowsError(try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: ids))
+        }
+        source.transcriptSegments[1].attributionState = .assigned
+        source.transcriptSegments[1].speakerID = UUID()
+        XCTAssertThrowsError(try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: rows.map(\.id)))
+        source.transcriptSegments = rows
+        source.transcriptSegments[1].sourceTrackID = UUID()
+        XCTAssertThrowsError(try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: rows.map(\.id)))
     }
 }

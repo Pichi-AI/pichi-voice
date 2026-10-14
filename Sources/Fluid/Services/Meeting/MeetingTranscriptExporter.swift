@@ -71,6 +71,62 @@ nonisolated enum MeetingTranscriptExporter {
         }
     }
 
+    /// A reading projection of timed fragments, not a replacement for canonical evidence.
+    /// Every member retains its ID, text, revision and attribution for corrections and playback.
+    struct DisplayParagraph: Identifiable, Equatable {
+        let segments: [MeetingTranscriptSegment]
+        var id: MeetingTranscriptSegmentID { segments[0].id }
+        var firstSegment: MeetingTranscriptSegment { segments[0] }
+        var text: String {
+            segments.enumerated().map { index, segment in
+                Self.separator(after: index > 0 ? segments[index - 1].text : nil, before: segment.text) + segment.text
+            }.joined()
+        }
+
+        static func separator(after previous: String?, before next: String) -> String {
+            guard let last = previous?.last, let first = next.first,
+                  !last.isWhitespace, !first.isWhitespace else { return "" }
+            if ".,;:!?…)]}»".contains(first) || "([{«".contains(last) { return "" }
+            return " "
+        }
+    }
+
+    /// Input order is retained. Callers supply chronological, non-echo segments.
+    /// Adjacent nil-speaker fragments can flow under the honest unknown-speaker label. Their
+    /// distinct uncertainty states remain on every canonical member, not an invented identity.
+    /// Identified speaker/state changes, source changes and meaningful pauses stay boundaries.
+    static func displayParagraphs(for segments: [MeetingTranscriptSegment], in session: MeetingSession) -> [DisplayParagraph] {
+        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        var paragraphs: [DisplayParagraph] = []
+        var members: [MeetingTranscriptSegment] = []
+        var length = 0
+        var latestEnd = 0.0
+        for segment in segments {
+            let startsParagraph = members.last.map { previous in
+                let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
+                return (!bothUnknown && speakerLabelIdentity(for: previous, in: session, speakerNames: names)
+                    != speakerLabelIdentity(for: segment, in: session, speakerNames: names))
+                    || previous.sourceTrackID != segment.sourceTrackID
+                    || previous.status != segment.status || previous.completeness != segment.completeness
+                    || previous.isEcho != segment.isEcho
+                    || previous.text.contains("\n")
+                    || segment.start.seconds - latestEnd > 3
+                    || max(latestEnd, segment.end.seconds) - members[0].start.seconds > 30
+                    || length >= 512
+                    || (length >= 320 && ".!?…".contains(previous.text.last ?? " "))
+            } ?? false
+            if startsParagraph {
+                paragraphs.append(DisplayParagraph(segments: members))
+                members = []; length = 0; latestEnd = segment.end.seconds
+            }
+            members.append(segment)
+            length += segment.text.count + 1
+            latestEnd = max(latestEnd, segment.end.seconds)
+        }
+        if !members.isEmpty { paragraphs.append(DisplayParagraph(segments: members)) }
+        return paragraphs
+    }
+
     static func json(for session: MeetingSession) throws -> Data {
         let speakers = session.activeSpeakers.map {
             ExportedSpeaker(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser)

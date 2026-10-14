@@ -19,3 +19,20 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     "$task_test_dir/ProcessCPUTime.swift" Tests/ProcessCPUDiagnosticsTests.swift \
     -o "$task_test_dir/process-cpu-diagnostics-tests"
 "$task_test_dir/process-cpu-diagnostics-tests"
+# Whisper signal/token diagnostics are also pure values. Reuse the same native
+# diagnostic probe and the hosted test's synthetic scenarios without a model,
+# FileLogger initialization, or a second implementation of the measurement.
+python3 - "$task_test_dir/WhisperDiagnostics.swift" <<'PY'
+from pathlib import Path
+import sys
+source = Path('Sources/Fluid/Services/WhisperProvider.swift').read_text()
+start = source.index('/// Aggregate diagnostics only.')
+end = source.index('/// TranscriptionProvider implementation', start)
+Path(sys.argv[1]).write_text('import Foundation\n' + source[start:end])
+PY
+xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
+    -D PICHI_WHISPER_DIAGNOSTICS_STANDALONE \
+    -module-cache-path "$task_test_dir/module-cache" \
+    "$task_test_dir/WhisperDiagnostics.swift" Tests/MobileIntegrationTests/WhisperDiagnosticsTests.swift \
+    -o "$task_test_dir/whisper-diagnostics-tests"
+"$task_test_dir/whisper-diagnostics-tests"

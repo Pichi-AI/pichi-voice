@@ -100,7 +100,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent(fixture))
         player.numberOfLoops = -1
         var firstTextSecond: Int?
+        var firstPendingSecond: Int?
+        var largestPendingCount = 0
         var updates = 0
+        var protectedUpdateSeconds: [Double] = []
         var lastUpdateSecond = 0
         var lastBackgroundUpdateSecond = 0
         var previousIDs: Set<UUID> = []
@@ -134,6 +137,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     throw MeetingMemoryAudioError.overload
                 }
                 let snapshot = coordinator.liveTranscript
+                let pending = coordinator.pendingSpeech
+                largestPendingCount = max(largestPendingCount, pending.tokens.count)
+                if !pending.tokens.isEmpty { firstPendingSecond = firstPendingSecond ?? second }
+                XCTAssertLessThanOrEqual(pending.tokens.count, 64)
                 let isBackground = UIApplication.shared.applicationState == .background
                 let observationInterval = now - previousObservationTime
                 let adjacentBackgroundObservation = isBackground && wasBackground && observationInterval <= 2
@@ -149,6 +156,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 let partial = snapshot.partials[.you]
                 if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
                     updates += 1
+                    protectedUpdateSeconds.append(elapsed)
                     lastUpdateSecond = second
                     if adjacentBackgroundObservation {
                         backgroundUpdates += 1
@@ -159,7 +167,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 previousPartial = partial
                 wasBackground = isBackground
                 previousObservationTime = now
-                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) background=\(isBackground)")
+                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) pendingAudio=\(pending.tokens.count) background=\(isBackground)")
                 if now - previousResourceTime >= 15 {
                     let cpu = DiagnosticProcessCPUTime.capture()
                     let cpuMS = previousCPU.flatMap { earlier in cpu?.milliseconds(since: earlier) } ?? -1
@@ -172,9 +180,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let capturedSeconds = ProcessInfo.processInfo.systemUptime - captureStart
             player.stop()
             XCTAssertGreaterThanOrEqual(capturedSeconds, Double(duration))
+            XCTAssertNotNil(firstPendingSecond, "Real accepted microphone audio must show capture progress before recognition completes")
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
             XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
+            XCTAssertGreaterThanOrEqual(lastUpdateSecond, duration - 15,
+                                        "Protected text must keep advancing near the end, not only during the first window")
             if requiresBackground {
                 XCTAssertGreaterThanOrEqual(backgroundSeconds, duration == 300 ? 280.0 : 20.0,
                                             "The host must actually leave the foreground during paced recording")
@@ -185,6 +196,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 if requiresBackground { XCTAssertGreaterThanOrEqual(lastBackgroundUpdateSecond, 280) }
             }
             let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertTrue(coordinator.pendingSpeech.tokens.isEmpty, "Terminal teardown clears visual audio estimates")
             XCTAssertEqual(completed.state, .completed)
             XCTAssertFalse(completed.transcriptSegments.isEmpty)
             if twoVoiceFixture {
@@ -194,6 +206,24 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             let saved = try await store.load(id: completed.id)
             XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
+            // Opt-in replay evidence is retained privately in XCTest, never in
+            // routine support logs. The export contains protected text only.
+            let transcriptAttachment = XCTAttachment(data: try MeetingTranscriptExporter.json(for: completed),
+                                                       uniformTypeIdentifier: "public.json")
+            transcriptAttachment.name = "Physical-strict-protected-transcript-\(model.rawValue)"
+            transcriptAttachment.lifetime = .keepAlways
+            add(transcriptAttachment)
+            let timingData = try JSONSerialization.data(withJSONObject: [
+                "model": model.rawValue, "durationSeconds": capturedSeconds,
+                "firstTextSecond": firstTextSecond ?? -1,
+                "firstPendingSecond": firstPendingSecond ?? -1, "largestPendingCount": largestPendingCount,
+                "protectedUpdateSeconds": protectedUpdateSeconds,
+                "backgroundSeconds": backgroundSeconds
+            ], options: [.prettyPrinted, .sortedKeys])
+            let timingAttachment = XCTAttachment(data: timingData, uniformTypeIdentifier: "public.json")
+            timingAttachment.name = "Physical-strict-protected-update-timing-\(model.rawValue)"
+            timingAttachment.lifetime = .keepAlways
+            add(timingAttachment)
             let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
             for case let file as URL in files where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
                 XCTAssertEqual(file.pathExtension, "json", "Strict capture must not create any audio file")

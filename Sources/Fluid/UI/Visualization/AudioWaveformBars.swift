@@ -15,6 +15,9 @@ struct AudioWaveformBars: View {
     let isIdleWaveEnabled: Bool
     var glowIntensity: CGFloat = 0
     var glowRadius: CGFloat = 0
+    /// Captured visual shape for nonmoving hosts; existing dictation hosts keep their idle dots.
+    var frozenHeights: [CGFloat]? = nil
+    var animationInterval: TimeInterval = 1.0 / 50.0
 
     #if DEBUG
     // Apple's accessibility environment is read-only. Exercise the real static rendering
@@ -34,7 +37,7 @@ struct AudioWaveformBars: View {
 
     var body: some View {
         if self.isAnimating && !self.isMotionReduced {
-            TimelineView(.animation(minimumInterval: 1.0 / 50.0)) { timeline in
+            TimelineView(.animation(minimumInterval: self.animationInterval)) { timeline in
                 self.bars(heights: self.simulation.step(
                     at: timeline.date,
                     barCount: self.barCount,
@@ -46,8 +49,16 @@ struct AudioWaveformBars: View {
                 ))
             }
         } else {
-            self.bars(heights: Array(repeating: self.minHeight, count: self.barCount))
+            self.bars(heights: self.staticHeights)
         }
+    }
+
+    private var staticHeights: [CGFloat] {
+        guard let heights = self.frozenHeights, heights.count == self.barCount,
+              heights.allSatisfy(\.isFinite) else {
+            return Array(repeating: self.minHeight, count: self.barCount)
+        }
+        return heights.map { min(self.maxHeight, max(self.minHeight, $0)) }
     }
 
     private func bars(heights: [CGFloat]) -> some View {

@@ -183,6 +183,57 @@ final class MobileNavigationUITests: XCTestCase {
         capture("02-russian-dark-models")
     }
 
+    func testWordTimedHistoryFlowsAndParticipantsWrapInBothOrientationsAndThemes() throws {
+        let fixtureID = "C2A6906B-356C-4D80-B963-E125DF244703"
+        let sentence = "Здравствуйте, давайте обсудим инструкцию. После встречи я пришлю документ."
+        for appearance in ["light", "dark"] {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance]
+            app.launch()
+            waitForOrientation(portrait: true)
+            openNavigation("history", title: "История")
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            guard meeting.waitForExistence(timeout: 5) else {
+                throw XCTSkip("Stage the synthetic WordTimingMeeting.json in the simulator meeting store")
+            }
+            meeting.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+            let first = app.buttons["transcript.speaker.00000000-0000-0000-0000-000000000065"]
+            let second = app.buttons["transcript.speaker.00000000-0000-0000-0000-000000000066"]
+            XCTAssertTrue(first.waitForExistence(timeout: 5) && second.exists)
+            XCTAssertEqual(first.frame.minY, second.frame.minY, accuracy: 2,
+                           "Participants must occupy the available width instead of one full row each")
+            capture("word-timing-\(appearance)-portrait-participants")
+            let body = app.staticTexts[sentence].firstMatch
+            XCTAssertTrue(body.waitForExistence(timeout: 5), "Canonical words must appear in one readable paragraph")
+            XCTAssertFalse(app.staticTexts["обсудим"].exists, "Each word must not become a separate display row")
+            try revealParagraphAboveNavigation(body, step: "word-timing-\(appearance)-portrait-reading")
+            capture("word-timing-\(appearance)-portrait-paragraph")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            XCTAssertTrue(body.waitForExistence(timeout: 5))
+            try revealParagraphAboveNavigation(body, step: "word-timing-\(appearance)-landscape-reading")
+            capture("word-timing-\(appearance)-landscape-paragraph")
+        }
+    }
+
+    private func revealParagraphAboveNavigation(_ paragraph: XCUIElement, step: String) throws {
+        let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
+        XCTAssertTrue(scroll.exists)
+        for attempt in 0..<6 {
+            let top = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : app.windows.firstMatch.frame.minY
+            let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.windows.firstMatch.frame.maxY
+            if paragraph.isHittable && paragraph.frame.minY >= top && paragraph.frame.maxY <= bottom { return }
+            let upwards = paragraph.frame.maxY > bottom
+            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.65 : 0.35))
+            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.35 : 0.65))
+            from.press(forDuration: 0.05, thenDragTo: to)
+            capture("\(step)-scroll-\(attempt)")
+        }
+        XCTFail("The full paragraph must be readable above the navigation controls")
+    }
+
 
     func testNativeRussianGlyphCoverage() throws {
         let letters = Array("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя".utf16)

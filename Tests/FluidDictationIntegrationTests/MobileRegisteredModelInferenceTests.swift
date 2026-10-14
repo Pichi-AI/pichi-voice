@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import CryptoKit
 import Foundation
 import PichiGigaAM
 import XCTest
@@ -85,6 +86,14 @@ final class MobileInferenceTestAssetsTests: XCTestCase {
 /// in the hosted mobile target; that execution uses the adapters' actual CPU-only route.
 @MainActor
 final class MobileRegisteredModelInferenceTests: XCTestCase {
+    private final nonisolated class TinyQualityReport: @unchecked Sendable {
+        private let lock = NSLock()
+        private var rows: [[String: Any]] = []
+        func append(_ row: [String: Any]) { lock.withLock { rows.append(row) } }
+        func data() throws -> Data {
+            try lock.withLock { try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]) }
+        }
+    }
     private final nonisolated class LiveObservations: @unchecked Sendable {
         private let lock = NSLock()
         private var ready = false
@@ -134,6 +143,92 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
 
     private func normalized(_ text: String) -> String {
         text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: " ")
+    }
+
+    /// Explicitly staged public TTS with known text, rather than a nonempty-result
+    /// assertion. Exact inputs/outputs remain in private XCTest artifacts only.
+    func testWhisperTinyKnownRussianAndEnglishQuality() async throws {
+        guard ProcessInfo.processInfo.environment["PICHI_TINY_GROUNDTRUTH_E2E"] == "1" else {
+            throw XCTSkip("Explicitly stage the approved Tiny groundtruth fixtures")
+        }
+        let root = try self.assets()
+        let fixtures = [
+            ("ru-long", "Сегодня обсуждаем инструкцию к препарату. После встречи я пришлю документ.",
+             "a943c582f68746f7d56f8ba232dd574b305a45789992430d21a7ac33f849b2e0"),
+            ("en-long", "We will review the document and discuss the results after the meeting.",
+             "641ffa1e07997b723733c2ca86442c1f21899f6d108388a4c0da28fc991a5757")
+        ]
+        let configuration = try await self.installedConfiguration(model: .whisperTiny, assets: root)
+        XCTAssertEqual(configuration.languageCode, "auto")
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service },
+                                                    modelLocator: MeetingNemotronModelLocator())
+        let attempt = UUID()
+        let observations = TinyQualityReport()
+        defer {
+            if let data = try? observations.data() {
+                let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+                attachment.name = "Tiny-approved-groundtruth-\(ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "unknown")"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
+        do {
+            #if os(macOS)
+            try await service.retireDictationASRResourcesForMeeting(lease: lease)
+            #endif
+            try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.withPreparedASR(attemptID: attempt, configuration: configuration) { session in
+                    for (name, expected, hash) in fixtures {
+                        let file = root.appendingPathComponent("audio/\(name).wav")
+                        let actualHash = SHA256.hash(data: try Data(contentsOf: file)).map { String(format: "%02x", $0) }.joined()
+                        XCTAssertEqual(actualHash, hash, "The expected text must refer to this exact approved fixture")
+                        guard actualHash == hash else { throw NSError(domain: "UnapprovedTinyFixture", code: 1) }
+                        let samples = try await self.pcm(name, in: root)
+                        for scale: Float in [1, 0.01] {
+                            let input = scale == 1 ? samples : samples.map { $0 * scale }
+                            let began = ProcessInfo.processInfo.systemUptime
+                            let result = try await session.transcribeWithTimings(input)
+                            let elapsed = ProcessInfo.processInfo.systemUptime - began
+                            let expectedWords = await self.normalized(expected).split(separator: " ").map(String.init)
+                            let outputWords = await self.normalized(result.result.text).split(separator: " ").map(String.init)
+                            let errors = Self.wordEditDistance(expectedWords, outputWords)
+                            let rate = Double(errors) / Double(expectedWords.count)
+                            observations.append(["fixture": name, "sha256": actualHash, "amplitudeScale": scale,
+                                "inputText": expected, "outputText": result.result.text,
+                                "wordErrors": errors, "wordErrorRate": rate, "samples": input.count,
+                                "durationSeconds": Double(input.count) / 16_000, "inferenceSeconds": elapsed])
+                            XCTAssertLessThanOrEqual(rate, 0.10, "Tiny must recognize the known full sentence in its original language")
+                            XCTAssertLessThan(elapsed, Double(input.count) / 16_000,
+                                              "Native Tiny inference must keep up with the duration of this fixture")
+                        }
+                    }
+                    let zero = try await session.transcribeWithTimings([Float](repeating: 0, count: 48_000))
+                    XCTAssertTrue(zero.result.text.isEmpty)
+                    return MeetingParakeetPhaseResult()
+                }
+            }
+            XCTAssertFalse(service.hasActiveModelPreparation)
+            await service.shutdownForTermination()
+        } catch {
+            await service.shutdownForTermination()
+            throw error
+        }
+    }
+
+    private nonisolated static func wordEditDistance(_ expected: [String], _ actual: [String]) -> Int {
+        var previous = Array(0...actual.count)
+        for (index, word) in expected.enumerated() {
+            var current = [index + 1]
+            for (column, output) in actual.enumerated() {
+                current.append(min(current[column] + 1, previous[column + 1] + 1,
+                                   previous[column] + (word == output ? 0 : 1)))
+            }
+            previous = current
+        }
+        return previous.last ?? expected.count
     }
 
     private func configuration(modelID: String, root: URL, fingerprint: String? = nil) -> MeetingFinalProcessingConfiguration {

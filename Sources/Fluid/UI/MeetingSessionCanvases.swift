@@ -5,6 +5,7 @@ struct MeetingRecordingCanvas: View {
     let session: MeetingSession
     let trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth]
     let liveTranscript: MeetingLiveTranscriptSnapshot
+    var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     let isStopping: Bool
     let onStop: () -> Void
 
@@ -52,7 +53,7 @@ struct MeetingRecordingCanvas: View {
                 Divider()
             }
 
-            MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
+            MeetingLiveTranscriptCard(snapshot: self.liveTranscript, pendingSpeech: self.pendingSpeech)
 
             Divider()
             FluidGlassControlGroup {
@@ -129,6 +130,7 @@ struct MeetingRecordingCanvas: View {
 /// diarization pipeline replaces this view's content entirely on completion.
 private struct MeetingLiveTranscriptCard: View {
     let snapshot: MeetingLiveTranscriptSnapshot
+    var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
 
     @Environment(\.theme) private var theme
 
@@ -157,7 +159,7 @@ private struct MeetingLiveTranscriptCard: View {
                     .foregroundStyle(self.theme.palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if self.rows.isEmpty {
+            if self.rows.isEmpty && self.pendingSpeech.tokens.isEmpty {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                     Text(self.availabilityIndicator == nil ? PichiLocalization.text("Listening for conversation") : PichiLocalization.text("Waiting for captions"))
                         .font(self.theme.typography.body)
@@ -189,7 +191,7 @@ private struct MeetingLiveTranscriptCard: View {
     }
 
     private var scrollingBubbleList: some View {
-        MeetingLiveBubbleScrollList(rows: self.rows, documentStyle: true)
+        MeetingLiveBubbleScrollList(rows: self.rows, pending: self.pendingSpeech, documentStyle: true)
             .frame(minHeight: 120, maxHeight: .infinity)
     }
 }

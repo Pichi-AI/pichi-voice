@@ -83,7 +83,7 @@ enum PichiMeetingProviderFactory {
         PichiMeetingProviderFactory.whisperTinyModelID: Registration(
             descriptor: MeetingBackendDescriptor(
                 id: .whisperTiny,
-                version: "1",
+                version: "2",
                 execution: .local,
                 supportedLanguageCodes: VoiceEngineLanguageCatalog.whisperSupportedLanguageCodes.union(["auto"]),
                 supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
@@ -98,7 +98,8 @@ enum PichiMeetingProviderFactory {
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
+                pcmObservationPolicy: .init(initialSeconds: 3, intervalSeconds: 3)
             ),
             defaultLanguageCode: "auto",
             providerFactory: { try WhisperProvider(meetingConfiguration: $0) },

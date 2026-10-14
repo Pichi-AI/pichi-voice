@@ -87,6 +87,18 @@ struct MeetingPrivacyContextTests {
               status: .final, overlap: .none, completeness: .complete)
     }
     static func main() async throws {
+        let coverageTrack = UUID()
+        let coverageBatch = MeetingPCMTranscriptBatch(segments: [segment("слово", track: coverageTrack, start: 0),
+            segment("продолжение", track: coverageTrack, start: 1)])
+        let boundedPreview = try await MeetingTranscriptPrivacyPolicy.redactedBatch(coverageBatch,
+            using: InvalidPreviewRedactor(limit: 8), provisionalPreviewID: UUID(),
+            provisionalSegmentIDs: Set(coverageBatch.segments.map(\.id)))
+        try check(boundedPreview.livePreview?.end == 1, "A partially approved fragment cannot extend pending audio replacement")
+        let unknownPreview = try await MeetingTranscriptPrivacyPolicy.redactedBatch(coverageBatch,
+            using: InvalidPreviewRedactor(limit: 2), provisionalPreviewID: UUID(),
+            provisionalSegmentIDs: Set(coverageBatch.segments.map(\.id)))
+        try check(unknownPreview.livePreview != nil && unknownPreview.livePreview?.end == nil,
+                  "A partial first segment has no safely known audio endpoint")
         try await suite(using: StructuredPrivacyRedactor())
         try await liveSuite(using: StructuredPrivacyRedactor())
         try await provisionalSuite(using: StructuredPrivacyRedactor())

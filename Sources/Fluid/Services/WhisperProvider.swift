@@ -5,6 +5,131 @@ import TranscribeCpp
 import Darwin
 #endif
 
+/// Aggregate diagnostics only. No PCM is retained; thresholds describe sample
+/// amplitude, not voice activity or a decision to discard quiet speech.
+nonisolated struct WhisperSignalDiagnostics: Sendable, Equatable {
+    static let sampleRate = 16_000
+    static let quietAmplitude: Double = 0.001 // -60 dBFS per sample, not a VAD threshold.
+    let sampleCount: Int
+    let rms: Double
+    let peak: Double
+    let dc: Double
+    let clippingFraction: Double
+    let quietFraction: Double
+
+    var durationMilliseconds: Double { Double(sampleCount) * 1_000 / Double(Self.sampleRate) }
+
+    /// Also performs the provider's finite-input validation in the same pass.
+    static func measure(_ samples: [Float]) -> Self? {
+        guard !samples.isEmpty else { return nil }
+        var squares: Double = 0
+        var sum: Double = 0
+        var peak: Double = 0
+        var clipped = 0
+        var quiet = 0
+        for sample in samples {
+            guard sample.isFinite else { return nil }
+            let value = Double(sample)
+            let amplitude = abs(value)
+            squares += value * value
+            sum += value
+            peak = max(peak, amplitude)
+            if amplitude >= 1 { clipped += 1 }
+            if amplitude <= Self.quietAmplitude { quiet += 1 }
+        }
+        let count = Double(samples.count)
+        return .init(sampleCount: samples.count, rms: sqrt(squares / count), peak: peak,
+                     dc: sum / count, clippingFraction: Double(clipped) / count,
+                     quietFraction: Double(quiet) / count)
+    }
+}
+
+/// The library calls token.p a family-specific confidence hint. This summary
+/// does not replace the app's confidence contract or imply calibrated accuracy.
+nonisolated struct WhisperProbabilityDiagnostics: Sendable, Equatable {
+    let validCount: Int
+    let invalidCount: Int
+    let mean: Double?
+
+    static func measure<S: Sequence>(_ probabilities: S) -> Self where S.Element == Float {
+        var count = 0
+        var invalid = 0
+        var sum: Double = 0
+        for probability in probabilities {
+            guard probability.isFinite, probability >= 0, probability <= 1 else {
+                invalid += 1
+                continue
+            }
+            count += 1
+            sum += Double(probability)
+        }
+        return .init(validCount: count, invalidCount: invalid, mean: count == 0 ? nil : sum / Double(count))
+    }
+
+    /// Only registered language codes enter support logs, never arbitrary strings
+    /// passed through the library's language fields.
+    static func languageField(_ value: String?, supportedCodes: Set<String>, absent: String) -> String {
+        guard let value else { return absent }
+        return supportedCodes.contains(value) ? value : "unsupported"
+    }
+
+    /// Native timing zero means unmeasured. Invalid values must not look like a
+    /// fast measured stage or enter logs as NaN/Inf.
+    static func timingField(_ milliseconds: Float) -> String {
+        guard milliseconds.isFinite, milliseconds > 0 else { return "unmeasured" }
+        return String(format: "%.3f", milliseconds)
+    }
+}
+
+/// Short Tiny calls must not spend several decoder retries on an uncertain
+/// phrase. This adapter-local policy uses the loaded artifact and native quality
+/// scalars, not UI language, token confidence, or a quiet-speech amplitude gate.
+nonisolated enum WhisperShortInputPolicy {
+    static let maximumSamples = 20 * WhisperSignalDiagnostics.sampleRate
+
+    static func applies(modelFile: String?, sampleCount: Int) -> Bool {
+        modelFile == "whisper-tiny-Q8_0.gguf" && (1...maximumSamples).contains(sampleCount)
+    }
+
+    struct Chunk: Sendable, Equatable {
+        let temperature: Float
+        let avgLogprob: Float
+        let compressionRatio: Float
+        let noSpeechProbability: Float
+        let fallbacks: Int32
+        let noSpeechTriggered: Bool
+    }
+
+    enum Decision: String, Sendable {
+        case accepted, empty
+        case missingQuality = "missing_quality"
+        case invalidQuality = "invalid_quality"
+        case noSpeech = "no_speech"
+        case lowLogprob = "low_logprob"
+        case compression = "compression"
+    }
+
+    static func evaluate(hasText: Bool, chunks: [Chunk]) -> Decision {
+        guard hasText else { return .empty }
+        guard !chunks.isEmpty else { return .missingQuality }
+        for chunk in chunks {
+            guard chunk.temperature.isFinite, chunk.temperature >= 0,
+                  chunk.avgLogprob.isFinite, chunk.avgLogprob <= 0,
+                  chunk.compressionRatio.isFinite, chunk.compressionRatio >= 0,
+                  chunk.noSpeechProbability.isFinite, (0...1).contains(chunk.noSpeechProbability),
+                  chunk.fallbacks >= 0 else { return .invalidQuality }
+            // The first two thresholds are Whisper's existing retry criteria.
+            // With retries disabled, do not publish a failed final decoder tier.
+            // A strong no-speech probability also rejects Tiny's digital-silence
+            // hallucination even when its language-model logprob looks good.
+            if chunk.noSpeechTriggered || chunk.noSpeechProbability >= 0.9 { return .noSpeech }
+            if chunk.avgLogprob < -1 { return .lowLogprob }
+            if chunk.compressionRatio > 2.4 { return .compression }
+        }
+        return .accepted
+    }
+}
+
 /// TranscriptionProvider implementation using transcribe.cpp for Whisper GGUF models.
 final class WhisperProvider: TranscriptionProvider {
     let name = "Whisper (Universal)"
@@ -152,10 +277,11 @@ final class WhisperProvider: TranscriptionProvider {
         self.ready = true
     }
 
-    private func activeSession() -> Session? {
+    private func activeSession() -> (session: Session, modelName: String)? {
         self.stateLock.lock()
         defer { self.stateLock.unlock() }
-        return self.session
+        guard let session = self.session, let modelName = self.loadedModelName else { return nil }
+        return (session, modelName)
     }
 
     private func removeLegacyModelIfNeeded() {
@@ -271,8 +397,9 @@ final class WhisperProvider: TranscriptionProvider {
         DebugLogger.shared.info("WhisperProvider: Loading \(currentModelName) with \(self.backend)", source: "WhisperProvider")
         progressHandler?(.loading)
 
+        let loadedModelURL = self.modelURL
         let loadedModel = try Model(
-            path: self.modelURL.path,
+            path: loadedModelURL.path,
             options: ModelOptions(backend: self.backend)
         )
         let runtimeBackend = loadedModel.backend.lowercased()
@@ -286,7 +413,12 @@ final class WhisperProvider: TranscriptionProvider {
                 userInfo: [NSLocalizedDescriptionKey: "\(targetModel.displayName) loaded on \(loadedModel.backend), but Metal is required on Apple Silicon."]
             )
         }
-        let loadedSession = try loadedModel.session()
+        let sessionOptions = SessionOptions()
+        let loadedSession = try loadedModel.session(sessionOptions)
+        DebugLogger.shared.info(
+            "whisper_session requested_threads=\(sessionOptions.nThreads) requested_context=\(sessionOptions.nCtx) threads_policy=library_default",
+            source: "WhisperProvider"
+        )
 
         if self.useAutomaticLanguageDetection,
            (!loadedModel.capabilities.supportsLanguageDetect
@@ -297,7 +429,7 @@ final class WhisperProvider: TranscriptionProvider {
         }
 
         try Task.checkCancellation()
-        self.installModel(loadedModel, session: loadedSession, modelName: currentModelName)
+        self.installModel(loadedModel, session: loadedSession, modelName: loadedModelURL.lastPathComponent)
         DebugLogger.shared.info(
             "WhisperProvider: Model ready (\(currentModelName), backend=\(loadedModel.backend), arch=\(loadedModel.arch))",
             source: "WhisperProvider"
@@ -359,12 +491,14 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func transcribe(_ samples: [Float], languageCode: String?) async throws -> ASRTranscriptionResult {
-        let transcript = try await self.run(samples, languageCode: languageCode, timestamps: .segment)
+        guard let transcript = try await self.run(samples, languageCode: languageCode, timestamps: .segment) else {
+            return ASRTranscriptionResult(text: "", confidence: 0)
+        }
         let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         return ASRTranscriptionResult(text: fullText, confidence: 1.0)
     }
 
-    private func run(_ samples: [Float], languageCode: String?, timestamps: TimestampKind) async throws -> Transcript {
+    private func run(_ samples: [Float], languageCode: String?, timestamps: TimestampKind) async throws -> Transcript? {
         try Task.checkCancellation()
         let minSamples = 1
         guard samples.count >= minSamples else {
@@ -375,7 +509,7 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        guard let session = self.activeSession() else {
+        guard let active = self.activeSession() else {
             throw NSError(
                 domain: "WhisperProvider",
                 code: -1,
@@ -383,8 +517,16 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        guard samples.allSatisfy(\.isFinite) else {
+        guard let signal = WhisperSignalDiagnostics.measure(samples) else {
             throw NSError(domain: "WhisperProvider", code: -10, userInfo: [NSLocalizedDescriptionKey: "The audio contains invalid PCM samples."])
+        }
+
+        let boundedTiny = WhisperShortInputPolicy.applies(modelFile: active.modelName, sampleCount: samples.count)
+        if boundedTiny, signal.peak == 0 {
+            DebugLogger.shared.logLazy(source: "WhisperProvider") {
+                "whisper_quality decision=empty reason=digital_zero samples=\(signal.sampleCount) native_run=false"
+            }
+            return nil
         }
 
         let resolvedLanguageCode = self.resolvedLanguageCode(explicit: languageCode)
@@ -394,15 +536,87 @@ final class WhisperProvider: TranscriptionProvider {
         let inferenceSamples = samples.count < 16_000
             ? samples + [Float](repeating: 0, count: 16_000 - samples.count)
             : samples
-        return try await session.run(
-            inferenceSamples,
-            options: Self.runOptions(languageCode: resolvedLanguageCode, timestamps: timestamps)
-        )
+        let options = Self.runOptions(languageCode: resolvedLanguageCode, timestamps: timestamps,
+                                      loadedModelName: active.modelName, sampleCount: samples.count)
+        let supportedCodes = VoiceEngineLanguageCatalog.whisperSupportedLanguageCodes
+        let requestedLanguage = WhisperProbabilityDiagnostics.languageField(options.language, supportedCodes: supportedCodes, absent: "auto")
+        let targetLanguage = WhisperProbabilityDiagnostics.languageField(options.targetLanguage, supportedCodes: supportedCodes, absent: "none")
+        let autodetect = options.language == nil
+        let requestedTask = options.task == .transcribe ? "transcribe" : "translate"
+        let requestedTimestamps = Self.timestampLabel(options.timestamps)
+        let inferenceSampleCount = inferenceSamples.count
+        DebugLogger.shared.logLazy(source: "WhisperProvider") {
+            "whisper_input samples=\(signal.sampleCount) sample_rate=\(WhisperSignalDiagnostics.sampleRate) " +
+                "audio_ms=\(String(format: "%.3f", signal.durationMilliseconds)) inference_samples=\(inferenceSampleCount) " +
+                "rms=\(String(format: "%.6f", signal.rms)) peak=\(String(format: "%.6f", signal.peak)) " +
+                "dc=\(String(format: "%.6f", signal.dc)) clipping_fraction=\(String(format: "%.6f", signal.clippingFraction)) " +
+                "quiet_fraction=\(String(format: "%.6f", signal.quietFraction)) quiet_amplitude=\(WhisperSignalDiagnostics.quietAmplitude) " +
+                "language=\(requestedLanguage) autodetect=\(autodetect) task=\(requestedTask) " +
+                "target_language=\(targetLanguage) timestamps=\(requestedTimestamps) bounded_tiny=\(boundedTiny)"
+        }
+        let started = ProcessInfo.processInfo.systemUptime
+        do {
+            let snapshot = try await active.session.runWhisper(inferenceSamples, options: options)
+            try Task.checkCancellation()
+            let transcript = snapshot.transcript
+            let chunks = snapshot.chunks.map { chunk in
+                WhisperShortInputPolicy.Chunk(temperature: chunk.temperature, avgLogprob: chunk.avgLogprob,
+                                             compressionRatio: chunk.compressionRatio, noSpeechProbability: chunk.noSpeechProbability,
+                                             fallbacks: chunk.fallbacks, noSpeechTriggered: chunk.noSpeechTriggered)
+            }
+            let decision = boundedTiny
+                ? WhisperShortInputPolicy.evaluate(hasText: !transcript.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, chunks: chunks)
+                : .accepted
+            // Each closure captures only owned scalars, never a transcript or PCM.
+            for (index, chunk) in chunks.enumerated() {
+                DebugLogger.shared.logLazy(source: "WhisperProvider") {
+                    "whisper_quality chunk=\(index) bounded_tiny=\(boundedTiny) decision=\(decision.rawValue) " +
+                        "temperature=\(String(format: "%.6f", chunk.temperature)) avg_logprob=\(String(format: "%.6f", chunk.avgLogprob)) " +
+                        "compression_ratio=\(String(format: "%.6f", chunk.compressionRatio)) " +
+                        "no_speech_probability=\(String(format: "%.6f", chunk.noSpeechProbability)) " +
+                        "fallbacks=\(chunk.fallbacks) no_speech_triggered=\(chunk.noSpeechTriggered)"
+                }
+            }
+            if chunks.isEmpty {
+                DebugLogger.shared.logLazy(source: "WhisperProvider") {
+                    "whisper_quality chunks=0 bounded_tiny=\(boundedTiny) decision=\(decision.rawValue)"
+                }
+            }
+            let wallMilliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+            let probabilities = WhisperProbabilityDiagnostics.measure(transcript.tokens.lazy.map(\.p))
+            let language = WhisperProbabilityDiagnostics.languageField(transcript.language, supportedCodes: supportedCodes, absent: "unavailable")
+            let returnedTimestamps = Self.timestampLabel(transcript.timestampKind)
+            let segmentCount = transcript.segments.count
+            let wordCount = transcript.words.count
+            let tokenCount = transcript.tokens.count
+            let timings = transcript.timings
+            // Capture only aggregates, so the asynchronous logger never retains the
+            // transcript, its tokens/text, or the input sample array.
+            DebugLogger.shared.logLazy(source: "WhisperProvider") {
+                "whisper_output wall_ms=\(String(format: "%.3f", wallMilliseconds)) language=\(language) " +
+                    "timestamps=\(returnedTimestamps) segments=\(segmentCount) words=\(wordCount) tokens=\(tokenCount) " +
+                    "token_p_valid=\(probabilities.validCount) token_p_invalid=\(probabilities.invalidCount) " +
+                    "token_p_mean=\(probabilities.mean.map { String(format: "%.6f", $0) } ?? "unavailable") " +
+                    "mel_ms=\(WhisperProbabilityDiagnostics.timingField(timings.melMs)) " +
+                    "encode_ms=\(WhisperProbabilityDiagnostics.timingField(timings.encodeMs)) " +
+                    "decode_ms=\(WhisperProbabilityDiagnostics.timingField(timings.decodeMs))"
+            }
+            return decision == .accepted ? transcript : nil
+        } catch {
+            let wallMilliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+            let cancelled = Task.isCancelled
+            DebugLogger.shared.logLazy(level: .warning, source: "WhisperProvider") {
+                "whisper_failure wall_ms=\(String(format: "%.3f", wallMilliseconds)) cancelled=\(cancelled)"
+            }
+            throw error
+        }
     }
 
     func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
         guard self.supportsWordTimings else { return try (await self.transcribe(samples), []) }
-        let transcript = try await self.run(samples, languageCode: nil, timestamps: .word)
+        guard let transcript = try await self.run(samples, languageCode: nil, timestamps: .word) else {
+            return (ASRTranscriptionResult(text: "", confidence: 0), [])
+        }
         let duration = Double(samples.count) / 16_000
         let words = transcript.words.compactMap { word -> ASRWordTiming? in
             let text = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -416,8 +630,21 @@ final class WhisperProvider: TranscriptionProvider {
                 words.count == transcript.words.count ? words : [])
     }
 
-    static func runOptions(languageCode: String?, timestamps: TimestampKind = .segment) -> RunOptions {
-        RunOptions(timestamps: timestamps, language: languageCode == "auto" ? nil : languageCode)
+    static func runOptions(languageCode: String?, timestamps: TimestampKind = .segment,
+                           loadedModelName: String? = nil, sampleCount: Int? = nil) -> RunOptions {
+        let boundedTiny = sampleCount.map { WhisperShortInputPolicy.applies(modelFile: loadedModelName, sampleCount: $0) } ?? false
+        return RunOptions(timestamps: timestamps, language: languageCode == "auto" ? nil : languageCode,
+                          family: boundedTiny ? .whisper(.init(temperature: 0, temperatureInc: 0, seed: 1)) : nil)
+    }
+
+    private static func timestampLabel(_ kind: TimestampKind) -> String {
+        switch kind {
+        case .none: "none"
+        case .auto: "auto"
+        case .segment: "segment"
+        case .word: "word"
+        case .token: "token"
+        }
     }
 
     func resolvedLanguageCode(explicit: String? = nil) -> String? {
