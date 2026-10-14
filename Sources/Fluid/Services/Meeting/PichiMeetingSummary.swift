@@ -581,8 +581,12 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                         guard attempt == 0, let instruction = self.ledgerRepairInstruction(error) else { throw error }
                         try Task.checkCancellation()
                         // Same immutable input/schema/configuration; no rejected prefix enters repair.
-                        config.messages[0]["content"] = prompt + "\nThe previous ledger response was rejected. " + instruction
-                        raw = try await self.completion(config, remainingRequests: &remainingRequests)
+                        var repairedConfig = try self.config(
+                            prompt: prompt + "\nThe previous ledger response was rejected. " + instruction,
+                            input: batch.input, configuration: configuration
+                        )
+                        repairedConfig.extraParameters = config.extraParameters
+                        raw = try await self.completion(repairedConfig, remainingRequests: &remainingRequests)
                     }
                 }
             }
