@@ -5,6 +5,9 @@ No CI registration, installation, preference access or command execution. Requir
 an explicit model, artifact digest and loopback /v1 URL. Eight fixed cases maximum;
 60 seconds/request, 240 seconds/run, 2 MiB/response, 4096 frames, 128 KiB/frame.
 Raw requests, responses, failures and source/model provenance go into ignored .build.
+Every response frame must name the explicit requested model; artifact digests are
+checked before and after inference. Offline unit checks need no installed model:
+  python3 -S Tests/test_command_profile_quality_probe.py
 
 Offline examples (no HTTP, including metadata):
   python3 -S Tests/probe_command_profile_quality.py --model MODEL --model-digest SHA256 \
@@ -179,10 +182,13 @@ def loopback_url(value):
     return parsed
 
 
-def evaluate(raw, expected):
+def evaluate(raw, expected, expected_model):
     lines = raw.splitlines()
     require(0 < len(lines) <= 4096 and all(len(line) <= 131_072 for line in lines), 'Invalid frame bounds')
     frames = [json.loads(line) for line in lines]
+    require(isinstance(expected_model, str) and bool(expected_model)
+            and all(isinstance(frame, dict) and frame.get('model') == expected_model for frame in frames),
+            'Missing or mismatched model in native stream')
     require(all(isinstance(frame, dict) and not frame.get('error') for frame in frames)
             and frames[-1].get('done') is True and frames[-1].get('done_reason') == 'stop' and not any(frame.get('done') for frame in frames[:-1]), 'Incomplete/error native stream')
     content = ''.join(frame.get('message', {}).get('content', '') for frame in frames)
@@ -289,7 +295,7 @@ def main():
                 started = time.monotonic()
                 raw = http('/api/chat', payload, output / f'{index:02}-{name}-raw.ndjson')
                 result = dict(case=name, request_sha256=digest(payload), latency_seconds=time.monotonic() - started,
-                              **evaluate(raw, expected))
+                              **evaluate(raw, expected, args.model))
                 report['results'].append(result)
                 report.pop('active_case', None)
                 save(output / f'{index:02}-{name}-receipt.json', result)
