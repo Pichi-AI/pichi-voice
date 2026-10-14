@@ -53,6 +53,10 @@ struct AdaptiveAppTheme<Content: View>: View {
             .tint(activeAccent)
             .preferredColorScheme(preferredScheme)
             #if os(macOS)
+            // Native toolbar ink follows its color scheme only while the bar
+            // background is visible. Paint the same branded surface it pairs with.
+            .toolbarBackground(theme.palette.toolbarBackground, for: .windowToolbar)
+            .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
             .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .windowToolbar)
             #else
             .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .navigationBar)
