@@ -325,7 +325,7 @@ nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
 /// still resemble speech, so the UI must describe audio capture, never recognized words.
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
-    static let minimumActivityRMS: Float = 0.006
+    static let minimumActivityRMS: Float = 0.0042
     static let quietExpirySeconds: TimeInterval = 5
     private static let cadenceResetSeconds: TimeInterval = 0.24
     private struct Track {
@@ -365,11 +365,11 @@ nonisolated struct MeetingPendingSpeechProjection {
         let mean = track.energies.reduce(Float(0), +) / Float(track.energies.count)
         let variance = track.energies.reduce(Float(0)) { $0 + ($1 - mean) * ($1 - mean) } / Float(track.energies.count)
         let modulation = mean > 0 ? sqrt(variance) / mean : 0
-        // 120ms onset rejects isolated taps; modulation rejects a constant fan/tone; high ZCR
+        // 40ms onset keeps ordinary quiet syllables; modulation rejects a constant fan/tone; high ZCR
         // rejects broadband hiss. These thresholds classify an animation candidate only.
         let candidate = rms >= Self.minimumActivityRMS && modulation >= 0.12 && zeroCrossingRate < 0.34 && peak <= max(0.02, rms * 9)
-        track.consecutiveActivity = candidate ? min(6, track.consecutiveActivity + 1) : 0
-        if track.consecutiveActivity >= 6 {
+        track.consecutiveActivity = candidate ? min(2, track.consecutiveActivity + 1) : 0
+        if track.consecutiveActivity >= 2 {
             track.lastActivityEnd = end
             track.pendingDuration += end - start
             // Baseline presentation cadence: 150 words/minute, not a claim about actual words.

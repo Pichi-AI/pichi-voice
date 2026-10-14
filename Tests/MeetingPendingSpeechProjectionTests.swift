@@ -61,6 +61,17 @@ struct MeetingPendingSpeechProjectionTests {
         })
         try require(bumps.snapshot.tokens.isEmpty, "Separated short bumps must not accumulate cadence debt")
         print("PASS raised quiet threshold and separated bump rejection")
+        var quietSpeech = MeetingPendingSpeechProjection()
+        feed(&quietSpeech, duration: 8, rms: { Self.speech($0) * 0.25 })
+        try require(quietSpeech.snapshot.tokens.count >= 3, "Speech attenuated four times must still show pending capture")
+        var consonants = MeetingPendingSpeechProjection()
+        for frame in 0..<400 {
+            let time = Double(frame) * 0.02, level = Self.speech(time)
+            consonants.observe(source: .you, start: time, end: time + 0.02, rms: level,
+                peak: level * 3, zeroCrossingRate: frame % 8 < 2 ? 0.5 : 0.12)
+        }
+        try require(consonants.snapshot.tokens.count >= 3, "Short consonants cannot reset every voiced syllable")
+        print("PASS attenuated speech and short consonants")
         let original = speech.snapshot.tokens
         feed(&speech, start: 8, duration: 2, rms: { _ in 0 })
         try require(speech.snapshot.tokens == original, "A pause neither adds nor erases waiting audio")
