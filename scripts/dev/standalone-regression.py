@@ -119,31 +119,63 @@ def suite_signal_handlers():
             deliver(signal.SIGTERM if signal.SIGTERM in queued else signal.SIGINT)
 
 
-def live_process_group(group):
+def process_group_exists(group):
     if type(group) is not int or group <= 1:
         raise ValueError("Invalid owned process group")
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def live_process_group(group):
+    if not process_group_exists(group):
+        return False
     # Zombies cannot keep writing and may wait for an external init to reap them.
-    # Read only group/state fields, omitting command lines.
-    rows = subprocess.check_output(["ps", "-A", "-o", "pgid=", "-o", "stat="], text=True, timeout=2)
-    return any(len(fields) == 2 and fields[0] == str(group) and not fields[1].startswith("Z")
-               for fields in (line.split() for line in rows.splitlines()))
+    # Darwin can select the owned group in the kernel rather than scanning every
+    # process (including slow, unrelated process metadata).
+    if sys.platform == "darwin":
+        selection = ["-g", str(group)]
+    else:
+        selection = ["-A"]
+    completed = subprocess.run(["ps", *selection, "-o", "pgid=", "-o", "stat="],
+                               capture_output=True, text=True, timeout=2)
+    if completed.returncode not in (0, 1) or completed.stderr.strip() or (completed.returncode == 1 and completed.stdout.strip()):
+        raise OSError(f"Cannot inspect owned process group: ps exit {completed.returncode}")
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2 or not fields[0].isdigit():
+            raise OSError("Cannot inspect owned process group: malformed ps output")
+        if fields[0] == str(group) and not fields[1].startswith("Z"):
+            return True
+    return False
 
 
 def stop_process_group(process):
     with defer_interrupts():
-        for termination_signal, budget in ((signal.SIGTERM, CANCEL_GRACE_SECONDS), (signal.SIGKILL, KILL_WAIT_SECONDS)):
-            try:
-                os.killpg(process.pid, termination_signal)
-            except ProcessLookupError:
-                pass
-            deadline = time.monotonic() + budget
-            while live_process_group(process.pid) and time.monotonic() < deadline:
-                time.sleep(0.02)
-            if not live_process_group(process.pid):
-                break
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + CANCEL_GRACE_SECONDS
+        # No external inspection can delay escalation. In particular, a stalled
+        # ps must never leave a TERM-ignoring descendant runnable during cleanup.
+        while process_group_exists(process.pid) and time.monotonic() < deadline:
+            process.poll()
+            time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        # Reap the direct child even if the subsequent descendant inspection
+        # fails. An unobservable group keeps its ownership marker and fails.
         process.wait(timeout=KILL_WAIT_SECONDS)
-        if live_process_group(process.pid):
-            raise OSError("Owned descendants did not stop; this worktree remains reserved")
+        deadline = time.monotonic() + KILL_WAIT_SECONDS
+        while live_process_group(process.pid):
+            if time.monotonic() >= deadline:
+                raise OSError("Owned descendants did not stop; this worktree remains reserved")
+            time.sleep(0.02)
 
 
 def run_owned_process(command, root, stream, protect_creation):
