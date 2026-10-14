@@ -161,7 +161,7 @@ extension MeetingProcessingPipeline {
             DebugLogger.shared.info("strict_capture session=\(sessionID) track=\(trackID) backend=\(attempt.descriptor.id.rawValue) model=\(configuration.asrModel) speakers=\(configuration.speakerLabelsEnabled) privacy=\(privacyContext != nil)", source: "MeetingMemoryAudio")
         }
         let consumer = try Self.makeMemoryAudioConsumer(
-            initialChunkSeconds: 6,
+            initialChunkSeconds: 3,
             recognize: { samples, offset in
                 try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
                     let started = ProcessInfo.processInfo.systemUptime
