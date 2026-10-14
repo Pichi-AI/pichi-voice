@@ -68,6 +68,11 @@ struct MeetingPendingSpeechProjectionTests {
         try require(speech.snapshot.tokens.starts(with: original), "Resuming preserves prior stable identities")
         print("PASS pause and resume")
         let beforeQuiet = speech.snapshot.tokens
+        var bumpsAfterSpeech = speech
+        feed(&bumpsAfterSpeech, start: 12, duration: 20, rms: { time in
+            (time - 12).truncatingRemainder(dividingBy: 1) < 0.24 ? Self.speech(time) : 0.001
+        })
+        try require(bumpsAfterSpeech.snapshot.tokens.isEmpty, "Short bumps must not keep previously captured waves alive indefinitely")
         var isolatedDuringQuiet = speech
         feed(&isolatedDuringQuiet, start: 12, duration: 6, rms: { time in
             Int(((time - 12) / 0.02).rounded()) % 50 == 0 ? 0.02 : 0.001

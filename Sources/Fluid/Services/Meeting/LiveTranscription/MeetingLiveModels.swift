@@ -334,6 +334,7 @@ nonisolated struct MeetingPendingSpeechProjection {
         var pendingDuration: Double = 0
         var lastEnd: Double?
         var lastActivityEnd: Double?
+        var lastProgressEnd: Double?
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
     private var nextID: UInt64 = 0
@@ -374,6 +375,9 @@ nonisolated struct MeetingPendingSpeechProjection {
             // Baseline presentation cadence: 150 words/minute, not a claim about actual words.
             if track.pendingDuration >= 0.4 - 0.000_001 {
                 track.pendingDuration -= 0.4
+                // A short accepted bump must not keep old waves alive forever.
+                // Only sustained activity that earns a visual fragment extends its lifetime.
+                track.lastProgressEnd = end
                 if self.snapshot.tokens.count < Self.maximumTokens {
                     let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
                     self.nextID &+= 1
@@ -388,11 +392,11 @@ nonisolated struct MeetingPendingSpeechProjection {
         if let lastActivityEnd = track.lastActivityEnd {
             // Unminted cadence must not accumulate across separate background bumps.
             if end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
-            if end - lastActivityEnd >= Self.quietExpirySeconds {
-                let before = self.snapshot.tokens.count
-                self.snapshot.tokens.removeAll { $0.source == source && $0.end <= lastActivityEnd }
-                if self.snapshot.tokens.count != before { self.snapshot.revision &+= 1 }
-            }
+        }
+        if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietExpirySeconds {
+            let before = self.snapshot.tokens.count
+            self.snapshot.tokens.removeAll { $0.source == source && $0.end <= lastProgressEnd }
+            if self.snapshot.tokens.count != before { self.snapshot.revision &+= 1 }
         }
         self.tracks[source] = track
     }
