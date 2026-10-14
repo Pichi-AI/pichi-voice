@@ -9,17 +9,26 @@ final class FillerWordDefaultsTests: XCTestCase {
         "hmm", "hm", "mm", "mmm", "erm", "urm", "ugh",
     ]
 
+    private var previousMultilingualDefaults: [String] {
+        self.legacyDefaults + [
+            "э", "ээ", "эээ", "э-э", "э-э-э", "эм", "эмм", "эммм",
+            "ммм", "м-м", "м-м-м", "хм", "хмм",
+        ]
+    }
+
     func testFreshInstallUsesMultilingualDefaultsWithoutPersistingAList() throws {
         try self.withIsolatedDefaults { defaults in
             SettingsStore.migrateFillerWordDefaultsIfNeeded(defaults: defaults)
             XCTAssertNil(defaults.object(forKey: "FillerWords"))
             XCTAssertTrue(defaults.bool(forKey: "FillerWordDefaultsMigrationV1"))
+            XCTAssertTrue(defaults.bool(forKey: "FillerWordDefaultsMigrationV2"))
         }
         self.withRestoredFillerSettings {
             UserDefaults.standard.removeObject(forKey: "FillerWords")
             XCTAssertEqual(SettingsStore.shared.fillerWords, SettingsStore.defaultFillerWords)
             XCTAssertTrue(Set(self.legacyDefaults).isSubset(of: Set(SettingsStore.shared.fillerWords)))
             XCTAssertTrue(SettingsStore.shared.fillerWords.contains("эм"))
+            XCTAssertTrue(SettingsStore.shared.fillerWords.contains("э-мм"))
         }
     }
 
@@ -59,13 +68,58 @@ final class FillerWordDefaultsTests: XCTestCase {
         }
     }
 
+    func testMigrationUpgradesPreviousMultilingualDefaultsEvenAfterV1() throws {
+        for firstMigrationCompleted in [false, true] {
+            try self.withIsolatedDefaults { defaults in
+                defaults.set(self.previousMultilingualDefaults, forKey: "FillerWords")
+                defaults.set(firstMigrationCompleted, forKey: "FillerWordDefaultsMigrationV1")
+                defaults.set(false, forKey: "RemoveFillerWordsEnabled")
+                SettingsStore.migrateFillerWordDefaultsIfNeeded(defaults: defaults)
+                XCTAssertEqual(defaults.stringArray(forKey: "FillerWords"), SettingsStore.defaultFillerWords)
+                XCTAssertTrue(defaults.bool(forKey: "FillerWordDefaultsMigrationV1"))
+                XCTAssertTrue(defaults.bool(forKey: "FillerWordDefaultsMigrationV2"))
+                XCTAssertFalse(defaults.bool(forKey: "RemoveFillerWordsEnabled"))
+            }
+        }
+    }
+
+    func testSecondMigrationPreservesPreviouslyCustomizedLists() throws {
+        let customizedLists = [
+            [], self.legacyDefaults, Array(self.previousMultilingualDefaults.dropFirst()),
+            self.previousMultilingualDefaults + ["синтетический"],
+            self.previousMultilingualDefaults + ["эм"],
+            Array(self.previousMultilingualDefaults.reversed()), SettingsStore.defaultFillerWords,
+        ]
+        for list in customizedLists {
+            try self.withIsolatedDefaults { defaults in
+                defaults.set(list, forKey: "FillerWords")
+                defaults.set(true, forKey: "FillerWordDefaultsMigrationV1")
+                SettingsStore.migrateFillerWordDefaultsIfNeeded(defaults: defaults)
+                XCTAssertEqual(defaults.stringArray(forKey: "FillerWords"), list)
+                XCTAssertTrue(defaults.bool(forKey: "FillerWordDefaultsMigrationV2"))
+            }
+        }
+    }
+
+    func testSecondMigrationDoesNotReinsertRemovedHyphenatedHesitation() throws {
+        try self.withIsolatedDefaults { defaults in
+            defaults.set(self.previousMultilingualDefaults, forKey: "FillerWords")
+            defaults.set(true, forKey: "FillerWordDefaultsMigrationV1")
+            SettingsStore.migrateFillerWordDefaultsIfNeeded(defaults: defaults)
+            XCTAssertEqual(defaults.stringArray(forKey: "FillerWords"), SettingsStore.defaultFillerWords)
+            defaults.set(self.previousMultilingualDefaults, forKey: "FillerWords")
+            SettingsStore.migrateFillerWordDefaultsIfNeeded(defaults: defaults)
+            XCTAssertEqual(defaults.stringArray(forKey: "FillerWords"), self.previousMultilingualDefaults)
+        }
+    }
+
     func testDefaultFilterRemovesRussianHesitationsWithCaseAndPunctuation() {
         self.withRestoredFillerSettings {
             let settings = SettingsStore.shared
             settings.fillerWords = SettingsStore.defaultFillerWords
             settings.removeFillerWordsEnabled = true
             XCTAssertEqual(
-                ASRService.removeFillerWords("Э, ээ эээ э-э э-э-э Эм, эмм эммм ммм м-м м-м-м Хм... хмм готово."),
+                ASRService.removeFillerWords("Э, ээ эээ э-э э-э-э Эм, эмм эммм ммм м-м м-м-м Хм... хмм Э-ММ, готово."),
                 "готово."
             )
             XCTAssertEqual(ASRService.removeFillerWords("Um, эм сегодня uh обсудим хм план."), "сегодня обсудим план.")
@@ -80,6 +134,7 @@ final class FillerWordDefaultsTests: XCTestCase {
             let text = "Ну это типа значит короче как бы угу ага да а м. Ёжик ёлка эмаль экран гамма хмель."
             XCTAssertEqual(ASRService.removeFillerWords(text), text)
             XCTAssertEqual(ASRService.removeFillerWords("Эм, толщина 2 мм. и длина 10 мм"), "толщина 2 мм. и длина 10 мм")
+            XCTAssertEqual(ASRService.removeFillerWords("Э-мм, толщина 2 мм."), "толщина 2 мм.")
         }
     }
 
@@ -87,7 +142,7 @@ final class FillerWordDefaultsTests: XCTestCase {
         self.withRestoredFillerSettings {
             SettingsStore.shared.fillerWords = SettingsStore.defaultFillerWords
             SettingsStore.shared.removeFillerWordsEnabled = false
-            let text = "Эм,  um\nммм готово."
+            let text = "Эм,  um\nммм э-мм готово."
             XCTAssertEqual(ASRService.removeFillerWords(text), text)
         }
     }

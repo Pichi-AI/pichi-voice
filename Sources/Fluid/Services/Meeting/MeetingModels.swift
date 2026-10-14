@@ -11,6 +11,17 @@ nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case inRoom
 }
 
+/// Capture intent is independent of the process that triggered meeting detection.
+nonisolated enum MeetingApplicationAudioScope: String, Codable, Sendable {
+    case selectedApplication
+    case systemAudio
+}
+
+nonisolated enum MeetingApplicationAudioSource: Sendable {
+    case application(MeetingApplicationIdentity)
+    case systemAudio
+}
+
 nonisolated enum MeetingSessionState: String, Codable, Sendable {
     case preparing
     case recording
@@ -137,6 +148,7 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
     var mode: MeetingCaptureMode
     var applicationBundleIdentifier: String?
     var applicationDisplayName: String? = nil
+    var applicationAudioScope: MeetingApplicationAudioScope? = nil
     var microphoneCaptureDeviceID: String?
     var microphoneCoreAudioUID: String?
     var microphoneRole: MeetingMicrophoneRole
@@ -150,6 +162,17 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
         microphoneCoreAudioUID: nil,
         microphoneRole: .unknown
     )
+
+    /// Preferences without a scope adopt system audio. Historical session/configuration
+    /// manifests have a separate legacy interpretation and retain their narrow source.
+    var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
+        self.applicationAudioScope ?? .systemAudio
+    }
+
+    /// A saved bundle is an explicit source; nil means follow the detected call.
+    var usesAutomaticApplication: Bool {
+        !self.isConfigured || self.applicationBundleIdentifier == nil
+    }
 
     func savedApplication(in identities: [MeetingApplicationIdentity]) -> MeetingApplicationIdentity? {
         guard self.isConfigured, let applicationBundleIdentifier else { return nil }
@@ -269,6 +292,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var languageCode: String
     var platform: MeetingPlatformProfile?
     var application: MeetingApplicationIdentity?
+    var applicationAudioScope: MeetingApplicationAudioScope? = nil
     var microphone: MeetingMicrophoneIdentity
     var chunkDuration: TimeInterval
     var timestampDefaultTitle: Bool? = nil
@@ -279,6 +303,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         languageCode: String = "en",
         platform: MeetingPlatformProfile? = nil,
         application: MeetingApplicationIdentity? = nil,
+        applicationAudioScope: MeetingApplicationAudioScope? = nil,
         microphone: MeetingMicrophoneIdentity,
         chunkDuration: TimeInterval = Self.defaultChunkDuration,
         timestampDefaultTitle: Bool = false
@@ -288,12 +313,21 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.languageCode = languageCode
         self.platform = platform
         self.application = application
+        self.applicationAudioScope = applicationAudioScope
         self.microphone = microphone
         self.chunkDuration = max(60, chunkDuration)
         self.timestampDefaultTitle = timestampDefaultTitle
     }
 
+    var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
+        self.applicationAudioScope ?? .selectedApplication
+    }
 
+    var applicationAudioSource: MeetingApplicationAudioSource? {
+        guard self.mode == .onlineCall else { return nil }
+        if self.effectiveApplicationAudioScope == .systemAudio { return .systemAudio }
+        return self.application.map(MeetingApplicationAudioSource.application)
+    }
 }
 
 nonisolated struct MeetingMediaTime: Codable, Equatable, Comparable, Sendable {
@@ -861,6 +895,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var mode: MeetingCaptureMode
     var platform: MeetingPlatformProfile?
     var capturedApplication: MeetingApplicationIdentity?
+    var applicationAudioScope: MeetingApplicationAudioScope? = nil
     var selectedMicrophone: MeetingMicrophoneIdentity
     var startedAt: Date
     var endedAt: Date?
@@ -911,7 +946,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.languageCode = configuration.languageCode
         self.mode = configuration.mode
         self.platform = configuration.platform
-        self.capturedApplication = configuration.application
+        self.capturedApplication = configuration.effectiveApplicationAudioScope == .systemAudio ? nil : configuration.application
+        self.applicationAudioScope = configuration.applicationAudioScope
         self.selectedMicrophone = configuration.microphone
         self.startedAt = startedAt
         self.timebase = timebase
@@ -930,6 +966,17 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         )
         self.processingAttempts = []
         self.updatedAt = startedAt
+    }
+
+    var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
+        self.applicationAudioScope ?? .selectedApplication
+    }
+
+    /// Unlocalized resource key, or the imported app name for narrow legacy sessions.
+    var audioSourceDisplayName: String {
+        if self.mode == .inRoom { return "In-room meeting" }
+        if self.effectiveApplicationAudioScope == .systemAudio { return "System audio" }
+        return self.capturedApplication?.displayName ?? "Meeting audio"
     }
 
     var duration: TimeInterval {
@@ -1091,6 +1138,7 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
     case missingMicrophone
     case missingOnlineApplication
     case unexpectedInRoomApplication
+    case unexpectedSystemAudioApplication
     case duplicateTrackID
     case duplicateTrackKind
     case invalidTrackSet
@@ -1117,6 +1165,8 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
             return "A microphone must be selected."
         case .missingOnlineApplication:
             return "An online meeting application must be selected."
+        case .unexpectedSystemAudioApplication:
+            return PichiLocalization.text("System audio cannot be restricted to an application.")
         case .unexpectedInRoomApplication:
             return "In-room meetings cannot include an application-audio source."
         case .duplicateTrackID, .duplicateTrackKind, .invalidTrackSet:
@@ -1175,6 +1225,7 @@ nonisolated enum MeetingCaptureEvent: Sendable {
 /// The scope ScreenCaptureKit was filtering to for this capture. `nil` when the runtime has no
 /// ScreenCaptureKit stream at all (in-room microphone-only capture).
 nonisolated enum MeetingCaptureScope: Sendable {
+    case systemAudio
     case display
     case window
 }

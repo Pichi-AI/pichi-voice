@@ -58,11 +58,12 @@ struct DictationStopSnapshot {
         let promptAppID = Self.promptResolutionAppID(slot: slot, targetBundleID: appInfo.bundleId)
         let customPrompt = settings.resolvedDictationPromptProfile(for: slot, appBundleID: promptAppID)
             .flatMap { settings.shortcutOverrideSystemPrompt(for: $0) }
+        let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: slot, appBundleID: promptAppID)
         return Self(
             target: target,
             appInfo: appInfo,
-            route: DictationProviderRoute.resolve(settings: settings, dictationSlot: slot, appBundleID: promptAppID),
-            usesAI: target != nil && DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: promptAppID),
+            route: route,
+            usesAI: target != nil && DictationAIPostProcessingGate.isProviderConfigured(route: route, settings: settings),
             systemPrompt: customPrompt ?? settings.effectiveDictationSystemPrompt(for: slot, appBundleID: promptAppID),
             hasCustomPrompt: customPrompt != nil,
             precedingText: precedingText,

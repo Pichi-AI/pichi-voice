@@ -58,8 +58,9 @@ final class AppServices: ObservableObject {
     private func prewarmLocalPrivateAIForStartup() {
         guard self.isUIReady, !self.isTerminating, self.privateAIStartupWarmup == nil else { return }
         let appID = DictationAppSession.shared.appID
-        guard DictationAIPostProcessingGate.isConfigured(for: .primary, appBundleID: appID) else { return }
-        let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: .primary, appBundleID: appID)
+        let settings = SettingsStore.shared
+        let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: .primary, appBundleID: appID)
+        guard DictationAIPostProcessingGate.isProviderConfigured(route: route, settings: settings) else { return }
         guard route.usesPrivateAI, PrivateAIIntegrationService.isLocalRuntimeConfigured else { return }
         self.privateAIStartupWarmup = Task {
             await PrivateAIIntegrationService.shared.prewarmDictation(localOnly: true)
@@ -78,8 +79,9 @@ final class AppServices: ObservableObject {
                     guard let self else { return nil }
                     let appID = DictationAppSession.shared.appID
                     let slot = self.localAIResidencySlot
-                    guard DictationAIPostProcessingGate.isConfigured(for: slot, appBundleID: appID) else { return nil }
-                    let route = DictationProviderRoute.resolve(settings: SettingsStore.shared, dictationSlot: slot, appBundleID: appID)
+                    let settings = SettingsStore.shared
+                    let route = DictationProviderRoute.resolve(settings: settings, dictationSlot: slot, appBundleID: appID)
+                    guard DictationAIPostProcessingGate.isProviderConfigured(route: route, settings: settings) else { return nil }
                     return OllamaChatAdapter.supports(route.baseURL) ? route : nil
                 },
                 canWarm: { [weak self] in

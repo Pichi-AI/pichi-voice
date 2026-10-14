@@ -669,8 +669,18 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
 
     func testSavedLegacyBackendUsesProductionForFrenchWithoutChangingPreference() async {
         let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let speechModelKey = "SelectedSpeechModel"
+        let previousSpeechModel = defaults.object(forKey: speechModelKey)
         let previous = settings.meetingTranscriptionBackendID
-        defer { settings.meetingTranscriptionBackendID = previous }
+        defer {
+            settings.meetingTranscriptionBackendID = previous
+            if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
+            else { defaults.removeObject(forKey: speechModelKey) }
+        }
+        // A registered speech model takes precedence over the saved meeting backend.
+        // Select an unregistered model so this fixture exercises the legacy fallback.
+        settings.selectedSpeechModel = .whisperTiny
         settings.meetingTranscriptionBackendID = .legacyCompatibility
         let marker = CocoaError(.userCancelled)
         var productionPreparations = 0
@@ -695,8 +705,16 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
 
     func testExplicitLegacyAndUnknownSavedBackendsDoNotSilentlyFallBack() async {
         let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let speechModelKey = "SelectedSpeechModel"
+        let previousSpeechModel = defaults.object(forKey: speechModelKey)
         let previous = settings.meetingTranscriptionBackendID
-        defer { settings.meetingTranscriptionBackendID = previous }
+        defer {
+            settings.meetingTranscriptionBackendID = previous
+            if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
+            else { defaults.removeObject(forKey: speechModelKey) }
+        }
+        settings.selectedSpeechModel = .whisperTiny
         let unknown = MeetingBackendID(rawValue: "unknown-saved-backend")
         for pinned in [true, false] {
             settings.meetingTranscriptionBackendID = pinned ? .legacyCompatibility : unknown
@@ -721,6 +739,49 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
                         : .unknownBackend(unknown)
                 )
             }
+        }
+    }
+
+    func testRegisteredSpeechModelWinsOverSavedBackendWithoutChangingPreferences() {
+        let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let speechModelKey = "SelectedSpeechModel"
+        let previousSpeechModel = defaults.object(forKey: speechModelKey)
+        let backendKey = "MeetingTranscriptionBackendID"
+        let previousBackend = defaults.object(forKey: backendKey)
+        defer {
+            if let previousBackend { defaults.set(previousBackend, forKey: backendKey) }
+            else { defaults.removeObject(forKey: backendKey) }
+            if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
+            else { defaults.removeObject(forKey: speechModelKey) }
+        }
+        settings.selectedSpeechModel = .gigaam
+        let unknown = MeetingBackendID(rawValue: "unknown-saved-backend")
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperTiny.rawValue))
+        let selections: [(saved: MeetingBackendID, english: MeetingBackendID, nonEnglish: MeetingBackendID)] = [
+            (.legacyCompatibility, .legacyCompatibility, .productionDefault),
+            (.productionDefault, .productionDefault, .productionDefault),
+            (unknown, unknown, unknown),
+        ]
+        for (saved, english, nonEnglish) in selections {
+            settings.meetingTranscriptionBackendID = saved
+            for (languageCode, fallback) in [("en", english), ("fr", nonEnglish), ("ru", nonEnglish)] {
+                XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode), .gigaam)
+                XCTAssertEqual(
+                    PichiMeetingProviderFactory.selectedBackendID(
+                        languageCode: languageCode, selectedModelID: SettingsStore.SpeechModel.gigaam.rawValue
+                    ),
+                    .gigaam
+                )
+                XCTAssertEqual(
+                    PichiMeetingProviderFactory.selectedBackendID(
+                        languageCode: languageCode, selectedModelID: SettingsStore.SpeechModel.whisperTiny.rawValue
+                    ),
+                    fallback
+                )
+            }
+            XCTAssertEqual(settings.meetingTranscriptionBackendID, saved)
+            XCTAssertEqual(settings.selectedSpeechModel, .gigaam)
         }
     }
 

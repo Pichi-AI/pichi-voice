@@ -51,10 +51,14 @@ def main():
     assert "self.controller.deleteModel(asr: self.asrService ?? AppServices.shared.asr)" in template
     assert "self.$preferences.thinksFirst" in declaration(template, "private var thinkingRow:")
     assert ".font(.system" not in source and ".font(.headline" not in source, "Summary UI must use shared typography"
+    grounded = (ROOT / "Sources/Fluid/UI/PichiMeetingSummaryView.swift").read_text()
+    for field, title in (("changes", "Corrections"), ("answers", "Answers")):
+        section = declaration(grounded, f"if let {field} = document.{field}, !{field}.isEmpty")
+        assert f'self.summarySection(PichiLocalization.text("{title}"), items: {field})' in section, "Retained grounded facts must reach the shared source-backed section"
     catalog = json.loads((ROOT / "Sources/Fluid/Localization/Localizable.xcstrings").read_text())["strings"]
     required_keys = ["Summary format", "Summary with sources", "Templates and custom prompt", "Executive summary",
                      "Detailed summary", "Action items", "Key decisions", "Participants", "Topics discussed", "Custom prompt",
-                     "Custom summary prompt", "Summary model", "Summary model actions", "Think before summarizing"]
+                     "Custom summary prompt", "Summary model", "Summary model actions", "Think before summarizing", "Corrections", "Answers"]
     for key in required_keys:
         for language in ("en", "ru"):
             assert catalog[key]["localizations"][language]["stringUnit"]["value"], (key, language)

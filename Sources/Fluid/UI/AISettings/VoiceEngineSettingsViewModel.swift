@@ -12,6 +12,9 @@ enum SpeechModelImportFolderPicker {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.message = PichiLocalization.format(model.importFolderPrompt, model.displayName)
+        if let instructions = model.importFolderInstructions {
+            panel.message += "\n\n" + PichiLocalization.text(instructions)
+        }
         panel.prompt = PichiLocalization.text("Import")
         return panel.runModal() == .OK ? panel.url : nil
     }
@@ -46,6 +49,7 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
     @Published var showSpeechFilters: Bool = false
     @Published private(set) var importingModel: SettingsStore.SpeechModel?
     @Published private(set) var isCancellingModelImport = false
+    @Published private(set) var isRestoringDefaultModelSource = false
     private var modelImportTask: Task<Void, Never>?
     var isImportingModel: Bool { self.importingModel != nil }
 
@@ -197,24 +201,43 @@ final class VoiceEngineSettingsViewModel: ObservableObject {
         guard !self.areSpeechModelActionsBlocked, model.supportsFolderImport,
               let directory = SpeechModelImportFolderPicker.chooseFolder(for: model),
               !self.areSpeechModelActionsBlocked else { return }
+        self.performModelSourceOperation(model, restoringDefault: false) { [asr] in
+            try await asr.importModel(model, from: directory)
+        }
+    }
+
+    func useDefaultSpeechModelSource(_ model: SettingsStore.SpeechModel) {
+        guard !self.areSpeechModelActionsBlocked, model.supportsFolderImport,
+              model.supportsAutomaticDownload else { return }
+        self.performModelSourceOperation(model, restoringDefault: true) { [asr] in
+            try await asr.useDefaultModelSource(model)
+        }
+    }
+
+    private func performModelSourceOperation(
+        _ model: SettingsStore.SpeechModel, restoringDefault: Bool,
+        operation: @escaping @MainActor () async throws -> Void
+    ) {
         self.importingModel = model
+        self.isRestoringDefaultModelSource = restoringDefault
         self.isCancellingModelImport = false
         self.modelImportTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 self.importingModel = nil
                 self.isCancellingModelImport = false
+                self.isRestoringDefaultModelSource = false
                 self.modelImportTask = nil
             }
             do {
                 try Task.checkCancellation()
-                try await self.asr.importModel(model, from: directory)
+                try await operation()
                 try Task.checkCancellation()
             } catch is CancellationError {
                 DebugLogger.shared.info("Model import cancelled: \(model.displayName)", source: "VoiceEngineVM")
             } catch {
                 guard !Task.isCancelled else { return }
-                self.asr.errorTitle = PichiLocalization.text("Model Import Failed")
+                self.asr.errorTitle = PichiLocalization.text(restoringDefault ? "Model Source Change Failed" : "Model Import Failed")
                 self.asr.errorMessage = error.localizedDescription
                 self.asr.showError = true
             }

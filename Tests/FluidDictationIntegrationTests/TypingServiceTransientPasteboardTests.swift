@@ -572,7 +572,19 @@ final class TypingServiceTransientPasteboardTests: XCTestCase {
             XCTAssertEqual(lines[index - 1], "guard isOutputValid() else { return false }")
         }
         XCTAssertTrue(writes.contains("if isOutputValid(), let axRange"))
-        XCTAssertTrue(source.contains("guard isOutputValid() else { return -1 }\n                post(keyDown)\n                post(keyUp)"))
+        XCTAssertEqual(pipeline.components(separatedBy: "if outcome != .notDispatched { return outcome }").count - 1, 2, "Partial preferred or focused PID delivery must stop further direct fallbacks")
+
+        let chunksStart = try XCTUnwrap(source.range(of: "private nonisolated func postUnicodeChunks("))
+        let chunksEnd = try XCTUnwrap(source.range(of: "private nonisolated static func unicodeChunkEnd", range: chunksStart.upperBound..<source.endIndex))
+        let chunks = source[chunksStart.lowerBound..<chunksEnd.lowerBound]
+        XCTAssertTrue(chunks.contains("guard isOutputValid() else { return chunkCount == 0 ? .notDispatched : .partiallyDispatched }\n                post(keyDown)\n                post(keyUp)\n\n                chunkStart = chunkEnd\n                chunkCount += 1"), "Invalid output must preserve emitted progress; a posted KeyDown always receives its paired KeyUp, even if cancellation occurs during the post")
+
+        let outcomeStart = try XCTUnwrap(source.range(of: "switch directOutcome {"))
+        let partialStart = try XCTUnwrap(source.range(of: "case .partiallyDispatched:", range: outcomeStart.upperBound..<source.endIndex))
+        let partialEnd = try XCTUnwrap(source.range(of: "case .notDispatched:", range: partialStart.upperBound..<source.endIndex))
+        let partial = source[partialStart.lowerBound..<partialEnd.lowerBound]
+        XCTAssertTrue(partial.contains("result = .recoverableFailure(.partialInsertion)"))
+        XCTAssertFalse(partial.contains("PasteDeliveryCoordinator.shared.deliver("), "A partial direct insertion must not paste the entire text again")
     }
 
     private func makePasteboard() -> NSPasteboard {

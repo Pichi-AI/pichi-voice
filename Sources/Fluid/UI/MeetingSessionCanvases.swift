@@ -101,7 +101,7 @@ struct MeetingRecordingCanvas: View {
     @ViewBuilder
     private var sourceHealth: some View {
         if self.session.mode == .onlineCall {
-            MeetingTrackHealthRow(title: PichiLocalization.text("Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
+            MeetingTrackHealthRow(title: PichiLocalization.text(self.session.effectiveApplicationAudioScope == .systemAudio ? "System audio" : "Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
         }
         MeetingTrackHealthRow(title: PichiLocalization.text("Microphone"), systemImage: "mic", health: self.trackHealth[.microphone] ?? .waiting)
     }
@@ -109,7 +109,7 @@ struct MeetingRecordingCanvas: View {
     private var sourceSummary: String {
         let microphoneName = self.session.selectedMicrophone.displayName
         guard self.session.mode == .onlineCall else { return microphoneName }
-        let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text("Meeting audio")
+        let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
         return "\(applicationName) · \(microphoneName)"
     }
 
@@ -818,7 +818,7 @@ struct MeetingResultCanvas: View {
     }
 
     private var sourceName: String {
-        self.session.capturedApplication?.displayName ?? PichiLocalization.text("In-room meeting")
+        self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
     }
 
     private var emptyTranscriptDescription: String {

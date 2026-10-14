@@ -4692,7 +4692,8 @@ final class SettingsStore: ObservableObject {
 
     // Include hesitation sounds in both languages regardless of the interface language.
     // Words such as "ну", "это" and "типа", and the unit "мм", must remain opt-in.
-    static let defaultFillerWords = SettingsStore.legacyDefaultFillerWords + [
+    // Keep the first multilingual preset unchanged as the second migration's snapshot.
+    private static let initialMultilingualDefaultFillerWords = SettingsStore.legacyDefaultFillerWords + [
         "э",
         "ээ",
         "эээ",
@@ -4708,13 +4709,23 @@ final class SettingsStore: ObservableObject {
         "хмм",
     ]
 
+    static let defaultFillerWords = SettingsStore.initialMultilingualDefaultFillerWords + ["э-мм"]
+
     static func migrateFillerWordDefaultsIfNeeded(defaults: UserDefaults) {
-        guard !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV1) else { return }
-        // Upgrade only the unchanged old defaults. An empty or customized list is intentional.
-        if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.legacyDefaultFillerWords {
+        if !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV1) {
+            // Upgrade only the unchanged old defaults. An empty or customized list is intentional.
+            if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.legacyDefaultFillerWords {
+                defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
+            }
+            defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV1)
+        }
+
+        guard !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV2) else { return }
+        // Existing installations may already have completed the first migration.
+        if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.initialMultilingualDefaultFillerWords {
             defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
         }
-        defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV1)
+        defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV2)
     }
 
     var fillerWords: [String] {
@@ -5284,6 +5295,18 @@ final class SettingsStore: ObservableObject {
 
         /// Trusted localization template. The picker inserts the model name exactly once.
         var importFolderPrompt: String { "Choose the folder containing the %@ model files." }
+
+        var defaultDownloadSourceName: String? { self == .gigaam ? "Hugging Face" : nil }
+
+        var modelFolderSourceLabel: String? {
+            guard self == .gigaam else { return nil }
+            return PichiGigaAMModelStore.shared.usesImportedModelSource ? "Imported model folder" : "Hugging Face (default)"
+        }
+
+        var importFolderInstructions: String? {
+            guard self == .gigaam else { return nil }
+            return "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported."
+        }
 
         // MARK: - Display Properties
 
@@ -6120,6 +6143,7 @@ private extension SettingsStore {
         // Filler Words
         static let fillerWords = "FillerWords"
         static let fillerWordDefaultsMigrationV1 = "FillerWordDefaultsMigrationV1"
+        static let fillerWordDefaultsMigrationV2 = "FillerWordDefaultsMigrationV2"
         static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
         static let autoConvertPunctuationEnabled = "AutoConvertPunctuationEnabled"
         static let literalDictationFormattingEnabled = "LiteralDictationFormattingEnabled"

@@ -1560,8 +1560,7 @@ final class ASRService: ObservableObject {
         }
     }
 
-    /// Installs folder-based engines through the existing model operation, activity and resource
-    /// mechanisms. The provider owns artifact validation; this service owns admission and teardown.
+    /// Installs a local folder through the same admitted operation as source restoration.
     func importModel(_ model: SettingsStore.SpeechModel, from directory: URL) async throws {
         try Task.checkCancellation()
         guard model.supportsFolderImport else {
@@ -1569,6 +1568,21 @@ final class ASRService: ObservableObject {
                 NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support importing a model folder."),
             ])
         }
+        try await self.changeModelSource(model) { provider in try await provider.importModel(from: directory) }
+    }
+
+    /// Optional provider source reset, sharing import's cancellation, residency and reset drain.
+    func useDefaultModelSource(_ model: SettingsStore.SpeechModel) async throws {
+        try await self.changeModelSource(model) { provider in try await provider.restoreDefaultModelSource() }
+    }
+
+    /// Both source-changing operations must invalidate a selected provider only after its
+    /// atomic artifact operation and native cleanup have joined. Providers own source details.
+    private func changeModelSource(
+        _ model: SettingsStore.SpeechModel,
+        operation: @escaping @MainActor (TranscriptionProvider) async throws -> Void
+    ) async throws {
+        try Task.checkCancellation()
         guard !self.isTerminating, !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
               !self.recordingBufferHandoffGate.isActive, !self.recordingBufferHandoffGate.isRecovering,
               !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive, !self.isDictionaryTrainingCaptureActive,
@@ -1594,7 +1608,7 @@ final class ASRService: ObservableObject {
         let task = Task { @MainActor in
             let outcome: Result<Void, Error>
             do {
-                try await provider.importModel(from: directory)
+                try await operation(provider)
                 outcome = .success(())
             } catch {
                 outcome = .failure(error)
@@ -1615,7 +1629,7 @@ final class ASRService: ObservableObject {
         } catch {
             outcome = .failure(error)
         }
-        // The joined operation has finished every import and release hook before admission opens.
+        // The joined operation has finished every source mutation and release hook before admission opens.
         if self.modelDownloadOperationID == operationID {
             self.modelDownloadTask = nil
             self.modelDownloadOperationID = nil
@@ -1628,7 +1642,7 @@ final class ASRService: ObservableObject {
             self.providerResetPending = true
         }
         self.meetingModelResidency.endOperation(admission)
-        // Releasing the import lease precedes reset admission, so modelMaintenance is not nested.
+        // Releasing the source-change lease precedes reset admission, so modelMaintenance is not nested.
         self.releaseExclusiveActivity(lease)
         while let drain = self.providerResetDrain { await drain.task.value }
         SpeechModelInstallationSnapshot.shared.refresh()
@@ -7698,6 +7712,7 @@ final class ASRService: ObservableObject {
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval? = nil,
         preserveTranscriptOnClipboard: Bool = false,
+        requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         await self.typeOutputPlanToActiveField(
@@ -7705,6 +7720,7 @@ final class ASRService: ObservableObject {
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            requiredFocusTarget: requiredFocusTarget,
             isOutputValid: isOutputValid
         )
     }
@@ -7717,6 +7733,7 @@ final class ASRService: ObservableObject {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         preserveTranscriptOnClipboard: Bool = false,
+        requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         let requestedAt = ProcessInfo.processInfo.systemUptime
@@ -7734,6 +7751,7 @@ final class ASRService: ObservableObject {
             toggleStopRequestedAt: toggleStopRequestedAt,
             tracksDictionaryCorrections: tracksDictionaryCorrections,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            requiredFocusTarget: requiredFocusTarget,
             isOutputValid: isOutputValid
         )
         let dispatchedAt = ProcessInfo.processInfo.systemUptime

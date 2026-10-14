@@ -37,10 +37,6 @@ nonisolated final class DebugLogger: @unchecked Sendable {
     func benchmark(_: String, message _: String, source _: String) {}
     func logLazy(level _: Level, source _: String, message _: () -> String) {}
 }
-nonisolated enum LocalAIModelResidencyPolicy {
-    static let shared = Self.self
-    static func isPinned(baseURL _: String, model _: String) -> Bool { false }
-}
 
 @MainActor enum TerminalService {
     static let toolDefinition: [String: Any] = ["type": "function", "function": [
@@ -116,7 +112,7 @@ nonisolated enum LocalAIModelResidencyPolicy {
     }
 }
 
-private final class AdmissionBackend: @unchecked Sendable {
+final class AdmissionBackend: @unchecked Sendable {
     enum Failure: Error { case synthetic }
     private let lock = NSLock()
     private let release = DispatchSemaphore(value: 0)
@@ -157,11 +153,12 @@ private final class AdmissionBackend: @unchecked Sendable {
     }
 }
 
-private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
+final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     private static var authorizationHeaders: [String?] = []
     private static var models: [String?] = []
     private static var urls: [String?] = []
+    private static var systemPrompts: [String?] = []
     private static var holdNext = false
     private static var deferredResponse: (() -> Void)?
     private static var unexpectedURLs = 0
@@ -169,11 +166,14 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         "https://api.openai.com/v1/chat/completions", "https://keyless.example/v1/chat/completions",
         "https://192.168.1.40/v1/chat/completions", "https://alias.example/v1/chat/completions",
         "http://127.0.0.1:1234/v1/chat/completions",
+        "http://127.0.0.1:11434/api/ps", "http://127.0.0.1:11434/api/version", "http://127.0.0.1:11434/api/chat",
     ]
+    private var isStreaming = false
     static var requestCount: Int { self.lock.withLock { self.authorizationHeaders.count } }
     static var lastAuthorization: String? { self.lock.withLock { self.authorizationHeaders.last ?? nil } }
     static var lastModel: String? { self.lock.withLock { self.models.last ?? nil } }
     static var lastURL: String? { self.lock.withLock { self.urls.last ?? nil } }
+    static var lastSystemPrompt: String? { self.lock.withLock { self.systemPrompts.last ?? nil } }
     static var hasDeferredResponse: Bool { self.lock.withLock { self.deferredResponse != nil } }
     static var unexpectedURLCount: Int { self.lock.withLock { self.unexpectedURLs } }
     static func holdNextResponse() { self.lock.withLock { self.holdNext = true } }
@@ -189,10 +189,12 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let body = self.requestBody().flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        self.isStreaming = body?["stream"] as? Bool == true
         Self.lock.withLock {
             Self.authorizationHeaders.append(self.request.value(forHTTPHeaderField: "Authorization"))
             Self.models.append(body?["model"] as? String)
             Self.urls.append(self.request.url?.absoluteString)
+            Self.systemPrompts.append((body?["messages"] as? [[String: Any]])?.first(where: { $0["role"] as? String == "system" })?["content"] as? String)
         }
         guard let url = self.request.url?.absoluteString, Self.allowedURLs.contains(url) else {
             Self.lock.withLock { Self.unexpectedURLs += 1 }
@@ -222,9 +224,19 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         }
     }
     private func reply() {
+        let payload: String
+        switch self.request.url?.path {
+        case "/api/version": payload = #"{"version":"0.16.0"}"#
+        case "/api/ps": payload = #"{"models":[]}"#
+        case "/api/chat": payload = #"{"message":{"content":"Synthetic summary"},"done":true}"#
+        default:
+            payload = self.isStreaming
+                ? "data: {\"choices\":[{\"delta\":{\"content\":\"Synthetic summary\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+                : #"{"choices":[{"message":{"content":"Synthetic summary"},"finish_reason":"stop"}]}"#
+        }
         let response = HTTPURLResponse(url: self.request.url!, statusCode: 200, httpVersion: nil,
-            headerFields: ["Content-Type": "application/json"])!
-        let data = Data(#"{"choices":[{"message":{"content":"Synthetic summary"},"finish_reason":"stop"}]}"#.utf8)
+            headerFields: ["Content-Type": self.isStreaming ? "text/event-stream" : "application/json"])!
+        let data = Data(payload.utf8)
         self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         self.client?.urlProtocol(self, didLoad: data)
         self.client?.urlProtocolDidFinishLoading(self)
@@ -234,17 +246,17 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
 
 @MainActor @main enum MeetingSummaryAdmissionTests {
     private static var checks = 0
-    private static var commandClient: LLMClient!
-    private static func check(_ condition: Bool, _ message: String) {
+    static var commandClient: LLMClient!
+    static func check(_ condition: Bool, _ message: String) {
         guard condition else { fputs("FAIL: \(message)\n", stderr); exit(1) }
         self.checks += 1
     }
-    private static func waitUntil(_ predicate: () -> Bool) async {
+    static func waitUntil(_ predicate: () -> Bool) async {
         let deadline = ContinuousClock.now + .seconds(3)
         while !predicate(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(5)) }
         self.check(predicate(), "Synthetic worker must settle within its deadline")
     }
-    private static func load(_ service: KeychainService) async {
+    static func load(_ service: KeychainService) async {
         var finished = false
         self.check(service.loadInBackground { result in
             if case .failure = result { fputs("FAIL: synthetic successful load failed\n", stderr); exit(1) }
@@ -252,7 +264,7 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         }, "Background load admitted")
         await self.waitUntil { finished && service.readiness == .loaded }
     }
-    private static func fixture(_ backend: AdmissionBackend, provider: String = "openai",
+    static func fixture(_ backend: AdmissionBackend, provider: String = "openai",
                                 endpoint: String? = nil, key: String = "synthetic-key",
                                 options: [String: String] = [:]) -> (SettingsStore, KeychainService, MeetingSummarySelection) {
         let service = backend.service()
@@ -332,10 +344,20 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
     static func main() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AdmissionURLProtocol.self]
+        NormalDictationHTTPConfiguration.make = {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [AdmissionURLProtocol.self]
+            return configuration
+        }
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         self.commandClient = LLMClient(session: session)
         let remote = MeetingSummaryRemoteService(session: session)
+        if let caller = ProcessInfo.processInfo.environment["PICHI_NORMAL_DICTATION_ADMISSION_PENDING_ONLY"] {
+            try await self.normalPendingProbe(caller: caller)
+            print("PASS: actual normal dictation pending-credential probe; no HTTP")
+            return
+        }
         if ProcessInfo.processInfo.environment["PICHI_TEMPLATE_UI_ADMISSION_PENDING_ONLY"] == "1" {
             try await self.templatePendingProbe()
             self.check(AdmissionURLProtocol.requestCount == 0, "Pending click probe must post no HTTP request")
@@ -347,21 +369,22 @@ private final class AdmissionURLProtocol: URLProtocol, @unchecked Sendable {
         try await self.keylessAdmission(remote)
         try await self.aliasAndStaleConfiguration(remote)
         try await self.localAPIAdmission()
-        self.check(AdmissionURLProtocol.requestCount == 27 && AdmissionURLProtocol.unexpectedURLCount == 0,
-            "All 27 expected positive requests are intercepted; unknown URLs fail closed")
+        try await self.normalDictationAdmission()
+        self.check(AdmissionURLProtocol.requestCount == 52 && AdmissionURLProtocol.unexpectedURLCount == 0,
+            "All 52 expected positive requests are intercepted; unknown URLs fail closed")
         if let path = ProcessInfo.processInfo.environment["PICHI_ADMISSION_REPORT_PATH"] {
             let report: [String: Any] = [
                 "status": "PASS", "admission_assertions": self.checks,
                 "intercepted_requests": AdmissionURLProtocol.requestCount,
                 "unexpected_urls": AdmissionURLProtocol.unexpectedURLCount,
                 "credential_backend": "injected_only", "transport": "explicit_session_protocol_classes",
-                "tested_callers": ["MeetingSummaryRoute.resolve + RemoteService + LLMClient", "TemplateMeetingSummaryView.generate + fresh resolveRoute + recorded controller dispatch + RemoteService + LLMClient", "CommandModeService.callLLM + LLMClient", "InferenceAPIController.handle + DictationPostProcessingService.process + LLMClient"],
+                "tested_callers": ["MeetingSummaryRoute.resolve + RemoteService + LLMClient", "TemplateMeetingSummaryView.generate + fresh resolveRoute + recorded controller dispatch + RemoteService + LLMClient", "CommandModeService.callLLM + LLMClient", "InferenceAPIController.handle + DictationPostProcessingService.process + LLMClient", "DictationStopSnapshot.capture + ContentView post-ASR AI/raw fallback block + processTextWithAIMetrics + LLMClient", "ContentView explicit/global processTextWithAIMetrics + LLMClient", "AppServices selectedRoute + actual prewarmLocalModel and LocalAIModelResidencyTransport.isReady"],
                 "revision": ProcessInfo.processInfo.environment["PICHI_ADMISSION_SOURCE_REVISION"] ?? "unknown",
                 "source_dirty": ProcessInfo.processInfo.environment["PICHI_ADMISSION_SOURCE_DIRTY"] != "0",
             ]
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
         }
-        print("PASS: \(self.checks) summary, command and Local API credential admission checks; production storage/operations/HTTP, injected backend and intercepted requests only")
+        print("PASS: \(self.checks) summary, template UI, command, API, dictation and warming credential admission checks; production storage/operations/HTTP, injected backend and intercepted requests only")
     }
 
     private static func templatePendingProbe() async throws {

@@ -1,4 +1,5 @@
 @testable import FluidVoice_Debug
+import CryptoKit
 import Foundation
 import XCTest
 
@@ -269,19 +270,24 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertLessThan(try encode(choices), try encode(short), "Same source text with fewer repeated metadata fields")
     }
 
-    func testLedgerSchemaRestrictsSparseCandidateIDsAndEmptyBatches() throws {
+    func testLedgerSchemaRestrictsSparseCandidateIDsAndRequiresExplicitPerChangeReceipts() throws {
         for candidates in [[4, 11, 27], []] {
-            let schema = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [2, 9], candidateIndexes: candidates)
+            let schema = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [0, 2, 9], candidateIndexes: candidates,
+                candidateOriginalSourceIndexes: Dictionary(uniqueKeysWithValues: candidates.map { ($0, [0]) }),
+                changeSourceIndexes: [7: [2, 9]])
             let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-            let updates = try XCTUnwrap(properties["updates"] as? [String: Any])
-            XCTAssertEqual(updates["maxItems"] as? Int, candidates.count)
-            let item = try XCTUnwrap(updates["items"] as? [String: Any])
-            let fields = try XCTUnwrap(item["properties"] as? [String: Any])
-            let index = try XCTUnwrap(fields["index"] as? [String: Any])
-            if candidates.isEmpty {
-                XCTAssertNil(index["enum"], "No invalid empty enum; maxItems zero prevents updates")
-            } else {
-                XCTAssertEqual(index["enum"] as? [Int], candidates, "Candidate IDs are not batch positions")
+            let resolutions = try XCTUnwrap(properties["resolutions"] as? [String: Any])
+            XCTAssertEqual(resolutions["minItems"] as? Int, 1)
+            XCTAssertEqual(resolutions["maxItems"] as? Int, 1)
+            let event = try XCTUnwrap(((resolutions["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])?.first)
+            let fields = try XCTUnwrap(event["properties"] as? [String: Any])
+            XCTAssertEqual((fields["changeIndex"] as? [String: Any])?["enum"] as? [Int], [7])
+            let matches = try XCTUnwrap(fields["matches"] as? [String: Any])
+            XCTAssertEqual(matches["maxItems"] as? Int, candidates.count)
+            XCTAssertNil(matches["minItems"], "A required receipt must still allow explicit no-match")
+            if !candidates.isEmpty {
+                let branches = try XCTUnwrap((matches["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])
+                XCTAssertEqual(branches.compactMap { (($0["properties"] as? [String: Any])?["index"] as? [String: Any])?["enum"] as? [Int] }, candidates.map { [$0] })
             }
         }
     }
@@ -353,10 +359,13 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let body = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(nativeRequest.httpBody)) as? [String: Any])
             let schema = try XCTUnwrap(body["format"] as? [String: Any])
             let fields = try XCTUnwrap(schema["properties"] as? [String: Any])
-            let array = try XCTUnwrap(fields["updates"] as? [String: Any])
+            let array = try XCTUnwrap(fields["resolutions"] as? [String: Any])
+            XCTAssertEqual(array["minItems"] as? Int, 1)
             XCTAssertEqual(array["maxItems"] as? Int, 1)
-            let item = try XCTUnwrap(array["items"] as? [String: Any])
-            let branch = try XCTUnwrap((item["anyOf"] as? [[String: Any]])?.first)
+            let event = try XCTUnwrap(((array["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])?.first)
+            let matches = try XCTUnwrap((event["properties"] as? [String: Any])?["matches"] as? [String: Any])
+            XCTAssertEqual(matches["maxItems"] as? Int, 1)
+            let branch = try XCTUnwrap(((matches["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])?.first)
             let itemFields = try XCTUnwrap(branch["properties"] as? [String: Any])
             XCTAssertEqual((itemFields["index"] as? [String: Any])?["enum"] as? [Int], [0])
         }
@@ -474,26 +483,21 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertTrue((schema["required"] as? [String] ?? []).contains("decisions"))
     }
 
-    func testNativeSchemaDescribesMeetingAndTaskBeforeChoosingTheirLiteralFields() throws {
-        let config = LLMClient.Config(messages: [["role": "system", "content": "Summarize a meeting"]], model: "fixture-model",
+    func testNativeCanonicalRequestPreservesMessagesSchemaAndBounds() throws {
+        let messages: [[String: Any]] = [["role": "system", "content": "Summarize a meeting"],
+                                       ["role": "user", "content": #"Ёж: \"quotes\", C:\reports, https://example.org/a?x=1&y=2"#]]
+        let config = LLMClient.Config(messages: messages, model: "fixture-model",
                                       baseURL: "http://127.0.0.1:11434/v1", apiKey: "", streaming: false)
         let request = try PichiMeetingSummaryTransport.ollamaRequest(config)
         let data = try XCTUnwrap(request.httpBody)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let schema = try XCTUnwrap(body["format"] as? [String: Any])
         XCTAssertEqual(schema as NSDictionary, PichiMeetingSummaryTransport.schema(ledger: false) as NSDictionary,
-                       "Ordering must preserve every schema field, required value and validation limit")
-        let raw = String(decoding: data, as: UTF8.self)
-        XCTAssertTrue(raw.contains("\"properties\":{\"summary\":"), "The grammar must describe the meeting before selecting separate ledgers")
-        let root = try XCTUnwrap(raw.range(of: "\"properties\":{\"summary\":"))
-        let questions = try XCTUnwrap(raw.range(of: "\"openQuestions\":", range: root.upperBound..<raw.endIndex))
-        let actions = try XCTUnwrap(raw.range(of: "\"actions\":", range: root.upperBound..<raw.endIndex))
-        XCTAssertLessThan(questions.lowerBound, actions.lowerBound, "Classify unresolved inquiries before selecting actionable work")
-        XCTAssertTrue(raw.contains("\"properties\":{\"title\":"), "The grammar must identify the task before choosing its owner or deadline")
-        let title = try XCTUnwrap(raw.range(of: "\"properties\":{\"title\":"))
-        let text = try XCTUnwrap(raw.range(of: "\"text\":", range: title.upperBound..<raw.endIndex))
-        let deadline = try XCTUnwrap(raw.range(of: "\"deadline\":", range: title.upperBound..<raw.endIndex))
-        XCTAssertLessThan(text.lowerBound, deadline.lowerBound)
+                       "Canonical encoding must preserve every schema field, required value and validation limit")
+        XCTAssertEqual(try XCTUnwrap(body["messages"] as? [[String: Any]]) as NSArray, messages as NSArray,
+                       "Quotes, backslashes, URLs and Cyrillic source data must remain literal")
+        XCTAssertEqual(data, try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]),
+                       "The same canonical payload must not depend on dictionary insertion order")
         let options = try XCTUnwrap(body["options"] as? [String: Any])
         XCTAssertEqual(options["num_ctx"] as? Int, 8192)
         XCTAssertEqual(options["num_predict"] as? Int, 3000)
@@ -937,6 +941,8 @@ final class PichiMeetingSummaryTests: XCTestCase {
             XCTAssertEqual(Set(document.actions[0].evidence.map(\.segmentID)), Set(session.transcriptSegments.prefix(2).map(\.id)))
             XCTAssertEqual(Set(document.actions[1].evidence.map(\.segmentID)), Set(session.transcriptSegments.dropFirst().map(\.id)))
             XCTAssertNoThrow(try document.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+            let wireOrders = await transport.resolutionOrders
+            XCTAssertEqual(wireOrders, [reversed ? [1, 0] : [0, 1]], "The fixture must actually reverse the provider-facing receipt order")
             documents.append(document)
         }
         XCTAssertEqual(documents[0], documents[1], "One validated response has the same document regardless of its update array order")
@@ -1234,7 +1240,278 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
     }
 
-    // Only the two public synthetic opt-in fixtures use this trace helper. Never
+    func testLiveSeparateCommitmentsKeepLiteralDeadlinesAndRelevantCitationsWhenEnabled() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
+                          "Opt-in semantic regression. Uses invented text and an already installed local Ollama model.")
+        let modelID = environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b"
+        var configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: modelID,
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru")
+        configuration.execution = .extended
+        configuration.execution.reasoningParameter = "enable_thinking"
+        configuration.execution.reasoningValue = "false"
+        let session = self.separateCommitmentsSession()
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await self.generateLiveSyntheticSummary(session: session, configuration: configuration)
+        let issues = self.separateCommitmentIssues(result, session: session)
+        XCTAssertTrue(issues.isEmpty, issues.joined(separator: "\n"))
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
+    func testLiveConditionalProposalAbilityQuestionAndPredictionStayUnacceptedWhenEnabled() async throws {
+        try await self.checkLiveMatrix(.unaccepted)
+    }
+
+    func testLiveTrueCancellationRetainsEveryOriginalDecisionAndTaskAsHistoryWhenEnabled() async throws {
+        try await self.checkLiveMatrix(.cancelled)
+    }
+
+    func testLivePronominalAcceptanceAndCompletionPreserveOriginalTaskAcrossChunksWhenEnabled() async throws {
+        // Two distinct predefined inputs, not a retry: first prove acceptance,
+        // then check the same request followed by acceptance and completion.
+        try await self.checkLiveMatrix(.accepted)
+        try await self.checkLiveMatrix(.completed)
+    }
+
+    func testLiveExplicitAnswerResolvesOnlyItsMatchingQuestionAndRemainsAvailableWhenEnabled() async throws {
+        try await self.checkLiveMatrix(.answered)
+    }
+
+    private func checkLiveMatrix(_ fixture: LiveMatrixFixture) async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
+                          "Opt-in semantic regression using public synthetic text and an installed local model.")
+        var configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local",
+            modelID: environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b",
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru")
+        configuration.execution = .extended
+        configuration.execution.reasoningParameter = "enable_thinking"
+        configuration.execution.reasoningValue = "false"
+        let session = self.liveMatrixSession(fixture)
+        if fixture != .unaccepted {
+            XCTAssertGreaterThanOrEqual(PichiMeetingSummaryInput.chunks(PichiMeetingSummaryInput.turns(for: session)).count, 2)
+        }
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await self.generateLiveSyntheticSummary(session: session, configuration: configuration)
+        let issues = self.liveMatrixIssues(result, fixture: fixture, session: session)
+        XCTAssertTrue(issues.isEmpty, issues.joined(separator: "\n"))
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
+    func testLiveMatrixOraclesAcceptParaphrasesAndRejectWrongStateAttributionAndSource() throws {
+        for fixture in LiveMatrixFixture.allCases {
+            let session = self.liveMatrixSession(fixture)
+            if fixture != .unaccepted {
+                let chunks = PichiMeetingSummaryInput.chunks(PichiMeetingSummaryInput.turns(for: session))
+                XCTAssertEqual(chunks.count, 2)
+                XCTAssertEqual(Set(chunks[0].map(\.id)), Set([session.transcriptSegments[0].id]))
+                XCTAssertEqual(Set(chunks[1].map(\.id)), Set(session.transcriptSegments.dropFirst().map(\.id)))
+            }
+            let expected = self.liveMatrixDocument(fixture, session: session)
+            XCTAssertNoThrow(try expected.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+            XCTAssertTrue(self.liveMatrixIssues(expected, fixture: fixture, session: session).isEmpty)
+            var faults: [PichiMeetingSummaryDocument] = []
+            var changed = expected
+            switch fixture {
+            case .unaccepted:
+                changed.actions[0].status = .agreed; faults.append(changed)
+                changed = expected; changed.actions[0].owner = "Иван"; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = "завтра"; faults.append(changed)
+                changed = expected; changed.actions[0].evidence = expected.openQuestions[0].evidence; faults.append(changed)
+                changed = expected; changed.openQuestions = []; faults.append(changed)
+            case .cancelled:
+                changed.actions[0].superseded = nil; faults.append(changed)
+                changed = expected; changed.actions[0].status = .agreed; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = "пятницу"; faults.append(changed)
+                changed = expected; changed.decisions[0].superseded = nil; faults.append(changed)
+                changed = expected; changed.actions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.actions.append(self.liveMatrixItem(session, text: "Подготовить выпуск.", indexes: [0]))
+                changed.actions[1].title = "Подготовить выпуск"; changed.actions[1].status = .requested
+                changed.actions[1].urgency = .unspecified; faults.append(changed)
+            case .accepted:
+                changed.actions[0].status = .requested; faults.append(changed)
+                changed = expected; changed.actions[0].superseded = true; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = nil; faults.append(changed)
+                changed = expected; changed.actions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.actions.append(expected.actions[0]); faults.append(changed)
+            case .completed:
+                let starts = session.transcriptSegments.map { $0.start.seconds }
+                XCTAssertEqual(starts, starts.sorted()); XCTAssertEqual(Set(starts).count, 3)
+                changed.actions[0].status = .agreed; faults.append(changed)
+                changed = expected; changed.actions[0].owner = nil; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = nil; faults.append(changed)
+                changed = expected; changed.actions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.changes = nil; faults.append(changed)
+                changed = expected; changed.actions = []; faults.append(changed)
+            case .answered:
+                changed.openQuestions[1].resolved = true; faults.append(changed)
+                changed = expected; changed.openQuestions[0].resolved = nil; faults.append(changed)
+                changed = expected; changed.openQuestions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.answers = nil; faults.append(changed)
+                changed = expected; changed.answers?[0].evidence = expected.openQuestions[1].evidence; faults.append(changed)
+                changed = expected; changed.openQuestions[1].evidence = expected.openQuestions[0].evidence; faults.append(changed)
+            }
+            for fault in faults {
+                XCTAssertFalse(self.liveMatrixIssues(fault, fixture: fixture, session: session).isEmpty,
+                               "\(fixture) must reject the changed typed state or evidence, independently of prose.")
+            }
+        }
+    }
+
+    private enum LiveMatrixFixture: CaseIterable { case unaccepted, cancelled, accepted, completed, answered }
+
+    private func liveMatrixSession(_ fixture: LiveMatrixFixture) -> MeetingSession {
+        if fixture == .accepted || fixture == .completed {
+            // Reuse the established request fixture's neutral padding. It forces
+            // actual production chunking, rather than mocking a part boundary.
+            var session = self.acceptanceSession()
+            session.transcriptSegments[1].text = "Согласен, сделаю это."
+            session.transcriptSegments[1].end = .init(value: 61_000, timescale: 1000)
+            if fixture == .completed {
+                var completion = session.transcriptSegments[1]
+                completion.id = UUID()
+                completion.start = .init(value: 120_000, timescale: 1000)
+                completion.end = .init(value: 121_000, timescale: 1000)
+                completion.text = "Это сделано: отчёт готов."
+                session.transcriptSegments.append(completion)
+            }
+            return session
+        }
+        let texts: [String]
+        switch fixture {
+        case .unaccepted:
+            texts = ["Если согласуют бюджет, предлагаю обновить дизайн.",
+                     "Сможет ли Иван подключиться к видеозвонку?",
+                     "Вероятно, Мария завтра доставит материалы, но мы ей ничего не поручали."]
+        case .cancelled:
+            // Public russian-v1 cancellation speech with neutral padding to
+            // place the original work before a genuinely later extraction part.
+            texts = ["Решили выпустить релиз в пятницу. Иван подготовит релиз в пятницу. " + String(repeating: "Детали. ", count: 965),
+                     "Отменяем выпуск релиза. Иван, подготовка релиза тоже отменена. Новую дату не назначаем."]
+        case .answered:
+            // Public explicit-answer speech, a separate question, and neutral
+            // padding so only a later answer can resolve the original question.
+            texts = ["Можно ли отправить итоговые материалы клиенту? " + String(repeating: "Детали. ", count: 965),
+                     "Можно ли вернуть платёж? Решения о возврате пока нет.",
+                     "Да, итоговые материалы можно отправить клиенту: согласование получено."]
+        case .accepted, .completed: preconditionFailure("Handled above")
+        }
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = texts.enumerated().map { index, text in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 60_000), timescale: 1000)
+            segment.end = .init(value: Int64(index * 60_000 + 1_000), timescale: 1000)
+            segment.text = text
+            return segment
+        }
+        return session
+    }
+
+    private func liveMatrixItem(_ session: MeetingSession, text: String, indexes: [Int]) -> PichiMeetingSummaryItem {
+        .init(text: text, evidence: indexes.map {
+            .init(segmentID: session.transcriptSegments[$0].id, quote: String(session.transcriptSegments[$0].text.prefix(200)))
+        })
+    }
+
+    private func liveMatrixDocument(_ fixture: LiveMatrixFixture, session: MeetingSession) -> PichiMeetingSummaryDocument {
+        func item(_ text: String, _ indexes: [Int]) -> PichiMeetingSummaryItem {
+            self.liveMatrixItem(session, text: text, indexes: indexes)
+        }
+        var document = PichiMeetingSummaryDocument(summary: [item("Обсудили отдельные вопросы.", [0])],
+                                                   decisions: [], actions: [], openQuestions: [])
+        switch fixture {
+        case .unaccepted:
+            document.actions = [item("Обновление дизайна предложено только при согласовании бюджета.", [0])]
+            document.actions[0].title = "Обновить дизайн"; document.actions[0].status = .proposed
+            document.actions[0].urgency = .unspecified
+            document.openQuestions = [item("Неизвестно, сможет ли Иван участвовать в звонке.", [1])]
+            document.summary.append(item("Ожидается доставка Марией, без поручения.", [2]))
+        case .cancelled:
+            document.decisions = [item("Пятничный выпуск был согласован, затем отменён.", [0, 1])]
+            document.decisions[0].superseded = true
+            document.actions = [item("Подготовить выпуск.", [0, 1])]
+            document.actions[0].title = "Подготовить выпуск"; document.actions[0].status = .cancelled
+            document.actions[0].superseded = true; document.actions[0].urgency = .unspecified
+            document.actions[0].owner = "Иван"; document.actions[0].deadline = "в пятницу"
+        case .accepted, .completed:
+            document.actions = [item("Подготовить отчёт.", fixture == .accepted ? [0, 1] : [0, 2])]
+            document.actions[0].title = "Подготовить отчёт"
+            document.actions[0].status = fixture == .accepted ? .agreed : .completed
+            document.actions[0].superseded = fixture == .accepted ? nil : true
+            document.actions[0].urgency = .unspecified
+            document.actions[0].owner = "Иван"; document.actions[0].deadline = "к пятнице"
+            if fixture == .completed { document.changes = [item("Участник явно принял порученную задачу.", [1])] }
+        case .answered:
+            document.openQuestions = [item("Разрешена ли передача итоговых материалов?", [0, 2]),
+                                      item("Возможен ли возврат платежа?", [1])]
+            document.openQuestions[0].resolved = true
+            document.answers = [item("Согласование получено, материалы разрешено отправить.", [2])]
+        }
+        return document
+    }
+
+    /// These fixture-specific oracles inspect typed relationships and exact source
+    /// identity, not model wording. They never enter a production/model prompt.
+    private func liveMatrixIssues(_ document: PichiMeetingSummaryDocument, fixture: LiveMatrixFixture,
+                                  session: MeetingSession) -> [String] {
+        var issues: [String] = []
+        func check(_ condition: Bool, _ message: String) { if !condition { issues.append(message) } }
+        func ids(_ item: PichiMeetingSummaryItem) -> Set<UUID> { Set(item.evidence.map(\.segmentID)) }
+        let sourceIDs = session.transcriptSegments.map(\.id)
+        check((try? document.validated(against: PichiMeetingSummaryInput.turns(for: session))) != nil,
+              "All quotes and attribution must pass the unchanged canonical validator")
+        switch fixture {
+        case .unaccepted:
+            check(document.decisions.isEmpty, "No proposal, ability question or prediction is an agreed decision")
+            check(document.actions.count == 1 && document.actions.allSatisfy {
+                ids($0) == Set([sourceIDs[0]]) && $0.status == .proposed && $0.owner == nil
+                    && $0.deadline == nil && $0.urgency == .unspecified && $0.superseded != true
+            }, "Retain only the conditional proposal, without acceptance or invented assignment")
+            check(document.openQuestions.count == 1 && document.openQuestions.allSatisfy {
+                ids($0) == Set([sourceIDs[1]]) && $0.resolved != true
+            }, "The independent ability question remains unanswered")
+            check(document.summary.contains { ids($0) == Set([sourceIDs[2]]) }, "Keep the prediction as a report, not a commitment")
+        case .cancelled, .accepted, .completed:
+            let original = document.actions.filter { ids($0).contains(sourceIDs[0]) }
+            let required = Set(sourceIDs)
+            let status: PichiMeetingSummaryActionStatus = fixture == .cancelled ? .cancelled : fixture == .accepted ? .agreed : .completed
+            let witnesses = fixture == .completed ? Set([sourceIDs[0], sourceIDs[2]]) : required
+            check(!original.isEmpty && original.allSatisfy {
+                $0.status == status && ($0.superseded == true) == (fixture != .accepted) && $0.owner == "Иван"
+                    && $0.deadline == (fixture == .cancelled ? "в пятницу" : "к пятнице")
+                    && $0.urgency == .unspecified && ids($0).isSuperset(of: witnesses) && ids($0).isSubset(of: required)
+            }, "Every original task retains literal owner/deadline, correct state and original/later witnesses")
+            check(document.actions.allSatisfy { $0.status == status && ids($0).isSubset(of: required) },
+                  "No inconsistent duplicate or unrelated replacement task survives the state update")
+            if fixture == .accepted {
+                check(document.actions.count == 1, "Acceptance keeps one current task rather than duplicating assigned work")
+            } else if fixture == .completed {
+                check(document.allItems.contains { ids($0).contains(sourceIDs[1]) },
+                      "Preserve acceptance evidence separately or with the original task; never drop its history")
+            }
+            if fixture == .cancelled {
+                let decisions = document.decisions.filter { ids($0).contains(sourceIDs[0]) }
+                check(!decisions.isEmpty && decisions.allSatisfy { $0.superseded == true && ids($0) == required },
+                      "Every original release decision is historical and cites its cancellation")
+            }
+        case .answered:
+            let answered = document.openQuestions.filter { ids($0).contains(sourceIDs[0]) }
+            let independent = document.openQuestions.filter { ids($0).contains(sourceIDs[1]) }
+            check(answered.count == 1 && answered.allSatisfy { $0.resolved == true && ids($0) == Set([sourceIDs[0], sourceIDs[2]]) },
+                  "Only the matching question resolves with both original and later evidence")
+            check(independent.count == 1 && independent.allSatisfy { $0.resolved != true && ids($0) == Set([sourceIDs[1]]) },
+                  "The unrelated refund question remains open with its own evidence")
+            check(document.openQuestions.count == 2 && document.actions.isEmpty, "Retain both questions without inventing assigned work")
+            check((document.answers ?? []).contains { ids($0).contains(sourceIDs[2]) && ids($0).isSubset(of: Set([sourceIDs[0], sourceIDs[2]])) },
+                  "Preserve the explicit matching answer in the existing answers section")
+        }
+        return issues
+    }
+
+    // Only public synthetic opt-in fixtures use this trace helper. Never
     // attach a saved session's speech or dump API credentials/provider options.
     private func generateLiveSyntheticSummary(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration) async throws -> PichiMeetingSummaryDocument {
         let trace = LiveSyntheticSummaryTrace()
@@ -1244,11 +1521,18 @@ final class PichiMeetingSummaryTests: XCTestCase {
             resolveArtifact: { try await PichiMeetingSummaryTransport.artifactID($0) }
         )
         do {
-            let result = try await generator.generate(session: session, configuration: configuration)
+            let generation = try await generator.generateWithProvenance(session: session, configuration: configuration)
+            let result = generation.document
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let document = String(decoding: try encoder.encode(result), as: UTF8.self)
-            self.attachLiveSyntheticSummaryTrace(await trace.report() + "\nFINAL DOCUMENT:\n" + document, modelID: configuration.modelID)
+            let provenance = "ENDPOINT: \(generation.configuration.baseURL)\n"
+                + "EXECUTION: \(generation.configuration.execution.identity)\n"
+                + "ARTIFACT ID: \(generation.configuration.modelArtifactID ?? "unavailable")\n"
+                + "INFERENCE ALIAS: \(generation.configuration.inferenceModelID ?? generation.configuration.modelID)\n"
+                + "INPUT FINGERPRINT: \(PichiMeetingSummaryInput.fingerprint(session))\n"
+            self.attachLiveSyntheticSummaryTrace(provenance + (await trace.report()) + "\nFINAL DOCUMENT:\n" + document,
+                                                 modelID: configuration.modelID)
             return result
         } catch {
             self.attachLiveSyntheticSummaryTrace(await trace.report() + "\nERROR:\n" + error.localizedDescription, modelID: configuration.modelID)
@@ -1270,7 +1554,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let stage = (config.messages.first?["content"] as? String ?? "").split(separator: "\n").first.map(String.init) ?? ""
             let input = config.messages.last?["content"] as? String ?? ""
             let response = try await PichiMeetingSummaryTransport.complete(config)
-            self.entries.append("STAGE: \(stage)\nSYNTHETIC INPUT:\n\(input)\nRAW OUTPUT:\n\(response)")
+            self.entries.append("STAGE: \(stage)\nINFERENCE MODEL: \(config.model)\nSYNTHETIC INPUT:\n\(input)\nRAW OUTPUT:\n\(response)")
             return response
         }
 
@@ -1737,42 +2021,93 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
-    func testLedgerScopedSchemaBindsCandidateIndexAndLegalWitnessesWithTaskState() throws {
+    func testLedgerScopedSchemaBindsEventCandidateAndBothWitnessRolesWithTaskState() throws {
         for actionStates in [false, true] {
             let schema = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [0, 1, 2, 3],
-                candidateIndexes: [4, 11, 27], candidateSourceIndexes: [4: [0, 1], 11: [2, 999], 27: []], actionStates: actionStates)
+                candidateIndexes: [4, 11, 27], candidateSourceIndexes: [4: [2, 3], 11: [3, 999], 27: []],
+                candidateOriginalSourceIndexes: [4: [0], 11: [1], 27: [3]], changeSourceIndexes: [7: [2], 12: [3]], actionStates: actionStates)
             XCTAssertEqual(schema["type"] as? String, "object")
-            XCTAssertNil(schema["anyOf"], "Keep the structured-output root as an object")
+            XCTAssertNil(schema["anyOf"])
             let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
-            let updates = try XCTUnwrap(properties["updates"] as? [String: Any])
-            XCTAssertEqual(updates["maxItems"] as? Int, 2)
-            let item = try XCTUnwrap(updates["items"] as? [String: Any])
-            let branches = try XCTUnwrap(item["anyOf"] as? [[String: Any]])
-            XCTAssertEqual(branches.count, 2)
-            for (offset, expected) in [(4, [0, 1]), (11, [2])] {
-                let branch = try XCTUnwrap(branches.first {
-                    (($0["properties"] as? [String: Any])?["index"] as? [String: Any])?["enum"] as? [Int] == [offset]
-                })
-                let fields = try XCTUnwrap(branch["properties"] as? [String: Any])
-                XCTAssertEqual(branch["additionalProperties"] as? Bool, false)
-                XCTAssertEqual(Set(branch["required"] as? [String] ?? []), Set(actionStates ? ["index", "evidence", "status"] : ["index", "evidence"]))
-                let citations = try XCTUnwrap(fields["evidence"] as? [String: Any])
-                XCTAssertEqual(citations["minItems"] as? Int, 1)
-                XCTAssertEqual(citations["maxItems"] as? Int, 8)
-                let evidence = try XCTUnwrap(citations["items"] as? [String: Any])
-                let evidenceFields = try XCTUnwrap(evidence["properties"] as? [String: Any])
-                XCTAssertEqual((evidenceFields["sourceIndex"] as? [String: Any])?["enum"] as? [Int], expected)
-                XCTAssertEqual(Set(evidenceFields.keys), ["sourceIndex"])
-                if actionStates {
-                    let status = try XCTUnwrap(fields["status"] as? [String: Any])
-                    let choices = try XCTUnwrap(status["anyOf"] as? [[String: Any]])
-                    XCTAssertEqual(choices[0]["type"] as? String, "null")
-                    XCTAssertEqual(choices[1]["enum"] as? [String], PichiMeetingSummaryActionStatus.allCases.map(\.rawValue))
-                } else { XCTAssertNil(fields["status"]) }
+            let resolutions = try XCTUnwrap(properties["resolutions"] as? [String: Any])
+            XCTAssertEqual(resolutions["minItems"] as? Int, 2)
+            XCTAssertEqual(resolutions["maxItems"] as? Int, 2)
+            let events = try XCTUnwrap((resolutions["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])
+            for (event, ids, later) in [(7, [4], [2]), (12, [4, 11], [3])] {
+                let branch = try XCTUnwrap(events.first { (($0["properties"] as? [String: Any])?["changeIndex"] as? [String: Any])?["enum"] as? [Int] == [event] })
+                let matches = try XCTUnwrap((branch["properties"] as? [String: Any])?["matches"] as? [String: Any])
+                let choices = try XCTUnwrap((matches["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])
+                XCTAssertEqual(matches["maxItems"] as? Int, ids.count)
+                for (choice, id) in zip(choices, ids) {
+                    let fields = try XCTUnwrap(choice["properties"] as? [String: Any])
+                    XCTAssertEqual((fields["index"] as? [String: Any])?["enum"] as? [Int], [id])
+                    XCTAssertEqual(Set(choice["required"] as? [String] ?? []), Set(actionStates ? ["index", "originalEvidence", "laterEvidence", "status"] : ["index", "originalEvidence", "laterEvidence"]))
+                    for (role, expected) in [("originalEvidence", id == 4 ? [0] : [1]), ("laterEvidence", later)] {
+                        let citations = try XCTUnwrap(fields[role] as? [String: Any])
+                        XCTAssertEqual(citations["minItems"] as? Int, 1)
+                        XCTAssertEqual(citations["maxItems"] as? Int, 8)
+                        let item = try XCTUnwrap(citations["items"] as? [String: Any])
+                        XCTAssertEqual(((item["properties"] as? [String: Any])?["sourceIndex"] as? [String: Any])?["enum"] as? [Int], expected)
+                    }
+                    XCTAssertEqual(fields["status"] != nil, actionStates)
+                }
             }
-            let empty = PichiMeetingSummaryTransport.schema(ledger: true, sourceIndexes: [0], candidateIndexes: [4], candidateSourceIndexes: [4: []])
-            let emptyProperties = try XCTUnwrap(empty["properties"] as? [String: Any])
-            XCTAssertEqual((emptyProperties["updates"] as? [String: Any])?["maxItems"] as? Int, 0)
+            XCTAssertLessThanOrEqual(Self.schemaEnumCount(schema), PichiMeetingSummaryTransport.maximumLedgerSchemaEnumValues)
+        }
+    }
+
+    func testUnrelatedChangeAndAnswerPreserveGroundedFactsAndCurrentCommitments() async throws {
+        var session = self.separateCommitmentsSession()
+        var answer = session.transcriptSegments[6]
+        answer.id = UUID()
+        answer.start = .init(value: 105_000, timescale: 1000)
+        answer.end = .init(value: 106_000, timescale: 1000)
+        answer.text = "Проверка каталога завершена: доступно семь записей."
+        session.transcriptSegments.append(answer)
+        var reviewed = self.separateCommitmentsDocument(session)
+        let cancellation = session.transcriptSegments[4]
+        reviewed.summary.removeAll { $0.evidence.contains { $0.segmentID == cancellation.id } }
+        reviewed.changes = [.init(text: cancellation.text,
+                                 evidence: [.init(segmentID: cancellation.id, quote: cancellation.text)])]
+        reviewed.answers = [.init(text: answer.text, evidence: [.init(segmentID: answer.id, quote: answer.text)])]
+        let transport = SupportReviewTransport(responses: [try self.json(reviewed), try self.json(reviewed),
+                                                         #"{"updates":[]}"#, #"{"updates":[]}"#, #"{"updates":[]}"#])
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.decisions, reviewed.decisions, "A different proposal's cancellation must not supersede the release decision")
+        XCTAssertEqual(result.actions, reviewed.actions, "Unrelated later evidence must not change either commitment or its own citations")
+        XCTAssertEqual(result.openQuestions, reviewed.openQuestions)
+        XCTAssertEqual(result.changes, reviewed.changes, "A change stated only in its source ledger must survive publication")
+        XCTAssertEqual(result.answers, reviewed.answers, "A definite unrelated answer must remain visible without resolving the launch question")
+        XCTAssertTrue(self.separateCommitmentIssues(result, session: session).isEmpty)
+        XCTAssertEqual(try JSONDecoder().decode(PichiMeetingSummaryDocument.self, from: JSONEncoder().encode(result)), result)
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 5, "The existing extraction, review and three ledgers suffice without a new pass or repair")
+        for request in requests.suffix(3) {
+            let input = try XCTUnwrap(request.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            let isQuestion = (request.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting open questions")
+            let laterText = isQuestion ? answer.text : cancellation.text
+            let laterIndex = try XCTUnwrap(sources.first { $0.text == laterText }?.sourceIndex)
+            let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+            XCTAssertTrue(candidates.allSatisfy { $0["laterSourceIndexes"] as? [Int] == [laterIndex] },
+                          "The later citation is structurally legal while remaining unrelated to all supplied work")
+            for candidate in candidates {
+                let originals = try XCTUnwrap(candidate["originalSourceIndexes"] as? [Int])
+                XCTAssertFalse(originals.isEmpty)
+                XCTAssertFalse(originals.contains(laterIndex), "Original-work proof and unrelated later event have separate roles")
+            }
+            let format = try XCTUnwrap(request.extraParameters["response_format"] as? [String: Any])
+            let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let receipts = try XCTUnwrap(properties["resolutions"] as? [String: Any])
+            XCTAssertEqual(receipts["minItems"] as? Int, 1, "Every event has an explicit result, including no-match")
+            let event = try XCTUnwrap(((receipts["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])?.first)
+            let matches = try XCTUnwrap((event["properties"] as? [String: Any])?["matches"] as? [String: Any])
+            XCTAssertNil(matches["minItems"], "Eligible witnesses must not force a semantic match")
         }
     }
 
@@ -1793,15 +2128,267 @@ final class PichiMeetingSummaryTests: XCTestCase {
         _ = try ModelSource.catalog(from: fields)
         let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
         XCTAssertEqual(candidates.compactMap { $0["index"] as? Int }, [0, 1])
-        XCTAssertEqual(candidates[0]["allowedSourceIndexes"] as? [Int], [1, 2, 3])
-        XCTAssertEqual(candidates[1]["allowedSourceIndexes"] as? [Int], [2, 3], "An equal-time witness legal for another candidate remains forbidden here")
+        XCTAssertEqual(candidates[0]["laterSourceIndexes"] as? [Int], [1, 2, 3])
+        XCTAssertEqual(candidates[1]["laterSourceIndexes"] as? [Int], [2, 3], "An equal-time witness legal for another candidate remains forbidden here")
         let format = try XCTUnwrap(requests[0].extraParameters["response_format"] as? [String: Any])
         let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
         let schemaProperties = try XCTUnwrap(schema["properties"] as? [String: Any])
-        let updates = try XCTUnwrap(schemaProperties["updates"] as? [String: Any])
-        let branches = try XCTUnwrap((updates["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])
-        XCTAssertEqual(branches.count, 2)
-        XCTAssertTrue((requests[0].messages.first?["content"] as? String ?? "").contains("ONLY from its allowedSourceIndexes"))
+        let resolutions = try XCTUnwrap(schemaProperties["resolutions"] as? [String: Any])
+        let branches = try XCTUnwrap((resolutions["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])
+        XCTAssertEqual(branches.count, 4, "Each supplied event needs a receipt, even if temporally ineligible for every candidate")
+        XCTAssertEqual(resolutions["minItems"] as? Int, 4)
+        XCTAssertTrue((requests[0].messages.first?["content"] as? String ?? "").contains("originalEvidence"))
+        XCTAssertTrue((requests[0].messages.first?["content"] as? String ?? "").contains("that candidate's laterSourceIndexes"))
+    }
+
+    func testLedgerCitationIndexesRejectBooleanStringAndFractionTokensInBothRoles() async throws {
+        let fixture = self.ledgerIndexTypeFixture()
+        // false->0 and true->1 would be valid witnesses if Foundation bridge
+        // coercion bypassed the existing JSONDecoder integer boundary.
+        for (original, later) in [("false", "1"), ("0", "true"), ("false", "true"),
+                                  ("\"0\"", "1"), ("0", "\"1\""), ("0.25", "1"), ("0", "1.25")] {
+            for repair in [false, true] {
+                let transport = CitationScalarTransport(document: try self.json(fixture.document), original: original, later: later, repair: repair)
+                let generator = PichiMeetingSummaryGenerator(complete: { try await transport.complete($0) }, prepare: { configuration in
+                    .init(configuration: configuration, release: { await transport.release() })
+                })
+                do {
+                    let result = try await generator.generate(session: fixture.session, configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+                    XCTAssertTrue(repair, "Non-integer references must never hydrate a witness: \(original), \(later)")
+                    XCTAssertEqual(result.openQuestions.first?.resolved, true)
+                    XCTAssertEqual(result.openQuestions.first?.evidence, fixture.document.openQuestions[0].evidence + fixture.document.answers![0].evidence)
+                } catch PichiMeetingSummaryValidationIssue.unknownSource {
+                    XCTAssertFalse(repair, "The repaired integer receipt must succeed")
+                }
+                let requests = await transport.ledgerRequests
+                XCTAssertEqual(requests.count, 2, "Exactly one regeneration, with no accepted prefix or third attempt")
+                if requests.count == 2 {
+                    XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String)
+                }
+                XCTAssertNil(requests.first?.extraParameters["response_format"], "An API ignoring structured output still obeys the same integer codec")
+                let releases = await transport.releases
+                XCTAssertEqual(releases, 1, "Repair success and final rejection both join the attempt's sole release")
+            }
+        }
+    }
+
+    func testLedgerCitationIndexesAcceptJSONSchemaIntegralNumbersInBothRoles() async throws {
+        let fixture = self.ledgerIndexTypeFixture()
+        for (original, later) in [("0", "1"), ("0.0", "1e0"), ("0e0", "1.0")] {
+            let transport = CitationScalarTransport(document: try self.json(fixture.document), original: original, later: later, repair: false)
+            let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: fixture.session, configuration: self.configuration())
+            XCTAssertEqual(result.openQuestions.first?.resolved, true, "JSON Schema integer includes mathematically integral JSON numbers")
+            XCTAssertEqual(result.openQuestions.first?.evidence, fixture.document.openQuestions[0].evidence + fixture.document.answers![0].evidence)
+            let requests = await transport.ledgerRequests
+            XCTAssertEqual(requests.count, 1, "Valid integral tokens must not require regeneration")
+        }
+    }
+
+    private func ledgerIndexTypeFixture() -> (session: MeetingSession, document: PichiMeetingSummaryDocument) {
+        var session = self.session()
+        session.transcriptSegments[0].text = "Когда будет готов отчёт?"
+        var answer = session.transcriptSegments[0]
+        answer.id = UUID()
+        answer.start = .init(value: 60_000, timescale: 1000)
+        answer.text = "Отчёт будет готов в пятницу."
+        session.transcriptSegments.append(answer)
+        let original = PichiMeetingSummaryEvidence(segmentID: session.transcriptSegments[0].id, quote: session.transcriptSegments[0].text)
+        let later = PichiMeetingSummaryEvidence(segmentID: answer.id, quote: answer.text)
+        return (session, .init(summary: [.init(text: "Обсудили срок отчёта.", evidence: [original])], decisions: [], actions: [],
+            openQuestions: [.init(text: "Когда будет готов отчёт?", evidence: [original])],
+            answers: [.init(text: "Отчёт будет готов в пятницу.", evidence: [later])]))
+    }
+
+    private actor CitationScalarTransport {
+        let document: String
+        let original: String
+        let later: String
+        let repair: Bool
+        var ledgerRequests: [LLMClient.Config] = []
+        var releases = 0
+        init(document: String, original: String, later: String, repair: Bool) {
+            self.document = document; self.original = original; self.later = later; self.repair = repair
+        }
+        func complete(_ config: LLMClient.Config) throws -> String {
+            if let review = try PichiMeetingSummaryTests.identityReview(config) { return review }
+            guard (config.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") else { return self.document }
+            self.ledgerRequests.append(config)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(config.messages.last?["content"] as? String).utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            XCTAssertEqual(sources.map(\.sourceIndex), [0, 1], "Both boolean bridge targets must actually be valid source indexes")
+            let candidate = try XCTUnwrap((fields["candidates"] as? [[String: Any]])?.first)
+            XCTAssertEqual(candidate["originalSourceIndexes"] as? [Int], [0])
+            XCTAssertEqual(candidate["laterSourceIndexes"] as? [Int], [1])
+            let original = self.repair && self.ledgerRequests.count == 2 ? "0" : self.original
+            let later = self.repair && self.ledgerRequests.count == 2 ? "1" : self.later
+            // Raw JSON tokens survive intact inside the nested role arrays; no
+            // scripted legacy adapter or NSNumber-to-Int fixture conversion.
+            return "{\"resolutions\":[{\"changeIndex\":0,\"matches\":[{\"index\":0,\"originalEvidence\":[{\"sourceIndex\":\(original)}],\"laterEvidence\":[{\"sourceIndex\":\(later)}]}]}]}"
+        }
+        func release() { self.releases += 1 }
+    }
+
+    func testResolutionReceiptsRejectIncompleteDuplicateAndWrongRoleEvidenceWithoutPublishingPrefix() async throws {
+        let fixture = self.ledgerRepairFixture()
+        for mutation in ["missing", "duplicate-change", "unknown-change", "duplicate-candidate", "unknown-candidate",
+                         "wrong-original", "wrong-event", "equal-earlier", "unknown-source", "missing-role", "extra-field", "status", "too-many-citations", "legacy"] {
+            let transport = ResolutionFixtureTransport(document: try self.json(fixture.document), mutation: mutation)
+            do {
+                _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: fixture.session, configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+                XCTFail("A malformed full receipt must not publish a valid prefix: \(mutation)")
+            } catch { XCTAssertTrue(error is PichiMeetingSummaryError || error is PichiMeetingSummaryValidationIssue, "\(mutation): \(error)") }
+            let requests = await transport.ledgerRequests
+            XCTAssertEqual(requests.count, 2, "Exactly one bounded regeneration for \(mutation)")
+            XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String)
+            XCTAssertNil(requests[0].extraParameters["response_format"], "Compatible providers must obey the same runtime contract")
+        }
+    }
+
+    func testMalformedLedgerJSONRegeneratesOnceThenEitherAcceptsFullReceiptOrRejects() async throws {
+        let fixture = self.ledgerRepairFixture()
+        for mutation in ["malformed-first", "malformed-both"] {
+            let transport = ResolutionFixtureTransport(document: try self.json(fixture.document), mutation: mutation)
+            do {
+                let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                    .generate(session: fixture.session, configuration: self.configuration())
+                XCTAssertEqual(mutation, "malformed-first", "Two malformed responses must fail closed")
+                XCTAssertTrue(result.openQuestions.allSatisfy { $0.resolved == true })
+            } catch PichiMeetingSummaryError.invalidOutput { XCTAssertEqual(mutation, "malformed-both") }
+            let requests = await transport.ledgerRequests
+            XCTAssertEqual(requests.count, 2, "A syntactically invalid response gets exactly one bounded regeneration")
+            XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String)
+        }
+    }
+
+    func testResolutionReceiptsResolveOnlyTheMatchingQuestionAndRetainUnmatchedFacts() async throws {
+        let fixture = self.ledgerRepairFixture()
+        let transport = ResolutionFixtureTransport(document: try self.json(fixture.document), mutation: "one-answer")
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: fixture.session, configuration: self.configuration())
+        XCTAssertEqual(result.openQuestions[0].resolved, true)
+        XCTAssertNil(result.openQuestions[1].resolved, "An explicit unmatched answer must not resolve the other issue")
+        XCTAssertEqual(result.openQuestions[1], fixture.document.openQuestions[1])
+        XCTAssertEqual(result.answers, fixture.document.answers)
+        XCTAssertEqual(Set(result.openQuestions[0].evidence.map(\.segmentID)), Set([fixture.session.transcriptSegments[0].id, fixture.session.transcriptSegments[2].id]))
+        XCTAssertNoThrow(try result.validated(against: PichiMeetingSummaryInput.turns(for: fixture.session)))
+    }
+
+    func testSameCandidateCanAcceptThenCompleteAcrossChronologicalReceiptsWithPronounContext() async throws {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = ["Иван, подготовь отчёт к пятнице.", "Согласен, сделаю это.", "Это готово, работу завершил."].enumerated().map { index, text in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 60_000), timescale: 1000)
+            segment.text = text
+            return segment
+        }
+        let evidence = session.transcriptSegments.map { PichiMeetingSummaryEvidence(segmentID: $0.id, quote: $0.text) }
+        let original = PichiMeetingSummaryItem(text: "Подготовить отчёт.", evidence: [evidence[0]], owner: "Иван", deadline: "к пятнице",
+                                              title: "Подготовить отчёт", status: .requested, urgency: .unspecified)
+        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили подготовку отчёта.", evidence: [evidence[0]])],
+            decisions: [], actions: [original], openQuestions: [], changes: [
+                .init(text: "Участник принял поручение.", evidence: [evidence[1]]),
+                .init(text: "Участник сообщил о завершении этой работы.", evidence: [evidence[2]])])
+        var outputs: [PichiMeetingSummaryDocument] = []
+        for reverse in [false, true] {
+            let transport = SequentialResolutionTransport(document: try self.json(document), reverse: reverse)
+            let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: session, configuration: self.configuration())
+            var expected = original
+            expected.status = .completed
+            expected.superseded = true
+            expected.evidence = evidence
+            XCTAssertEqual(result.actions, [expected], "Two events for one candidate are applied by source chronology, preserving immutable fields")
+            XCTAssertEqual(result.changes, document.changes)
+            let requests = await transport.ledgerRequests
+            XCTAssertEqual(requests.count, 1, "No extra matching pass or inference call")
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(requests[0].messages.last?["content"] as? String).utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            XCTAssertEqual(sources.map(\.seconds), [0, 60, 120])
+            XCTAssertEqual(sources.map(\.speaker), ["Иван", "Иван", "Иван"])
+            XCTAssertEqual(sources.map(\.text), session.transcriptSegments.map(\.text), "Original work plus ordered pronoun context reaches the same request")
+            outputs.append(result)
+        }
+        XCTAssertEqual(outputs[0], outputs[1])
+    }
+
+    private actor ResolutionFixtureTransport {
+        let document: String
+        let mutation: String
+        var ledgerRequests: [LLMClient.Config] = []
+        init(document: String, mutation: String) { self.document = document; self.mutation = mutation }
+        func complete(_ config: LLMClient.Config) throws -> String {
+            if let review = try PichiMeetingSummaryTests.identityReview(config) { return review }
+            guard (config.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") else { return self.document }
+            self.ledgerRequests.append(config)
+            if self.mutation == "malformed-both" || (self.mutation == "malformed-first" && self.ledgerRequests.count == 1) {
+                return "{\"resolutions\":["
+            }
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(config.messages.last?["content"] as? String).utf8)) as? [String: Any])
+            let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+            let events = try XCTUnwrap(fields["changes"] as? [[String: Any]])
+            var receipts = try events.map { event -> [String: Any] in
+                let time = try XCTUnwrap(event["sourceSeconds"] as? Double)
+                var matches: [[String: Any]] = []
+                if time == 120 || (time == 180 && self.mutation != "one-answer") {
+                    let candidate = try XCTUnwrap(candidates.first { $0["lastSourceSeconds"] as? Double == time - 120 })
+                    let original = try XCTUnwrap((candidate["item"] as? [String: Any])?["evidence"] as? [[String: Any]])
+                    let later = try XCTUnwrap((event["item"] as? [String: Any])?["evidence"] as? [[String: Any]])
+                    matches = [["index": try XCTUnwrap(candidate["index"] as? Int), "originalEvidence": original, "laterEvidence": later]]
+                }
+                return ["changeIndex": try XCTUnwrap(event["changeIndex"] as? Int), "matches": matches]
+            }
+            if self.mutation == "missing" { receipts.removeFirst() }
+            else if self.mutation == "duplicate-change" { receipts[3]["changeIndex"] = receipts[0]["changeIndex"] }
+            else if self.mutation == "unknown-change" { receipts[3]["changeIndex"] = 99 }
+            else if self.mutation == "legacy" { return "{\"updates\":[]}" }
+            else if self.mutation != "one-answer" {
+                var matches = try XCTUnwrap(receipts[3]["matches"] as? [[String: Any]])
+                var match = try XCTUnwrap(matches.first)
+                switch self.mutation {
+                case "duplicate-candidate": matches.append(match)
+                case "unknown-candidate": match["index"] = 99
+                case "wrong-original": match["originalEvidence"] = [["sourceIndex": 0]]
+                case "wrong-event": match["laterEvidence"] = [["sourceIndex": 2]]
+                case "equal-earlier": match["laterEvidence"] = [["sourceIndex": 1]]
+                case "unknown-source": match["laterEvidence"] = [["sourceIndex": 999]]
+                case "missing-role": match.removeValue(forKey: "originalEvidence")
+                case "extra-field": match["text"] = "A rewritten candidate is forbidden."
+                case "status": match["status"] = NSNull()
+                case "too-many-citations": match["laterEvidence"] = Array(repeating: ["sourceIndex": 3], count: 9)
+                default: break
+                }
+                matches[0] = match
+                receipts[3]["matches"] = matches
+            }
+            return try PichiMeetingSummaryTests.wireJSON(["resolutions": receipts])
+        }
+    }
+
+    private actor SequentialResolutionTransport {
+        let document: String
+        let reverse: Bool
+        var ledgerRequests: [LLMClient.Config] = []
+        init(document: String, reverse: Bool) { self.document = document; self.reverse = reverse }
+        func complete(_ config: LLMClient.Config) throws -> String {
+            if let review = try PichiMeetingSummaryTests.identityReview(config) { return review }
+            guard (config.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") else { return self.document }
+            self.ledgerRequests.append(config)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(config.messages.last?["content"] as? String).utf8)) as? [String: Any])
+            let candidate = try XCTUnwrap((fields["candidates"] as? [[String: Any]])?.first)
+            let original = try XCTUnwrap((candidate["item"] as? [String: Any])?["evidence"] as? [[String: Any]])
+            let events = try XCTUnwrap(fields["changes"] as? [[String: Any]])
+            let receipts = try events.map { event -> [String: Any] in
+                let later = try XCTUnwrap((event["item"] as? [String: Any])?["evidence"] as? [[String: Any]])
+                let status = event["sourceSeconds"] as? Double == 60 ? "agreed" : "completed"
+                return ["changeIndex": try XCTUnwrap(event["changeIndex"] as? Int), "matches": [[
+                    "index": try XCTUnwrap(candidate["index"] as? Int), "originalEvidence": original, "laterEvidence": later, "status": status]]]
+            }
+            return try PichiMeetingSummaryTests.wireJSON(["resolutions": self.reverse ? Array(receipts.reversed()) : receipts])
+        }
     }
 
     func testNoEligibleFutureWitnessMakesNoLedgerRequestAndPreservesOriginalQuestions() async throws {
@@ -1829,7 +2416,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             _ = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
                 .generate(session: fixture.session, configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
             XCTFail("A later literal quote without a matching change/answer event cannot resolve a candidate")
-        } catch PichiMeetingSummaryError.invalidEvidence {}
+        } catch PichiMeetingSummaryValidationIssue.unknownSource {}
         let count = await transport.ledgerRequests.count
         XCTAssertEqual(count, 2, "An API ignoring schema still receives at most one regeneration before whole-attempt rejection")
     }
@@ -1868,6 +2455,47 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(indexes.sorted(), Array(0..<30), "Every eligible candidate survives the bounded schema batches exactly once")
     }
 
+    func testNoMatchInEarlierCandidateBatchDoesNotDropTrueMatchInLaterBatch() async throws {
+        var session = self.session()
+        session.transcriptSegments[0].text = "Вопрос."
+        var later = session.transcriptSegments[0]
+        later.id = UUID()
+        later.start = .init(value: 60_000, timescale: 1000)
+        let quotes = (0..<64).map { "П\($0)." }
+        later.text = quotes.joined(separator: " ")
+        session.transcriptSegments.append(later)
+        let original = PichiMeetingSummaryEvidence(segmentID: self.id, quote: "Вопрос.")
+        let questions = (0..<30).map { PichiMeetingSummaryItem(text: "Вопрос \($0)?", evidence: [original]) }
+        let answers = stride(from: 0, to: 64, by: 8).map { start in
+            PichiMeetingSummaryItem(text: "Уточнили ответ \(start).", evidence: quotes[start..<(start + 8)].map { .init(segmentID: later.id, quote: $0) })
+        }
+        let document = PichiMeetingSummaryDocument(summary: [.init(text: "Обсудили вопросы.", evidence: [original])],
+            decisions: [], actions: [], openQuestions: questions, answers: answers)
+        let transport = LedgerRepairTransport(document: try self.json(document), responses: [], targetIndex: 29)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.openQuestions[29].resolved, true)
+        XCTAssertEqual(Array(result.openQuestions.prefix(29)), Array(questions.prefix(29)))
+        XCTAssertEqual(result.openQuestions[29].text, questions[29].text)
+        XCTAssertTrue(Set(questions[29].evidence).isSubset(of: Set(result.openQuestions[29].evidence)))
+        let requests = await transport.ledgerRequests
+        XCTAssertGreaterThan(requests.count, 1)
+        var indexes: [Int] = []
+        for config in requests {
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(config.messages.last?["content"] as? String).utf8)) as? [String: Any])
+            let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+            indexes += candidates.compactMap { $0["index"] as? Int }
+            let sources = try ModelSource.catalog(from: fields)
+            XCTAssertLessThanOrEqual(sources.count, 128, "Both witness roles share the total catalog cap")
+            let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+            XCTAssertLessThanOrEqual(input.utf8.count, 64_000)
+            let format = try XCTUnwrap(config.extraParameters["response_format"] as? [String: Any])
+            let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
+            XCTAssertLessThanOrEqual(Self.schemaEnumCount(schema), PichiMeetingSummaryTransport.maximumLedgerSchemaEnumValues)
+        }
+        XCTAssertEqual(indexes.sorted(), Array(0..<30), "Every eligible candidate survives the bounded schema batches exactly once")
+    }
+
     private nonisolated static func schemaEnumCount(_ value: Any) -> Int {
         if let fields = value as? [String: Any] {
             return ((fields["enum"] as? [Any])?.count ?? 0)
@@ -1899,6 +2527,13 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(Set(result.openQuestions[1].evidence.map(\.segmentID)), Set([fixture.session.transcriptSegments[1].id, fixture.session.transcriptSegments[3].id]))
         let requests = await transport.ledgerRequests
         XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].apiKey, requests[1].apiKey)
+        XCTAssertEqual(requests[0].providerOptions, requests[1].providerOptions)
+        XCTAssertEqual(requests[0].streaming, requests[1].streaming)
+        XCTAssertEqual(requests[0].maxRetries, requests[1].maxRetries)
+        XCTAssertEqual(requests[0].retryDelayMs, requests[1].retryDelayMs)
+        XCTAssertEqual(try Self.wireJSON(requests[0].extraParameters), try Self.wireJSON(requests[1].extraParameters),
+                       "Repair must retain the exact schema, immutable artifact and provider execution options")
         XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String,
                        "Rejected response cannot mutate the snapshot, source catalog or candidate index batch")
         for config in requests {
@@ -1918,7 +2553,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let feedback = try XCTUnwrap(requests[1].messages.first?["content"] as? String)
         XCTAssertTrue(feedback.contains("strictly GREATER"))
         XCTAssertTrue(feedback.contains("equal-time and earlier witnesses are invalid"))
-        XCTAssertTrue(feedback.contains("COMPLETE updates array"))
+        XCTAssertTrue(feedback.contains("COMPLETE resolutions array"))
         XCTAssertTrue(feedback.contains("Never return only a valid prefix of the rejected response"))
         XCTAssertTrue(feedback.contains("Never drop a known supported update merely to hide a structure or citation-limit error"))
         XCTAssertFalse(feedback.contains(fixture.session.transcriptSegments[0].text), "No private speech or expected answer in validation feedback")
@@ -2021,13 +2656,15 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let responses: [String]
         let failure: Failure?
         let entered: XCTestExpectation?
+        let targetIndex: Int?
         var ledgerRequests: [LLMClient.Config] = []
         var events: [String] = []
-        init(document: String, responses: [String], failure: Failure? = nil, entered: XCTestExpectation? = nil) {
+        init(document: String, responses: [String], failure: Failure? = nil, entered: XCTestExpectation? = nil, targetIndex: Int? = nil) {
             self.document = document
             self.responses = responses
             self.failure = failure
             self.entered = entered
+            self.targetIndex = targetIndex
         }
         func complete(_ config: LLMClient.Config) async throws -> String {
             if let review = try PichiMeetingSummaryTests.identityReview(config) { return review }
@@ -2044,8 +2681,24 @@ final class PichiMeetingSummaryTests: XCTestCase {
             case .outputLimit: throw PichiMeetingSummaryError.outputLimit
             case nil: break
             }
+            if let targetIndex {
+                let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(config.messages.last?["content"] as? String).utf8)) as? [String: Any])
+                let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+                let events = try XCTUnwrap(fields["changes"] as? [[String: Any]])
+                let target = candidates.first { $0["index"] as? Int == targetIndex }
+                let receipts = try events.enumerated().map { offset, event -> [String: Any] in
+                    var matches: [[String: Any]] = []
+                    if offset == 0, let target {
+                        let original = try XCTUnwrap((target["item"] as? [String: Any])?["evidence"] as? [[String: Any]])
+                        let later = try XCTUnwrap((event["item"] as? [String: Any])?["evidence"] as? [[String: Any]])
+                        matches = [["index": targetIndex, "originalEvidence": original, "laterEvidence": later]]
+                    }
+                    return ["changeIndex": try XCTUnwrap(event["changeIndex"] as? Int), "matches": matches]
+                }
+                return try PichiMeetingSummaryTests.wireJSON(["resolutions": receipts])
+            }
             guard self.responses.indices.contains(self.ledgerRequests.count - 1) else { throw URLError(.badServerResponse) }
-            return self.responses[self.ledgerRequests.count - 1]
+            return try PichiMeetingSummaryTests.scriptedLedgerReceipts(self.responses[self.ledgerRequests.count - 1], config: config)
         }
         func release() { self.events.append("release") }
     }
@@ -2113,6 +2766,80 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.turns(for: session).count, 3)
     }
 
+    func testSupportReviewRepairsSeparateCommitmentStatusDeadlineAndCrossTaskEvidence() async throws {
+        // Reproduces the three semantic defects observed in the synthetic native
+        // qwen3.5:4b result. Scripted correction proves pipeline wiring, not model quality.
+        let session = self.separateCommitmentsSession()
+        let corrected = self.separateCommitmentsDocument(session)
+        var candidate = corrected
+        candidate.actions[0].status = .requested
+        candidate.actions[0].deadline = nil
+        candidate.actions[1].evidence.append(corrected.actions[0].evidence[0])
+        XCTAssertNoThrow(try candidate.validated(against: PichiMeetingSummaryInput.turns(for: session)),
+                         "Literal quote membership does not establish speech act, completeness or citation relevance")
+        XCTAssertEqual(self.separateCommitmentIssues(candidate, session: session),
+                       ["A commitment must be agreed", "A deadline must be literal сегодня", "B evidence must support only B's report task"])
+        let transport = SupportReviewTransport(responses: [try self.json(candidate), try self.json(corrected)])
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.actions, corrected.actions)
+        XCTAssertTrue(self.separateCommitmentIssues(result, session: session).isEmpty)
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 2, "Repair uses the existing extraction and one support review")
+        let input = try XCTUnwrap(requests.last?.messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        let sources = try ModelSource.catalog(from: fields)
+        XCTAssertEqual(sources.map(\.text), session.transcriptSegments.map(\.text))
+        XCTAssertEqual(sources.map(\.speaker), ["Тестовый участник А", "Тестовый участник А", "Тестовый участник Б",
+                                               "Тестовый участник А", "Тестовый участник Б", "Тестовый участник А", "Тестовый участник Б"])
+        let reviewedCandidate = try XCTUnwrap(fields["candidate"] as? [String: Any])
+        let actions = try XCTUnwrap(reviewedCandidate["actions"] as? [[String: Any]])
+        XCTAssertEqual(actions.first?["status"] as? String, "requested")
+        XCTAssertNil(actions.first?["deadline"], "The uncorrected candidate omitted A's stated deadline")
+        XCTAssertEqual((actions.last?["evidence"] as? [[String: Any]])?.count, 2,
+                       "The reviewer receives the actual faulty candidate, including its irrelevant citation")
+    }
+
+    func testSeparateCommitmentOracleAcceptsParaphrasedProseButRejectsReactivatedProposalAndFalseAnswer() {
+        let session = self.separateCommitmentsSession()
+        var document = self.separateCommitmentsDocument(session)
+        // Only owners/deadlines must be verbatim. Prose may paraphrase the same
+        // facts; lexical checks cannot establish semantic entailment.
+        func replacingText(_ item: PichiMeetingSummaryItem, _ text: String) -> PichiMeetingSummaryItem {
+            .init(text: text, evidence: item.evidence, owner: item.owner, deadline: item.deadline,
+                  title: item.title, status: item.status, urgency: item.urgency)
+        }
+        document.summary[1] = replacingText(document.summary[1], "От замены API endpoint отказались; старый адрес сохранён.")
+        document.decisions[0] = replacingText(document.decisions[0], "Отчёт можно выпустить после проверки.")
+        document.actions[0] = replacingText(document.actions[0], "Проверить локализацию и English API labels.")
+        document.actions[1] = replacingText(document.actions[1], "Подготовить результаты встречи в документе.")
+        document.openQuestions[0] = replacingText(document.openQuestions[0], "Когда запустим тестовый выпуск?")
+        XCTAssertNoThrow(try document.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+        XCTAssertTrue(self.separateCommitmentIssues(document, session: session).isEmpty)
+        var activeReplacement = document.summary[1]
+        activeReplacement.title = "Заменить API endpoint"
+        activeReplacement.status = .proposed
+        activeReplacement.urgency = .unspecified
+        document.actions.append(activeReplacement)
+        document.openQuestions[0].resolved = true
+        XCTAssertEqual(self.separateCommitmentIssues(document, session: session),
+                       ["Source for the cancelled proposal must not support current unrelated work", "The launch-date question must remain unanswered"])
+    }
+
+    func testSeparateCommitmentOracleRejectsSupersededReleaseAndUnrelatedReleaseCitation() {
+        let session = self.separateCommitmentsSession()
+        let expected = self.separateCommitmentsDocument(session)
+        var historical = expected
+        historical.decisions[0].superseded = true
+        XCTAssertEqual(self.separateCommitmentIssues(historical, session: session), ["Retain the report-release decision"])
+        var unrelated = expected
+        unrelated.decisions[0].evidence.append(.init(segmentID: session.transcriptSegments[4].id,
+                                                   quote: session.transcriptSegments[4].text))
+        XCTAssertEqual(self.separateCommitmentIssues(unrelated, session: session), ["Retain the report-release decision"])
+    }
+
     func testSupportReviewRecoversSeparateDecisionAndAssignedTaskFromRecapOnlyCandidate() async throws {
         let evidence: [[String: Any]] = [["sourceIndex": 0]]
         let recap: [[String: Any]] = [["text": "Иван подготовит отчёт к пятнице. Решили оставить текущую цену.", "evidence": evidence]]
@@ -2139,10 +2866,14 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let requests = await transport.requests
         XCTAssertEqual(requests.count, 2, "Coverage recovery shares the existing single review, with no extra inference pass")
         let input = try XCTUnwrap(requests[1].messages.last?["content"] as? String)
-        let sourceRange = try XCTUnwrap(input.range(of: "\"sources\":"))
-        let candidateRange = try XCTUnwrap(input.range(of: "\"candidate\":"))
-        XCTAssertLessThan(sourceRange.lowerBound, candidateRange.lowerBound,
-                          "Original speech must precede a fallible recap-only candidate in the source-first review")
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        let sources = try ModelSource.catalog(from: fields)
+        XCTAssertEqual(sources.map(\.text), session.transcriptSegments.map(\.text),
+                       "Omission recovery must retain every original excerpt regardless of JSON key order")
+        XCTAssertEqual(sources.map(\.sourceIndex), Array(sources.indices))
+        XCTAssertEqual(try Self.wireJSON(try XCTUnwrap(fields["candidate"] as? [String: Any])), try Self.wireJSON(candidate),
+                       "The reviewer must receive the entire fallible candidate, including its omitted tasks")
+        XCTAssertEqual(input, try Self.wireJSON(fields), "Review input must use the canonical complete JSON payload")
     }
 
     func testSupportReviewReplacesPendingChoiceWithUnresolvedQuestionAndKeepsUnknownAssignment() async throws {
@@ -2278,7 +3009,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
             let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
             XCTAssertNotNil(properties["actions"])
-            XCTAssertNil(properties["updates"], "Revision returns the existing complete document, not a new ledger/patch schema")
+            XCTAssertNil(properties["resolutions"], "Revision returns the existing complete document, not a new ledger/patch schema")
         }
     }
 
@@ -2309,9 +3040,45 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 }
             }
             guard self.responses.indices.contains(self.requests.count - 1) else { throw URLError(.badServerResponse) }
-            return self.responses[self.requests.count - 1]
+            return try PichiMeetingSummaryTests.scriptedLedgerReceipts(self.responses[self.requests.count - 1], config: config)
         }
         func release() { self.events.append("release") }
+    }
+
+    /// Migrate existing scripted lifecycle fixtures to explicit event receipts.
+    /// This is test data assembly, not provider compatibility or semantic judgment.
+    /// Deliberately bad indexes, citations, status and duplicates stay bad.
+    private nonisolated static func scriptedLedgerReceipts(_ response: String, config: LLMClient.Config) throws -> String {
+        guard (config.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting"),
+              let raw = try JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any],
+              let updates = raw["updates"] as? [[String: Any]] else { return response }
+        let input = try XCTUnwrap(config.messages.last?["content"] as? String)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+        let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+        let events = try XCTUnwrap(fields["changes"] as? [[String: Any]])
+        let sources = try ModelSource.catalog(from: fields)
+        var receipts = try events.map { ["changeIndex": try XCTUnwrap($0["changeIndex"] as? Int), "matches": []] as [String: Any] }
+        for update in updates {
+            let candidate = candidates.first { $0["index"] as? Int == update["index"] as? Int }
+            let evidence = (update["evidence"] as? [[String: Any]] ?? []).map { citation -> [String: Any] in
+                if citation["sourceIndex"] != nil { return citation }
+                let source = sources.first { $0.text == citation["quote"] as? String }
+                return ["sourceIndex": source?.sourceIndex ?? 999]
+            }
+            let eventIndex = events.firstIndex { event in
+                let item = event["item"] as? [String: Any]
+                let choices = item?["evidence"] as? [[String: Any]] ?? []
+                return evidence.contains { citation in choices.contains { $0["sourceIndex"] as? Int == citation["sourceIndex"] as? Int } }
+            } ?? 0
+            let item = (candidate ?? candidates.first)?["item"] as? [String: Any]
+            let original = (item?["evidence"] as? [[String: Any]])?.prefix(1).map { $0 } ?? [["sourceIndex": 999]]
+            var match: [String: Any] = ["index": update["index"] ?? NSNull(), "originalEvidence": original, "laterEvidence": evidence]
+            if let status = update["status"] { match["status"] = status }
+            var matches = receipts[eventIndex]["matches"] as? [[String: Any]] ?? []
+            matches.append(match)
+            receipts[eventIndex]["matches"] = matches
+        }
+        return try self.wireJSON(["resolutions": receipts])
     }
 
     /// Existing extraction/ledger fixtures are not semantic model judges. Their
@@ -2435,7 +3202,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
             if self.failTransport { throw URLError(.cannotConnectToHost) }
             let index = self.requests.count - 1
             guard self.responses.indices.contains(index) else { throw URLError(.badServerResponse) }
-            return self.responses[index]
+            return try PichiMeetingSummaryTests.scriptedLedgerReceipts(self.responses[index], config: config)
         }
     }
 
@@ -2671,6 +3438,19 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(first.cacheIdentity.count, 64)
     }
 
+    func testRelationReceiptRevisionInvalidatesPriorPromptCacheIdentity() throws {
+        let configuration = self.configuration()
+        for version in [19, 20, 21] {
+            let priorPayload: [String: Any] = ["version": version, "provider": configuration.providerID,
+                "model": configuration.modelID, "endpoint": configuration.baseURL, "language": configuration.language,
+                "execution": configuration.execution.identity, "connection": configuration.connectionOptions]
+            let priorData = try JSONSerialization.data(withJSONObject: priorPayload, options: [.sortedKeys])
+            let priorIdentity = SHA256.hash(data: priorData).map { String(format: "%02x", $0) }.joined()
+            XCTAssertNotEqual(configuration.baseCacheIdentity, priorIdentity,
+                              "A summary from a prior generation contract cannot be treated as current without regeneration")
+        }
+    }
+
     @MainActor
     func testCachedArtifactResolvesDigestAndOfflineCacheIsHistorical() async throws {
         let session = self.session()
@@ -2836,6 +3616,99 @@ final class PichiMeetingSummaryTests: XCTestCase {
                                             sourceTrackID: trackID, speakerID: speakerID, text: self.turns[0].text,
                                             revision: 0, status: .final, overlap: .none, completeness: .complete)]
         return session
+    }
+
+    /// Exact invented speech from the native E2E fixture, without app history,
+    /// persistence IDs, audio or a golden answer in any model-facing prompt.
+    private func separateCommitmentsSession() -> MeetingSession {
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        let speakerA = UUID()
+        let speakerB = UUID()
+        session.speakers = [(speakerA, "Тестовый участник А"), (speakerB, "Тестовый участник Б")].map { id, name in
+            .init(id: id, displayName: name, diarizationClusterID: "synthetic-\(name)",
+                  trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        let texts = [
+            "Это полностью синтетическая встреча для E2E. Обсуждаем тестовый выпуск Ёж и работу API.",
+            "Решили выпустить тестовый отчёт после проверки, без изменения пользовательских данных.",
+            "Я, Тестовый участник Б, подготовлю тестовый отчёт к пятнице. Это согласованная задача обычной срочности.",
+            "Я, Тестовый участник А, сегодня проверю русский текст, буквы Ё и ё, а также English API labels.",
+            "Предложение заменить API endpoint отменили. Остаётся прежний адрес, новые credentials не нужны.",
+            "Срок запуска тестового выпуска пока не определён. Кто подтвердит дату запуска? Это открытый вопрос.",
+            "После проверки сравним решения, задачи и открытые вопросы. На этом синтетическая встреча завершена.",
+        ]
+        session.transcriptSegments = texts.enumerated().map { index, text in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 15_000), timescale: 1000)
+            segment.end = .init(value: Int64(index * 15_000 + 10_000), timescale: 1000)
+            segment.speakerID = [speakerA, speakerA, speakerB, speakerA, speakerB, speakerA, speakerB][index]
+            segment.text = text
+            return segment
+        }
+        return session
+    }
+
+    private func separateCommitmentsDocument(_ session: MeetingSession) -> PichiMeetingSummaryDocument {
+        func item(_ text: String, _ index: Int) -> PichiMeetingSummaryItem {
+            let segment = session.transcriptSegments[index]
+            return .init(text: text, evidence: [.init(segmentID: segment.id, quote: segment.text)])
+        }
+        var a = item("Проверить русский текст, Ё и ё и English API labels.", 3)
+        a.title = "Проверить текст"
+        a.owner = "Тестовый участник А"
+        a.deadline = "сегодня"
+        a.status = .agreed
+        a.urgency = .unspecified
+        var b = item("Подготовить тестовый отчёт.", 2)
+        b.title = "Подготовить отчёт"
+        b.owner = "Тестовый участник Б"
+        b.deadline = "к пятнице"
+        b.status = .agreed
+        b.urgency = .normal
+        return .init(summary: [item("Синтетический выпуск Ёж и API.", 0), item("Замену API endpoint отменили; прежний адрес остаётся.", 4)],
+                     decisions: [item("Выпустить тестовый отчёт после проверки без изменения пользовательских данных.", 1)],
+                     actions: [a, b], openQuestions: [item("Кто подтвердит дату запуска?", 5)])
+    }
+
+    /// Fixture-specific semantic oracle. It deliberately adds no heuristic to the
+    /// production validator and never gives expected answers to real inference.
+    private func separateCommitmentIssues(_ document: PichiMeetingSummaryDocument, session: MeetingSession) -> [String] {
+        var issues: [String] = []
+        func check(_ condition: Bool, _ message: String) { if !condition { issues.append(message) } }
+        let aTasks = document.actions.filter { $0.owner == "Тестовый участник А" }
+        let bTasks = document.actions.filter { $0.owner == "Тестовый участник Б" }
+        check(aTasks.count == 1, "Retain exactly one A text-check commitment")
+        check(bTasks.count == 1, "Retain exactly one B report commitment")
+        if let a = aTasks.first {
+            check(a.status == .agreed, "A commitment must be agreed")
+            check(a.deadline == "сегодня", "A deadline must be literal сегодня")
+            check(a.urgency == .unspecified, "A's today deadline does not imply urgency")
+            check(a.superseded != true, "A's uncompleted commitment remains current")
+            check(Set(a.evidence.map(\.segmentID)) == Set([session.transcriptSegments[3].id]), "A evidence must support only A's text-check task")
+        }
+        if let b = bTasks.first {
+            check(b.status == .agreed, "B commitment must be agreed")
+            check(b.deadline == "к пятнице", "B deadline must be literal к пятнице")
+            check(b.urgency == .normal, "B explicitly stated normal urgency")
+            check(b.superseded != true, "B's uncompleted commitment remains current")
+            check(Set(b.evidence.map(\.segmentID)) == Set([session.transcriptSegments[2].id]), "B evidence must support only B's report task")
+        }
+        let release = document.decisions.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[1].id }
+            && $0.superseded != true }
+        check(release.count == 1 && release.allSatisfy {
+            Set($0.evidence.map(\.segmentID)) == Set([session.transcriptSegments[1].id])
+        }, "Retain the report-release decision")
+        let cancellation = document.allItems.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[4].id } }
+        check(!cancellation.isEmpty,
+              "Retain the explicit endpoint-proposal cancellation")
+        check(document.actions.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[4].id } }.allSatisfy {
+            $0.status == .cancelled || $0.superseded == true
+        }, "Source for the cancelled proposal must not support current unrelated work")
+        check(document.openQuestions.contains { $0.evidence.contains { $0.segmentID == session.transcriptSegments[5].id }
+            && $0.resolved != true }, "The launch-date question must remain unanswered")
+        return issues
     }
 
     private func completionSession() -> MeetingSession {
@@ -3015,7 +3888,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 let next = accepting ? PichiMeetingSummaryActionStatus.agreed : try XCTUnwrap(self.terminalStatus)
                 let update: [String: Any] = ["index": try XCTUnwrap(candidate["index"] as? Int), "status": next.rawValue,
                                              "evidence": try XCTUnwrap(event["evidence"] as? [[String: Any]])]
-                return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [update]]), as: UTF8.self)
+                return try PichiMeetingSummaryTests.scriptedLedgerReceipts(PichiMeetingSummaryTests.wireJSON(["updates": [update]]), config: config)
             }
             let source = try XCTUnwrap(sources.first)
             let evidence: [[String: Any]] = [["sourceIndex": source.sourceIndex]]
@@ -3052,6 +3925,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
         let reversed: Bool
         let invalidSecondEvidence: Bool
         var recordedRequests: [LLMClient.Config] = []
+        var resolutionOrders: [[Int]] = []
         var requests: [LLMClient.Config] { recordedRequests.filter { !Self.isReview($0) } }
         private static func isReview(_ config: LLMClient.Config) -> Bool {
             (config.messages.first?["content"] as? String ?? "").hasPrefix("Review meeting support and omissions")
@@ -3080,7 +3954,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
                                           "evidence": try XCTUnwrap(acceptance["evidence"] as? [[String: Any]])]
                 let second: [String: Any] = ["index": try XCTUnwrap(accepted["index"] as? Int), "status": "completed",
                                            "evidence": try XCTUnwrap((self.invalidSecondEvidence ? acceptance : completion)["evidence"] as? [[String: Any]])]
-                result = ["updates": self.reversed ? [second, first] : [first, second]]
+                result = ["updates": [first, second]]
             } else {
                 func evidence(_ seconds: Double) throws -> [[String: Any]] {
                     [["sourceIndex": try XCTUnwrap(sources.first { $0.seconds == seconds }?.sourceIndex)]]
@@ -3094,7 +3968,14 @@ final class PichiMeetingSummaryTests: XCTestCase {
                           "changes": [["text": "Иван согласился подготовить отчёт.", "evidence": try evidence(60)],
                                       ["text": "Подготовка отчёта завершена.", "evidence": try evidence(120)]]]
             }
-            return String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self)
+            let response = try PichiMeetingSummaryTests.scriptedLedgerReceipts(PichiMeetingSummaryTests.wireJSON(result), config: config)
+            guard prompt.contains("Reconcile meeting") else { return response }
+            var receipt = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(response.utf8)) as? [String: Any])
+            let resolutions = try XCTUnwrap(receipt["resolutions"] as? [[String: Any]])
+            let ordered = self.reversed ? Array(resolutions.reversed()) : resolutions
+            self.resolutionOrders.append(ordered.compactMap { $0["changeIndex"] as? Int })
+            receipt["resolutions"] = ordered
+            return try PichiMeetingSummaryTests.wireJSON(receipt)
         }
     }
 
@@ -3118,9 +3999,9 @@ final class PichiMeetingSummaryTests: XCTestCase {
                 let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
                 let candidate = try XCTUnwrap(candidates.first { ($0["item"] as? [String: Any])?["status"] as? String == "agreed" })
                 var update: [String: Any] = ["index": try XCTUnwrap(candidate["index"] as? Int),
-                                            "evidence": [["sourceIndex": try XCTUnwrap(sources.first?.sourceIndex)]]]
+                                            "evidence": try XCTUnwrap(((fields["changes"] as? [[String: Any]])?.first?["item"] as? [String: Any])?["evidence"] as? [[String: Any]])]
                 if !self.omitStatus { update["status"] = "completed" }
-                return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": [update]]), as: UTF8.self)
+                return try PichiMeetingSummaryTests.scriptedLedgerReceipts(PichiMeetingSummaryTests.wireJSON(["updates": [update]]), config: config)
             }
             let source = try XCTUnwrap(sources.first)
             let evidence: [[String: Any]] = [["sourceIndex": source.sourceIndex]]
@@ -3173,7 +4054,7 @@ final class PichiMeetingSummaryTests: XCTestCase {
                     if prompt.contains("Reconcile meeting tasks") { update["status"] = NSNull() }
                     return update
                 }
-                return String(decoding: try JSONSerialization.data(withJSONObject: ["updates": updates]), as: UTF8.self)
+                return try PichiMeetingSummaryTests.scriptedLedgerReceipts(PichiMeetingSummaryTests.wireJSON(["updates": updates]), config: config)
             }
             let item: [String: Any]
             if prompt.contains("Condense") {

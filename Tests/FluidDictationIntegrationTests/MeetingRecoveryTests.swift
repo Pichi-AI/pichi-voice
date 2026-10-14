@@ -12,6 +12,85 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    private var englishBackendFixture: EnglishBackendFixture?
+
+    override func setUp() {
+        super.setUp()
+        // Recovery fixtures use English and mocked capture/ASR. A fresh installation's
+        // Russian-only model must not reject them before their injected controllers run.
+        self.englishBackendFixture = EnglishBackendFixture(defaults: .standard)
+    }
+
+    override func tearDown() {
+        self.englishBackendFixture?.restore()
+        self.englishBackendFixture = nil
+        super.tearDown()
+    }
+
+    private struct EnglishBackendFixture {
+        private let defaults: UserDefaults
+        private let originalValues: [Any?]
+        private static let keys = ["SelectedSpeechModel", "MeetingTranscriptionBackendID"]
+
+        init(defaults: UserDefaults) {
+            self.defaults = defaults
+            self.originalValues = Self.keys.map { defaults.object(forKey: $0) }
+            defaults.set(SettingsStore.SpeechModel.parakeetTDTv2.rawValue, forKey: Self.keys[0])
+            defaults.set(MeetingBackendID.productionDefault.rawValue, forKey: Self.keys[1])
+        }
+
+        func restore() {
+            for (key, value) in zip(Self.keys, self.originalValues) {
+                if let value { self.defaults.set(value, forKey: key) }
+                else { self.defaults.removeObject(forKey: key) }
+            }
+        }
+    }
+
+    func testEnglishBackendFixtureRestoresAbsentAndGigaAMSelections() throws {
+        let suite = "MeetingRecoveryFixtureTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let originals: [(String?, String?)] = [
+            (nil, nil),
+            (SettingsStore.SpeechModel.gigaam.rawValue, MeetingBackendID.gigaam.rawValue),
+            ("future-model", "future-backend"),
+        ]
+        for (model, backend) in originals {
+            defaults.set(model, forKey: "SelectedSpeechModel")
+            defaults.set(backend, forKey: "MeetingTranscriptionBackendID")
+            let fixture = EnglishBackendFixture(defaults: defaults)
+            XCTAssertEqual(defaults.string(forKey: "SelectedSpeechModel"), SettingsStore.SpeechModel.parakeetTDTv2.rawValue)
+            XCTAssertEqual(defaults.string(forKey: "MeetingTranscriptionBackendID"), MeetingBackendID.productionDefault.rawValue)
+            fixture.restore()
+            XCTAssertEqual(defaults.string(forKey: "SelectedSpeechModel"), model, "Restore the stored choice and absence exactly")
+            XCTAssertEqual(defaults.string(forKey: "MeetingTranscriptionBackendID"), backend)
+        }
+    }
+
+    func testEnglishRecoveryFixtureReachesMockCaptureWithCompatibleModel() async throws {
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "SelectedSpeechModel"), SettingsStore.SpeechModel.parakeetTDTv2.rawValue)
+        XCTAssertEqual(SettingsStore.shared.meetingTranscriptionBackendID, .productionDefault)
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        XCTAssertEqual(session.languageCode, "en")
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.productionDefault.rawValue)
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        await coordinator.shutdownForTermination()
+        XCTAssertEqual(arbiter.releaseCount, 1)
+    }
+
     func testUnexpectedStopPublishesQuiescenceAfterDelayedAudioHandback() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

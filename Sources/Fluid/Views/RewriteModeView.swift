@@ -17,6 +17,10 @@ struct RewriteModeView: View {
     @State private var showHowTo: Bool = false
     @State private var isHoveringHowTo: Bool = false
     @State private var isThinkingExpanded: Bool = false
+    @State private var acceptanceTask: Task<Void, Never>?
+    @State private var acceptanceCancellationTask: Task<Void, Never>?
+    @State private var acceptanceID: UUID?
+    @State private var isClosing = false
 
     /// Local state for available models (derived from shared AI Settings pool)
     @State private var availableModels: [String] = []
@@ -34,7 +38,7 @@ struct RewriteModeView: View {
 
                 Spacer()
 
-                Button(action: { self.onClose?() }) {
+                Button(action: { self.cancelAcceptance(closeAfterJoining: true) }) {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(self.theme.palette.secondaryText)
                 }
@@ -141,13 +145,10 @@ struct RewriteModeView: View {
                                 Spacer()
 
                                 Button("Replace Original") {
-                                    let text = self.service.rewrittenText
-                                    Task { @MainActor in
-                                        await self.service.acceptRewrite(text)
-                                    }
-                                    self.onClose?()
+                                    self.acceptCurrentRewrite()
                                 }
                                 .fluidGlassAction(prominent: true)
+                                .disabled(self.acceptanceTask != nil || self.isClosing || self.service.isAcceptingRewrite)
                             }
                             .padding(.top, 8)
                         }
@@ -256,13 +257,63 @@ struct RewriteModeView: View {
             }
         }
         .onExitCommand {
-            self.onClose?()
+            self.cancelAcceptance(closeAfterJoining: true)
         }
         .onAppear {
             // Note: Overlay mode is now set centrally by ContentView.handleModeTransition()
+            self.acceptanceCancellationTask?.cancel()
+            self.isClosing = false
             self.updateAvailableModels()
         }
-        // Note: onDisappear overlay mode handling removed - now handled centrally by ContentView
+        .onDisappear {
+            self.cancelAcceptance(closeAfterJoining: false)
+        }
+    }
+
+    @MainActor
+    private func acceptCurrentRewrite() {
+        guard self.acceptanceTask == nil, !self.isClosing else { return }
+        let text = self.service.rewrittenText
+        let targetContext = NotchContentState.shared.recordingTargetContext
+        let id = UUID()
+        self.acceptanceID = id
+        self.acceptanceTask = Task { @MainActor in
+            defer {
+                if self.acceptanceID == id {
+                    self.acceptanceTask = nil
+                    self.acceptanceID = nil
+                }
+            }
+            let result = await self.service.acceptRewrite(
+                text,
+                targetContext: targetContext,
+                isOutputValid: { self.acceptanceID == id && !self.isClosing }
+            )
+            guard !Task.isCancelled, self.acceptanceID == id, !self.isClosing else { return }
+            if result.wasDispatched {
+                self.onClose?()
+            } else if case let .recoverableFailure(failure) = result,
+                      let message = failure.userFacingMessage
+            {
+                self.asr.errorTitle = PichiLocalization.text(message)
+                self.asr.errorMessage = TextDeliveryFailure.userFacingDetail(forMessage: message).map(PichiLocalization.text) ?? ""
+                self.asr.showError = true
+            }
+        }
+    }
+
+    @MainActor
+    private func cancelAcceptance(closeAfterJoining: Bool) {
+        if closeAfterJoining, self.isClosing { return }
+        self.isClosing = true
+        let task = self.acceptanceTask
+        task?.cancel()
+        self.acceptanceCancellationTask?.cancel()
+        self.acceptanceCancellationTask = Task { @MainActor in
+            if let task { await task.value }
+            guard !Task.isCancelled else { return }
+            if closeAfterJoining { self.onClose?() }
+        }
     }
 
     private func toggleRecording() {

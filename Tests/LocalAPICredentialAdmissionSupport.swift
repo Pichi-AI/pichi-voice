@@ -9,7 +9,7 @@ extension UserDefaults {
 extension SettingsStore {
     enum Mode { case dictate }
     enum DictationShortcutSlot { case primary, secondary }
-    enum DictationPromptSelection { case off, `default`, privateAI }
+    enum DictationPromptSelection: Equatable { case off, `default`, privateAI, profile(String) }
     enum PromptRoutingScope { case selectedAppsOnly, allApps }
     struct DictationPromptConfiguration { let providerID: String; let modelName: String }
     var privateAIPrefixKVCacheEnabled: Bool { false }
@@ -26,11 +26,16 @@ extension SettingsStore {
     func dictationPromptSelection(for _: DictationShortcutSlot) -> DictationPromptSelection {
         self.selectsPrivateCapability ? .privateAI : .default
     }
-    func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID _: String?) -> DictationPromptSelection {
-        self.dictationPromptSelection(for: slot)
+    func resolvedDictationPromptSelection(for slot: DictationShortcutSlot, appBundleID: String?) -> DictationPromptSelection {
+        if let choice = DictationAppSession.shared.choice(for: slot, appID: appBundleID) { return choice }
+        if let profile = self.resolvedDictationPromptProfile(for: slot, appBundleID: appBundleID) { return .profile(profile.id) }
+        return UserDefaults.standard.values["synthetic-prompt-off"] as? Bool == true ? .off : self.dictationPromptSelection(for: slot)
     }
-    func dictationPromptConfiguration(for _: DictationPromptSelection) -> DictationPromptConfiguration {
-        .init(providerID: self.selectedProviderID, modelName: self.selectedModel ?? "")
+    func dictationPromptConfiguration(for selection: DictationPromptSelection) -> DictationPromptConfiguration {
+        if case .profile(let id) = selection, let profile = self.syntheticProfiles.values.first(where: { $0.id == id }) {
+            return .init(providerID: profile.providerID, modelName: profile.model)
+        }
+        return .init(providerID: self.selectedProviderID, modelName: self.selectedModel ?? "")
     }
     func promptRoutingScope(for _: Mode) -> PromptRoutingScope { .selectedAppsOnly }
     func appPromptBinding(for _: Mode, appBundleID _: String?) -> String? { nil }
@@ -57,10 +62,10 @@ extension PrivateAIIntegrationService {
         let contextTokenLimit: Int
     }
     struct AppContext { let appName: String; let bundleID: String; let windowTitle: String; let appVersion: String? }
-    struct Response { let outputText: String }
+    struct Response { let outputText: String; let tokensPerSecond: Double? = nil }
     @MainActor final class InertAdapter {
         private(set) var calls = 0
-        func enhanceDictation(_: String, runtime: RuntimeConfiguration, context _: AppContext) async throws -> Response {
+        func enhanceDictation(_: String, runtime: RuntimeConfiguration, context _: AppContext, streamHandler _: PrivateAIStreamHandler? = nil) async throws -> Response {
             precondition(runtime.model == PrivateAIProviderFeature.shared.modelIDs().first && runtime.apiKey.isEmpty)
             self.calls += 1
             return Response(outputText: "Synthetic private result")
@@ -80,6 +85,7 @@ extension PrivateAIIntegrationService {
         return token
     }
     func endProcessing(_ token: UUID) { precondition(self.active.remove(token) != nil) }
+    func beginOptionalProcessing(cancelAndJoin _: @escaping @MainActor () async -> Void) -> UUID? { self.beginProcessing() }
 }
 enum MeetingModelResidencyError: Error { case busy }
 final class ASRService {

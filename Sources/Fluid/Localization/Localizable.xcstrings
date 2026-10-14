@@ -6230,6 +6230,23 @@
         }
       }
     },
+    "Answers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответы"
+          }
+        }
+      }
+    },
     "Any transcription text or audio.": {
       "extractionState": "manual",
       "localizations": {
@@ -49761,6 +49778,431 @@
           "stringUnit": {
             "state": "translated",
             "value": "В папке навыка слишком много сохраненных записей. Просмотрите и очистите файлы восстановления перед обновлением навыка."
+          }
+        }
+      }
+    },
+    "Oops, text wasn't inserted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oops, text wasn't inserted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось вставить текст"
+          }
+        }
+      }
+    },
+    "Your transcript is saved. Copy it and paste it into a text field.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your transcript is saved. Copy it and paste it into a text field."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст сохранён. Скопируйте его и вставьте в текстовое поле."
+          }
+        }
+      }
+    },
+    "Only part of the text was inserted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only part of the text was inserted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст вставлен частично"
+          }
+        }
+      }
+    },
+    "Check the text field before inserting the full transcript again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the text field before inserting the full transcript again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте текстовое поле перед повторной вставкой полного текста."
+          }
+        }
+      }
+    },
+    "Hugging Face (default)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hugging Face (default)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hugging Face (по умолчанию)"
+          }
+        }
+      }
+    },
+    "Imported model folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported model folder"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортированная папка модели"
+          }
+        }
+      }
+    },
+    "Model source: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model source: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Источник модели: %@"
+          }
+        }
+      }
+    },
+    "Use %@ model (default)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use %@ model (default)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать модель с %@ (по умолчанию)"
+          }
+        }
+      }
+    },
+    "Other options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие варианты"
+          }
+        }
+      }
+    },
+    "Other model options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other model options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие варианты модели"
+          }
+        }
+      }
+    },
+    "Import model folder...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import model folder..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать папку модели..."
+          }
+        }
+      }
+    },
+    "Download the default model or import a supported local model folder.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the default model or import a supported local model folder."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачайте модель по умолчанию или импортируйте папку с поддерживаемой локальной моделью."
+          }
+        }
+      }
+    },
+    "Changing model source...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changing model source..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Смена источника модели..."
+          }
+        }
+      }
+    },
+    "Model Source Change Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model Source Change Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сменить источник модели"
+          }
+        }
+      }
+    },
+    "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите папку. Для публичной модели в ней должны быть файлы v3_e2e_ctc.int8.onnx и v3_e2e_ctc_vocab.txt. Для нашей модели E2E нужны v3_e2e_ctc_eou_v5.fp16.onnx и тот же файл словаря. Импортируются только поддерживаемые экспорты с соответствующими контрольными суммами."
+          }
+        }
+      }
+    },
+    "This speech model does not support changing its model source.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This speech model does not support changing its model source."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой модели распознавания нельзя сменить источник модели."
+          }
+        }
+      }
+    },
+    "No call was detected. Choose its app under Change, or choose In person for microphone-only recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No call was detected. Choose its app under Change, or choose In person for microphone-only recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звонок не обнаружен. Выберите его приложение в меню «Изменить» или вариант «В одной комнате» для записи только микрофона."
+          }
+        }
+      }
+    },
+    "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранное приложение встречи недоступно. Откройте его и обновите источники или выберите другое приложение в меню «Изменить»."
+          }
+        }
+      }
+    },
+    "Choose the application that contains the online meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the application that contains the online meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите приложение, в котором проходит онлайн-встреча."
+          }
+        }
+      }
+    },
+    "System audio": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук"
+          }
+        }
+      }
+    },
+    "System audio · all apps": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio · all apps"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук · все приложения"
+          }
+        }
+      }
+    },
+    "Record audio from all apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record audio from all apps."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте звук всех приложений."
+          }
+        }
+      }
+    },
+    "System audio and your mic will be recorded, including apps opened during the meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio and your mic will be recorded, including apps opened during the meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Будут записаны системный звук и микрофон, включая приложения, открытые во время встречи."
+          }
+        }
+      }
+    },
+    "System audio includes apps opened during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio includes apps opened during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук включает приложения, открытые во время записи."
+          }
+        }
+      }
+    },
+    "System audio cannot be restricted to an application.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio cannot be restricted to an application."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук нельзя ограничить одним приложением."
           }
         }
       }

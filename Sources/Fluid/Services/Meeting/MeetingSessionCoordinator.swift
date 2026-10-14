@@ -287,8 +287,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     var sourceDisplayName: String {
-        self.currentSession?.capturedApplication?.displayName
-            ?? (self.currentSession?.mode == .inRoom ? "In-room meeting" : "Meeting audio")
+        self.currentSession?.audioSourceDisplayName ?? "Meeting audio"
     }
 
     var microphoneDisplayName: String {
@@ -303,8 +302,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     /// Used by the auto-detection Start path: `preferredBundleIdentifier` is the detected app.
-    /// When `requirePreferredApplication` is true, that app must be available — no Zoom/Chrome/Teams
-    /// fallback. `preferredWindowID` is threaded onto the resulting identity when it still matches.
+    /// For selected-application scope, `requirePreferredApplication` requires that exact app.
+    /// For system scope, detection is a start/title hint and cannot narrow the captured audio.
+    /// `preferredWindowID` is threaded onto narrow identities when it still matches.
     /// SCK content and microphone identities are refreshed here rather than reused.
     func defaultConfiguration(
         mode: MeetingCaptureMode,
@@ -313,16 +313,21 @@ final class MeetingSessionCoordinator: ObservableObject {
         preferredWindowID: UInt32?,
         requirePreferredApplication: Bool = false
     ) async throws -> MeetingCaptureConfiguration {
+        // Freeze source intent and language before microphone/source discovery suspends.
+        let defaults = SettingsStore.shared.meetingRecordingDefaults
+        let scope = defaults.effectiveApplicationAudioScope
+        let languageCode = defaults.languageCode
+            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: SettingsStore.shared.selectedSpeechModel.rawValue) ?? "ru"
         let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: self.preferredMicrophoneUID()
         )
         var application: MeetingApplicationIdentity?
-        if mode == .onlineCall {
+        if mode == .onlineCall, scope == .selectedApplication {
             let applications = try await MeetingCaptureSourceCatalog.availableApplications()
             var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
                 from: applications,
-                preferredBundleIdentifier: preferredBundleIdentifier,
-                requirePreferredApplication: requirePreferredApplication
+                preferredBundleIdentifier: defaults.usesAutomaticApplication ? preferredBundleIdentifier : defaults.applicationBundleIdentifier,
+                requirePreferredApplication: requirePreferredApplication || !defaults.usesAutomaticApplication
             )
             if let preferredWindowID, resolved.bundleIdentifier == preferredBundleIdentifier {
                 resolved.windowID = preferredWindowID
@@ -334,9 +339,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         return MeetingCaptureConfiguration(
             mode: mode,
             title: title,
-            languageCode: SettingsStore.shared.meetingRecordingDefaults.languageCode
-                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: SettingsStore.shared.selectedSpeechModel.rawValue) ?? "ru",
+            languageCode: languageCode,
             application: application,
+            applicationAudioScope: mode == .onlineCall ? scope : nil,
             microphone: microphone,
             timestampDefaultTitle: true
         )

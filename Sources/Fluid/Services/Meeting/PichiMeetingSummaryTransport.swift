@@ -211,44 +211,8 @@ nonisolated enum PichiMeetingSummaryTransport {
         request.timeoutInterval = config.timeoutSeconds ?? 180
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !config.apiKey.isEmpty { request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization") }
-        request.httpBody = try self.orderedRequestJSON(body)
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
-    }
-
-    /// Native structured-output grammars consume property order from the schema.
-    /// Describe the meeting/work before selecting its category and literal fields,
-    /// instead of alphabetically generating deadlines before the task itself.
-    /// The schema and its validation/resource limits remain identical.
-    private static func orderedRequestJSON(_ value: Any, key: String? = nil) throws -> Data {
-        if let fields = value as? [String: Any] {
-            var keys = fields.keys.sorted()
-            if key == "properties" {
-                let preferred = fields["summary"] != nil
-                    ? ["summary", "decisions", "openQuestions", "actions", "changes", "answers"]
-                    : fields["title"] != nil ? ["title", "text", "status", "urgency", "evidence", "owner", "deadline"] : []
-                keys = preferred.filter { fields[$0] != nil } + keys.filter { !preferred.contains($0) }
-            }
-            var data = Data("{".utf8)
-            for (index, name) in keys.enumerated() {
-                if index > 0 { data.append(Data(",".utf8)) }
-                data.append(try JSONSerialization.data(withJSONObject: name, options: [.fragmentsAllowed]))
-                data.append(Data(":".utf8))
-                guard let field = fields[name] else { throw LLMError.encodingError }
-                data.append(try self.orderedRequestJSON(field, key: name))
-            }
-            data.append(Data("}".utf8))
-            return data
-        }
-        if let values = value as? [Any] {
-            var data = Data("[".utf8)
-            for (index, item) in values.enumerated() {
-                if index > 0 { data.append(Data(",".utf8)) }
-                data.append(try self.orderedRequestJSON(item))
-            }
-            data.append(Data("]".utf8))
-            return data
-        }
-        return try JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed])
     }
 
     // Protocol adaptation only: boolean thinking and effort levels are distinct
@@ -279,6 +243,7 @@ nonisolated enum PichiMeetingSummaryTransport {
     }
 
     static func schema(ledger: Bool, sourceIndexes: [Int]? = nil, candidateIndexes: [Int]? = nil, candidateSourceIndexes: [Int: [Int]]? = nil,
+                       candidateOriginalSourceIndexes: [Int: [Int]]? = nil, changeSourceIndexes: [Int: [Int]]? = nil,
                        actionStates: Bool = false, recapOnly: Bool = false) -> [String: Any] {
         var evidence: [String: Any] = [
             "type": "object", "additionalProperties": false, "required": ["segmentID", "quote"],
@@ -292,47 +257,45 @@ nonisolated enum PichiMeetingSummaryTransport {
         let citationItem: [String: Any] = definitions.isEmpty ? evidence : ["$ref": "#/$defs/evidence"]
         let citations: [String: Any] = ["type": "array", "items": citationItem, "minItems": 1, "maxItems": 8]
         if ledger {
-            var index: [String: Any] = ["type": "integer", "minimum": 0]
-            var updates: [String: Any] = ["type": "array"]
-            if let candidateIndexes {
-                let choices = Array(Set(candidateIndexes)).sorted()
-                // An empty batch permits only empty updates; an empty enum is not
-                // supported by every structured-output provider.
-                if !choices.isEmpty { index["enum"] = choices }
-                updates["maxItems"] = choices.count
+            let sourceSet = Set(sourceIndexes ?? [])
+            let candidates = Array(Set(candidateIndexes ?? [])).sorted()
+            let events = (changeSourceIndexes ?? [0: sourceIndexes ?? []]).sorted { $0.key < $1.key }
+            func scopedCitations(_ choices: [Int]) -> [String: Any] {
+                let reference: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["sourceIndex"],
+                    "properties": ["sourceIndex": ["type": "integer", "enum": choices]]]
+                return ["type": "array", "items": reference, "minItems": 1, "maxItems": 8]
             }
-            var updateProperties: [String: Any] = ["index": index, "evidence": citations]
-            var required = ["index", "evidence"]
-            if actionStates {
-                updateProperties["status"] = ["anyOf": [["type": "null"], ["type": "string", "enum": PichiMeetingSummaryActionStatus.allCases.map(\.rawValue)]]]
-                required.append("status")
-            }
-            let update: [String: Any] = ["type": "object", "additionalProperties": false,
-                                         "required": required, "properties": updateProperties]
-            updates["items"] = update
-            if let candidateSourceIndexes {
-                let sourceSet = Set(sourceIndexes ?? [])
-                let candidates = Array(Set(candidateIndexes ?? candidateSourceIndexes.keys.map { $0 })).sorted()
-                let branches: [[String: Any]] = candidates.compactMap { candidate in
-                    let legal = Array(Set(candidateSourceIndexes[candidate] ?? []).intersection(sourceSet)).sorted()
-                    guard !legal.isEmpty else { return nil }
-                    var properties = updateProperties
-                    properties["index"] = ["type": "integer", "enum": [candidate]]
-                    var scopedEvidence = evidence
-                    scopedEvidence["properties"] = ["sourceIndex": ["type": "integer", "enum": legal]]
-                    scopedEvidence["required"] = ["sourceIndex"]
-                    var scopedCitations = citations
-                    scopedCitations["items"] = scopedEvidence
-                    properties["evidence"] = scopedCitations
-                    return ["type": "object", "additionalProperties": false, "required": required, "properties": properties]
+            var branches: [[String: Any]] = []
+            for event in events {
+                let eventSources = Set(event.value).intersection(sourceSet)
+                var matches: [[String: Any]] = []
+                for candidate in candidates {
+                    let original = Array(Set(candidateOriginalSourceIndexes?[candidate] ?? sourceIndexes ?? []).intersection(sourceSet)).sorted()
+                    let later = Array(Set(candidateSourceIndexes?[candidate] ?? sourceIndexes ?? []).intersection(eventSources)).sorted()
+                    guard !original.isEmpty, !later.isEmpty else { continue }
+                    var properties: [String: Any] = ["index": ["type": "integer", "enum": [candidate]],
+                        "originalEvidence": scopedCitations(original), "laterEvidence": scopedCitations(later)]
+                    var required = ["index", "originalEvidence", "laterEvidence"]
+                    if actionStates {
+                        properties["status"] = ["anyOf": [["type": "null"], ["type": "string", "enum": PichiMeetingSummaryActionStatus.allCases.map(\.rawValue)]]]
+                        required.append("status")
+                    }
+                    matches.append(["type": "object", "additionalProperties": false, "required": required, "properties": properties])
                 }
-                updates["maxItems"] = branches.count
-                // Empty anyOf/enum is not portable. Runtime skips batches without
-                // legal candidates; the standalone empty schema allows no updates.
-                if !branches.isEmpty { updates["items"] = ["anyOf": branches] }
+                // Empty matches is always legal. Avoid empty anyOf/enum for the
+                // shared provider subset when this event has no legal candidate.
+                let fallback: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["index"],
+                                               "properties": ["index": ["type": "integer"]]]
+                let items: [String: Any] = matches.isEmpty ? fallback : ["anyOf": matches]
+                let array: [String: Any] = ["type": "array", "maxItems": matches.count, "items": items]
+                branches.append(["type": "object", "additionalProperties": false, "required": ["changeIndex", "matches"],
+                    "properties": ["changeIndex": ["type": "integer", "enum": [event.key]], "matches": array]])
             }
-            return definitions.merging(["type": "object", "additionalProperties": false, "required": ["updates"],
-                                        "properties": ["updates": updates]]) { _, new in new }
+            let fallback: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["changeIndex", "matches"],
+                "properties": ["changeIndex": ["type": "integer"], "matches": ["type": "array", "maxItems": 0, "items": ["type": "object"]]]]
+            let resolutionItems: [String: Any] = branches.isEmpty ? fallback : ["anyOf": branches]
+            return ["type": "object", "additionalProperties": false, "required": ["resolutions"],
+                "properties": ["resolutions": ["type": "array", "minItems": events.count, "maxItems": events.count, "items": resolutionItems]]]
         }
         let properties: [String: Any] = ["text": ["type": "string", "minLength": 1, "maxLength": 2000], "evidence": citations]
         let item: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["text", "evidence"], "properties": properties]
@@ -352,6 +315,15 @@ nonisolated enum PichiMeetingSummaryTransport {
         }
         return definitions.merging(["type": "object", "additionalProperties": false, "required": Array(fields.keys).sorted(), "properties": fields]) { _, new in new }
     }
+    static func ledgerSchemaEnumCount(_ value: Any) -> Int {
+        if let fields = value as? [String: Any] {
+            return ((fields["enum"] as? [Any])?.count ?? 0)
+                + fields.filter { $0.key != "enum" }.reduce(0) { $0 + self.ledgerSchemaEnumCount($1.value) }
+        }
+        if let values = value as? [Any] { return values.reduce(0) { $0 + self.ledgerSchemaEnumCount($1) } }
+        return 0
+    }
+
 }
 
 // One joined release even when both failure unwinding and cancellation converge.

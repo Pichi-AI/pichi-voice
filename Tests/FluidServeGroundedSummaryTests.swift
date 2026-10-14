@@ -98,9 +98,10 @@ struct FluidServeGroundedSummaryTests {
         try manager.createDirectory(at: tool.deletingLastPathComponent(), withIntermediateDirectories: true)
         try manager.copyItem(at: URL(fileURLWithPath: CommandLine.arguments[1]), to: tool)
         try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": suiteName, "CFBundleDisplayName": "Synthetic voice app"], format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
-        func run(_ arguments: [String]) throws -> (Int32, String, Process.TerminationReason) {
+        func run(_ arguments: [String], environment: [String: String]? = nil) throws -> (Int32, String, Process.TerminationReason) {
             let process = Process(); let output = Pipe()
             process.executableURL = tool; process.arguments = arguments
+            if let environment { process.environment = environment }
             process.standardOutput = output; process.standardError = output
             try process.run()
             let deadline = Date().addingTimeInterval(10)
@@ -148,6 +149,49 @@ struct FluidServeGroundedSummaryTests {
         }
         let supportBytes = try Data(contentsOf: supportRoot.appendingPathComponent(directory.lastPathComponent + "/session.json"))
         check(supportBytes == (try Data(contentsOf: directory.appendingPathComponent("session.json"))), "Real helper never rewrites source")
+
+        // Exercise the same template input/version contract through the actual isolated helper.
+        // These fixtures deliberately include fractions that disappear in the saved manifest.
+        let supportDirectory = supportRoot.appendingPathComponent(directory.lastPathComponent)
+        let templateFile = supportDirectory.appendingPathComponent("manual-summary-executive.json")
+        let manifestFile = supportDirectory.appendingPathComponent("session.json")
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        for language in ["en", "ru", "auto", "invalid-code"] {
+            session.languageCode = language
+            session.startedAt = Date(timeIntervalSince1970: 1_700_000_000.7)
+            session.endedAt = Date(timeIntervalSince1970: 1_700_001_800.3)
+            let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+            let manifest = try encoder.encode(session)
+            try manifest.write(to: manifestFile)
+            let reloaded = try decoder.decode(MeetingSession.self, from: manifest)
+            let input = MeetingSummaryInput.transcript(for: session, timeZone: FluidServeMeetings.systemTimeZone())
+            check(input == MeetingSummaryInput.transcript(for: reloaded, timeZone: FluidServeMeetings.systemTimeZone()), "Reloaded whole seconds keep the app's \(language) template input")
+            check(input.contains("Duration: 30 minutes"), "Template duration rounds dates before counting whole minutes")
+            let hash = MeetingSummaryInput.fingerprint(input)
+            for version in [nil, 1, MeetingSummaryInput.currentPromptVersion + 1, MeetingSummaryInput.currentPromptVersion] as [Int?] {
+                var stored: [String: Any] = ["transcriptHash": hash, "text": "Versioned \(language) synthetic template.",
+                                           "providerID": "synthetic-provider", "modelName": "synthetic-model"]
+                if let version { stored["promptVersion"] = version }
+                let bytes = try JSONSerialization.data(withJSONObject: stored, options: .sortedKeys)
+                try bytes.write(to: templateFile)
+                let current = version == MeetingSummaryInput.currentPromptVersion
+                let printed = try run(["meet", "summary", "latest", "--style", "executive"])
+                check(printed.0 == (current ? 0 : 1) && printed.2 == .exit, "Real helper accepts only the current template contract")
+                check(printed.1.contains("Versioned \(language) synthetic template.") == current, "Old, missing and future versions stay hidden")
+                check(try Data(contentsOf: templateFile) == bytes, "Rejecting a stale template leaves the saved output intact")
+            }
+            for zone in ["UTC", "Asia/Tokyo"] {
+                var environment = ProcessInfo.processInfo.environment
+                environment["TZ"] = zone
+                let printed = try run(["meet", "summary", "latest", "--style", "executive"], environment: environment)
+                check(printed.0 == 0 && printed.1.contains("Versioned \(language) synthetic template."), "Agent TZ must not hide an app-current template")
+            }
+            check(try Data(contentsOf: manifestFile) == manifest, "Template reads never rewrite the source")
+            session.languageCode = language == "ru" ? "fr" : "ru"
+            try encoder.encode(session).write(to: manifestFile)
+            let changed = try run(["meet", "summary", "latest", "--style", "executive"])
+            check(changed.0 == 1 && !changed.1.contains("Versioned \(language) synthetic template."), "Changed capture language requires template regeneration")
+        }
         print("FluidServe grounded summary tests: \(checks) checks passed")
     }
 }

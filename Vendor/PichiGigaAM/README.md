@@ -6,7 +6,7 @@ The default execution provider is CPU. The CoreML diagnostic option was tested a
 
 ## Models and installation
 
-`GigaAMModelCatalog` records SHA-256 checksums for existing imports and the pinned public download. Existing complete imports retain their preference:
+`GigaAMModelCatalog` records SHA-256 checksums for supported imports and the pinned public download. The default source is the public GigaAM v3 E2E CTC INT8 export on Hugging Face. Files left by an earlier import do not change that default. An import becomes the selected source only after the user explicitly imports a folder and verification succeeds:
 
 | Export | Decoder | EOU threshold |
 | --- | --- | --- |
@@ -22,6 +22,32 @@ Meeting jobs can pin `installedModelFingerprint()` (export ID, model checksum, v
 The default download is the community ONNX export from [istupakov/gigaam-v3-onnx](https://huggingface.co/istupakov/gigaam-v3-onnx), pinned to revision `322c3b29492673eb7d0b434bfa9dfb8653e34d02`. Its model has 224,893,347 bytes and SHA-256 `2e3fcb7a7b66030336fd10c2fcfb033bd1dc7e1bf238fe5cfd83b1d0cfc9d28e`; its 2,007-byte vocabulary uses the same hash as existing e2e imports. It derives from the official GigaAM v3 model and uses its MIT license, preserved in the app's Notices. It has no Pichi EOU head. The existing provider prepares missing files through the shared progressive downloader, validates size and checksums, atomically publishes a complete directory and then loads the native session. Onboarding and Settings share this preparation operation.
 
 Pichi's optimized EOU weights retain their verified local import path; their distribution destination is still unpublished. No weights, recordings or private training data are included in this package or Git.
+
+### Default download and optional folder import
+
+In Speech Recognition, choose GigaAM and click Download, then Activate. The application fetches the public 224,895,354-byte model and vocabulary from Hugging Face and verifies both files. No external application or manually supplied file is required.
+
+For a local model, use GigaAM's Other options menu, then Import model folder. Choose a folder containing one supported export. For the same public model downloaded manually, the folder is:
+
+```text
+gigaam-local/
+  v3_e2e_ctc.int8.onnx
+  v3_e2e_ctc_vocab.txt
+```
+
+For our existing custom E2E v5 model, the folder is:
+
+```text
+gigaam-custom/
+  v3_e2e_ctc_eou_v5.fp16.onnx
+  v3_e2e_ctc_vocab.txt
+```
+
+The older character CTC exports in the table above require only their named ONNX file. Imports accept the registered filenames and exact SHA-256 checksums in `GigaAMModelCatalog`; a renamed model, arbitrary ONNX/GGUF file, or a different Hugging Face export is not automatically compatible. The application copies the required files into its model storage and selects that imported export only after verification and complete publication. Click Activate to load it.
+
+To return to the public model, choose Other options, then Use Hugging Face model (default), and click Download or Activate. This switches the source without deleting the imported files. A failed import or cancellation before publication keeps the previous source. Recording and meeting operations block source changes until their owned work finishes. Already scheduled meeting attempts retain their pinned artifact identity.
+
+The developer `PICHI_GIGAAM_MODEL_DIR` override and descriptor-named artifact directories remain explicit local references for tests and pinned jobs. They are separate from the first-run default and are not required for normal installation.
 
 ## Library characteristics
 

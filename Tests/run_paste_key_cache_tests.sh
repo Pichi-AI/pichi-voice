@@ -19,6 +19,7 @@ xcrun swiftc -O \
     "$task_repo_dir/Tests/PasteKeyCodeResolverTests.swift" \
     -o "$task_test_dir/paste-resolver-tests"
 "$task_test_dir/paste-resolver-tests"
+python3 -S "$task_repo_dir/Tests/TypingFocusIdentityTests.py"
 if [ "${1:-}" = "--live" ]; then
     xcrun swiftc -O \
         "$task_repo_dir/Sources/Fluid/Services/PasteKeyCodeCache.swift" \

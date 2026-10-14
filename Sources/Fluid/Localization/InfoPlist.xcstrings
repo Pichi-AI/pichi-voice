@@ -44,13 +44,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "System audio access records the meeting application you select. Meeting audio stays on this Mac."
+            "value": "System audio access lets you record the selected application or all system audio, according to your meeting settings. Meeting audio stays on this Mac."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Доступ к системному звуку нужен для записи выбранного вами приложения встречи. Аудиозапись встречи остаётся на этом Mac."
+            "value": "Доступ к системному звуку позволяет записывать выбранное приложение или звук всех приложений согласно настройкам встречи. Аудиозапись встречи остаётся на этом Mac."
           }
         }
       }
@@ -62,13 +62,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Screen & System Audio access lets the app record audio from the meeting application you select."
+            "value": "Screen & System Audio access lets you record the selected application or all system audio, according to your meeting settings."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Доступ к записи экрана и системного звука позволяет записывать звук выбранного вами приложения встречи."
+            "value": "Доступ к записи экрана и системного звука позволяет записывать выбранное приложение или звук всех приложений согласно настройкам встречи."
           }
         }
       }

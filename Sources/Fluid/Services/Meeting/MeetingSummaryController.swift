@@ -1,5 +1,4 @@
 import Combine
-import CryptoKit
 import Foundation
 
 nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable {
@@ -18,40 +17,6 @@ nonisolated enum MeetingSummaryKind: String, CaseIterable, Identifiable, Codable
         case .topics: "Topics discussed"
         case .custom: "Custom prompt"
         }
-    }
-}
-
-nonisolated enum MeetingSummaryInput {
-    static func transcript(for session: MeetingSession) -> String {
-        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateStyle = .long
-        formatter.timeStyle = .none
-        let date = formatter.string(from: session.startedAt)
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        let time = formatter.string(from: session.startedAt)
-        // A saved meeting keeps whole seconds. Count the same way here, so the text (and the fingerprint
-        // that decides whether a saved summary is still shown) is the same before and after a restart.
-        let startSeconds = session.startedAt.timeIntervalSinceReferenceDate.rounded(.down)
-        let endSeconds = (session.endedAt ?? session.startedAt).timeIntervalSinceReferenceDate.rounded(.down)
-        let duration = max(0, (endSeconds - startSeconds) / 60)
-        let turns = session.transcriptSegments.filter { !$0.isEcho }.sorted { $0.start.seconds < $1.start.seconds }
-        return """
-        Title: \(session.title)
-        Date: \(date)
-        Time: \(time)
-        Duration: \(Int(duration)) minutes
-        Participants: \(session.activeSpeakers.map(\.displayName).joined(separator: ", "))
-        ----------
-        """ + "\n" + turns.map {
-            "**\(MeetingTranscriptExporter.speakerLabel(for: $0, in: session, speakerNames: names))**: \($0.text)"
-        }.joined(separator: "\n")
-    }
-
-    static func fingerprint(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -193,9 +158,11 @@ final class MeetingSummaryController: ObservableObject {
         }
 
         /// Summaries saved before providers were recorded came from the earlier on-device
-        /// model, which was withdrawn for accuracy; they stay hidden.
+        /// model, which was withdrawn for accuracy; they stay hidden. Older input/prompt
+        /// contracts also require regeneration; their stored text is not deleted.
         func isCurrent(transcriptHash: String, promptHash: String?) -> Bool {
-            self.providerID != nil && self.transcriptHash == transcriptHash && self.promptHash == promptHash
+            self.providerID != nil && self.promptVersion == MeetingSummaryInput.currentPromptVersion
+                && self.transcriptHash == transcriptHash && self.promptHash == promptHash
         }
     }
 
@@ -301,7 +268,8 @@ final class MeetingSummaryController: ObservableObject {
                         transcript: transcript,
                         kind: kind,
                         route: route,
-                        customInstructions: instructions
+                        customInstructions: instructions,
+                        languageCode: session.languageCode
                     )
                     try Task.checkCancellation()
                     guard let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: session.id) else {
@@ -314,7 +282,7 @@ final class MeetingSummaryController: ObservableObject {
                         providerID: route.providerID,
                         providerName: route.providerName,
                         configurationHash: route.configurationHash,
-                        promptVersion: 1,
+                        promptVersion: MeetingSummaryInput.currentPromptVersion,
                         generatedAt: Date(),
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil
                     )
@@ -386,7 +354,7 @@ final class MeetingSummaryController: ObservableObject {
                         providerID: MeetingSummaryOnDevice.providerID,
                         providerName: MeetingSummaryOnDevice.providerName,
                         configurationHash: MeetingSummaryInput.fingerprint("\(MeetingSummaryOnDevice.providerID)|\(model.id)|\(thinking)"),
-                        promptVersion: 1,
+                        promptVersion: MeetingSummaryInput.currentPromptVersion,
                         generatedAt: Date(),
                         promptHash: kind == .custom ? MeetingSummaryInput.fingerprint(instructions) : nil,
                         modelName: model.displayName

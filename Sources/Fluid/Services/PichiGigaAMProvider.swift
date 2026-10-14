@@ -43,14 +43,32 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     static var supportsDefaultDownload: Bool { GigaAMModelCatalog.downloadableModel.downloadBaseURL != nil }
     static var preferredLibraryMetadata: SpeechModelLibraryMetadata? { GigaAMModelCatalog.downloadableModel.libraryMetadata }
     private static let directoryPreferenceKey = "pichiGigaAMModelDirectory"
+    private static let importedModelPreferenceKey = "pichiGigaAMImportedModelID"
     private let overriddenDirectory: URL?
+    private let preferences: UserDefaults
+    private let environment: [String: String]
     private let downloadDescriptor: GigaAMModelDescriptor
+    private let importDescriptors: [GigaAMModelDescriptor]
     private let download: Download
 
+    /// A cheap catalog scan cannot distinguish an old file from an explicitly selected import.
+    /// Freeze the chosen descriptor, directory and write ownership before an async operation.
+    private struct Selection: Sendable {
+        let descriptor: GigaAMModelDescriptor
+        let root: URL
+        let allowsDownload: Bool
+    }
+
     init(directory: URL? = nil, downloadDescriptor: GigaAMModelDescriptor = GigaAMModelCatalog.downloadableModel,
+         importDescriptors: [GigaAMModelDescriptor] = GigaAMModelCatalog.models,
+         preferences: UserDefaults = .standard,
+         environment: [String: String] = ProcessInfo.processInfo.environment,
          download: @escaping Download = PichiGigaAMModelStore.downloadArtifact) {
         self.overriddenDirectory = directory
+        self.preferences = preferences
+        self.environment = environment
         self.downloadDescriptor = downloadDescriptor
+        self.importDescriptors = importDescriptors
         self.download = download
     }
 
@@ -61,48 +79,91 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
             .appendingPathComponent("Models/GigaAM", isDirectory: true)
     }
 
-    static var configuredModelDirectory: URL {
-        if let path = ProcessInfo.processInfo.environment["PICHI_GIGAAM_MODEL_DIR"], !path.isEmpty {
+    static var configuredModelDirectory: URL { self.shared.directory }
+
+    /// Legacy directory preferences alone do not opt an existing installation into private weights.
+    var directory: URL {
+        if let overriddenDirectory { return overriddenDirectory }
+        if let path = self.environment["PICHI_GIGAAM_MODEL_DIR"], !path.isEmpty {
             return URL(fileURLWithPath: path, isDirectory: true)
         }
-        if let path = UserDefaults.standard.string(forKey: self.directoryPreferenceKey), !path.isEmpty {
-            return URL(fileURLWithPath: path, isDirectory: true)
+        return Self.defaultDirectory
+    }
+
+    var usesImportedModelSource: Bool {
+        if self.preferences.string(forKey: Self.importedModelPreferenceKey) != nil { return true }
+        guard let selection = try? self.selectedArtifact() else {
+            return self.preferences.string(forKey: Self.importedModelPreferenceKey) != nil
         }
-        return self.defaultDirectory
+        return selection.descriptor.id != self.downloadDescriptor.id
     }
 
-    static func setModelDirectory(_ url: URL) {
-        UserDefaults.standard.set(url.standardizedFileURL.path, forKey: self.directoryPreferenceKey)
+    private var registeredDescriptors: [GigaAMModelDescriptor] {
+        [self.downloadDescriptor] + self.importDescriptors.filter { $0.id != self.downloadDescriptor.id }
     }
 
-    var directory: URL { self.overriddenDirectory ?? Self.configuredModelDirectory }
+    private func selectedArtifact() throws -> Selection {
+        let root = self.directory.standardizedFileURL
+        // Saved meetings pass the exact installed artifact folder. This explicit reference is
+        // independent of the user's current source preference and never starts a download.
+        if self.overriddenDirectory != nil,
+           let descriptor = self.registeredDescriptors.first(where: { $0.id == root.lastPathComponent }) {
+            return Selection(descriptor: descriptor, root: root, allowsDownload: false)
+        }
+        // The developer environment override remains an explicit, read-only source.
+        if self.overriddenDirectory == nil,
+           let path = self.environment["PICHI_GIGAAM_MODEL_DIR"], !path.isEmpty {
+            let descriptor = self.registeredDescriptors.first { Self.locate($0, in: root) != nil } ?? self.downloadDescriptor
+            return Selection(descriptor: descriptor, root: root, allowsDownload: false)
+        }
+        if let importedID = self.preferences.string(forKey: Self.importedModelPreferenceKey) {
+            guard let descriptor = self.registeredDescriptors.first(where: { $0.id == importedID }) else {
+                throw GigaAMError.incompatibleModel
+            }
+            return Selection(descriptor: descriptor, root: root, allowsDownload: false)
+        }
+        return Selection(descriptor: self.downloadDescriptor, root: root, allowsDownload: true)
+    }
+
+    private static func locate(_ descriptor: GigaAMModelDescriptor, in root: URL) -> URL? {
+        [root.appendingPathComponent(descriptor.id, isDirectory: true), root].first { descriptor.filesExist(in: $0) }
+    }
 
     // Disk scans in the model picker remain cheap. Full digests are verified off the
     // main actor during import and preparation, never on a SwiftUI render.
-    func modelsExistOnDisk() -> Bool { GigaAMModelCatalog.discover(in: self.directory) != nil }
+    func modelsExistOnDisk() -> Bool { (try? self.installedModel()) != nil }
 
     func installedModel() throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
-        guard let model = GigaAMModelCatalog.discover(in: self.directory) else {
-            throw GigaAMError.missingModels(self.directory)
+        let selection = try self.selectedArtifact()
+        guard let directory = Self.locate(selection.descriptor, in: selection.root) else {
+            throw GigaAMError.missingModels(selection.root)
         }
-        return model
+        return (selection.descriptor, directory)
+    }
+
+    /// A resumable meeting binds content identity and its saved directory, not mutable UI selection.
+    func installedModel(matchingFingerprint fingerprint: String) throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
+        let root = self.directory.standardizedFileURL
+        guard let descriptor = self.registeredDescriptors.first(where: { $0.fingerprint == fingerprint }),
+              let directory = Self.locate(descriptor, in: root) else {
+            throw GigaAMError.missingModels(root)
+        }
+        return (descriptor, directory)
     }
 
     func installedModelFingerprint() throws -> String {
         try self.installedModel().descriptor.fingerprint
     }
 
-    /// Initial preparation downloads only the registered public export. User-configured
-    /// external directories remain read-only; injected destinations are isolated test/owned
-    /// stores. Complete local imports keep their priority.
+    /// Preparation only downloads the pinned public source unless a verified import was
+    /// explicitly selected. Existing private files are preserved, but do not select themselves.
     func ensureInstalled(progressHandler: ((ModelPreparationProgress) -> Void)? = nil) async throws -> (descriptor: GigaAMModelDescriptor, directory: URL) {
         try Task.checkCancellation()
-        let destinationRoot = self.directory.standardizedFileURL
-        if let installed = GigaAMModelCatalog.discover(in: destinationRoot) { return installed }
-        guard self.overriddenDirectory != nil || destinationRoot.path == Self.defaultDirectory.standardizedFileURL.path else {
-            throw GigaAMError.missingModels(destinationRoot)
-        }
-        let descriptor = self.downloadDescriptor
+        let selection = try self.selectedArtifact()
+        let destinationRoot = selection.root
+        let descriptor = selection.descriptor
+        if let installed = Self.locate(descriptor, in: destinationRoot) { return (descriptor, installed) }
+        guard selection.allowsDownload else { throw GigaAMError.missingModels(destinationRoot) }
         let relay = ModelPreparationProgressRelay(progressHandler)
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
@@ -189,47 +250,73 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
     }
 
     func importModel(from sourceDirectory: URL) async throws {
-        let destinationRoot = self.overriddenDirectory ?? Self.defaultDirectory
+        try Task.checkCancellation()
+        let destinationRoot = (self.overriddenDirectory ?? Self.defaultDirectory).standardizedFileURL
+        // Discovery and destination are captured once; preferences cannot change this attempt.
+        guard let descriptor = self.importDescriptors.first(where: { Self.locate($0, in: sourceDirectory) != nil }),
+              let source = Self.locate(descriptor, in: sourceDirectory) else {
+            throw GigaAMError.missingModels(sourceDirectory)
+        }
         let task = Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
-            guard let source = GigaAMModelCatalog.discover(in: sourceDirectory) else {
-                throw GigaAMError.missingModels(sourceDirectory)
-            }
-            try source.descriptor.verify(in: source.directory)
+            try descriptor.verify(in: source)
+            try Self.validateOwnedDirectory(destinationRoot)
             let manager = FileManager.default
             try manager.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
-            let target = destinationRoot.appendingPathComponent(source.descriptor.id, isDirectory: true)
-            if target.standardizedFileURL == source.directory.standardizedFileURL { return }
-            let stage = destinationRoot.appendingPathComponent(".import-\(UUID().uuidString)", isDirectory: true)
-            try manager.createDirectory(at: stage, withIntermediateDirectories: true)
-            defer { try? manager.removeItem(at: stage) }
-            for name in [source.descriptor.modelFile] + [source.descriptor.vocabularyFile].compactMap({ $0 }) {
+            try Self.validateOwnedDirectory(destinationRoot)
+            let target = destinationRoot.appendingPathComponent(descriptor.id, isDirectory: true)
+            try Self.validateOwnedDirectory(target)
+            if target.standardizedFileURL.path != source.standardizedFileURL.path {
+                let stage = destinationRoot.appendingPathComponent(".import-\(UUID().uuidString)", isDirectory: true)
+                try manager.createDirectory(at: stage, withIntermediateDirectories: false)
+                defer { try? manager.removeItem(at: stage) }
+                for name in [descriptor.modelFile] + [descriptor.vocabularyFile].compactMap({ $0 }) {
+                    try Task.checkCancellation()
+                    try manager.copyItem(at: source.appendingPathComponent(name), to: stage.appendingPathComponent(name))
+                }
+                try descriptor.verify(in: stage)
                 try Task.checkCancellation()
-                try manager.copyItem(at: source.directory.appendingPathComponent(name), to: stage.appendingPathComponent(name))
+                _ = try Self.publish(stage, descriptor: descriptor, destinationRoot: destinationRoot)
+            } else {
+                try Task.checkCancellation()
             }
-            try source.descriptor.verify(in: stage)
-            try Task.checkCancellation()
-            _ = try Self.publish(stage, descriptor: source.descriptor, destinationRoot: destinationRoot)
+            // Publication is the commit point. Persist explicit selection with it, even if the
+            // caller cancels while joining native cleanup immediately after successful return.
+            self.preferences.set(destinationRoot.path, forKey: Self.directoryPreferenceKey)
+            self.preferences.set(descriptor.id, forKey: Self.importedModelPreferenceKey)
         }
-        try await withTaskCancellationHandler {
-            try await task.value
-        } onCancel: {
-            task.cancel()
-        }
-        if self.overriddenDirectory == nil { Self.setModelDirectory(destinationRoot) }
+        try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
-    /// Never remove an externally configured source directory.
+    /// Return to the registered public source without deleting any imported artifacts.
+    func restoreDefaultModelSource() async throws {
+        try Task.checkCancellation()
+        self.preferences.removeObject(forKey: Self.importedModelPreferenceKey)
+        self.preferences.removeObject(forKey: Self.directoryPreferenceKey)
+    }
+
+    /// Remove only the selected owned artifact, retaining other downloaded/imported choices.
+    /// Explicit external overrides are read-only even when they reference the owned path.
     func removeOwnedModels() throws {
-        let directory = self.directory.standardizedFileURL
+        let selection = try self.selectedArtifact()
+        let directory = selection.root.standardizedFileURL
         guard self.overriddenDirectory == nil,
+              self.environment["PICHI_GIGAAM_MODEL_DIR"]?.isEmpty != false,
               directory.path == Self.defaultDirectory.standardizedFileURL.path else { return }
         try Self.validateOwnedDirectory(directory)
-        for descriptor in GigaAMModelCatalog.models {
-            let path = directory.appendingPathComponent(descriptor.id, isDirectory: true)
-            if FileManager.default.fileExists(atPath: path.path) { try FileManager.default.removeItem(at: path) }
+        guard let installed = Self.locate(selection.descriptor, in: directory) else { return }
+        if installed.path != directory.path {
+            try Self.validateOwnedDirectory(installed)
+            try FileManager.default.removeItem(at: installed)
+        } else {
+            for name in [selection.descriptor.modelFile] + [selection.descriptor.vocabularyFile].compactMap({ $0 }) {
+                let path = directory.appendingPathComponent(name)
+                try Self.validateOwnedDirectory(path)
+                try FileManager.default.removeItem(at: path)
+            }
         }
     }
+
 }
 
 /// Narrow adapter onto the upstream provider contract. All inference runs in the
@@ -270,8 +357,8 @@ final class PichiGigaAMProvider: TranscriptionProvider {
         let generation = self.lifecycleGeneration
         self.runtime = runtime
         let task = Task {
-            let model = if self.expectedModelFingerprint != nil {
-                try self.modelStore.installedModel()
+            let model = if let expected = self.expectedModelFingerprint {
+                try self.modelStore.installedModel(matchingFingerprint: expected)
             } else {
                 try await self.modelStore.ensureInstalled(progressHandler: progressHandler)
             }
@@ -362,6 +449,10 @@ final class PichiGigaAMProvider: TranscriptionProvider {
 
     func importModel(from directory: URL) async throws {
         try await self.modelStore.importModel(from: directory)
+    }
+
+    func restoreDefaultModelSource() async throws {
+        try await self.modelStore.restoreDefaultModelSource()
     }
 
     func clearCache() async throws {

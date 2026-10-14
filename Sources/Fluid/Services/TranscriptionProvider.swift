@@ -199,6 +199,10 @@ protocol TranscriptionProvider {
     /// artifacts; cancellation must join any file operation before returning.
     func importModel(from directory: URL) async throws
 
+    /// Restore the registered download source after an explicit local import, retaining weights.
+    /// Callers use the same maintenance admission and joined cleanup as folder import.
+    func restoreDefaultModelSource() async throws
+
     /// Clear cached models
     func clearCache() async throws
 
@@ -215,6 +219,11 @@ extension TranscriptionProvider {
     func importModel(from directory: URL) async throws {
         throw NSError(domain: "TranscriptionProvider", code: -2, userInfo: [
             NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support importing a model folder."),
+        ])
+    }
+    func restoreDefaultModelSource() async throws {
+        throw NSError(domain: "TranscriptionProvider", code: -3, userInfo: [
+            NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support changing its model source."),
         ])
     }
     var shouldClearCacheAfterCancellation: Bool { true }
