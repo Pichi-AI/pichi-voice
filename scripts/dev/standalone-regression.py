@@ -126,6 +126,10 @@ def process_group_exists(group):
         os.killpg(group, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # EPERM is not proof of absence. Darwin can return it while a killed
+        # group is disappearing; inspect its members before releasing ownership.
+        return True
     return True
 
 
