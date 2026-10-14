@@ -155,6 +155,72 @@ with Path(sys.argv[1]).open('a') as output:
         '        return FluidGlassProminentActionStyle.pairedLabelButton(role: self.role, foreground: foreground, action: {}) {\n'
         '            Label("Remove file", systemImage: "xmark")\n'
         '        }\n    }\n}\n')
+# Preserve the complete actual secondary PrimitiveButtonStyle and real History
+# report Button. Replace only the glass renderer, which ImageRenderer cannot draw.
+import os, subprocess, hashlib, json
+secondary_revision = os.environ.get('PICHI_SECONDARY_GLASS_LEGACY_REVISION')
+secondary_source_path = 'Sources/Fluid/Theme/Components/FluidGlassControls.swift'
+secondary_source = subprocess.check_output(['git', 'show', f'{secondary_revision}:{secondary_source_path}'], text=True) if secondary_revision else Path(secondary_source_path).read_text()
+first = secondary_source.index('struct FluidGlassSecondaryActionStyle:')
+secondary_style = secondary_source[first:secondary_source.index('/// Native glass replaces an inherited foreground', first)]
+assert secondary_style.count('.buttonStyle(.glass)') == 1
+assert 'role: configuration.role' in secondary_style and 'action: configuration.trigger' in secondary_style
+reference_style = secondary_style.replace('struct FluidGlassSecondaryActionStyle:', 'struct ProductionSecondaryReferenceStyle:', 1).replace('.buttonStyle(.glass)', '.buttonStyle(.plain)', 1)
+history_report = snippet('Sources/Fluid/UI/TranscriptionHistoryView.swift',
+    '        Button { self.openFeedbackReport(for: entry) } label: {',
+    '        Button { self.copyFinalText(entry) } label: {')
+assert history_report.count('.fluidGlassAction()') == 1
+with Path(sys.argv[1]).open('a') as output:
+    output.write(reference_style)
+    output.write('struct ProductionHistoryReportFixture: View {\n'
+        ' let action: () -> Void\n private let entry = "Synthetic"\n'
+        ' private func openFeedbackReport(for entry: String) { self.action() }\n'
+        ' var body: some View {\n' + history_report.replace('.fluidGlassAction()', '.buttonStyle(ProductionSecondaryReferenceStyle(tone: nil))') + '\n }\n}\n')
+menu_first = glass.index('private struct FluidGlassMenuActionModifier:')
+menu_last = glass.index('\nextension View {\n    func fluidGlassMenuAction()', menu_first)
+menu_source = glass[menu_first:menu_last]
+assert menu_source.count('.glassEffect(.regular, in: .capsule)') == 1
+assert '.buttonStyle(FluidGlassMenuActionStyle(foreground: .primary))' in menu_source
+assert '.buttonStyle(FluidGlassMenuActionStyle(foreground: self.theme.palette.primaryText))' in menu_source
+menu_reference = menu_source.replace('private struct FluidGlassMenuActionModifier:', 'struct ProductionMenuReferenceModifier:', 1)
+menu_reference = menu_reference.replace('@Environment(\\.accessibilityReduceTransparency) private var reduceTransparency', 'let reduceTransparency: Bool', 1)
+menu_reference = menu_reference.replace('FluidGlassMenuActionStyle', 'ProductionMenuReferenceStyle')
+menu_reference = menu_reference.replace('.glassEffect(.regular, in: .capsule)', '.background(Color.clear)', 1)
+export_source = snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
+    '                        Menu {\n                            ForEach(ExportFormat.allCases',
+    '                        Button(role: .destructive) { self.pendingDeleteEntry = entry } label: {')
+assert export_source.count('.fluidGlassMenuAction()') == 1
+assert 'ForEach(ExportFormat.allCases, id: \\.self)' in export_source
+assert 'self.exportDocument = try TranscriptionDocument(entry: entry, format: format)' in export_source
+label_start = export_source.index('                            Label("Export",')
+export_label = export_source[label_start:export_source.index('\n                        }', label_start)]
+stats_share = snippet('Sources/Fluid/UI/StatsView.swift',
+    '            Button { self.showShareSheet = true } label: {',
+    '        }\n        .sheet(isPresented: self.$showShareSheet)')
+for contract in ['.fluidToolbarIcon()', '.accessibilityLabel("Share my stats")',
+                 '.disabled(self.statsStore.snapshot == nil)',
+                 '.help(PichiLocalization.text("Make an image of your stats to post or send"))']:
+    assert contract in stats_share
+with Path(sys.argv[1]).open('a') as output:
+    output.write(menu_reference)
+    output.write('struct ProductionExportReferenceFixture: View {\n'
+        ' let fallback: Bool\n var body: some View {\n'
+        '  Button(action: {}) {\n' + export_label + '\n  }\n'
+        '  .modifier(ProductionMenuReferenceModifier(reduceTransparency: self.fallback))\n }\n}\n')
+    output.write('struct ProductionStatsShareFixture: View {\n'
+        ' @State private var showShareSheet = false\n'
+        ' private struct Store { let snapshot: Int? = 1 }\n private let statsStore = Store()\n'
+        ' var body: some View {\n' + stats_share + '\n }\n}\n')
+Path(sys.argv[1]).with_name('SecondaryGlassProductionSource.json').write_text(json.dumps({
+    'styleSourceSHA256': hashlib.sha256(secondary_source.encode()).hexdigest(),
+    'reportButtonSHA256': hashlib.sha256(history_report.encode()).hexdigest(),
+    'exportMenuSHA256': hashlib.sha256(export_source.encode()).hexdigest(),
+    'menuStyleSHA256': hashlib.sha256(menu_source.encode()).hexdigest(),
+    'statsShareSHA256': hashlib.sha256(stats_share.encode()).hexdigest(),
+    'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', secondary_revision], text=True).strip() if secondary_revision else None,
+    'adapters': ['native glass renderer replaced by plain ButtonStyle', 'synthetic report action and entry', 'injected material scheme'],
+    'nativeMaterialSchemePropagation': 'SKIP',
+}, indent=2) + '\n')
 # SwiftUI supplies Configuration, and this quiet ButtonStyle is private.
 # Compile the EXACT production quiet style body in an inert View adapter with
 # a synthetic pressed configuration; this is source-bound raster evidence,
@@ -353,6 +419,33 @@ with Path(sys.argv[1]).open('a') as output:
             ' private func inspectDate(_ x: CGFloat, proxy: ChartProxy, pin: Bool) {}\n'
             ' var body: some View {\n' + code + '\n }\n}\n')
 
+# Extract the complete production participant editor, not a parallel test field.
+participant_path = 'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift'
+participant_revision = os.environ.get('PICHI_PARTICIPANT_INPUT_LEGACY_REVISION')
+participant_source = subprocess.check_output(['git', 'show', f'{participant_revision}:{participant_path}'], text=True) if participant_revision else Path(participant_path).read_text()
+participant_start = '            TextField(\n                speaker.displayName,'
+assert participant_source.count(participant_start) == 1
+participant_first = participant_source.index(participant_start)
+participant_last_marker = '            .disabled(self.isSaving)'
+participant_last = participant_source.index(participant_last_marker, participant_first) + len(participant_last_marker)
+participant_field = participant_source[participant_first:participant_last]
+with Path(sys.argv[1]).open('a') as output:
+    output.write('struct ProductionParticipantInputFixture: View {\n'
+        ' struct Speaker { let id: String; let displayName: String }\n'
+        ' @Environment(\\.theme) private var theme\n'
+        ' @Binding var drafts: [String: String]\n'
+        ' let isSaving: Bool\n'
+        ' @FocusState private var focusedField: String?\n'
+        ' let speaker = Speaker(id: "synthetic", displayName: "Участник Ёё")\n'
+        ' var body: some View {\n' + participant_field + '\n }\n}\n')
+Path(sys.argv[1]).with_name('ParticipantInputProductionSource.json').write_text(json.dumps({
+    'source': participant_path, 'sourceSHA256': hashlib.sha256(participant_source.encode()).hexdigest(),
+    'fieldSHA256': hashlib.sha256(participant_field.encode()).hexdigest(),
+    'legacySourceRevision': participant_revision,
+    'adapters': ['invented participant ID/name', 'externally observed draft/saving state'],
+    'visibleWindowOrPhysicalKeyboard': 'SKIP',
+}, indent=2) + '\n')
+
 Path(sys.argv[1]).with_name('NativeInkProductionSource.json').write_text(json.dumps({
     'sourceSHA256': ink_sources,
     'sharedControlSHA256': hashlib.sha256(Path('Sources/Fluid/Theme/Components/FluidEditControls.swift').read_bytes()).hexdigest(),
@@ -517,6 +610,8 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/Theme/Components/FluidIconTile.swift \
     Sources/Fluid/Theme/Components/FluidEditControls.swift \
+    Sources/Fluid/Theme/Components/FluidManagementSheet.swift \
+    Sources/Fluid/UI/AISettings/ProviderConnectionFields.swift \
     Sources/Fluid/Theme/Components/FluidSegmentedPicker.swift \
     Sources/Fluid/Theme/Components/FluidDropdown.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
@@ -526,12 +621,14 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
     Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
-    Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift \
-    "$task_test_dir/ToolbarPageLayout.swift" -o "$task_test_dir/tests"
+    Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
+    "$task_test_dir/ToolbarPageLayout.swift" \
+    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
+    Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in
-    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|"  ")
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*|"  ")
         xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
             --output-directory "$task_test_dir/OverlayCaptionFixture.app/Contents/Resources" --language en --language ru
         cp "$task_test_dir/tests" "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests"
@@ -539,7 +636,7 @@ case " $* " in
         ;;
 esac
 case " $* " in
-    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*)
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*)
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
         ;;
     "  ")
@@ -547,6 +644,7 @@ case " $* " in
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --overlay-captions-only
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --native-ink-only
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --toolbar-ink-only
+        "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --secondary-glass-ink-only
         ;;
     *) "$task_test_dir/tests" "$task_test_dir" "$@" ;;
 esac

@@ -126,6 +126,10 @@ def process_group_exists(group):
         os.killpg(group, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # EPERM is not proof of absence. Darwin can return it while a killed
+        # group is disappearing; inspect its members before releasing ownership.
+        return True
     return True
 
 
@@ -235,7 +239,7 @@ class Probe:
 
 # Registration is explicit: a new probe needs a reviewed interpreter/UI classification.
 SHELL_PROBES = (
-    "analytics_config", "brand_owned_native_menu", "brand_profile",
+    "analytics_config", "brand_logo_rendering", "brand_owned_native_menu", "brand_profile",
     "command_archive_search", "command_cancellation", "command_markdown",
     "credential_startup", "command_model_catalog", "command_session_boundary", "command_ui_localization", "command_workspace_presentation",
     "dictation_prompt_defaults", "dictation_prompt_request", "dictionary_correction",
@@ -244,7 +248,7 @@ SHELL_PROBES = (
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_microphone_capture_contracts", "native_window_appearance",
     "meeting_summary_evidence", "onboarding",
-    "page_presentation", "paste_key_cache", "private_ai_idle_unloader",
+    "page_presentation", "participant_input_contrast", "paste_key_cache", "private_ai_idle_unloader",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
     "stats_snapshot", "voice_edit_cancellation",
 )

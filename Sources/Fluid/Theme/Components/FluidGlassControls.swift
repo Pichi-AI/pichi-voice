@@ -175,15 +175,15 @@ private struct FluidGlassActionModifier: ViewModifier {
     }
 }
 
-/// Secondary glass uses neutral material, independently of the inherited accent
-/// tint. Keep its theme/semantic ink inside the native button's actual label.
+/// Secondary glass owns a neutral material whose appearance can differ from the
+/// app palette. Use native semantic ink unless the action supplies an explicit tone.
 @available(macOS 26, iOS 26, *)
 struct FluidGlassSecondaryActionStyle: PrimitiveButtonStyle {
     let tone: Color?
     @Environment(\.theme) private var theme
 
     func makeBody(configuration: Configuration) -> some View {
-        let foreground = self.theme.palette.readableText(self.tone ?? self.theme.palette.primaryText)
+        let foreground = self.tone.map { self.theme.palette.readableText($0) } ?? Color.primary
         return FluidGlassProminentActionStyle.pairedLabelButton(role: configuration.role,
                                                                foreground: foreground,
                                                                action: configuration.trigger) { configuration.label }
@@ -278,13 +278,15 @@ private struct FluidGlassMenuActionModifier: ViewModifier {
         let menu = content
             .menuStyle(.button)
             .menuIndicator(.hidden)
-            .buttonStyle(FluidGlassMenuActionStyle())
             .fixedSize(horizontal: true, vertical: false)
         // Stationary glass: native menu tracking swallows the release that interactive glass waits for.
         if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
-            menu.glassEffect(.regular, in: .capsule)
+            menu
+                .buttonStyle(FluidGlassMenuActionStyle(foreground: .primary))
+                .glassEffect(.regular, in: .capsule)
         } else {
             menu
+                .buttonStyle(FluidGlassMenuActionStyle(foreground: self.theme.palette.primaryText))
                 .background(self.theme.palette.cardBackground, in: Capsule())
                 .overlay { Capsule().strokeBorder(self.theme.palette.cardBorder, lineWidth: 1).allowsHitTesting(false) }
         }
@@ -293,8 +295,11 @@ private struct FluidGlassMenuActionModifier: ViewModifier {
 
 /// Padding lives in the label so the whole pill opens the menu.
 private struct FluidGlassMenuActionStyle: ButtonStyle {
+    let foreground: Color
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
+            .foregroundStyle(self.foreground)
             .padding(.horizontal, 14)
             .frame(height: 32)
             .contentShape(Capsule())

@@ -1,16 +1,12 @@
-import AppKit
 import SwiftUI
 
-/// Reuse AppKit's cached app icon; no asset lookup or filesystem query in the view.
+/// Decorative artwork follows the shared theme and existing package variants.
+/// Distribution and Dock icons continue to use PichiBrandMark.appIcon.
 struct FluidVoiceBrandIcon: View {
+    @Environment(\.theme) private var theme
     let size: CGFloat
 
     var body: some View {
-        Image(nsImage: PichiBrandMark.appIcon)
-            .resizable()
-            .interpolation(.high)
-            .aspectRatio(contentMode: .fit)
-            .frame(width: self.size, height: self.size)
-            .accessibilityHidden(true)
+        PichiBrandMark(size: self.size, color: self.theme.palette.accent)
     }
 }

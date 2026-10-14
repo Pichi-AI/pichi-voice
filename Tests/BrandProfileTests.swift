@@ -42,6 +42,7 @@ struct BrandProfileTests {
             precondition(demo.logos != nil && demo.theme != nil)
             precondition(!demo.profile.appName.contains("Pichi"))
         }
+        try self.verifyLogoVisibility(packaged)
         try self.verifyPaletteForegroundContrast(packaged)
         try self.require(try BrandPackage.decode(packaged.encoded()) == packaged)
         let valid = try JSONEncoder().encode(packaged.profile)
@@ -378,6 +379,69 @@ struct BrandProfileTests {
         try self.require(try Data(contentsOf: oldLog) == sentinel)
         print("Diagnostic log identity, isolated baseline, rotation, joined queue and direct crash writes passed")
         #endif
+    }
+
+    static func verifyLogoVisibility(_ packaged: BrandPackage) throws {
+        let whiteData = try self.logoPNG(width: 8, height: 8, pixel: [255, 255, 255, 255])
+        let blackData = try self.logoPNG(width: 8, height: 8, pixel: [0, 0, 0, 255])
+        let clearData = try self.logoPNG(width: 8, height: 8, pixel: [255, 255, 255, 0])
+        let white = try BrandLogo(data: whiteData)
+        let black = try BrandLogo(data: blackData)
+        let clear = try BrandLogo(data: clearData)
+        try self.require(try white.visibleData() == whiteData)
+        try self.require(try black.visibleData() == blackData)
+        try self.require(try clear.visibleData() == nil)
+        // No opacity threshold or downsampling: a final, minimally nonzero
+        // alpha pixel is still artwork, even on the maximum allowed width.
+        let thinData = try self.logoPNG(width: 4096, height: 1, pixel: [0, 0, 0, 0], lastAlpha: 1)
+        try self.require(try BrandLogo(data: thinData).visibleData() == thinData)
+        let variants = BrandLogos(primary: white, light: black, dark: white, menuBar: black)
+        precondition(variants.visibleData(for: .primary) == whiteData)
+        precondition(variants.visibleData(for: .light) == blackData)
+        precondition(variants.visibleData(for: .dark) == whiteData)
+        precondition(variants.visibleData(for: .menuBar) == blackData)
+        precondition(variants.visibleData(for: .menuBar, fallbackToPrimary: false) == blackData)
+        let primaryOnly = BrandLogos(primary: white)
+        // Explicit-only resolution lets the native owner check its packaged
+        // distribution asset before requesting primary artwork. Imports skip
+        // that trusted-asset branch, and still obtain their primary bytes.
+        precondition(primaryOnly.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
+        precondition(primaryOnly.visibleData(for: .primary) == whiteData)
+        precondition(primaryOnly.visibleData(for: .menuBar) == whiteData)
+        let blankVariants = BrandLogos(primary: black, light: clear, dark: clear, menuBar: clear)
+        precondition(blankVariants.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
+        for role in [BrandLogos.Role.primary, .light, .dark, .menuBar] {
+            precondition(blankVariants.visibleData(for: role) == blackData)
+            precondition(BrandLogos(primary: clear).visibleData(for: role) == nil)
+        }
+        // Keep legacy blank packages readable and preserve their product copy;
+        // source resolution must request the neutral renderer fallback instead.
+        let legacy = BrandPackage(profile: packaged.profile, logos: BrandLogos(primary: clear))
+        let decoded = try BrandPackage.decode(legacy.encoded())
+        precondition(decoded.profile == packaged.profile)
+        precondition(decoded.logos?.primary == clear)
+        precondition(decoded.logos?.visibleData(for: .menuBar) == nil)
+        var invalid = try JSONSerialization.jsonObject(with: JSONEncoder().encode(white)) as! [String: Any]
+        invalid["base64"] = "invalid"
+        let invalidLogo = try JSONDecoder().decode(BrandLogo.self, from: JSONSerialization.data(withJSONObject: invalid))
+        precondition(BrandLogos(primary: invalidLogo).visibleData(for: .menuBar) == nil)
+        print("Synthetic logo alpha, original-color bytes, appearance/menu source selection and legacy blank fallback passed")
+    }
+
+    static func logoPNG(width: Int, height: Int, pixel: [UInt8], lastAlpha: UInt8? = nil) throws -> Data {
+        precondition(pixel.count == 4)
+        var pixels = Array(repeating: pixel, count: width * height).flatMap { $0 }
+        if let lastAlpha { pixels[pixels.count - 1] = lastAlpha }
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+        let output = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, image, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        return output as Data
     }
 
     static func png(width: Int, height: Int) throws -> Data {

@@ -685,7 +685,7 @@ struct FileTranscriptionView: View {
                         } label: {
                             Label("Export", systemImage: "square.and.arrow.up")
                         }
-                        .fluidGlassAction()
+                        .fluidGlassMenuAction()
                         Button(role: .destructive) { self.pendingDeleteEntry = entry } label: {
                             Label("Delete", systemImage: "trash")
                         }
