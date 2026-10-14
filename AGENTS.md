@@ -26,6 +26,7 @@ Read [development setup](docs/development/codex.md) and [upstream strategy](docs
 
 ## Verification
 
+- **IMPORTANT:** For iPad/iPhone changes, first validate the combined build in both simulators and show native screenshots or video to the user for review. Physical iPad/iPhone tests are the final stage after the simulator results work correctly and the user has reviewed them. Do not replace an active device recording to install a test build.
 - `bash scripts/dev/check.sh`: portable repository and setup checks.
 - `bash scripts/dev/setup.sh`: worktree and prerequisite check. Swift dependencies resolve during the first macOS build; no model downloads occur during setup.
 - `bash scripts/dev/macos.sh build`: unsigned macOS build.
