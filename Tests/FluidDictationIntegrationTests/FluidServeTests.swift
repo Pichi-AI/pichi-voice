@@ -188,7 +188,6 @@ final class FluidServeTests: XCTestCase {
         var session = self.session(title: "Weekly sync")
         try self.save(session)
         let entry = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
-        XCTAssertEqual(FluidServeMeetings.summaryInput(for: entry.meeting), MeetingSummaryInput.transcript(for: session), "Same text the app summarizes, so the same fingerprint")
 
         try self.saveSummary("Current.", style: "executive", for: session)
         try self.saveSummary("From a withdrawn model.", style: "topics", for: session, providerID: nil)
@@ -209,6 +208,53 @@ final class FluidServeTests: XCTestCase {
         XCTAssertEqual(FluidServeMeetings.savedSummaries(for: renamed), [])
         XCTAssertEqual(self.run("meet", "summary", "latest").exitCode, 1)
         XCTAssertFalse(self.run("meet", "summary", "latest").output.contains("Current."))
+    }
+
+    func testTemplateSummaryVersionsFollowTheAppCachePolicyWithoutDeletingStoredText() throws {
+        let session = self.session(title: "Template cache versions")
+        try self.save(session)
+        let entry = try XCTUnwrap(FluidServeMeetings.entries(root: self.root).first)
+        let transcriptHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session))
+        for version in [nil, 1, MeetingSummaryInput.currentPromptVersion + 1, MeetingSummaryInput.currentPromptVersion] as [Int?] {
+            try self.saveSummary("Versioned synthetic output.", style: "executive", for: session, promptVersion: version)
+            let file = self.directory(for: session).appendingPathComponent("manual-summary-executive.json")
+            let before = try Data(contentsOf: file)
+            let saved = try JSONDecoder().decode(MeetingSummaryController.SavedSummary.self, from: before)
+            let appWouldShow = saved.isCurrent(transcriptHash: transcriptHash, promptHash: nil)
+            XCTAssertEqual(appWouldShow, version == MeetingSummaryInput.currentPromptVersion)
+            XCTAssertEqual(FluidServeMeetings.savedSummaries(for: entry).map(\.style), appWouldShow ? ["executive"] : [])
+            let result = self.run("meet", "summary", "latest", "--style", "executive")
+            XCTAssertEqual(result.exitCode, appWouldShow ? 0 : 1)
+            XCTAssertEqual(result.output.contains("Versioned synthetic output."), appWouldShow)
+            XCTAssertEqual(try Data(contentsOf: file), before, "Invalidating an old template must not delete its stored text")
+        }
+    }
+
+    func testTemplateSummaryCacheMatchesAppLanguageAndWholeSecondPersistence() throws {
+        for language in ["en", "ru", "auto", "invalid-code"] {
+            var session = self.session(title: "Template language \(language)")
+            session.languageCode = language
+            session.startedAt = Date(timeIntervalSince1970: 1_700_000_000.7)
+            session.endedAt = Date(timeIntervalSince1970: 1_700_001_800.3)
+            try self.save(session)
+            try self.saveSummary("Current \(language) template.", style: "executive", for: session)
+            let prefix = String(session.id.uuidString.prefix(8))
+            let saved = try JSONDecoder().decode(MeetingSummaryController.SavedSummary.self, from: Data(contentsOf:
+                self.directory(for: session).appendingPathComponent("manual-summary-executive.json")))
+            XCTAssertTrue(saved.isCurrent(transcriptHash: MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)), promptHash: nil))
+            XCTAssertTrue(MeetingSummaryInput.transcript(for: session).contains("Duration: 30 minutes"))
+            for displayTimeZone in [try XCTUnwrap(TimeZone(secondsFromGMT: 0)), try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))] {
+                let result = FluidServeCommand.run(arguments: ["meet", "summary", prefix, "--style", "executive"],
+                    root: self.root, accessEnabled: true, timeZone: displayTimeZone)
+                XCTAssertEqual(result.exitCode, 0, "Persisted dates and the listing time zone must not hide a current \(language) template")
+                XCTAssertTrue(result.output.contains("Current \(language) template."))
+            }
+            session.languageCode = language == "ru" ? "fr" : "ru"
+            try self.save(session)
+            let changed = self.run("meet", "summary", prefix, "--style", "executive")
+            XCTAssertEqual(changed.exitCode, 1)
+            XCTAssertFalse(changed.output.contains("Current \(language) template."), "Changing capture language requires regeneration")
+        }
     }
 
     func testListKeepsLongAndEmojiTitlesWholeAndMeasuresAnInterruptedMeeting() throws {
@@ -804,13 +850,15 @@ final class FluidServeTests: XCTestCase {
         for session: MeetingSession,
         providerID: String? = "on-device",
         transcriptHash: String? = nil,
-        promptHash: String? = nil
+        promptHash: String? = nil,
+        promptVersion: Int? = MeetingSummaryInput.currentPromptVersion
     ) throws {
         let saved = MeetingSummaryController.SavedSummary(
             transcriptHash: transcriptHash ?? MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session)),
             modelID: "model",
             text: text,
             providerID: providerID,
+            promptVersion: promptVersion,
             generatedAt: Date(timeIntervalSince1970: 1_700_000_500),
             promptHash: promptHash,
             modelName: "Qwen3.5 9B"

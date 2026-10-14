@@ -369,6 +369,7 @@
 				Services/FluidServe/FluidServeSkill.swift,
 				Services/Meeting/PichiMeetingSummaryDocument.swift,
 				Services/Meeting/MeetingModels.swift,
+				Services/Meeting/MeetingSummaryInput.swift,
 				Services/Meeting/MeetingPersistedMetadata.swift,
 				Services/Meeting/MeetingAudioAsset.swift,
 				Services/Meeting/MeetingTranscriptExporter.swift,

@@ -204,9 +204,10 @@ struct FluidServeContainmentTests {
     private static func manualSummary(_ fixture: Fixture, text: String = foreignSentinel) throws -> Data {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let meeting = try decoder.decode(FluidServeMeetings.Meeting.self, from: self.sessionBytes(fixture.session))
+        let session = try decoder.decode(MeetingSession.self, from: self.sessionBytes(fixture.session))
         return try JSONSerialization.data(withJSONObject: [
-            "transcriptHash": FluidServeMeetings.fingerprint(FluidServeMeetings.summaryInput(for: meeting)),
+            "transcriptHash": MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: session, timeZone: FluidServeMeetings.systemTimeZone())),
+            "promptVersion": MeetingSummaryInput.currentPromptVersion,
             "text": text, "providerID": "synthetic-provider", "modelName": "synthetic-model",
         ], options: .sortedKeys)
     }
