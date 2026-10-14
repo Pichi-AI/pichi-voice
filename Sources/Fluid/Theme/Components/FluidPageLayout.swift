@@ -42,13 +42,23 @@ extension EnvironmentValues {
 }
 
 private struct FluidPageActions<Actions: View>: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.fluidPageToolbarVisible) private var isVisible
     @Environment(\.fluidToolbarTrailingInset) private var trailingInset
     let enabled: Bool
     let actions: Actions
 
     func body(content: Content) -> some View {
-        content.toolbar {
+        // Capture the caller environment before native toolbar content is
+        // rehosted. Page actions must not inherit a stale hosting-root scheme.
+        let pageColorScheme = self.colorScheme
+        #if os(macOS)
+        ToolbarAppearanceTrace.emit(kind: "page-action-input", source: "FluidPageActions", payload: [
+            "colorScheme": pageColorScheme == .dark ? "dark" : "light",
+            "visible": self.isVisible, "enabled": self.enabled,
+        ])
+        #endif
+        return content.toolbar {
             if self.isVisible, self.enabled {
                 // Keep page actions separate from the shared trailing controls.
                 if #available(macOS 26, *) {
@@ -56,6 +66,7 @@ private struct FluidPageActions<Actions: View>: ViewModifier {
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     self.actions
+                        .environment(\.colorScheme, pageColorScheme)
                         .foregroundStyle(Color.primary)
                         .buttonStyle(.automatic)
                         .labelStyle(FluidToolbarLabelStyle())

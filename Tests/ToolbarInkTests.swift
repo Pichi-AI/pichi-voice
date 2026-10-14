@@ -30,6 +30,7 @@ enum ToolbarInkTests {
             case "issue": ProductionToolbarIssueFixture()
             case "update": ProductionToolbarUpdateFixture()
             case "page": ProductionToolbarPageFixture()
+            case "page-stale-host": ProductionToolbarPageFixture(staleHostScheme: self.state.material == .light ? .dark : .light)
             case "today-empty": ProductionToolbarTodayFixture(hasActivity: false, action: {})
             default: ProductionToolbarTodayFixture(hasActivity: true, action: {})
             }
@@ -75,15 +76,30 @@ enum ToolbarInkTests {
 
     @MainActor static func run(directory: URL) async throws {
         var checks = 0
-        for (brand, path) in [("pichi", "Sources/Fluid/Branding/brand-package.json"),
-                              ("sber", "Configuration/BrandExamples/sber-demo.json"),
-                              ("alfa", "Configuration/BrandExamples/alfa-demo.json")] {
-            let package = try BrandPackage.decode(Data(contentsOf: URL(fileURLWithPath: path)))
+        var packages = try [("pichi", "Sources/Fluid/Branding/brand-package.json"),
+                            ("sber", "Configuration/BrandExamples/sber-demo.json"),
+                            ("alfa", "Configuration/BrandExamples/alfa-demo.json")].map {
+            ($0.0, try BrandPackage.decode(Data(contentsOf: URL(fileURLWithPath: $0.1))))
+        }
+        var inverted = packages[0].1
+        let profile = inverted.profile
+        inverted.profile = BrandProfile(appName: profile.appName, meetingName: profile.meetingName,
+            assistantName: profile.assistantName, tagline: profile.tagline,
+            accentLight: profile.accentDark, accentDark: profile.accentLight,
+            website: profile.website, support: profile.support)
+        inverted.theme = BrandTheme(light: inverted.theme!.dark, dark: inverted.theme!.light)
+        packages.append(("inverted", try BrandPackage.decode(inverted.encoded())))
+        for (brand, package) in packages {
             for appScheme: ColorScheme in [.dark, .light] {
                 let theme = AppTheme.adaptive(accent: Color(hex: appScheme == .dark ? package.profile.accentDark : package.profile.accentLight)!,
                                               colorScheme: appScheme, package: package)
+                if brand == "inverted" {
+                    precondition(theme.palette.nativeColorScheme(fallback: appScheme) != appScheme)
+                }
+                let kinds = brand == "inverted" ? ["page", "page-stale-host"]
+                    : ["sidebar", "theme", "issue", "update", "page", "page-stale-host", "today-empty", "today-active"]
                 for language in ["en", "ru"] {
-                    for kind in ["sidebar", "theme", "issue", "update", "page", "today-empty", "today-active"] {
+                    for kind in kinds {
                         let state = State(theme: theme)
                         let renderer = ImageRenderer(content: Fixture(state: state, kind: kind, locale: Locale(identifier: language)))
                         renderer.scale = 2
@@ -102,7 +118,7 @@ enum ToolbarInkTests {
                 }
             }
         }
-        print("Toolbar ink: \(checks) production label/reference-material checks, 3 brands, RU/EN, opposite and matching app/material appearances; intentional updater accent preserved")
+        print("Toolbar ink: \(checks) production label/reference-material checks, 3 brands plus validated inverted palette, RU/EN, opposite and matching app/material appearances; stale page-host forwarding and intentional updater accent preserved")
         print("SKIP: actual native toolbar material-to-label scheme propagation, disabled chrome, pointer/AX actions and hot/cold application replay")
     }
 }
