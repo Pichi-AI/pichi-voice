@@ -420,9 +420,6 @@ private struct DashboardQuickAction: View {
     let icon: String
     let action: () -> Void
     @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovered = false
 
     var body: some View {
         Button(action: self.action) {
@@ -442,19 +439,9 @@ private struct DashboardQuickAction: View {
                     .foregroundStyle(self.theme.palette.tertiaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
             .padding(.vertical, 16)
-            .background(self.hovered && self.isEnabled ? self.theme.palette.elevatedCardBackground : .clear, in: RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(self.hovered && self.isEnabled ? self.theme.palette.secondaryText : .clear, lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 12))
         }
-        .buttonStyle(.plain)
-        .onHover { self.hovered = $0 && self.isEnabled }
-        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.hovered)
+        .buttonStyle(FluidOutlinedButtonStyle(fillsWidth: true))
     }
 }
 
