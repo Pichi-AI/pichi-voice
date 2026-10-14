@@ -76,3 +76,49 @@ xcrun swiftc -swift-version 6 -strict-concurrency=complete -parse-as-library \
     "$hotkey_test_dir/ProductionHotkeyInitialization.swift" Tests/HotkeyInitializationTests.swift \
     -o "$hotkey_test_dir/tests"
 "$hotkey_test_dir/tests"
+
+# The same native XCTest methods run against the complete production shortcut
+# model without an application host, event taps, preferences, or captured input.
+python3 -S - "$hotkey_test_dir" "${1:-}" <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+output, reference = Path(sys.argv[1]), sys.argv[2]
+model_path = 'Sources/Fluid/Models/HotkeyShortcut.swift'
+model = subprocess.check_output(['git', 'show', f'{reference}:{model_path}'], text=True) if reference else Path(model_path).read_text()
+(output / 'HotkeyShortcut.swift').write_text(model)
+source = Path('Tests/FluidDictationIntegrationTests/HotkeyShortcutTests.swift').read_text()
+names = [
+    'testFunctionKeyDisplayNames',
+    'testModifiedFunctionKeyDisplayPreservesMatchingAndCoding',
+    'testFunctionKeyNamesPreserveLetterLayoutAndModifierNames',
+]
+methods = []
+for name in names:
+    marker = '    func ' + name + '('
+    assert source.count(marker) == 1, f'Expected one native shortcut test {name}'
+    start = source.index(marker)
+    end = source.index('\n    }', start) + len('\n    }')
+    methods.append(source[start:end])
+(output / 'main.swift').write_text(
+    'import AppKit\nimport Carbon\nimport Foundation\nimport XCTest\n'
+    + 'final class HotkeyShortcutDisplayTests: XCTestCase {\n'
+    + '\n'.join(methods) + '\n}\n'
+    + 'let suite = HotkeyShortcutDisplayTests.defaultTestSuite\n'
+    + 'precondition(suite.testCaseCount == 3, "All native shortcut display tests must be discovered")\n'
+    + 'suite.run()\n'
+    + 'guard let run = suite.testRun, run.executionCount == 3, run.failureCount == 0 else { exit(1) }\n'
+)
+PY
+
+hotkey_frameworks="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+hotkey_libraries="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/usr/lib"
+xcrun swiftc -swift-version 6 -strict-concurrency=complete \
+    -I "$hotkey_libraries" -L "$hotkey_libraries" -lXCTestSwiftSupport \
+    -Xlinker -rpath -Xlinker "$hotkey_libraries" \
+    -F "$hotkey_frameworks" -Xlinker -rpath -Xlinker "$hotkey_frameworks" \
+    -module-cache-path "$hotkey_test_dir/ModuleCache" \
+    "$hotkey_test_dir/HotkeyShortcut.swift" "$hotkey_test_dir/main.swift" \
+    -o "$hotkey_test_dir/display-tests"
+"$hotkey_test_dir/display-tests"
