@@ -140,6 +140,24 @@ with Path(sys.argv[1]).open('a') as output:
         '        return FluidGlassProminentActionStyle.pairedLabelButton(role: self.role, foreground: foreground, action: {}) {\n'
         '            Label("Remove file", systemImage: "xmark")\n'
         '        }\n    }\n}\n')
+# SwiftUI supplies Configuration, and this quiet ButtonStyle is private.
+# Compile the EXACT production quiet style body in an inert View adapter with
+# a synthetic pressed configuration; this is source-bound raster evidence,
+# not a physical mouse press or native input/activation test.
+quiet = snippet('Sources/Fluid/Theme/Components/FluidGlassControls.swift',
+                'private struct FluidQuietActionStyle: ButtonStyle {',
+                '/// Glass stays outside the menu label;')
+quiet = quiet.replace('private struct FluidQuietActionStyle: ButtonStyle {',
+    'struct ProductionQuietPressedFixture: View {', 1)
+quiet = quiet.replace('    let circular: Bool', '    let circular = false', 1)
+quiet = quiet.replace('    let tone: Color?', '    let tone: Color? = nil', 1)
+quiet = quiet.replace('    let spacious: Bool', '    let spacious = false', 1)
+quiet = quiet.replace('    func makeBody(configuration: Configuration) -> some View {',
+    '    struct Configuration { let isPressed = true; let label = Text("Quiet pressed action") }\n'
+    '    var body: some View { self.makeBody(configuration: Configuration()) }\n'
+    '    @ViewBuilder\n    func makeBody(configuration: Configuration) -> some View {', 1)
+with Path(sys.argv[1]).open('a') as output:
+    output.write(quiet)
 PY
 
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
@@ -153,6 +171,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/NativeButtonStyles.swift \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/Theme/Components/FluidIconTile.swift \
+    Sources/Fluid/Theme/Components/FluidEditControls.swift \
     Sources/Fluid/Theme/Components/FluidDropdown.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
     Sources/Fluid/UI/AISettingsComponents.swift \

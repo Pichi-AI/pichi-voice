@@ -256,7 +256,7 @@ private struct FluidQuietActionStyle: ButtonStyle {
             .padding(.horizontal, self.circular ? 0 : 8)
             .frame(minWidth: height, minHeight: height)
             .contentShape(Rectangle())
-            .opacity(self.isEnabled && configuration.isPressed ? 0.6 : 1)
+            .scaleEffect(self.isEnabled && configuration.isPressed ? FluidInteractionVisuals.pressedScale : 1)
             .onHover { self.isHovered = $0 && self.isEnabled }
             .onChange(of: self.isEnabled) { _, enabled in
                 if !enabled { self.isHovered = false }

@@ -514,9 +514,16 @@ private struct SearchablePickerSelectedRowBackground: ViewModifier {
     func body(content: Content) -> some View {
         content.background(
             self.isSelected
-                ? self.theme.palette.accent.opacity(self.theme.metrics.pickerControl.selectedRowOpacity)
+                ? self.theme.palette.elevatedCardBackground
                 : Color.clear
         )
+        .overlay(alignment: .leading) {
+            if self.isSelected {
+                Rectangle().fill(self.theme.palette.accentText).frame(width: 2)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }
 
