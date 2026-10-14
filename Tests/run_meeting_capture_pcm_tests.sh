@@ -9,6 +9,10 @@ trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
 # Combined iOS/app tests separately verify real canonical batch/store integration.
 python3 - "$task_test_dir" <<'PY'
 import pathlib, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path('Tests').resolve()))
+from run_meeting_backup_refresh_tests import declaration
+
 root = pathlib.Path(sys.argv[1])
 contract = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingCaptureControlling.swift').read_text()
 start = contract.index('nonisolated protocol MeetingMemoryAudioConsuming:')
@@ -17,8 +21,9 @@ root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
     + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
-start = source.index('nonisolated enum MeetingLiveSampleCopy {')
-root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + source[start:])
+# Compile the complete production copier, without unrelated declarations appended later.
+sample_copy = declaration(source, 'nonisolated enum MeetingLiveSampleCopy {')
+root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + sample_copy + '\n')
 PY
 xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Localization/PichiLocalization.swift \

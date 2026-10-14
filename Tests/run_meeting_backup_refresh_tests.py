@@ -94,6 +94,7 @@ def main() -> None:
         "nonisolated enum MeetingBackendResultContract:",
         "nonisolated enum MeetingDiarizationDependency:",
         "nonisolated enum MeetingBackendInputKind:",
+        "nonisolated struct MeetingPCMObservationPolicy:",
         "nonisolated struct MeetingBackendDescriptor:",
     ))
     # PCM admission is exercised by the native backend tests, not these UI handlers.
