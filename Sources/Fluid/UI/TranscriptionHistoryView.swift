@@ -127,10 +127,10 @@ struct TranscriptionHistoryView: View {
 
             if let entry = selectedEntry {
                 self.entryDetailView(entry)
-                    .frame(minWidth: 400)
+                    .frame(minWidth: 320)
             } else {
                 self.noSelectionView
-                    .frame(minWidth: 400)
+                    .frame(minWidth: 320)
             }
         }
         .onChange(of: self.historyStore.searchSelectionRequest) { _, _ in
@@ -558,6 +558,7 @@ struct TranscriptionHistoryView: View {
                         Spacer(minLength: 12)
                         self.detailActions(entry)
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     VStack(alignment: .leading, spacing: 16) {
                         self.detailHeading(entry)
                         self.detailActions(entry)
@@ -642,7 +643,7 @@ struct TranscriptionHistoryView: View {
     }
 
     private var detailColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(minimum: 0), spacing: 16, alignment: .leading), count: 3)
+        [GridItem(.adaptive(minimum: 180), spacing: 16, alignment: .leading)]
     }
 
     private func recordedModel(_ entry: TranscriptionHistoryEntry) -> String? {
@@ -652,33 +653,42 @@ struct TranscriptionHistoryView: View {
 
     private func detailActions(_ entry: TranscriptionHistoryEntry) -> some View {
         FluidGlassControlGroup {
-            HStack(spacing: 8) {
-                Button { self.openFeedbackReport(for: entry) } label: {
-                    Label("Report issue", systemImage: "flag")
-                }
-                .fluidGlassAction()
-                Button { self.copyFinalText(entry) } label: {
-                    Label(
-                        PichiLocalization.text(self.copiedEntryID == entry.id ? "Copied" : "Copy text"),
-                        systemImage: self.copiedEntryID == entry.id ? "checkmark" : "doc.on.doc"
-                    )
-                }
-                .fluidGlassAction(prominent: true)
-                .disabled(entry.clipboardText == nil)
-                if self.hasAudio(entry) {
-                    Button {
-                        self.audioEntryID = self.audioEntryID == entry.id ? nil : entry.id
-                    } label: {
-                        Label(PichiLocalization.text(self.audioEntryID == entry.id ? "Close audio" : "Audio"), systemImage: "waveform")
-                    }
-                    .fluidGlassAction()
-                }
-                Menu { self.entryActions(entry) } label: { Image(systemName: "ellipsis") }
-                    .menuIndicator(.hidden)
-                    .fluidGlassAction(circular: true)
-                    .accessibilityLabel(PichiLocalization.text("Dictation actions"))
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { self.detailActionButtons(entry) }
+                    .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 8) { self.detailActionButtons(entry) }
             }
         }
+    }
+
+    @ViewBuilder
+    private func detailActionButtons(_ entry: TranscriptionHistoryEntry) -> some View {
+        Button { self.openFeedbackReport(for: entry) } label: {
+            Label("Report issue", systemImage: "flag")
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .fluidGlassAction()
+        Button { self.copyFinalText(entry) } label: {
+            Label(
+                PichiLocalization.text(self.copiedEntryID == entry.id ? "Copied" : "Copy text"),
+                systemImage: self.copiedEntryID == entry.id ? "checkmark" : "doc.on.doc"
+            )
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .fluidGlassAction(prominent: true)
+        .disabled(entry.clipboardText == nil)
+        if self.hasAudio(entry) {
+            Button {
+                self.audioEntryID = self.audioEntryID == entry.id ? nil : entry.id
+            } label: {
+                Label(PichiLocalization.text(self.audioEntryID == entry.id ? "Close audio" : "Audio"), systemImage: "waveform")
+            }
+            .fluidGlassAction()
+        }
+        Menu { self.entryActions(entry) } label: { Image(systemName: "ellipsis") }
+            .menuIndicator(.hidden)
+            .fluidGlassAction(circular: true)
+            .accessibilityLabel(PichiLocalization.text("Dictation actions"))
     }
 
     private func relativeDate(_ date: Date) -> String {
@@ -694,7 +704,9 @@ struct TranscriptionHistoryView: View {
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 5) {
                 Text(PichiLocalization.text(label)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(value).font(self.theme.typography.bodyStrong).monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
         }

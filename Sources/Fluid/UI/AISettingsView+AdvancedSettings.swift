@@ -1394,7 +1394,6 @@ extension AIEnhancementSettingsView {
                     )
                     .disabled(self.settings.rewriteModeLinkedToGlobal)
                 }
-                .opacity(self.settings.rewriteModeLinkedToGlobal ? 0.65 : 1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)

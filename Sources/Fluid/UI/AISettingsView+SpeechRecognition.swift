@@ -582,7 +582,6 @@ extension VoiceEngineSettingsView {
         .onTapGesture {
             self.viewModel.previewSpeechModel = model
         }
-        .opacity(self.viewModel.asr.isRunning ? 0.6 : 1.0)
         .allowsHitTesting(!self.viewModel.asr.isRunning)
     }
 
