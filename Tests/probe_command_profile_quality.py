@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Opt-in, synthetic Command Mode semantic regression for an existing local Ollama.
 
-No CI registration, installation, preference access or command execution. Requires
-an explicit model, artifact digest and loopback /v1 URL. Eight fixed cases maximum;
+The live probe is not registered with CI. It does not install software, access
+preferences or execute commands. It requires an explicit model, artifact digest
+and loopback /v1 URL. Eight fixed cases maximum;
 60 seconds/request, 240 seconds/run, 2 MiB/response, 4096 frames, 128 KiB/frame.
 Raw requests, responses, failures and source/model provenance go into ignored .build.
 Every response frame must name the explicit requested model; artifact digests are
 checked before and after inference. Offline unit checks need no installed model:
   python3 -S Tests/test_command_profile_quality_probe.py
+These offline unit checks also run through scripts/dev/check.sh in repository CI.
+They trap HTTP/HTTPS construction during module loading and evaluation; the live
+probe remains opt-in and never runs from the portable or standalone check suites.
 
 Offline examples (no HTTP, including metadata):
   python3 -S Tests/probe_command_profile_quality.py --model MODEL --model-digest SHA256 \
