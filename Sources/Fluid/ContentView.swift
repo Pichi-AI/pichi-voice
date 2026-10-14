@@ -6333,8 +6333,7 @@ private struct UpdateAvailableToolbarButton: View {
                 self.updater.showAvailableUpdate()
             } label: {
                 Image(systemName: "arrow.down.circle.fill")
-                    .fluidToolbarIcon()
-                    .foregroundStyle(self.theme.palette.accent)
+                    .fluidToolbarIcon(foreground: self.theme.palette.accent)
             }
             .buttonStyle(.automatic)
             .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
@@ -6369,6 +6368,7 @@ private struct TodayStatsToolbarButton: View {
                 }
             }
             .font(.fluidSystem(size: 12, weight: .medium))
+            .foregroundStyle(Color.primary)
         }
         .help(hasActivity ? "Today: \(summary.words) words · \(timeSaved) saved - view stats" : "View your stats")
         .accessibilityLabel("Today stats")
