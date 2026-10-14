@@ -70,11 +70,12 @@ route = source[source.index('nonisolated struct MeetingSummaryRoute {'):source.i
 route = route[:route.index('    /// Provider selection is shared;')] + '}\n'
 remote = source[source.index('/// Uses a dedicated session'):]
 kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryController.swift').read_text()
-kind = kind_source[kind_source.index('nonisolated enum MeetingSummaryKind:'):kind_source.index('nonisolated enum MeetingSummaryInput {')]
-# The prompt uses the controller's pure source-language contract. Keep the
+kind = declaration(kind_source, 'nonisolated enum MeetingSummaryKind:') + '\n'
+# The prompt uses the shared pure source-language contract. Keep the
 # actual declaration without linking capture, persistence or model services.
+input_source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift').read_text()
 language_input = ('nonisolated enum MeetingSummaryInput {\n'
-    + declaration(kind_source, '    static func transcriptLanguageName(') + '\n}\n')
+    + declaration(input_source, '    static func transcriptLanguageName(') + '\n}\n')
 (out / 'AdmissionRoute.swift').write_text('import Combine\nimport CryptoKit\nimport Foundation\n' + selection + route + kind + language_input + remote)
 # Exercise the current production prompt even when admission uses an earlier
 # resolver as its negative control. This fixture performs no HTTP or inference.
