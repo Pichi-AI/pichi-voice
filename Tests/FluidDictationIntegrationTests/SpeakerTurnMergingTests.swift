@@ -576,7 +576,7 @@ final class FluidAudioProviderWordTimingTests: XCTestCase {
 extension MeetingSessionModelTests {
     private static let allowedExportKeys: Set<String> = [
         "schemaVersion", "title", "languageCode", "startedAt", "endedAt", "durationSeconds",
-        "mode", "applicationDisplayName", "speakers", "id", "displayName", "isLocalUser",
+        "mode", "applicationDisplayName", "applicationAudioScope", "speakers", "id", "displayName", "isLocalUser",
         "segments", "startSeconds", "endSeconds", "speakerID", "text", "revision", "status",
         "overlap", "completeness", "isLikelyEcho", "attributionState",
     ]
@@ -790,6 +790,19 @@ extension MeetingSessionModelTests {
         XCTAssertTrue(keys.contains("schemaVersion"))
         XCTAssertTrue(keys.contains("speakers"))
         XCTAssertTrue(keys.contains("segments"))
+    }
+
+    func testJSONExportIdentifiesSystemAudioWithoutAnApplicationIdentity() throws {
+        var session = MeetingModelFixture.makeSession()
+        session.applicationAudioScope = .systemAudio
+        session.capturedApplication = nil
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(json["applicationAudioScope"] as? String, "systemAudio")
+        XCTAssertNil(json["applicationDisplayName"])
+        var keys: Set<String> = []
+        self.collectDictionaryKeys(in: json, into: &keys)
+        XCTAssertTrue(keys.isSubset(of: Self.allowedExportKeys))
     }
 
     /// Belt-and-suspenders on top of the key-allowlist test above: even with diarization
@@ -1407,6 +1420,49 @@ final class MeetingSessionModelTests: XCTestCase {
         XCTAssertEqual(segment.speakerID, originalSpeakerID)
         XCTAssertEqual(segment.revision, 2)
         XCTAssertEqual(segment.status, .final)
+    }
+
+    func testLegacyCaptureAndSessionScopeRemainSelectedApplication() throws {
+        let configuration = MeetingModelFixture.makeOnlineConfiguration()
+        let decodedConfiguration = try JSONDecoder().decode(MeetingCaptureConfiguration.self, from: JSONEncoder().encode(configuration))
+        XCTAssertNil(decodedConfiguration.applicationAudioScope)
+        XCTAssertEqual(decodedConfiguration.effectiveApplicationAudioScope, .selectedApplication)
+        XCTAssertNoThrow(try decodedConfiguration.validate())
+        let decodedSession = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(MeetingModelFixture.makeSession()))
+        XCTAssertNil(decodedSession.applicationAudioScope)
+        XCTAssertEqual(decodedSession.effectiveApplicationAudioScope, .selectedApplication)
+        XCTAssertEqual(decodedSession.capturedApplication?.bundleIdentifier, configuration.application?.bundleIdentifier)
+        XCTAssertNoThrow(try decodedSession.validateForPersistence())
+        let decodedDefaults = try JSONDecoder().decode(MeetingRecordingDefaults.self, from: JSONEncoder().encode(MeetingRecordingDefaults.unconfigured))
+        XCTAssertNil(decodedDefaults.applicationAudioScope)
+        XCTAssertEqual(decodedDefaults.effectiveApplicationAudioScope, .systemAudio)
+    }
+
+    func testSystemAudioSessionRoundTripHasNoCapturedApplication() throws {
+        var configuration = MeetingModelFixture.makeOnlineConfiguration()
+        configuration.application = nil
+        configuration.applicationAudioScope = .systemAudio
+        XCTAssertNoThrow(try configuration.validate())
+        guard case .systemAudio? = configuration.applicationAudioSource else {
+            return XCTFail("System audio must resolve independently of process identity")
+        }
+        let legacy = MeetingModelFixture.makeSession()
+        let session = MeetingSession(configuration: configuration, timebase: legacy.timebase)
+        let decoded = try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(decoded.applicationAudioScope, .systemAudio)
+        XCTAssertNil(decoded.capturedApplication)
+        XCTAssertEqual(decoded.audioSourceDisplayName, "System audio")
+        XCTAssertNoThrow(try decoded.validateForPersistence())
+        var invalid = decoded
+        invalid.capturedApplication = MeetingModelFixture.makeOnlineConfiguration().application
+        XCTAssertThrowsError(try invalid.validateForPersistence()) {
+            XCTAssertEqual($0 as? MeetingModelValidationError, .unexpectedSystemAudioApplication)
+        }
+        configuration.application = MeetingModelFixture.makeOnlineConfiguration().application
+        self.assertConfigurationValidationError(.unexpectedSystemAudioApplication, configuration: configuration)
+        configuration.application = nil
+        configuration.mode = .inRoom
+        self.assertConfigurationValidationError(.unexpectedInRoomApplication, configuration: configuration)
     }
 
     func testCaptureConfigurationPinsEnglishAndSeparatesMicrophoneIdentifiers() {

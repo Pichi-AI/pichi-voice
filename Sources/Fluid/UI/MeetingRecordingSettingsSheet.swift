@@ -101,6 +101,7 @@ struct MeetingRecordingSettingsSheet: View {
         guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.draft.languageCode) else { return false }
         guard self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) else { return false }
         return self.draft.mode == .inRoom
+            || self.draft.applicationAudioScope == .systemAudio
             || self.draft.usesAutomaticApplication
             || self.applications.contains { $0.id == self.draft.selectedApplicationID }
     }
@@ -110,7 +111,7 @@ struct MeetingRecordingSettingsSheet: View {
         if !self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) {
             return PichiLocalization.text("Choose an available microphone to save this setup.")
         }
-        if self.draft.mode == .onlineCall, !self.draft.usesAutomaticApplication,
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .selectedApplication, !self.draft.usesAutomaticApplication,
            !self.applications.contains(where: { $0.id == self.draft.selectedApplicationID })
         {
             return PichiLocalization.text("Choose an available meeting application to save this setup.")
@@ -246,9 +247,15 @@ struct MeetingRecordingSettingsSheet: View {
                         Divider()
                         MeetingAdaptiveSetupRow(
                             title: PichiLocalization.text("Meeting audio"),
-                            detail: PichiLocalization.text("Automatic follows the detected call.")
+                            detail: PichiLocalization.text("System audio includes apps opened during recording.")
                         ) {
                             Menu {
+                                Button { self.draft.chooseSystemAudio() } label: {
+                                    if self.draft.applicationAudioScope == .systemAudio {
+                                        Label("System audio · all apps", systemImage: "checkmark")
+                                    } else { Text("System audio · all apps") }
+                                }
+                                Divider()
                                 self.applicationMenuEntry(title: PichiLocalization.text("Automatic"), id: nil)
                                 ForEach(self.meetingApplications) { option in
                                     self.applicationMenuEntry(title: self.applicationDisplayName(option), id: option.id)
@@ -341,9 +348,8 @@ struct MeetingRecordingSettingsSheet: View {
     private var applicationSelection: Binding<String?> {
         Binding(
             get: { self.draft.usesAutomaticApplication ? nil : self.draft.selectedApplicationID },
-            set: {
-                self.draft.usesAutomaticApplication = $0 == nil
-                self.draft.selectedApplicationID = $0
+            set: { id in
+                self.draft.chooseApplication(self.applications.first { $0.id == id }?.identity)
             }
         )
     }
@@ -352,7 +358,7 @@ struct MeetingRecordingSettingsSheet: View {
         Button {
             self.applicationSelection.wrappedValue = id
         } label: {
-            if self.applicationSelection.wrappedValue == id {
+            if self.draft.applicationAudioScope == .selectedApplication && self.applicationSelection.wrappedValue == id {
                 Label(title, systemImage: "checkmark")
             } else {
                 Text(title)
@@ -369,6 +375,7 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private var selectedApplicationName: String {
+        if self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("System audio") }
         guard !self.draft.usesAutomaticApplication else { return PichiLocalization.text("Automatic") }
         guard let selected = self.applications.first(where: { $0.id == self.draft.selectedApplicationID }) else {
             return PichiLocalization.text("Source unavailable")

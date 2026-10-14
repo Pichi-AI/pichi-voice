@@ -21,14 +21,9 @@ nonisolated extension MeetingSession {
         guard self.timebase.machTimebaseDenominator > 0 else {
             throw MeetingModelValidationError.invalidTimebase
         }
-        switch (self.mode, self.capturedApplication) {
-        case (.onlineCall, .none):
-            throw MeetingModelValidationError.missingOnlineApplication
-        case (.inRoom, .some):
-            throw MeetingModelValidationError.unexpectedInRoomApplication
-        case (.onlineCall, .some), (.inRoom, .none):
-            break
-        }
+        try MeetingCaptureConfiguration.validateAudioSource(
+            mode: self.mode, scope: self.effectiveApplicationAudioScope, application: self.capturedApplication
+        )
 
         let trackIDs = Set(self.audioTracks.map(\.id))
         guard trackIDs.count == self.audioTracks.count else {
@@ -120,13 +115,24 @@ nonisolated extension MeetingCaptureConfiguration {
         guard !self.microphone.captureDeviceID.isEmpty else {
             throw MeetingModelValidationError.missingMicrophone
         }
-        switch (self.mode, self.application) {
-        case (.onlineCall, .none):
+        try Self.validateAudioSource(
+            mode: self.mode, scope: self.effectiveApplicationAudioScope, application: self.application
+        )
+    }
+
+    static func validateAudioSource(
+        mode: MeetingCaptureMode,
+        scope: MeetingApplicationAudioScope,
+        application: MeetingApplicationIdentity?
+    ) throws {
+        if mode == .inRoom {
+            guard application == nil, scope != .systemAudio else {
+                throw MeetingModelValidationError.unexpectedInRoomApplication
+            }
+        } else if scope == .systemAudio {
+            guard application == nil else { throw MeetingModelValidationError.unexpectedSystemAudioApplication }
+        } else if application == nil {
             throw MeetingModelValidationError.missingOnlineApplication
-        case (.inRoom, .some):
-            throw MeetingModelValidationError.unexpectedInRoomApplication
-        case (.onlineCall, .some), (.inRoom, .none):
-            break
         }
     }
 }
