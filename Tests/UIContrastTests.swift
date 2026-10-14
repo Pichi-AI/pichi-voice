@@ -204,6 +204,10 @@ struct UIContrastTests {
             try await NativeSidebarContrastTests.run(directory: directory)
             return
         }
+        if CommandLine.arguments.contains("--dashboard-shortcuts-only") {
+            try await DashboardShortcutSurfaceTests.run(directory: directory)
+            return
+        }
         let packages = [
             ("pichi", "Sources/Fluid/Branding/brand-package.json"),
             ("sber", "Configuration/BrandExamples/sber-demo.json"),
@@ -435,6 +439,7 @@ struct UIContrastTests {
         try await FluidSegmentedPickerTests.run(directory: directory)
         try await NativePaletteAppearanceTests.run(directory: directory)
         try await NativeSidebarContrastTests.run(directory: directory)
+        try await DashboardShortcutSurfaceTests.run(directory: directory)
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }
