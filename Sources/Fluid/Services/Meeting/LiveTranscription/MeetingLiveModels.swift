@@ -383,7 +383,7 @@ nonisolated struct MeetingPendingSpeechProjection {
         self.tracks[source] = track
     }
 
-    /// Only caller-approved, actually visible captions retire blocks. PII-held words and
+    /// Recognition-based retirement uses only caller-approved, actually visible captions. PII-held words and
     /// unavailable/empty hypotheses cannot clear captured progress. Timed closed turns remove
     /// their own coverage. Untimed prefixes retain progress until coverage is known.
     mutating func reconcile(visible: MeetingLiveTranscriptSnapshot) {
