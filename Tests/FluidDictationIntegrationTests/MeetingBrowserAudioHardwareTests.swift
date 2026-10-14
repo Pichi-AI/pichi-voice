@@ -879,6 +879,11 @@ fileprivate struct SystemContinuityProtocol {
     private var browserExitedAt: Double?
     private var browserRestartedAt: Double?
     private var restartedPID: Int32?
+
+    init(runID: UUID) {
+        self.runID = runID
+    }
+
     var isComplete: Bool { self.sequence == 8 }
     var browserAbsentSeconds: Double? {
         guard let browserExitedAt, let browserRestartedAt else { return nil }
@@ -997,6 +1002,19 @@ fileprivate struct SystemContinuityReport: Encodable {
 
 /// Pure operator-evidence validation. No microphone, browser, permission, or model dependency.
 final class MeetingSystemAudioContinuityProtocolTests: XCTestCase {
+    func testNewProtocolHasNoAcceptedOperatorEvidence() {
+        let runID = UUID()
+        let state = SystemContinuityProtocol(runID: runID)
+
+        XCTAssertEqual(state.runID, runID)
+        XCTAssertEqual(state.sequence, 0)
+        XCTAssertTrue(state.commands.isEmpty)
+        XCTAssertTrue(state.acknowledgements.isEmpty)
+        XCTAssertTrue(state.phases.isEmpty)
+        XCTAssertFalse(state.isComplete)
+        XCTAssertNil(state.browserAbsentSeconds)
+    }
+
     func testValidPhasesRequireDistinctProcessAndEightSecondAbsence() throws {
         var state = SystemContinuityProtocol(runID: UUID())
         let commands = self.commands(runID: state.runID)
