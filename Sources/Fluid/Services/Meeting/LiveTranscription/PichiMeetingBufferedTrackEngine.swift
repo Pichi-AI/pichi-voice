@@ -95,8 +95,25 @@ final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
 final nonisolated class PichiMeetingCaptionInputEpoch: @unchecked Sendable {
     private let lock = NSLock()
     private var value: UInt64 = 0
+    private var latestOfferedEnd: TimeInterval?
     var current: UInt64 { self.lock.withLock { self.value } }
-    func advance() { self.lock.withLock { self.value &+= 1 } }
+
+    /// Capture does constant work: stamp one scalar and obtain its era atomically. Use the
+    /// latest offered clock, not an all-time maximum, so backward clock resets remain valid.
+    func recordOffer(end: CMTime) -> UInt64 {
+        self.lock.withLock {
+            if end.isNumeric, end.seconds.isFinite { self.latestOfferedEnd = end.seconds }
+            return self.value
+        }
+    }
+
+    func latestEnd(in epoch: UInt64) -> TimeInterval? {
+        self.lock.withLock { self.value == epoch ? self.latestOfferedEnd : nil }
+    }
+
+    func advance() {
+        self.lock.withLock { self.value &+= 1; self.latestOfferedEnd = nil }
+    }
 }
 
 /// Bounded buffered captions for models without the upstream native English streaming decoder.
@@ -118,6 +135,9 @@ actor PichiMeetingBufferedTrackEngine {
     private static let blockSamples = 1600
     private static let minimumTurnSamples = 5600
     private static let partialIntervalSamples = 20_000
+    /// Two capture blocks plus drain-polling tolerance. Final turns always take priority
+    /// over redecoding an obsolete prefix while queued PCM is farther ahead.
+    private static let maximumPartialBacklogSeconds = 0.25
     private static let maximumTurnSamples = 320_000
     private static let preRollSamples = 2400
     private static let pauseSamples = 11_200
@@ -190,7 +210,8 @@ actor PichiMeetingBufferedTrackEngine {
     }
 
     nonisolated func offer(_ sample: MeetingLiveSampleCopy.Sample) {
-        self.queue.enqueue(Input(sample: sample, epoch: self.inputEpoch.current))
+        let epoch = self.inputEpoch.recordOffer(end: sample.pts + sample.duration)
+        self.queue.enqueue(Input(sample: sample, epoch: epoch))
     }
 
     /// Synchronous capture-era barrier. Old queued/batched PCM and late inference are discarded.
@@ -311,9 +332,19 @@ actor PichiMeetingBufferedTrackEngine {
             return
         }
         if self.samples.count >= Self.minimumTurnSamples,
-           self.samples.count - self.lastRecognitionSampleCount >= Self.partialIntervalSamples {
+           self.samples.count - self.lastRecognitionSampleCount >= Self.partialIntervalSamples,
+           self.canRecognizeCurrentPartial(at: end) {
             await self.recognizePartial()
         }
+    }
+
+    /// A drained batch is no longer in the queue while inference is awaited, so queue count
+    /// alone cannot reveal its remaining backlog. The capture-era head covers both that batch
+    /// and later arrivals. Suppression changes only preview work, never PCM or final coverage.
+    private func canRecognizeCurrentPartial(at end: CMTime) -> Bool {
+        guard let epoch = self.activeInputEpoch, epoch == self.inputEpoch.current else { return false }
+        guard let latest = self.inputEpoch.latestEnd(in: epoch), end.isNumeric, end.seconds.isFinite else { return false }
+        return latest - end.seconds <= Self.maximumPartialBacklogSeconds
     }
 
     private func recognizePartial() async {
@@ -408,7 +439,8 @@ actor PichiMeetingBufferedTrackEngine {
 
     #if DEBUG
     func consumeForTesting(_ sample: MeetingLiveSampleCopy.Sample) async {
-        await self.consume(Input(sample: sample, epoch: self.inputEpoch.current))
+        let epoch = self.inputEpoch.recordOffer(end: sample.pts + sample.duration)
+        await self.consume(Input(sample: sample, epoch: epoch))
     }
     func bufferedSampleCountForTesting() -> Int { self.samples.count }
     #endif

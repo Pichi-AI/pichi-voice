@@ -3,7 +3,7 @@ import Foundation
 #if arch(arm64)
 import FluidAudio
 
-@available(macOS 15.0, *)
+@available(macOS 15.0, iOS 18.0, *)
 final class ExternalCoreMLTranscriptionProvider: TranscriptionProvider {
     let name = "External CoreML"
 

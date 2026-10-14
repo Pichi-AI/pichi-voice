@@ -35,7 +35,11 @@ final class MeetingDiarizationModelStore: ObservableObject {
         -> MeetingNemotronModelArtifact
 
     @Published private(set) var state: State = .idle
+    @Published private(set) var voiceMatchingReady = false
     private var attempt: Task<MeetingNemotronModelArtifact, Error>?
+    private var voiceAttempt: Task<Void, Error>?
+    private let validateVoice: @Sendable () throws -> Void
+    private let installVoice: @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void
     private let canDownload: @Sendable () -> Bool
     private let validate: Validate
     private let install: Install
@@ -49,11 +53,15 @@ final class MeetingDiarizationModelStore: ObservableObject {
             )
             return try MeetingModelInstaller.validate(package)
         },
-        install: @escaping Install = MeetingDiarizationModelStore.downloadAndInstall
+        install: @escaping Install = MeetingDiarizationModelStore.downloadAndInstall,
+        validateVoice: @escaping @Sendable () throws -> Void = MeetingSpeakerVoiceModelArtifacts.validate,
+        installVoice: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void = MeetingSpeakerVoiceModelArtifacts.ensureInstalled
     ) {
         self.canDownload = canDownload
         self.validate = validate
         self.install = install
+        self.validateVoice = validateVoice
+        self.installVoice = installVoice
     }
 
     /// Starts a check, and a download when needed, without waiting for it.
@@ -63,7 +71,57 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     /// Returns the installed model, downloading it first when it is missing or damaged.
     @discardableResult
-    func ensureInstalled() async throws -> MeetingNemotronModelArtifact {
+    func ensureInstalled(includingVoiceEncoder: Bool = false) async throws -> MeetingNemotronModelArtifact {
+        let installed = try await self.ensureSeparationInstalled()
+        if includingVoiceEncoder { try await self.ensureVoiceMatchingInstalled() }
+        return installed
+    }
+
+    func prepare(dependencies: Set<MeetingDiarizationDependency>) async throws {
+        guard !dependencies.isEmpty else { return }
+        if dependencies.contains(.speakerSeparation) {
+            _ = try await self.ensureInstalled(includingVoiceEncoder: dependencies.contains(.voiceMatching))
+        } else if dependencies.contains(.voiceMatching) { try await self.ensureVoiceMatchingInstalled() }
+    }
+
+    var allSpeakerResourcesReady: Bool {
+        if case .ready = self.state { return self.voiceMatchingReady }
+        return false
+    }
+
+    private func ensureVoiceMatchingInstalled() async throws {
+        if let voiceAttempt { return try await voiceAttempt.value }
+        let task = Task { @MainActor in
+            defer { self.voiceAttempt = nil }
+            let validate = self.validateVoice
+            if (try? await Task.detached(priority: .utility, operation: validate).value) != nil {
+                self.voiceMatchingReady = true
+                return
+            }
+            self.voiceMatchingReady = false
+            let prior = self.state
+            self.state = .downloading(fraction: 0)
+            do {
+                try await self.installVoice { fraction in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.voiceAttempt != nil, !self.voiceMatchingReady,
+                              case .downloading = self.state else { return }
+                        self.state = .downloading(fraction: fraction)
+                    }
+                }
+                try await Task.detached(priority: .utility, operation: validate).value
+                self.voiceMatchingReady = true
+                self.state = prior
+            } catch {
+                self.state = .failed(message: Self.userMessage(for: error))
+                throw DownloadError(message: Self.userMessage(for: error))
+            }
+        }
+        self.voiceAttempt = task
+        try await task.value
+    }
+
+    private func ensureSeparationInstalled() async throws -> MeetingNemotronModelArtifact {
         if let attempt { return try await attempt.value }
         let attempt = Task { @MainActor in
             // Cleared before the result is delivered, so a caller reacting to a failure can
@@ -123,10 +181,17 @@ final class MeetingDiarizationModelStore: ObservableObject {
     nonisolated static func downloadAndInstall(
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> MeetingNemotronModelArtifact {
-        let destination = MeetingNemotronModelLocator.defaultPackageURL()
+        try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(), progress: progress)
+    }
+
+    /// The existing install operation can target an explicitly owned store. Test and
+    /// mobile preflight use the same pinned download and publication as desktop setup.
+    nonisolated static func downloadAndInstall(
+        to destination: URL, progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> MeetingNemotronModelArtifact {
         let staging = destination.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("download-\(MeetingNemotronModelLocator.cacheVersion)", isDirectory: true)
-        let downloader = HuggingFaceModelDownloader(
+        let downloader = await HuggingFaceModelDownloader(
             owner: Self.repositoryOwner,
             repo: Self.repositoryName,
             revision: Self.repositoryRevision,

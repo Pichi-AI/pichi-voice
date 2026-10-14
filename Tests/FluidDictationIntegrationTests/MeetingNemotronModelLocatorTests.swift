@@ -368,6 +368,57 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         guard case .failed = store.state else { return XCTFail("expected failed state, got \(store.state)") }
     }
 
+    func testCompleteReadinessIncludesVoiceEncoderAndConcurrentCallersShareItsInstall() async throws {
+        let installs = Counter()
+        let store = MeetingDiarizationModelStore(
+            validate: { Self.artifact },
+            validateVoice: { if installs.count == 0 { throw Missing() } },
+            installVoice: { progress in
+                progress(0.5)
+                try await Task.sleep(nanoseconds: 30_000_000)
+                _ = installs.increment()
+            }
+        )
+        async let first = store.ensureInstalled(includingVoiceEncoder: true)
+        async let second = store.ensureInstalled(includingVoiceEncoder: true)
+        _ = try await [first, second]
+        XCTAssertEqual(installs.count, 1)
+        XCTAssertTrue(store.voiceMatchingReady)
+        XCTAssertTrue(store.allSpeakerResourcesReady)
+    }
+
+    func testInstalledSeparationAloneCannotClaimCompleteSpeakerReadiness() async throws {
+        let store = MeetingDiarizationModelStore(validate: { Self.artifact }, validateVoice: { throw Missing() }, installVoice: { _ in throw Missing() })
+        _ = try await store.ensureInstalled()
+        XCTAssertFalse(store.allSpeakerResourcesReady)
+        do {
+            _ = try await store.ensureInstalled(includingVoiceEncoder: true)
+            XCTFail("Missing voice matching must fail readiness")
+        } catch { }
+        XCTAssertFalse(store.voiceMatchingReady)
+        XCTAssertFalse(store.allSpeakerResourcesReady)
+        guard case .failed = store.state else { return XCTFail("Expected failed dependency state") }
+    }
+
+    func testAlreadyInstalledVoiceEncoderIsNotDownloadedAgain() async throws {
+        let installs = Counter()
+        let store = MeetingDiarizationModelStore(validate: { Self.artifact }, validateVoice: {}, installVoice: { _ in _ = installs.increment() })
+        _ = try await store.ensureInstalled(includingVoiceEncoder: true)
+        XCTAssertEqual(installs.count, 0)
+        XCTAssertTrue(store.allSpeakerResourcesReady)
+    }
+
+    func testVoicePackageRejectsSymlinkedAncestorBeforeReadingWeights() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let package = root.appendingPathComponent("model.mlmodelc", isDirectory: true)
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: package.appendingPathComponent("analytics"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createSymbolicLink(at: package.appendingPathComponent("weights"), withDestinationURL: outside)
+        XCTAssertThrowsError(try MeetingSpeakerVoiceModelArtifacts.validatePackageDirectories(at: package))
+    }
+
     func testUnavailableRepositoryMessage() {
         XCTAssertEqual(
             MeetingDiarizationModelStore.userMessage(for: NSError(domain: "HF", code: 401)),

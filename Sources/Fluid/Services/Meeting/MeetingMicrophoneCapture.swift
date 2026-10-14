@@ -265,7 +265,6 @@ nonisolated func meetingMicrophoneSynthesizeSampleBuffer(
 
 // MARK: - Binding
 
-/// Verified outcome of binding the AUHAL input unit to a specific CoreAudio device (plan §6).
 /// Pure decision table, unit-testable headless.
 nonisolated enum MeetingMicrophoneBindDecision {
     static func outcome(
@@ -294,7 +293,6 @@ nonisolated enum MeetingMicrophoneBindDecision {
 
 // MARK: - Settled configuration
 
-/// What the session actually got, not what it asked for; `Codable` for §7 provenance at rest.
 // MARK: - Voice-processing read-back probe
 
 /// One exact `AudioUnitGetProperty` result. A failed read never carries a stale value.

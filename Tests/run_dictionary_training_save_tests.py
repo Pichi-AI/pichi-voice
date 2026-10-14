@@ -23,9 +23,14 @@ progress = source[source.index('struct DictionaryTrainingProgress {'):source.ind
 readiness = source[source.index('    private var trainingProgress:'):source.index('    private var trainingAlreadyCorrectWithoutReplacement:')]
 can_save = source[source.index('    private var canAddTrainedReplacement:'):source.index('    private var shouldPulseTrainedReplacementButton:')]
 merge = source[source.index('enum CustomDictionaryTrainingMerge {'):source.index('private struct ReplacementConfirmation:')]
-settings = (repo / 'Sources/Fluid/Persistence/SettingsStore.swift').read_text()
+settings = (repo / 'Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
 entry_start = settings.rfind('\n', 0, settings.index('struct CustomDictionaryEntry:')) + 1
-entry = settings[entry_start:settings.index('    var vocabularyBoostingEnabled:')]
+brace = settings.index('{', entry_start)
+depth, end = 1, brace + 1
+while depth:
+    depth += (settings[end] == '{') - (settings[end] == '}')
+    end += 1
+entry = settings[entry_start:end]
 swift = r'''
 import Foundation
 // The production localizer can read preferences, but this control-flow probe must not.

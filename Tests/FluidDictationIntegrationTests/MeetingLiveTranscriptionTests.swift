@@ -409,6 +409,37 @@ final class MeetingLiveMemoryGateTests: XCTestCase {
         wait(for: [notice], timeout: 1)
     }
 
+    func testGigaAMLiveAdmissionIncludesMeasuredNominalFourGBDevice() throws {
+        let admission = try XCTUnwrap(PichiMeetingProviderFactory.registeredLiveAdmission(
+            for: PichiMeetingProviderFactory.gigaamModelID))
+        XCTAssertEqual(admission.minimumPhysicalMemoryBytes, 4_000_000_000)
+        // The physical iPad's reported capacity is below four binary GiB.
+        let measuredPhysicalMemory: UInt64 = 4_166_696_960
+        XCTAssertLessThan(measuredPhysicalMemory, 4 * 1_073_741_824)
+        XCTAssertGreaterThanOrEqual(measuredPhysicalMemory, admission.minimumPhysicalMemoryBytes)
+        XCTAssertLessThan(UInt64(4_000_000_000 - 1), admission.minimumPhysicalMemoryBytes)
+        XCTAssertLessThan(UInt64(3 * 1_073_741_824), admission.minimumPhysicalMemoryBytes)
+        XCTAssertEqual(admission.maximumTrackCount, 2)
+        XCTAssertLessThanOrEqual(1, admission.maximumTrackCount)
+        XCTAssertLessThanOrEqual(2, admission.maximumTrackCount)
+        XCTAssertGreaterThan(3, admission.maximumTrackCount)
+    }
+
+    func testOtherRegisteredLiveAdmissionFloorsAndLegacyGateRemainUnchanged() throws {
+        let tiny = try XCTUnwrap(PichiMeetingProviderFactory.registeredLiveAdmission(
+            for: PichiMeetingProviderFactory.whisperTinyModelID))
+        let parakeet = try XCTUnwrap(PichiMeetingProviderFactory.registeredLiveAdmission(
+            for: PichiMeetingProviderFactory.parakeetV3ModelID))
+        XCTAssertEqual(tiny.minimumPhysicalMemoryBytes, 2 * 1_073_741_824)
+        XCTAssertEqual(parakeet.minimumPhysicalMemoryBytes, 4 * 1_073_741_824)
+        XCTAssertEqual(tiny.maximumTrackCount, 2)
+        XCTAssertEqual(parakeet.maximumTrackCount, 2)
+        XCTAssertLessThan(UInt64(4_166_696_960), parakeet.minimumPhysicalMemoryBytes)
+        XCTAssertNil(PichiMeetingProviderFactory.registeredLiveAdmission(for: "synthetic-unregistered"))
+        XCTAssertEqual(MeetingLiveTranscriptionCoordinator.minimumPhysicalMemoryBytes, 8 * 1_073_741_824)
+        XCTAssertFalse(MeetingLiveTranscriptionCoordinator.isMemorySufficient(physicalMemory: 4_166_696_960))
+    }
+
     func testBelowThresholdDisablesLive() {
         let oneGigabyte: UInt64 = 1 * 1024 * 1024 * 1024
         XCTAssertFalse(MeetingLiveTranscriptionCoordinator.isMemorySufficient(physicalMemory: oneGigabyte))
@@ -695,6 +726,138 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
             onDegraded: { _, text in events.degraded(text) },
             onReady: { _ in }
         )
+    }
+
+    private actor BlockedRecognizer: PichiMeetingCaptionRecognizing {
+        private var gate: CheckedContinuation<Void, Never>?
+        private var opened = false
+        private let firstCall: @Sendable () -> Void
+        var inputs: [[Float]] = []
+        init(firstCall: @escaping @Sendable () -> Void) { self.firstCall = firstCall }
+        func prepare() {}
+        func recognize(_ samples: [Float]) async -> PichiMeetingCaptionRecognition {
+            self.inputs.append(samples)
+            if self.inputs.count == 1 {
+                self.firstCall()
+                if !self.opened { await withCheckedContinuation { self.gate = $0 } }
+            }
+            return .init(text: samples.contains(0.1) ? "first turn" : "second turn", endOfUtteranceProbability: nil)
+        }
+        func release() { self.opened = true; self.gate?.resume(); self.gate = nil }
+        func unload() { self.release() }
+    }
+
+    private func offer(_ engine: PichiMeetingBufferedTrackEngine, start: Double, packets: Int, value: Float) throws {
+        for packet in 0..<packets {
+            engine.offer(try self.sample(start: start + Double(packet) / 10, seconds: 0.1, value: value))
+        }
+    }
+
+    private func waitForUtterances(_ count: Int, events: Events) async -> Bool {
+        let deadline = Date().addingTimeInterval(3)
+        while events.utterances.count < count, Date() < deadline { try? await Task.sleep(for: .milliseconds(5)) }
+        return events.utterances.count >= count
+    }
+
+    func testQueuedBacklogSuppressesObsoletePrefixesButPreservesBothFinalTurns() async throws {
+        let entered = expectation(description: "first prefix parked")
+        let ready = expectation(description: "engine ready")
+        let recognizer = BlockedRecognizer(firstCall: { entered.fulfill() })
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        self.addTeardownBlock { await recognizer.release(); await engine.stop(); await recognizer.unload() }
+        await engine.configure(onPartial: { _, id, text, _, _ in events.partial(id, text) },
+            onUtterance: { kind, id, text, start, end in events.utterance(kind, id, text, start, end) },
+            onDegraded: { _, reason in events.degraded(reason) }, onReady: { _ in ready.fulfill() })
+        await engine.start()
+        await fulfillment(of: [ready], timeout: 2)
+        try self.offer(engine, start: 0, packets: 13, value: 0.1)
+        await fulfillment(of: [entered], timeout: 2)
+        // Captured PCM keeps arriving while the recognizer is suspended. Some of this work
+        // will already be in drainAll's local batch, so testing queue count alone is insufficient.
+        try self.offer(engine, start: 1.3, packets: 27, value: 0.1)
+        try self.offer(engine, start: 4, packets: 8, value: 0)
+        try self.offer(engine, start: 4.8, packets: 42, value: 0.2)
+        try self.offer(engine, start: 9, packets: 8, value: 0)
+        await recognizer.release()
+        let completed = await self.waitForUtterances(2, events: events)
+        XCTAssertTrue(completed)
+        let inputs = await recognizer.inputs
+        XCTAssertLessThanOrEqual(inputs.count, 4, "Obsolete intermediate prefixes must yield to queued endpoints")
+        XCTAssertEqual(events.utterances.map { $0.2 }, ["first turn", "second turn"])
+        let first = try XCTUnwrap(events.utterances.first)
+        let second = try XCTUnwrap(events.utterances.dropFirst().first)
+        XCTAssertEqual(first.3, 0, accuracy: 0.0001)
+        XCTAssertEqual(first.4, 4.7, accuracy: 0.0001)
+        XCTAssertEqual(second.4, 9.7, accuracy: 0.0001)
+        XCTAssertTrue(inputs.contains { $0.filter { $0 == 0.1 }.count == 64_000 })
+        XCTAssertTrue(inputs.contains { $0.filter { $0 == 0.2 }.count == 67_200 })
+        XCTAssertTrue(events.degraded.isEmpty)
+    }
+
+    func testResetDuringBlockedPrefixDoesNotPublishPreviousEraAndAcceptsNewClock() async throws {
+        let entered = expectation(description: "old prefix parked")
+        let ready = expectation(description: "engine ready")
+        let recognizer = BlockedRecognizer(firstCall: { entered.fulfill() })
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        self.addTeardownBlock { await recognizer.release(); await engine.stop(); await recognizer.unload() }
+        await engine.configure(onPartial: { _, id, text, _, _ in events.partial(id, text) },
+            onUtterance: { kind, id, text, start, end in events.utterance(kind, id, text, start, end) },
+            onDegraded: { _, reason in events.degraded(reason) }, onReady: { _ in ready.fulfill() })
+        await engine.start()
+        await fulfillment(of: [ready], timeout: 2)
+        try self.offer(engine, start: 10, packets: 13, value: 0.1)
+        await fulfillment(of: [entered], timeout: 2)
+        engine.requestReset()
+        try self.offer(engine, start: 1, packets: 16, value: 0.2)
+        try self.offer(engine, start: 2.6, packets: 8, value: 0)
+        await recognizer.release()
+        let completed = await self.waitForUtterances(1, events: events)
+        XCTAssertTrue(completed)
+        XCTAssertTrue(events.partials.filter { !$0.1.isEmpty }.allSatisfy { $0.1 == "second turn" })
+        XCTAssertEqual(events.utterances.map { $0.2 }, ["second turn"])
+        let utterance = try XCTUnwrap(events.utterances.first)
+        XCTAssertEqual(utterance.4, 3.3, accuracy: 0.0001)
+        XCTAssertTrue(events.degraded.isEmpty)
+    }
+
+    func testStopJoinsBlockedPrefixAndNeverPublishesItsLateText() async throws {
+        let entered = expectation(description: "prefix parked")
+        let ready = expectation(description: "engine ready")
+        let recognizer = BlockedRecognizer(firstCall: { entered.fulfill() })
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        self.addTeardownBlock { await recognizer.release(); await engine.stop(); await recognizer.unload() }
+        await engine.configure(onPartial: { _, id, text, _, _ in events.partial(id, text) },
+            onUtterance: { kind, id, text, start, end in events.utterance(kind, id, text, start, end) },
+            onDegraded: { _, reason in events.degraded(reason) }, onReady: { _ in ready.fulfill() })
+        await engine.start()
+        await fulfillment(of: [ready], timeout: 2)
+        try self.offer(engine, start: 0, packets: 13, value: 0.1)
+        await fulfillment(of: [entered], timeout: 2)
+        var stopped = false
+        let stopping = Task { await engine.stop(); stopped = true }
+        stopping.cancel()
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertFalse(stopped, "Stop must remain joined to noncooperative inference")
+        await recognizer.release()
+        await stopping.value
+        XCTAssertTrue(stopped)
+        XCTAssertTrue(events.partials.filter { !$0.1.isEmpty }.isEmpty)
+        XCTAssertTrue(events.utterances.isEmpty)
+    }
+
+    func testCaptureEraHeadRejectsInvalidValuesAndRestartsAtBackwardClock() {
+        let box = PichiMeetingCaptionInputEpoch()
+        let epoch = box.recordOffer(end: .init(seconds: 12, preferredTimescale: 16_000))
+        _ = box.recordOffer(end: .invalid)
+        XCTAssertEqual(box.latestEnd(in: epoch), 12)
+        _ = box.recordOffer(end: .init(seconds: 4, preferredTimescale: 16_000))
+        XCTAssertEqual(box.latestEnd(in: epoch), 4)
+        box.advance()
+        XCTAssertNil(box.latestEnd(in: epoch))
+        XCTAssertNil(box.latestEnd(in: box.current))
     }
 
     func testUnknownProviderEndpointMetadataFinalizesAfterShortAcousticPause() async throws {

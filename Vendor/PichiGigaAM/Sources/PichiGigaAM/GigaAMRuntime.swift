@@ -35,7 +35,15 @@ public actor GigaAMRuntime {
         }
         let environment = try ORTEnv(loggingLevel: .warning)
         let options = try ORTSessionOptions()
+        #if os(iOS)
+        // Preserve measured transcription latency while avoiding active waits
+        // between operators. Freeze these options before opening the session.
         try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
+        try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
+        try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
+        #else
+        try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
+        #endif
         try options.setGraphOptimizationLevel(.all)
         // Dynamic GigaAM shapes are supported by the CPU EP on both architectures.
         // CoreML remains opt-in until a particular export/device passes parity.

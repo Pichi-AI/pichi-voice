@@ -52,10 +52,10 @@ class StandaloneRunnerTests(unittest.TestCase):
 
     def test_current_registry_covers_every_standalone_and_only_update_prompt_opts_in(self):
         RUNNER.validate_registry(ROOT)
-        self.assertEqual(len(RUNNER.PROBES), 48)
-        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 40)
+        self.assertEqual(len(RUNNER.PROBES), 53)
+        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 42)
         self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 7)
-        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 1)
+        self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 4)
         self.assertEqual([probe.name for probe in RUNNER.PROBES if probe.requires_ui], ["update_prompt"])
         self.assertTrue({"fluid_serve", "file_export", "file_error_localization", "ui_contrast", "file_transcript_relative_date", "command_ui_localization", "clipboard_backup_reproduction", "settings_owned_copy", "local_api_live_harness", "meeting_audio_scope", "upstream_sync", "diarization_repeatability", "hotkey_initialization"}
                         .issubset({probe.name for probe in RUNNER.PROBES}))

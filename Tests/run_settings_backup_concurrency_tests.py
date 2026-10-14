@@ -348,9 +348,15 @@ def main() -> None:
     errors = declaration(source, "enum BackupServiceError:")
     schema = declaration(source, "struct BackupFileVersion:")
     asr_source = (repo / "Sources/Fluid/Services/ASRService.swift").read_text()
+    # --ref intentionally selects the backup/settings boundary only; keep its
+    # ASR dependency current, including declarations split into their own file.
+    # Repositories predating that split still provide the types in ASRService.
+    lease_path = repo / "Sources/Fluid/Services/ASRActivityLease.swift"
+    lease_source = lease_path.read_text() if lease_path.exists() else asr_source
     asr_admission = declaration(asr_source, "    func beginSettingsBackupRestore()")
-    asr_activity = declaration(asr_source, "enum ASRExclusiveActivity:")
-    asr_error = declaration(asr_source, "enum ASRActivityError:")
+    asr_activity = declaration(lease_source, "enum ASRExclusiveActivity:")
+    asr_lease = declaration(lease_source, "struct ASRActivityLease:")
+    asr_error = declaration(lease_source, "enum ASRActivityError:")
     asr_release = declaration(asr_source, "    func releaseExclusiveActivity(")
     asr_restore = declaration(asr_source, "    func handleSettingsBackupDidRestore()")
     swift = r'''
@@ -473,7 +479,7 @@ enum PrivateAIIntegrationService { static let idleUnloader = IdleDouble() }
 }
 ASR_ACTIVITY
 ASR_ERROR
-struct ASRActivityLease: Equatable { let id: UUID; let activity: ASRExclusiveActivity }
+ASR_LEASE
 @MainActor final class HandoffProbe { var isRecovering = false }
 @MainActor final class ResidencyProbe { var isExclusive = false }
 @MainActor final class ASRService {
@@ -582,7 +588,7 @@ func awaitGate(_ gate: Gate) async {
         CURRENT_TESTS
     }
 }
-'''.replace("SCHEMA", schema).replace("ERRORS", errors).replace("MEMBERS", members).replace("ASR_ACTIVITY", asr_activity).replace("ASR_ERROR", asr_error).replace("ASR_ADMISSION", asr_admission).replace("ASR_RELEASE", asr_release).replace("ASR_RESTORE", asr_restore)
+'''.replace("SCHEMA", schema).replace("ERRORS", errors).replace("MEMBERS", members).replace("ASR_ACTIVITY", asr_activity).replace("ASR_LEASE", asr_lease).replace("ASR_ERROR", asr_error).replace("ASR_ADMISSION", asr_admission).replace("ASR_RELEASE", asr_release).replace("ASR_RESTORE", asr_restore)
 
     if args.expect_active_work_gap:
         swift = swift[:swift.index("@main struct Run")] + r'''

@@ -91,6 +91,365 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.releaseCount, 1)
     }
 
+    func testStrictBackendInputRefusedBeforeDownloadPermissionLeaseOrPersistence() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        let originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        var modelChecks = 0
+        var dependencyPreparations = 0
+        let processing = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Refused strict input cannot reach ASR"); return ASRService() },
+            managesModelResidency: false, meetingRuntimeFactory: { _ in XCTFail("Refused strict input cannot build runtime"); throw CancellationError() },
+            prepareDiarizationDependencies: { _ in XCTFail("Refused strict input cannot prepare pipeline dependencies") })
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter,
+            validateRecordingModels: { modelChecks += 1 }, prepareRecordingDependencies: { _ in dependencyPreparations += 1 })
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        configuration.mode = .inRoom
+        configuration.languageCode = "en"
+        for backendID in [MeetingBackendID.legacyCompatibility, .init(rawValue: "synthetic-unknown")] {
+            settings.meetingTranscriptionBackendID = .productionDefault
+            configuration.transcriptionBackendID = backendID.rawValue
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unsupported strict selection must fail before admission") }
+            catch {
+                let expected: MeetingBackendError = backendID == .legacyCompatibility
+                    ? .unsupportedInput(backend: backendID, input: .boundedMicrophonePCM) : .unknownBackend(backendID)
+                XCTAssertEqual(error as? MeetingBackendError, expected)
+            }
+        }
+        XCTAssertEqual(modelChecks, 0)
+        XCTAssertEqual(dependencyPreparations, 0)
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testExplicitRetainedBackendRefusedBeforePreparationOrPermission() async throws {
+        let suite = "ExplicitRetainedBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        var preparations = 0
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Refused request cannot load ASR"); return ASRService() },
+            managesModelResidency: false, settings: settings)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+            audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 },
+            prepareRecordingDependencies: { _ in XCTFail("Refused request cannot prepare speaker models") })
+        let unknown = MeetingBackendID(rawValue: "explicit-unknown")
+        for (backend, language, expected) in [
+            (unknown, "en", MeetingBackendError.unknownBackend(unknown)),
+            (.legacyCompatibility, "ru", .unsupportedLanguage(backend: .legacyCompatibility, languageCode: "ru")),
+        ] {
+            var configuration = self.makeConfiguration()
+            configuration.mode = .inRoom
+            configuration.languageCode = language
+            configuration.transcriptionBackendID = backend.rawValue
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Explicit invalid request must be rejected") }
+            catch { XCTAssertEqual(error as? MeetingBackendError, expected) }
+        }
+        XCTAssertEqual(preparations, 0)
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testExplicitTinyLanguageReachesRequestedRuntimeWithoutAmbientPreparation() async throws {
+        for language in ["en", "auto"] {
+            let suite = "ExplicitTinyRuntime.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = SettingsStore(defaults: defaults)
+            settings.selectedSpeechModel = .gigaam
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = MeetingSessionStore(rootDirectory: dir)
+            let capture = StubCaptureController()
+            let arbiter = StubArbiter()
+            var preparations = 0
+            var runtimeRequest: MeetingBackendRequest?
+            let marker = CocoaError(.userCancelled)
+            let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Runtime marker precedes ASR residency"); return ASRService() },
+                managesModelResidency: false, settings: settings,
+                meetingRuntimeFactory: { request in runtimeRequest = request; throw marker })
+            let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+                audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 })
+            var configuration = self.makeConfiguration()
+            configuration.mode = .inRoom
+            configuration.languageCode = language
+            configuration.audioStorageMode = .memoryOnly
+            configuration.speakerLabelsEnabled = false
+            configuration.transcriptionBackendID = MeetingBackendID.whisperTiny.rawValue
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Expected the requested-runtime marker") }
+            catch { XCTAssertEqual(error as? CocoaError, marker) }
+            let request = try XCTUnwrap(runtimeRequest)
+            XCTAssertEqual(request.session.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
+            XCTAssertEqual(request.configuration.asrModel, PichiMeetingProviderFactory.whisperTinyModelID)
+            XCTAssertEqual(request.configuration.languageCode, language)
+            XCTAssertEqual(preparations, 0)
+            XCTAssertEqual(capture.preflightCount, 1)
+            XCTAssertEqual(capture.startCount, 0)
+            XCTAssertEqual(arbiter.acquireCount, 1)
+            XCTAssertEqual(arbiter.releaseCount, 1)
+            XCTAssertEqual(settings.selectedSpeechModel, .gigaam)
+            XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+            XCTAssertTrue(coordinator.isQuiescent)
+        }
+    }
+
+    func testExplicitBackendRequestRoundTripsWithoutChangingLegacyDefault() throws {
+        var configuration = self.makeConfiguration()
+        let legacy = try JSONDecoder().decode(MeetingCaptureConfiguration.self,
+            from: JSONEncoder().encode(configuration))
+        XCTAssertNil(legacy.transcriptionBackendID)
+        configuration.transcriptionBackendID = "explicit-request"
+        let pinned = try JSONDecoder().decode(MeetingCaptureConfiguration.self,
+            from: JSONEncoder().encode(configuration))
+        XCTAssertEqual(pinned.transcriptionBackendID, "explicit-request")
+    }
+
+    func testBackendChangeDuringPromptCancelsFrozenAdmission() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        let originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.onPreflight = { await MainActor.run { settings.meetingTranscriptionBackendID = .legacyCompatibility } }
+        let arbiter = StubArbiter()
+        var modelChecks = 0
+        let processing = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Changed unsupported input cannot reach ASR"); return ASRService() },
+            managesModelResidency: false, meetingRuntimeFactory: { _ in XCTFail("Changed unsupported input cannot create a runtime"); throw CancellationError() })
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter,
+            validateRecordingModels: { modelChecks += 1 }, prepareRecordingDependencies: { _ in XCTFail("Disabled speaker labels cannot prepare dependencies") })
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        configuration.mode = .inRoom
+        configuration.languageCode = "en"
+        configuration.speakerLabelsEnabled = false
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Changed backend must be revalidated") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(modelChecks, 1)
+        XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testOwnedBackendAndFrozenModelIgnoreAnotherSettingsOwnersExplicitSelection() async throws {
+        let shared = SettingsStore.shared
+        let previousModel = shared.selectedSpeechModel
+        let previousBackend = shared.meetingTranscriptionBackendID
+        defer { shared.selectedSpeechModel = previousModel; shared.meetingTranscriptionBackendID = previousBackend }
+        shared.selectedSpeechModel = .whisperTiny
+        shared.meetingTranscriptionBackendID = .whisperTiny
+        let suite = "OwnedMeetingBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        settings.meetingTranscriptionBackendID = .legacyCompatibility
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        let processing = MemoryCheckpointProcessingController()
+        var frozen: MeetingFinalProcessingConfiguration?
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings,
+            validateFrozenRecordingConfiguration: { frozen = $0 })
+        var configuration = self.makeConfiguration()
+        configuration.mode = .inRoom
+        configuration.languageCode = "ru"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.speakerLabelsEnabled = false
+        let session = try await coordinator.startRecording(configuration: configuration)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        let prepared = try XCTUnwrap(processing.preparedSession)
+        let frozenConfiguration = try XCTUnwrap(frozen)
+        XCTAssertEqual(processing.validatedBackendIDs, [.gigaam, .gigaam])
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.gigaam.rawValue)
+        XCTAssertEqual(prepared.recordingBackendID, session.recordingBackendID)
+        XCTAssertEqual(frozenConfiguration.asrModel, PichiMeetingProviderFactory.gigaamModelID)
+        XCTAssertEqual(session.recordingASRArtifactFingerprint, frozenConfiguration.asrArtifactFingerprint)
+        XCTAssertEqual(prepared.recordingASRArtifactFingerprint, session.recordingASRArtifactFingerprint)
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.recordingBackendID, session.recordingBackendID)
+        let persisted = try await store.load(id: session.id)
+        XCTAssertEqual(persisted?.recordingBackendID, session.recordingBackendID)
+        XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, .legacyCompatibility)
+    }
+
+    func testExplicitBackendRequestPinsCapturedRouteWithoutMutatingPreferences() async throws {
+        let suite = "ExplicitCapturedBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let ambient = MeetingBackendID(rawValue: "ambient-future-backend")
+        settings.meetingTranscriptionBackendID = ambient
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        let processing = MemoryCheckpointProcessingController()
+        var preparations = 0
+        var frozen: MeetingFinalProcessingConfiguration?
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { frozen = $0 })
+        var configuration = self.makeConfiguration()
+        configuration.mode = .inRoom
+        configuration.languageCode = "ru"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.speakerLabelsEnabled = false
+        configuration.transcriptionBackendID = MeetingBackendID.gigaam.rawValue
+        let session = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.gigaam.rawValue)
+        XCTAssertEqual(processing.validatedBackendIDs, [.gigaam, .gigaam])
+        XCTAssertEqual(frozen?.asrModel, PichiMeetingProviderFactory.gigaamModelID)
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.recordingBackendID, session.recordingBackendID)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
+        XCTAssertTrue(coordinator.isQuiescent)
+        XCTAssertEqual(preparations, 0)
+        // A subsequent ordinary request still uses the selected model and its normal owner.
+        configuration.transcriptionBackendID = nil
+        configuration.languageCode = "auto"
+        let normal = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(normal.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
+        XCTAssertEqual(preparations, 1)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        _ = try await coordinator.stopAndTranscribe()
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testOwnedBackendChangeDuringPromptCancelsThatOwnersAdmission() async throws {
+        let shared = SettingsStore.shared
+        let previousBackend = shared.meetingTranscriptionBackendID
+        defer { shared.meetingTranscriptionBackendID = previousBackend }
+        shared.meetingTranscriptionBackendID = .whisperTiny
+        let suite = "OwnedMeetingBackendPrompt.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.onPreflight = { await MainActor.run { settings.meetingTranscriptionBackendID = .legacyCompatibility } }
+        let arbiter = StubArbiter()
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Refused input cannot prepare models"); return ASRService() },
+            managesModelResidency: false, settings: settings)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+            audioArbiter: arbiter, settings: settings)
+        var configuration = self.makeConfiguration()
+        configuration.mode = .inRoom
+        configuration.languageCode = "en"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.speakerLabelsEnabled = false
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Owned backend change must be revalidated") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(capture.preflightCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
+    }
+
+    func testMemoryTailCheckpointSurvivesPartialStopFailure() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("partialFailure")
+    }
+    func testMemoryTailCheckpointSurvivesUnexpectedStopGenerationInvalidation() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("unexpected")
+    }
+    func testMemoryTailCheckpointSurvivesTerminationGenerationInvalidation() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("termination")
+    }
+    func testMemoryTailCheckpointSurvivesNormalStop() async throws {
+        try await self.assertMemoryTailSurvivesTerminalPath("normal")
+    }
+    private func assertMemoryTailSurvivesTerminalPath(_ path: String) async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        let originalBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = originalModel; settings.meetingTranscriptionBackendID = originalBackend }
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = MeetingCaptureStartResult(tracks: [track], firstPresentationTime: nil)
+        capture.stopResult = MeetingCaptureStopResult(tracks: [track], stoppedAt: Date().addingTimeInterval(1))
+        let processing = MemoryCheckpointProcessingController()
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing, audioArbiter: arbiter)
+        var configuration = self.makeConfiguration()
+        configuration.audioStorageMode = .memoryOnly
+        configuration.languageCode = "en"
+        let session = try await coordinator.startRecording(configuration: configuration)
+        let first = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1), end: .init(value: 1, timescale: 1),
+            sourceTrackID: track.id, speakerID: nil, text: "Already durable", revision: 0, status: .final, overlap: .none, completeness: .complete)
+        let tail = MeetingTranscriptSegment(id: UUID(), start: .init(value: 1, timescale: 1), end: .init(value: 2, timescale: 1),
+            sourceTrackID: track.id, speakerID: nil, text: "Joined final tail", revision: 0, status: .final, overlap: .none, completeness: .complete)
+        try await processing.checkpoint(.init(segments: [first]))
+        capture.onStop = { try await processing.checkpoint(.init(segments: [tail])) }
+        if path == "partialFailure" {
+            capture.stopError = MeetingCaptureError.captureStopFailed("Synthetic partial stop", partialResult: try XCTUnwrap(capture.stopResult))
+            do { _ = try await coordinator.stopAndTranscribe(); XCTFail("Expected partial failure") } catch { }
+        } else if path == "unexpected" {
+            capture.emit(.interrupted(kind: .captureStoppedUnexpectedly, trackID: track.id, detail: "Synthetic stop"))
+            for _ in 0..<200 { if arbiter.releaseCount > 0 { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        } else if path == "termination" {
+            await coordinator.shutdownForTermination()
+        } else {
+            let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertEqual(completed.transcriptSegments.map(\.text), [first.text, tail.text])
+            XCTAssertEqual(completed.transcriptTimeDomain, .meetingRelative)
+            XCTAssertEqual(completed.transcriptIsComplete, true)
+        }
+        let persisted = try await store.load(id: session.id)
+        XCTAssertEqual(persisted?.transcriptSegments.map(\.text), [first.text, tail.text], "Terminal snapshot must never roll back joined durable text")
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(processing.cancelCount, path == "normal" ? 0 : 1)
+    }
+
     func testUnexpectedStopPublishesQuiescenceAfterDelayedAudioHandback() async throws {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -1712,6 +2071,11 @@ final class MeetingRecoveryTests: XCTestCase {
     }
 
     func testMissingModelBlocksCaptureAndClearsStartReservation() async throws {
+        let settingsName = "MissingMeetingModel.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: settingsName))
+        defer { defaults.removePersistentDomain(forName: settingsName) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let capture = StubCaptureController()
@@ -1722,6 +2086,7 @@ final class MeetingRecoveryTests: XCTestCase {
             capture: capture,
             processing: StubProcessingController(),
             audioArbiter: StubArbiter(),
+            settings: settings,
             validateRecordingModels: { throw MeetingModelInstaller.InstallError.wrongPackage }
         )
         for _ in 0..<2 {
@@ -4374,6 +4739,69 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(arbiter.acquireCount, 1)
     }
 
+    func testModelChangedDuringAdmittedDependencyPreparationRollsBackBeforeCapture() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        let previousBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = previous; settings.meetingTranscriptionBackendID = previousBackend }
+        settings.selectedSpeechModel = .parakeetTDT
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            prepareRecordingDependencies: { dependencies in
+                XCTAssertEqual(dependencies, [.speakerSeparation, .voiceMatching])
+                if arbiter.acquireCount > 0 { settings.selectedSpeechModel = .gigaam }
+            })
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "en"
+        do {
+            _ = try await coordinator.startRecording(configuration: configuration)
+            XCTFail("A changed admitted model must not be published")
+        } catch is CancellationError { }
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testCancellationDuringAdmittedDependencyPreparationJoinsBeforeLeaseRelease() async throws {
+        let settings = SettingsStore.shared
+        let previous = settings.selectedSpeechModel
+        let previousBackend = settings.meetingTranscriptionBackendID
+        defer { settings.selectedSpeechModel = previous; settings.meetingTranscriptionBackendID = previousBackend }
+        settings.selectedSpeechModel = .parakeetTDT
+        settings.meetingTranscriptionBackendID = .productionDefault
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let gate = PermissionPreflightGate()
+        let reached = self.expectation(description: "admitted preparation waiting")
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            prepareRecordingDependencies: { _ in
+                if arbiter.acquireCount > 0 { reached.fulfill(); await gate.wait() }
+            })
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "en"
+        let task = Task { try await coordinator.startRecording(configuration: configuration) }
+        await self.fulfillment(of: [reached], timeout: 2)
+        task.cancel()
+        XCTAssertEqual(arbiter.releaseCount, 0, "Noncooperative dependency work still owns admission")
+        await gate.open()
+        do { _ = try await task.value; XCTFail("Expected cancellation") } catch is CancellationError { }
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
     func testModelChangedDuringPermissionPromptIsValidatedBeforeCaptureAllocation() async throws {
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel
@@ -4407,12 +4835,10 @@ final class MeetingRecoveryTests: XCTestCase {
         await gate.open()
         do {
             _ = try await start.value
-            XCTFail("The model selected under the lease must reject incompatible meeting language")
-        } catch {
-            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedLanguageCode("en"))
-        }
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1, "Invalid frozen configuration must roll back the acquired lease")
+            XCTFail("The prepared model cannot be replaced while its permission prompt is open")
+        } catch is CancellationError { }
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0, "Changed preparation must stop before acquiring capture")
         XCTAssertEqual(capture.startCount, 0, "Capture and captions cannot start with the stale preflight model")
         XCTAssertEqual(coordinator.liveTranscript, .empty)
         XCTAssertEqual(coordinator.state, .idle)
@@ -4459,18 +4885,37 @@ final class MeetingRecoveryTests: XCTestCase {
         await gate.open()
         do {
             _ = try await start.value
-            XCTFail("The actual post-admission model must satisfy the frozen host capabilities")
-        } catch {
-            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedArchitecture)
-        }
-        XCTAssertEqual(frozenConfigurations.count, 1)
-        XCTAssertEqual(frozenConfigurations.first?.asrModel, "parakeet-tdt")
-        XCTAssertEqual(frozenConfigurations.first?.languageCode, "ru")
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1)
+            XCTFail("The chosen model cannot change between preparation and capture")
+        } catch is CancellationError { }
+        XCTAssertTrue(frozenConfigurations.isEmpty)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
         XCTAssertEqual(capture.startCount, 0)
         XCTAssertEqual(coordinator.liveTranscript, .empty)
         XCTAssertTrue(coordinator.isQuiescent)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
+    func testFrozenHostCapabilitiesStillRejectPreparedModelBeforeCapture() async throws {
+        let settings = SettingsStore.shared
+        let originalModel = settings.selectedSpeechModel
+        defer { settings.selectedSpeechModel = originalModel }
+        settings.selectedSpeechModel = .parakeetTDT
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter,
+            validateFrozenRecordingConfiguration: { try PichiMeetingProviderFactory.validateRecordingConfiguration($0, isAppleSilicon: false) })
+        var configuration = self.makeConfiguration()
+        configuration.languageCode = "ru"
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unsupported frozen hardware must reject capture") }
+        catch { XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedArchitecture) }
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(capture.startCount, 0)
         let sessions = try await store.loadAll()
         XCTAssertTrue(sessions.isEmpty)
     }
@@ -5074,6 +5519,9 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var startError: Error?
     var startupEvents: [MeetingCaptureEvent] = []
     var onStart: (@Sendable () async -> Void)?
+    var onStop: (@Sendable () async throws -> Void)?
+    var stopResult: MeetingCaptureStopResult?
+    var stopError: Error?
     var preflightError: Error?
     var onPreflight: (@Sendable () async -> Void)?
     private(set) var preflightCount = 0
@@ -5106,7 +5554,9 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
-        MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
+        try await self.onStop?()
+        if let stopError { throw stopError }
+        return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
     }
 
     func shutdownForTermination() async {}
@@ -5646,5 +6096,30 @@ final class MeetingProcessingSerializationGateTests: XCTestCase {
 
         try await self.acquireOrTimeout(gate)
         await gate.release()
+    }
+}
+
+@MainActor
+private final class MemoryCheckpointProcessingController: MeetingProcessingControlling {
+    private(set) var validatedBackendIDs: [MeetingBackendID] = []
+    private(set) var preparedSession: MeetingSession?
+    func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
+        // This explicit synthetic processor implements the memory checkpoint path under test.
+        self.validatedBackendIDs.append(backendID)
+        guard let descriptor = MeetingTranscriptionBackendRegistry.makeDefault().descriptor(for: backendID) else {
+            throw MeetingBackendError.unknownBackend(backendID)
+        }
+        return descriptor
+    }
+    private var operation: (@MainActor (MeetingPCMTranscriptBatch) async throws -> Void)?
+    private(set) var cancelCount = 0
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws { preparedSession = session; operation = checkpoint }
+    func checkpoint(_ batch: MeetingPCMTranscriptBatch) async throws { try await operation?(batch) }
+    func cancelMemoryAudio(sessionID: MeetingSessionID) async { cancelCount += 1; operation = nil }
+    func process(session: MeetingSession, sessionDirectory: URL, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        let attempt = MeetingProcessingAttempt(id: UUID(), startedAt: session.startedAt, completedAt: Date(), stage: .completed,
+            pipelineVersion: 13, asrProvider: "synthetic", asrModel: "synthetic", languageCode: session.languageCode,
+            diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil)
+        return MeetingProcessingResult(speakers: session.speakers, segments: session.transcriptSegments, attempt: attempt)
     }
 }

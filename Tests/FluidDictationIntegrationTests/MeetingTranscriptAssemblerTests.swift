@@ -20,6 +20,58 @@ private nonisolated struct AssemblerFixtureObserver: MeetingChunkAudioObserving 
 final class MeetingTranscriptAssemblerTests: XCTestCase {
     private let backendID = MeetingBackendID(rawValue: "fixture.assembler")
 
+    func testPCMWindowUsesExistingIdentityAndOffsetWithoutCreatingAudioManifest() throws {
+        let attempt = UUID()
+        let track = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let unit = MeetingFinalTextUnit(id: "pcm:first", trackID: track, analysisEpochID: epoch,
+                                       precision: .utterance, text: "Synthetic transcript", analysisStart: 0,
+                                       analysisEnd: 6, speaker: .assigned(token), analysisSpanIDs: [])
+        let assembler = MeetingTranscriptAssembler()
+        let first = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 10, duration: 6, units: [unit])
+        XCTAssertEqual(first.segments.first?.start.seconds, 10)
+        XCTAssertEqual(first.segments.first?.end.seconds, 16)
+        XCTAssertEqual(first.speakers.count, 1)
+        XCTAssertFalse(try XCTUnwrap(first.speakers.first).isLocalUser)
+        let replay = try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 10, duration: 6, units: [unit])
+        XCTAssertEqual(first.segments, replay.segments)
+        XCTAssertEqual(first.speakers, replay.speakers)
+        let nextEpoch = MeetingAnalysisEpochID(trackID: track, ordinal: 96_000)
+        let nextToken = MeetingBackendSpeakerToken(analysisEpochID: nextEpoch, label: "slot-3")
+        let nextUnit = MeetingFinalTextUnit(id: "pcm:second", trackID: track, analysisEpochID: nextEpoch,
+                                           precision: .utterance, text: "Another synthetic phrase", analysisStart: 0,
+                                           analysisEnd: 6, speaker: .assigned(nextToken), analysisSpanIDs: [])
+        let next = try assembler.assemblePCMWindow(attemptID: attempt, epoch: nextEpoch, offset: 16, duration: 6,
+                                                   units: [nextUnit], identityLinks: [.init(token: nextToken, canonicalToken: token)],
+                                                   priorSpeakers: first.speakers)
+        XCTAssertEqual(next.segments.first?.speakerID, first.segments.first?.speakerID)
+        XCTAssertEqual(next.speakers.first?.displayName, first.speakers.first?.displayName)
+        XCTAssertThrowsError(try assembler.assemblePCMWindow(attemptID: attempt, epoch: epoch, offset: 0,
+                                                            duration: 5, units: [unit]))
+    }
+
+    func testPCMInvalidWordTimingPreservesCompleteUntimedTextWithUncertainAttribution() throws {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let units = MeetingParakeetNemotronBackend.pcmUnits(
+            result: ASRTranscriptionResult(text: "Keep the complete phrase"),
+            words: [.init(text: "Keep", start: 0, end: 0.5), .init(text: "invalid", start: 20, end: 21)],
+            epoch: epoch, duration: 6,
+            activity: [.init(token: token, start: 0, end: 6)], identityTokens: []
+        )
+        XCTAssertEqual(units.count, 1)
+        XCTAssertEqual(units.first?.precision, .utterance)
+        XCTAssertEqual(units.first?.text, "Keep the complete phrase")
+        XCTAssertEqual(units.first?.speaker, .unassigned)
+        let batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: UUID(), epoch: epoch, offset: 0,
+                                                                       duration: 6, units: units)
+        XCTAssertTrue(batch.isComplete)
+        XCTAssertTrue(batch.speakers.isEmpty)
+        XCTAssertNil(batch.segments.first?.speakerID)
+        XCTAssertEqual(batch.segments.first?.attributionState, .unassigned)
+    }
+
     // MARK: - Session/manifest fixtures
 
     private func chunk(

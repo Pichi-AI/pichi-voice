@@ -1,0 +1,26 @@
+{
+  "duration": 42,
+  "events": [
+    { "time": 1.5, "action": "partial", "delivery": "partial", "id": "A0000001-0000-4000-8000-000000000001", "start": 0.4, "text": "Сегодня обсудим материалы" },
+    { "time": 3.4, "action": "partial", "delivery": "partial", "id": "A0000001-0000-4000-8000-000000000001", "start": 0.4, "text": "Сегодня обсудим материалы по препарату и вопросы" },
+    { "time": 5.2, "action": "partial", "delivery": "partial", "id": "A0000001-0000-4000-8000-000000000001", "start": 0.4, "text": "Сегодня обсудим материалы по препарату и вопросы к презентации." },
+    { "time": 6.3, "action": "final", "delivery": "partial", "id": "A0000001-0000-4000-8000-000000000001", "start": 0.4, "end": 5.9, "text": "Сегодня обсудим материалы по препарату и вопросы к презентации." },
+    { "time": 7.5, "action": "partial", "delivery": "partial", "id": "A0000002-0000-4000-8000-000000000002", "start": 6.7, "text": "Давайте начнём с инструкции." },
+    { "time": 9.2, "action": "partial", "delivery": "partial", "id": "A0000002-0000-4000-8000-000000000002", "start": 6.7, "text": "Давайте начнём с инструкции. Где можно найти актуальную версию документа?" },
+    { "time": 10.7, "action": "final", "delivery": "partial", "id": "A0000002-0000-4000-8000-000000000002", "start": 6.7, "end": 10.2, "text": "Давайте начнём с инструкции. Где можно найти актуальную версию документа?" },
+    { "time": 14.4, "action": "final", "delivery": "buffered", "id": "A0000003-0000-4000-8000-000000000003", "start": 10.9, "end": 12.1, "text": "Покажу раздел с документами." },
+    { "time": 14.4, "action": "final", "delivery": "buffered", "id": "A0000004-0000-4000-8000-000000000004", "start": 12.1, "end": 13.7, "text": "После встречи запишем вопросы, которые нужно уточнить." },
+    { "time": 16.1, "action": "partial", "delivery": "partial", "id": "A0000005-0000-4000-8000-000000000005", "start": 14.9, "text": "Хорошо. Let's also look" },
+    { "time": 18.3, "action": "partial", "delivery": "partial", "id": "A0000005-0000-4000-8000-000000000005", "start": 14.9, "text": "Хорошо. Let's also look at the English version of the presentation." },
+    { "time": 20.1, "action": "final", "delivery": "partial", "id": "A0000005-0000-4000-8000-000000000005", "start": 14.9, "end": 19.6, "text": "Хорошо. Let's also look at the English version of the presentation." },
+    { "time": 24.6, "action": "final", "delivery": "buffered", "id": "A0000006-0000-4000-8000-000000000006", "start": 20.8, "end": 22.0, "text": "The document has both language versions." },
+    { "time": 24.6, "action": "final", "delivery": "buffered", "id": "A0000007-0000-4000-8000-000000000007", "start": 22.0, "end": 24.0, "text": "Можно переключиться на английский и сравнить формулировки." },
+    { "time": 27.0, "action": "partial", "delivery": "partial", "id": "A0000008-0000-4000-8000-000000000008", "start": 25.0, "text": "Здесь есть отдельный раздел" },
+    { "time": 29.4, "action": "partial", "delivery": "partial", "id": "A0000008-0000-4000-8000-000000000008", "start": 25.0, "text": "Здесь есть отдельный раздел с вопросами. Let's review them together." },
+    { "time": 31.0, "action": "final", "delivery": "partial", "id": "A0000008-0000-4000-8000-000000000008", "start": 25.0, "end": 30.6, "text": "Здесь есть отдельный раздел с вопросами. Let's review them together." },
+    { "time": 35.7, "action": "final", "delivery": "buffered", "id": "A0000009-0000-4000-8000-000000000009", "start": 31.8, "end": 33.3, "text": "Да, сначала посмотрим материалы на русском." },
+    { "time": 35.7, "action": "final", "delivery": "buffered", "id": "A0000010-0000-4000-8000-000000000010", "start": 33.3, "end": 35.0, "text": "Then we can return to the English slides." },
+    { "time": 38.0, "action": "partial", "delivery": "partial", "id": "A0000011-0000-4000-8000-000000000011", "start": 36.0, "text": "Отмечу этот вопрос" },
+    { "time": 40.5, "action": "final", "delivery": "partial", "id": "A0000011-0000-4000-8000-000000000011", "start": 36.0, "end": 40.0, "text": "Отмечу этот вопрос в тексте встречи, чтобы вернуться к нему позже." }
+  ]
+}
