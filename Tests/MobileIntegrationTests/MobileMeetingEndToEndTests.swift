@@ -101,6 +101,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         player.numberOfLoops = -1
         var firstTextSecond: Int?
         var updates = 0
+        var protectedUpdateSeconds: [Double] = []
         var lastUpdateSecond = 0
         var lastBackgroundUpdateSecond = 0
         var previousIDs: Set<UUID> = []
@@ -149,6 +150,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 let partial = snapshot.partials[.you]
                 if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
                     updates += 1
+                    protectedUpdateSeconds.append(elapsed)
                     lastUpdateSecond = second
                     if adjacentBackgroundObservation {
                         backgroundUpdates += 1
@@ -194,6 +196,23 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             let saved = try await store.load(id: completed.id)
             XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
+            // Opt-in replay evidence is retained privately in XCTest, never in
+            // routine support logs. The export contains protected text only.
+            let transcriptAttachment = XCTAttachment(data: try MeetingTranscriptExporter.json(for: completed),
+                                                       uniformTypeIdentifier: "public.json")
+            transcriptAttachment.name = "Physical-strict-protected-transcript-\(model.rawValue)"
+            transcriptAttachment.lifetime = .keepAlways
+            add(transcriptAttachment)
+            let timingData = try JSONSerialization.data(withJSONObject: [
+                "model": model.rawValue, "durationSeconds": capturedSeconds,
+                "firstTextSecond": firstTextSecond ?? -1,
+                "protectedUpdateSeconds": protectedUpdateSeconds,
+                "backgroundSeconds": backgroundSeconds
+            ], options: [.prettyPrinted, .sortedKeys])
+            let timingAttachment = XCTAttachment(data: timingData, uniformTypeIdentifier: "public.json")
+            timingAttachment.name = "Physical-strict-protected-update-timing-\(model.rawValue)"
+            timingAttachment.lifetime = .keepAlways
+            add(timingAttachment)
             let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
             for case let file as URL in files where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
                 XCTAssertEqual(file.pathExtension, "json", "Strict capture must not create any audio file")
