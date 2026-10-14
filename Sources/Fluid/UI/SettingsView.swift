@@ -2608,7 +2608,6 @@ private extension SettingsView {
         .padding(.horizontal, 12)
         .frame(minHeight: 42)
         .contentShape(Rectangle())
-        .opacity(isAvailable ? 1 : 0.62)
         .onHover { isHovering in
             let animation: Animation? = self.accessibilityReduceMotion ? nil : .easeOut(duration: 0.12)
             withAnimation(animation) {

@@ -205,7 +205,6 @@ extension AIEnhancementSettingsView {
         }
         .padding(16)
         .frame(minHeight: 76)
-        .opacity(isEnabled ? 1 : 0.68)
         .background(
             shape
                 .fill(self.theme.palette.cardBackground.opacity(0.7))
@@ -339,7 +338,6 @@ extension AIEnhancementSettingsView {
 
             Spacer(minLength: 0)
         }
-        .opacity(isEnabled ? 1 : 0.68)
     }
 
     private func promptConfigChip(
@@ -1289,7 +1287,6 @@ extension AIEnhancementSettingsView {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.48)
         .onHover { hovering in
             self.hoveredPromptScopeKey = hovering && isEnabled ? key : nil
         }
@@ -1457,7 +1454,6 @@ extension AIEnhancementSettingsView {
                 .fluidDropdownStyle()
                 .frame(minHeight: AISettingsLayout.controlHeight)
                 .disabled(!isEnabled)
-                .opacity(isEnabled ? 1 : 0.48)
             }
 
             if bindings.isEmpty {
@@ -1551,7 +1547,6 @@ extension AIEnhancementSettingsView {
         .padding(.horizontal, 13)
         .padding(.vertical, 9)
         .frame(minHeight: 86)
-        .opacity(isEnabled ? 1 : 0.68)
         .background(
             shape
                 .fill(self.theme.palette.cardBackground.opacity(0.7))
