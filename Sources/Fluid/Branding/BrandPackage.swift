@@ -291,16 +291,26 @@ nonisolated final class BrandPackageStore: @unchecked Sendable {
         return self.generation
     }
 
-    var hasOverride: Bool {
-        _ = self.current()
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.cachedOverride
+    struct Snapshot: Sendable {
+        let package: BrandPackage
+        let hasOverride: Bool
+        let revision: Int
     }
 
-    func current() -> BrandPackage {
+    var hasOverride: Bool { self.snapshot().hasOverride }
+
+    /// Rendering must bind artwork, fallback policy and cache generation to
+    /// the same commit, including imports completed on a background task.
+    func snapshot() -> Snapshot {
         self.lock.lock()
         defer { self.lock.unlock() }
+        let package = self.currentLocked()
+        return Snapshot(package: package, hasOverride: self.cachedOverride, revision: self.generation)
+    }
+
+    func current() -> BrandPackage { self.snapshot().package }
+
+    private func currentLocked() -> BrandPackage {
         if let cachedPackage { return cachedPackage }
         let storedData: Data?
         if let storageURL = self.storageURL,
