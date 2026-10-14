@@ -185,11 +185,16 @@ enum PichiMeetingProviderFactory {
 
     static func validateRecordingConfiguration(
         _ configuration: MeetingFinalProcessingConfiguration,
-        isAppleSilicon: Bool
+        isAppleSilicon: Bool,
+        requiresInstalledArtifact: Bool = false
     ) throws {
         let options = try MeetingProviderOptions.resolve(configuration)
         guard isAppleSilicon || !options.model.requiresAppleSilicon else {
             throw MeetingProviderOptionsError.unsupportedArchitecture
+        }
+        if requiresInstalledArtifact,
+           configuration.asrArtifactFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            throw MeetingProcessingError.modelUnavailable
         }
     }
 

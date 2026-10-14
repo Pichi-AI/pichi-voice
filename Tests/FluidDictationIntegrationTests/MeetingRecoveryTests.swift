@@ -171,46 +171,76 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(coordinator.isQuiescent)
     }
 
-    func testExplicitTinyLanguageReachesRequestedRuntimeWithoutAmbientPreparation() async throws {
+    func testUnavailableExplicitTinyArtifactRejectsBeforeAnyPreparationOrCapture() async throws {
         for language in ["en", "auto"] {
-            let suite = "ExplicitTinyRuntime.\(UUID().uuidString)"
+            let suite = "UnavailableExplicitTiny.\(UUID().uuidString)"
             let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
             defer { defaults.removePersistentDomain(forName: suite) }
             let settings = SettingsStore(defaults: defaults)
             settings.selectedSpeechModel = .gigaam
+            let ambient = MeetingBackendID(rawValue: "ambient-future-backend")
+            settings.meetingTranscriptionBackendID = ambient
             let dir = self.makeTempDirectory()
             defer { try? FileManager.default.removeItem(at: dir) }
             let store = MeetingSessionStore(rootDirectory: dir)
             let capture = StubCaptureController()
             let arbiter = StubArbiter()
             var preparations = 0
-            var runtimeRequest: MeetingBackendRequest?
-            let marker = CocoaError(.userCancelled)
-            let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Runtime marker precedes ASR residency"); return ASRService() },
+            var dependencies = 0
+            let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Unavailable artifact cannot reach ASR residency"); return ASRService() },
                 managesModelResidency: false, settings: settings,
-                meetingRuntimeFactory: { request in runtimeRequest = request; throw marker })
+                meetingRuntimeFactory: { _ in XCTFail("Unavailable artifact cannot construct a runtime"); throw CancellationError() })
             let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
-                audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 })
+                audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 },
+                prepareRecordingDependencies: { _ in dependencies += 1 },
+                validateFrozenRecordingConfiguration: { _ in
+                    // Keep a controlled unavailable-resource outcome even if the developer
+                    // cache is populated. The existing validation boundary fails closed too.
+                    throw MeetingProcessingError.modelUnavailable
+                })
             var configuration = self.makeConfiguration()
             configuration.mode = .inRoom
             configuration.languageCode = language
             configuration.audioStorageMode = .memoryOnly
-            configuration.speakerLabelsEnabled = false
             configuration.transcriptionBackendID = MeetingBackendID.whisperTiny.rawValue
-            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Expected the requested-runtime marker") }
-            catch { XCTAssertEqual(error as? CocoaError, marker) }
-            let request = try XCTUnwrap(runtimeRequest)
-            XCTAssertEqual(request.session.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
-            XCTAssertEqual(request.configuration.asrModel, PichiMeetingProviderFactory.whisperTinyModelID)
-            XCTAssertEqual(request.configuration.languageCode, language)
+            // The requested Tiny language/input contract is valid even while GigaAM is selected.
+            XCTAssertNoThrow(try pipeline.validateRecordingInput(configuration: configuration, backendID: .whisperTiny))
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unavailable explicit artifact must be rejected") }
+            catch {
+                if case .modelUnavailable? = error as? MeetingProcessingError { }
+                else { XCTFail("Expected modelUnavailable, got \(error)") }
+            }
             XCTAssertEqual(preparations, 0)
-            XCTAssertEqual(capture.preflightCount, 1)
+            XCTAssertEqual(dependencies, 0)
+            XCTAssertEqual(capture.preflightCount, 0)
             XCTAssertEqual(capture.startCount, 0)
-            XCTAssertEqual(arbiter.acquireCount, 1)
-            XCTAssertEqual(arbiter.releaseCount, 1)
+            XCTAssertEqual(arbiter.acquireCount, 0)
+            XCTAssertEqual(arbiter.releaseCount, 0)
             XCTAssertEqual(settings.selectedSpeechModel, .gigaam)
+            XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
+            let sessions = try await store.loadAll()
+            XCTAssertTrue(sessions.isEmpty)
             XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
             XCTAssertTrue(coordinator.isQuiescent)
+        }
+    }
+
+    func testExplicitArtifactValidationRequiresNonemptyFrozenIdentity() throws {
+        for language in ["en", "auto"] {
+            for fingerprint in [nil, "", " \n"] as [String?] {
+                let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.whisperTinyModelID,
+                    asrArtifactFingerprint: fingerprint, languageCode: language, speakerLabelsEnabled: false)
+                XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration, isAppleSilicon: true))
+                XCTAssertThrowsError(try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration,
+                    isAppleSilicon: true, requiresInstalledArtifact: true)) {
+                    if case .modelUnavailable? = $0 as? MeetingProcessingError { }
+                    else { XCTFail("Expected modelUnavailable, got \($0)") }
+                }
+            }
+            let pinned = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.whisperTinyModelID,
+                asrArtifactFingerprint: "approved-synthetic-tiny-identity", languageCode: language, speakerLabelsEnabled: false)
+            XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(pinned,
+                isAppleSilicon: true, requiresInstalledArtifact: true))
         }
     }
 
@@ -307,7 +337,7 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(settings.meetingTranscriptionBackendID, .legacyCompatibility)
     }
 
-    func testExplicitBackendRequestPinsCapturedRouteWithoutMutatingPreferences() async throws {
+    func testOrdinaryCaptureRemainsUsableAfterUnavailableExplicitArtifact() async throws {
         let suite = "ExplicitCapturedBackend.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -324,21 +354,22 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.stopResult = .init(tracks: [track], stoppedAt: Date())
         let processing = MemoryCheckpointProcessingController()
         var preparations = 0
-        var frozen: MeetingFinalProcessingConfiguration?
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
-            audioArbiter: StubArbiter(), settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { frozen = $0 })
+            audioArbiter: StubArbiter(), settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { configuration in
+                if configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID { throw MeetingProcessingError.modelUnavailable }
+            })
         var configuration = self.makeConfiguration()
         configuration.mode = .inRoom
         configuration.languageCode = "ru"
         configuration.audioStorageMode = .memoryOnly
         configuration.speakerLabelsEnabled = false
         configuration.transcriptionBackendID = MeetingBackendID.gigaam.rawValue
-        let session = try await coordinator.startRecording(configuration: configuration)
-        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.gigaam.rawValue)
-        XCTAssertEqual(processing.validatedBackendIDs, [.gigaam, .gigaam])
-        XCTAssertEqual(frozen?.asrModel, PichiMeetingProviderFactory.gigaamModelID)
-        let completed = try await coordinator.stopAndTranscribe()
-        XCTAssertEqual(completed.recordingBackendID, session.recordingBackendID)
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Expected unavailable explicit artifact") }
+        catch {
+                if case .modelUnavailable? = error as? MeetingProcessingError { }
+                else { XCTFail("Expected modelUnavailable, got \(error)") }
+            }
+        XCTAssertTrue(processing.validatedBackendIDs.allSatisfy { $0 == .gigaam })
         XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
         XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
         XCTAssertTrue(coordinator.isQuiescent)
