@@ -157,7 +157,7 @@ struct MeetingPendingSpeechProjectionTests {
         try testCaptureTee()
     }
     static func testCaptureTee() throws {
-        final class Receipt: @unchecked Sendable {
+        final nonisolated class Receipt: @unchecked Sendable {
             let lock = NSLock(); var snapshots: [MeetingPendingSpeechSnapshot] = []
             func append(_ value: MeetingPendingSpeechSnapshot) { lock.withLock { snapshots.append(value) } }
         }
