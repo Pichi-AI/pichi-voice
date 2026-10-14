@@ -150,20 +150,26 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
         let probe = BlockingNativeProbe()
         let executor = TranscriptionExecutor()
         let work = Task { try await executor.runBlocking { probe.run() } }
-        defer { probe.release() }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
-        while !probe.hasEntered, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
-        XCTAssertTrue(probe.hasEntered)
-        XCTAssertFalse(probe.hasFinished)
-        XCTAssertFalse(probe.ranOnMainThread)
-        let olderOffset = max(0, bottomOffset(scroll) - 250)
-        scroll.setContentOffset(CGPoint(x: 0, y: olderOffset), animated: false)
-        try await settle(host, "Native viewport can scroll while synchronous work is still running") {
-            abs(scroll.contentOffset.y - olderOffset) < 3 && !probe.hasFinished
+        do {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+            while !probe.hasEntered, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+            XCTAssertTrue(probe.hasEntered)
+            XCTAssertFalse(probe.hasFinished)
+            XCTAssertFalse(probe.ranOnMainThread)
+            let olderOffset = max(0, bottomOffset(scroll) - 250)
+            scroll.setContentOffset(CGPoint(x: 0, y: olderOffset), animated: false)
+            try await settle(host, "Native viewport can scroll while synchronous work is still running") {
+                abs(scroll.contentOffset.y - olderOffset) < 3 && !probe.hasFinished
+            }
+            capture(host, step: "01-scrolled-during-native-work", scheme: .light)
+            probe.release()
+            let released = try await work.value
+            XCTAssertTrue(released)
+        } catch {
+            probe.release()
+            _ = await work.result
+            throw error
         }
-        capture(host, step: "01-scrolled-during-native-work", scheme: .light)
-        probe.release()
-        XCTAssertTrue(try await work.value)
     }
 
     func testPendingWaveformsGrowAndBecomeRealTextInBothThemes() async throws {
