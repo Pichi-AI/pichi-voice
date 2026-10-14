@@ -247,7 +247,13 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
                              "CAF has an invalid or unsupported decoding sample rate.")
             let startSeconds = chunk.presentationStart.seconds
             let endSeconds = chunk.presentationEnd.seconds
-            let declaredDuration = endSeconds - startSeconds
+            // Subtract rational media times before converting to Double. Subtracting large
+            // host-second Doubles first loses precision that can falsely exceed one frame.
+            let interval = CMTimeSubtract(
+                CMTime(value: chunk.presentationEnd.value, timescale: chunk.presentationEnd.timescale),
+                CMTime(value: chunk.presentationStart.value, timescale: chunk.presentationStart.timescale)
+            )
+            let declaredDuration = CMTimeGetSeconds(interval)
             let declaredFrames = declaredDuration * format.sampleRate
             let frameLimit = maximumCaptureDuration * format.sampleRate
             try Self.require(chunk.presentationStart.timescale > 0 && chunk.presentationEnd.timescale > 0
@@ -1317,13 +1323,23 @@ final class MeetingBrowserAudioMeasurementTests: XCTestCase {
     func testOneFrameTimestampQuantizationDoesNotAdmitTwoFrameMetadataMismatch() throws {
         let fixture = try self.fixture(frames: 1600, sampleRate: 16_000)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        var track = fixture.track
-        track.chunks[0].presentationEnd.value += 1
-        XCTAssertNoThrow(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
-        track.chunks[0].presentationEnd.value += 1
-        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
-        track.chunks[0].presentationEnd = track.chunks[0].presentationStart
-        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
+        for hostSeconds: Int64 in [100, 789_000] {
+            for frameDifference: Int64 in [-2, -1, 0, 1, 2] {
+                var track = fixture.track
+                track.chunks[0].presentationStart = MeetingMediaTime(value: hostSeconds * 16_000, timescale: 16_000)
+                track.chunks[0].presentationEnd = MeetingMediaTime(value: hostSeconds * 16_000 + 1600 + frameDifference, timescale: 16_000)
+                if abs(frameDifference) <= 1 {
+                    XCTAssertNoThrow(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100),
+                                     "One-frame rounding at host time \(hostSeconds), difference \(frameDifference), must be accepted.")
+                } else {
+                    XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100),
+                                         "Two-frame metadata mismatch at host time \(hostSeconds) must be rejected.")
+                }
+            }
+        }
+        var invalidRange = fixture.track
+        invalidRange.chunks[0].presentationEnd = invalidRange.chunks[0].presentationStart
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(invalidRange, in: fixture.directory, maximumCaptureDuration: 100))
     }
 
     func testGapMetadataAvoidsFalseContiguousComparisonButKeepsHardBound() throws {
