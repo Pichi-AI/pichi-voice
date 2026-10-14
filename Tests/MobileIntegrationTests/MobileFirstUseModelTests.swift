@@ -7,6 +7,30 @@ import XCTest
 /// microphone permission are controlled, so these tests never download weights or record audio.
 @MainActor
 final class MobileFirstUseModelTests: XCTestCase {
+    /// Explicit device maintenance after the user chooses Tiny. Ordinary test runs
+    /// never change real preferences; this invokes the same operation as Settings.
+    func testAuthorizedPhysicalDeviceActivationOfWhisperTiny() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the explicitly authorized physical device")
+        #else
+        guard ProcessInfo.processInfo.environment["PICHI_ACTIVATE_DEVICE_WHISPER_TINY"] == "1" else {
+            throw XCTSkip("Real device model selection requires an explicit opt-in")
+        }
+        let settings = SettingsStore.shared
+        let saveAudio = settings.meetingSaveAudio
+        let privacy = settings.meetingPIIRedactionEnabled
+        let speakers = settings.meetingSpeakerLabelsEnabled
+        try await AppServices.shared.asr.activateModel(.whisperTiny)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID,
+            PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperTiny.rawValue)?.id)
+        XCTAssertEqual(settings.meetingSaveAudio, saveAudio)
+        XCTAssertEqual(settings.meetingPIIRedactionEnabled, privacy)
+        XCTAssertEqual(settings.meetingSpeakerLabelsEnabled, speakers)
+        XCTAssertTrue(UserDefaults.standard.synchronize())
+        #endif
+    }
+
     private func settings() throws -> (SettingsStore, UserDefaults, String) {
         let name = "MobileFirstUseModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
