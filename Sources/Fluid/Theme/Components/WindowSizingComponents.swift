@@ -28,6 +28,8 @@ private struct FluidWindowSizingModifier: ViewModifier {
 }
 
 private struct FluidWindowSizingBridge: NSViewRepresentable {
+    @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var scheme
     let sizing: FluidWindowSizing
 
     func makeNSView(context _: Context) -> NSView {
@@ -37,10 +39,25 @@ private struct FluidWindowSizingBridge: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context _: Context) {
         guard let sizingView = nsView as? FluidWindowSizingNSView else { return }
         sizingView.sizing = self.sizing
+        sizingView.traceLogical = self.theme.variant.map { $0 == .dark ? "dark" : "light" } ?? "unspecified"
+        sizingView.tracePhysical = self.theme.palette.nativeColorScheme(fallback: self.scheme) == .dark ? "dark" : "light"
+        sizingView.scheduleAppearanceTrace()
     }
 }
 
 final class FluidWindowSizingNSView: NSView {
+    var traceLogical = "unknown"
+    var tracePhysical = "unknown"
+
+    func scheduleAppearanceTrace() {
+        ToolbarAppearanceTrace.schedule(window: self.window, logical: self.traceLogical, physical: self.tracePhysical)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        self.scheduleAppearanceTrace()
+    }
+
     var sizing: FluidWindowSizing {
         didSet {
             guard self.sizing != oldValue else { return }
@@ -71,6 +88,7 @@ final class FluidWindowSizingNSView: NSView {
         super.viewDidMoveToWindow()
         self.observeWindowIfNeeded()
         self.scheduleSizing()
+        self.scheduleAppearanceTrace()
     }
 
     private func observeWindowIfNeeded() {

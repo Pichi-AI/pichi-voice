@@ -75,6 +75,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/ThemedCard.swift \
     Sources/Fluid/Theme/Components/WindowSizingComponents.swift \
     Sources/Fluid/Theme/Components/FluidPageLayout.swift \
+    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift Sources/Fluid/Services/FileLogger.swift \
     "$task_test_dir/Doubles.swift" "$task_test_dir/Scroll.swift" \
     "$task_test_dir/RealContent.swift" Tests/SettingsViewportTests.swift \
     -o "$task_bundle_dir/Contents/MacOS/probe"

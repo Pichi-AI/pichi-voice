@@ -6369,6 +6369,7 @@ private struct TodayStatsToolbarButton: View {
             }
             .font(.fluidSystem(size: 12, weight: .medium))
             .foregroundStyle(Color.primary)
+            .traceToolbarAppearance()
         }
         .help(hasActivity ? "Today: \(summary.words) words · \(timeSaved) saved - view stats" : "View your stats")
         .accessibilityLabel("Today stats")
