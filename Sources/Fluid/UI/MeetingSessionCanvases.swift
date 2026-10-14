@@ -363,6 +363,7 @@ struct MeetingResultCanvas: View {
     var onOpenIntegrations: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.locale) private var locale
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
     @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
@@ -406,7 +407,8 @@ struct MeetingResultCanvas: View {
     }
 
     private var speakerTints: [SessionSpeakerID: Color] {
-        MeetingSpeakerPalette.tints(for: self.session.activeSpeakers)
+        let scheme = self.theme.palette.nativeColorScheme(fallback: self.colorScheme)
+        return MeetingSpeakerPalette.tints(for: self.session.activeSpeakers, isDark: scheme == .dark)
     }
 
     private var hasEchoSegments: Bool {

@@ -4135,7 +4135,7 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(before[speakerA.id], 0)
         XCTAssertNil(before[placeholder.id])
         XCTAssertEqual(before[speakerC.id], 2)
-        XCTAssertNil(MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC])[placeholder.id])
+        XCTAssertNil(MeetingSpeakerPalette.tints(for: [speakerA, placeholder, speakerC], isDark: false)[placeholder.id])
 
         var renamedPlaceholder = placeholder
         renamedPlaceholder.displayName = "Jordan"
@@ -4143,7 +4143,7 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(after[speakerA.id], 0)
         XCTAssertEqual(after[renamedPlaceholder.id], 1)
         XCTAssertEqual(after[speakerC.id], 2)
-        XCTAssertNotNil(MeetingSpeakerPalette.tints(for: [speakerA, renamedPlaceholder, speakerC])[renamedPlaceholder.id])
+        XCTAssertNotNil(MeetingSpeakerPalette.tints(for: [speakerA, renamedPlaceholder, speakerC], isDark: false)[renamedPlaceholder.id])
     }
 
     // MARK: - MeetingAssignSpeakersValidation.duplicateName

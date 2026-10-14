@@ -238,6 +238,10 @@ struct UIContrastTests {
     @MainActor
     static func main() async throws {
         let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+        if CommandLine.arguments.contains("--speaker-palette-only") {
+            try MeetingSpeakerPaletteContrastTests.run()
+            return
+        }
         if CommandLine.arguments.contains("--participant-input-only") {
             try await ParticipantInputContrastTests.run(directory: directory)
             return

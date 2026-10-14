@@ -419,6 +419,31 @@ with Path(sys.argv[1]).open('a') as output:
             ' private func inspectDate(_ x: CGFloat, proxy: ChartProxy, pin: Bool) {}\n'
             ' var body: some View {\n' + code + '\n }\n}\n')
 
+# Speaker metadata is inert; compile the complete production palette and exact
+# producer. This path performs color checks only, with no NSApplication or window.
+speaker_source = Path('Sources/Fluid/UI/MeetingSpeakerPalette.swift').read_text()
+speaker_canvas = Path('Sources/Fluid/UI/MeetingSessionCanvases.swift').read_text()
+speaker_producer = snippet('Sources/Fluid/UI/MeetingSessionCanvases.swift',
+    '    private var speakerTints: [SessionSpeakerID: Color] {',
+    '    private var hasEchoSegments: Bool {')
+assert speaker_canvas.count('MeetingSpeakerPalette.tints(') == 1
+assert '.foregroundStyle(self.theme.palette.readableText(self.tint))' in speaker_canvas
+assert 'self.speakerTint.map(self.theme.palette.readableText)' in speaker_canvas
+with Path(sys.argv[1]).open('a') as output:
+    output.write('typealias SessionSpeakerID = UUID\n'
+        'struct MeetingSessionSpeaker { let id: UUID; var displayName: String; let isLocalUser: Bool }\n')
+    output.write(speaker_source)
+    output.write('struct ProductionSpeakerPaletteProducer {\n'
+        ' struct Session { let activeSpeakers: [MeetingSessionSpeaker] }\n'
+        ' let session: Session; let theme: AppTheme; let colorScheme: ColorScheme\n'
+        + speaker_producer + '\n func currentTints() -> [SessionSpeakerID: Color] { self.speakerTints }\n}\n')
+Path(sys.argv[1]).with_name('SpeakerPaletteProductionSource.json').write_text(json.dumps({
+    'paletteSHA256': hashlib.sha256(speaker_source.encode()).hexdigest(),
+    'producerSHA256': hashlib.sha256(speaker_producer.encode()).hexdigest(),
+    'adapters': ['inert speaker ID/name/local metadata and active-speaker list'],
+    'nativeMeetingPixelReplay': 'SKIP',
+}, indent=2) + '\n')
+
 # Extract the complete production participant editor, not a parallel test field.
 participant_path = 'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift'
 participant_revision = os.environ.get('PICHI_PARTICIPANT_INPUT_LEGACY_REVISION')
@@ -637,7 +662,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
     Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
-    Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
+    Tests/MeetingSpeakerPaletteContrastTests.swift Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
     "$task_test_dir/ProductionParticipantSheet.swift" "$task_test_dir/ProductionMeetingActions.swift" \
     "$task_test_dir/ToolbarPageLayout.swift" \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
@@ -657,6 +682,7 @@ case " $* " in
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
         ;;
     "  ")
+        "$task_test_dir/tests" "$task_test_dir" --speaker-palette-only
         "$task_test_dir/tests" "$task_test_dir"
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --overlay-captions-only
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --native-ink-only
