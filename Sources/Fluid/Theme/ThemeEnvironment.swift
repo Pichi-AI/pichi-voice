@@ -65,11 +65,11 @@ struct AdaptiveAppTheme<Content: View>: View {
             // Imported inverted palettes still need an owned window override.
             .preferredColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme) == self.applicationAppearance.colorScheme
                 ? nil : theme.palette.nativeColorScheme(fallback: activeScheme))
-            // Native toolbar ink follows its color scheme only while the bar
-            // background is visible. Paint the same branded surface it pairs with.
+            // Keep the branded bar surface, but let native toolbar glass supply
+            // its own appearance to its labels. A separate bar color-scheme
+            // preference can pin ink while the glass still uses another scheme.
             .toolbarBackground(theme.palette.toolbarBackground, for: .windowToolbar)
             .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-            .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .windowToolbar)
             #else
             .preferredColorScheme(preferredScheme)
             .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .navigationBar)
