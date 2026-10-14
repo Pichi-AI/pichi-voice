@@ -41,3 +41,27 @@ struct FluidHoverIconButtonStyle: ButtonStyle {
         }
     }
 }
+
+/// macOS plain TextField drops a prompt Text's foreground attributes when it
+/// bridges to AppKit. Keep the native editor and draw its empty-state hint with
+/// the same explicit palette and inherited font as the surrounding search UI.
+struct FluidSearchField: View {
+    let title: LocalizedStringKey
+    @Binding var text: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        TextField(self.title, text: self.$text, prompt: Text(verbatim: ""))
+            .textFieldStyle(.plain)
+            .overlay(alignment: .leading) {
+                if self.text.isEmpty {
+                    Text(self.title)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityLabel(Text(self.title))
+    }
+}
