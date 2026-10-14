@@ -65,10 +65,10 @@ class MockProcesses(OwnedProcesses):
     def group_for(self, pid):
         return self.metadata[pid]["group"]
 
-    def arguments_for(self, pid):
+    def arguments_for(self, pid, deadline=None):
         return self.metadata[pid]["arguments"]
 
-    def group_members(self, group):
+    def group_members(self, group, deadline=None):
         return [pid for pid, value in self.metadata.items()
                 if value["group"] == group and self.statuses.get(pid) is None]
 
@@ -214,6 +214,75 @@ class DriverTests(unittest.TestCase):
             self.run_driver()
         self.assertEqual([kind for kind, _, _ in self.processes.launches], ["chrome"])
         self.assertTrue(all(status is not None for status in self.processes.statuses.values()))
+
+    def test_cleanup_helper_exit_between_snapshot_and_executable_lookup_is_rechecked(self):
+        child = self.processes.child("chrome")
+        self.processes.statuses[child.pid] = -9
+        helper = 900
+        self.processes.metadata[helper] = dict(group=child.pid, executable=str(self.processes.chrome_app / "helper"))
+        self.processes.statuses[helper] = None
+        def disappears(pid):
+            self.assertEqual(pid, helper)
+            self.processes.statuses[helper] = -9
+            raise ProtocolError("Cannot verify owned process executable")
+        with patch.object(self.processes, "executable_for", side_effect=disappears):
+            self.processes.stop(child)
+        self.assertEqual(self.processes.signals, [])
+        self.assertEqual(self.processes.group_members(child.pid), [])
+
+    def test_failed_lookup_of_still_live_unknown_member_is_never_signalled(self):
+        child = self.processes.child("chrome")
+        self.processes.statuses[child.pid] = -9
+        self.processes.metadata[900] = dict(group=child.pid, executable="/unknown/helper")
+        self.processes.statuses[900] = None
+        with patch.object(self.processes, "executable_for", side_effect=ProtocolError("Lookup failed")):
+            with self.assertRaisesRegex(ProtocolError, "unverified live"):
+                self.processes.stop(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_exited_leader_pid_reuse_is_refused_even_for_same_copy_executable(self):
+        child = self.processes.child("chrome")
+        self.processes.statuses[child.pid] = -9
+        with patch.object(self.processes, "group_members", return_value=[child.pid]):
+            with self.assertRaisesRegex(ProtocolError, "reused"):
+                self.processes.stop(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_disappearing_member_refresh_verifies_new_unknown_member(self):
+        child = self.processes.child("chrome")
+        self.processes.statuses[child.pid] = -9
+        self.processes.metadata[900] = dict(group=child.pid, executable="/old/helper")
+        self.processes.statuses[900] = None
+        def lookup(pid):
+            if pid == 900:
+                self.processes.statuses[900] = -9
+                self.processes.metadata[901] = dict(group=child.pid, executable="/foreign/new-helper")
+                self.processes.statuses[901] = None
+                raise ProcessLookupError("Member exited")
+            return self.processes.metadata[pid]["executable"]
+        with patch.object(self.processes, "executable_for", side_effect=lookup):
+            with self.assertRaisesRegex(ProtocolError, "unverified process"):
+                self.processes.stop(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_signal_esrch_requires_both_empty_group_and_joined_child(self):
+        child = self.processes.child("chrome")
+        self.processes.statuses[child.pid] = -9
+        with patch.object(self.processes, "send_group", side_effect=ProcessLookupError("Gone")):
+            self.processes.kill_group(child)
+            self.processes.statuses[child.pid] = None
+            with self.assertRaisesRegex(ProtocolError, "disappearance"):
+                self.processes.kill_group(child)
+
+    def test_cleanup_refresh_and_ps_timeout_keep_existing_three_second_deadline(self):
+        child = self.processes.child("chrome")
+        self.processes.statuses[child.pid] = -9
+        with patch("meeting_continuity_driver.time.monotonic", return_value=10):
+            self.assertEqual(self.processes.process_timeout(11), 1)
+            with self.assertRaisesRegex(ProtocolError, "deadline"):
+                self.processes.process_timeout(10)
+            with self.assertRaisesRegex(ProtocolError, "timed out"):
+                self.processes.verify_members(child, [900], deadline=10)
 
     def test_failed_ack_does_not_progress_and_cancellation_joins_owned_children(self):
         with patch("meeting_continuity_driver.wait_ack", side_effect=ProtocolError("ack failed")):

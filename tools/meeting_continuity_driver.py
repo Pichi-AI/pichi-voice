@@ -132,32 +132,58 @@ class OwnedProcesses:
     def group_for(self, pid):
         return os.getpgid(pid)
 
-    def arguments_for(self, pid):
-        return subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "command="], text=True, timeout=2).strip()
+    def process_timeout(self, deadline):
+        remaining = 2 if deadline is None else deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProtocolError("Owned process verification deadline expired.")
+        return min(2, remaining)
 
-    def group_members(self, group):
-        output = subprocess.check_output(["/bin/ps", "-axo", "pid=,pgid=,stat="], text=True, timeout=2)
+    def arguments_for(self, pid, deadline=None):
+        return subprocess.check_output(["/bin/ps", "-p", str(pid), "-o", "command="], text=True,
+                                       timeout=self.process_timeout(deadline)).strip()
+
+    def group_members(self, group, deadline=None):
+        output = subprocess.check_output(["/bin/ps", "-axo", "pid=,pgid=,stat="], text=True,
+                                         timeout=self.process_timeout(deadline))
         return [int(pid) for pid, pgid, state in (line.split() for line in output.splitlines())
                 if int(pgid) == group and not state.startswith("Z")]
 
-    def assert_owned(self, child):
+    def assert_owned(self, child, deadline=None):
         if self.children.get(child.pid) is not child or self.poll(child) is not None:
             raise ProtocolError("Refuse to signal a foreign or exited process.")
         expected = str(self.executable) if child.kind == "chrome" else "/usr/bin/afplay"
         if (self.executable_for(child.pid) != expected or self.group_for(child.pid) != child.pid
                 or child.args[0] != expected or (child.kind == "chrome"
                 and (f"--user-data-dir={self.profile}" not in child.args
-                     or f"--user-data-dir={self.profile}" not in self.arguments_for(child.pid).split()))):
+                     or f"--user-data-dir={self.profile}" not in self.arguments_for(child.pid, deadline).split()))):
             raise ProtocolError("Owned executable, profile or process group does not match.")
-        self.verify_members(child, self.group_members(child.pid))
+        self.verify_members(child, self.group_members(child.pid, deadline), deadline)
 
-    def verify_members(self, child, members):
-        for pid in members:
-            executable = self.executable_for(pid)
+    def verify_members(self, child, members, deadline=None):
+        deadline = deadline if deadline is not None else time.monotonic() + 3
+        pending, verified = list(members), []
+        while pending:
+            if time.monotonic() >= deadline:
+                raise ProtocolError("Owned process group verification timed out.")
+            pid = pending.pop(0)
+            try:
+                if pid == child.pid and self.poll(child) is not None:
+                    raise ProtocolError("Exited leader PID may have been reused.")
+                executable = self.executable_for(pid)
+            except (ProtocolError, ProcessLookupError) as error:
+                current = self.group_members(child.pid, deadline)
+                if pid in current:
+                    raise ProtocolError("Refuse an unverified live or reused group member.") from error
+                # The old PS snapshot raced exit. Reverify the complete fresh snapshot,
+                # including any newly observed members, before allowing a group signal.
+                pending, verified = list(current), []
+                continue
             owned_player = child.kind == "player" and pid == child.pid and executable == "/usr/bin/afplay"
             owned_chrome = child.kind == "chrome" and executable.startswith(str(self.chrome_app) + "/")
             if not (owned_player or owned_chrome):
                 raise ProtocolError("Refuse to signal an unverified process group member.")
+            verified.append(pid)
+        return verified
 
     def send_group(self, pid, value):
         os.killpg(pid, value)
@@ -169,21 +195,30 @@ class OwnedProcesses:
     def stop(self, child):
         if self.children.get(child.pid) is not child:
             raise ProtocolError("Refuse cleanup of a foreign process.")
-        if self.poll(child) is None:
-            self.assert_owned(child)
-            self.send_group(child.pid, signal.SIGKILL)
-        # After leader exit, only members from this unique copied bundle may remain.
         deadline = time.monotonic() + 3
+        if self.poll(child) is None:
+            self.assert_owned(child, deadline)
+            self.kill_group(child, deadline)
+        # After leader exit, only members from this unique copied bundle may remain.
         while time.monotonic() < deadline:
             self.poll(child)
-            members = self.group_members(child.pid)
+            members = self.group_members(child.pid, deadline)
             if not members and self.poll(child) is not None:
                 return
-            self.verify_members(child, members)
-            if members:
-                self.send_group(child.pid, signal.SIGKILL)
+            verified = self.verify_members(child, members, deadline)
+            if verified:
+                self.kill_group(child, deadline)
             time.sleep(0.025)
         raise ProtocolError("Owned process group did not join after termination.")
+
+    def kill_group(self, child, deadline=None):
+        try:
+            self.send_group(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            # Exit can also win between verification and killpg. ESRCH alone is not
+            # disappearance proof; require a fresh empty group and the joined child.
+            if self.group_members(child.pid, deadline) or self.poll(child) is None:
+                raise ProtocolError("Group signal failed without confirmed process disappearance.")
 
     def cleanup(self):
         errors = []
