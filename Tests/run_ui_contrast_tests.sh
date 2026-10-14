@@ -446,8 +446,7 @@ live_microphone = snippet('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift',
 assert '.foregroundStyle(self.theme.palette.readableText(self.tint))' in speaker_canvas
 assert 'self.speakerTint.map(self.theme.palette.readableText)' in speaker_canvas
 with Path(sys.argv[1]).open('a') as output:
-    output.write('typealias SessionSpeakerID = UUID\n'
-        'struct MeetingSessionSpeaker { let id: UUID; var displayName: String; let isLocalUser: Bool }\n')
+    # Reuse the complete participant sheet's inert Identifiable metadata.
     output.write(speaker_source)
     output.write('struct ProductionSpeakerPaletteProducer {\n'
         ' struct Session { let activeSpeakers: [MeetingSessionSpeaker] }\n'
