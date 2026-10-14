@@ -114,6 +114,29 @@ nonisolated struct MeetingSpeakerIdentityLink: Codable, Equatable, Sendable {
     let canonicalToken: MeetingBackendSpeakerToken
 }
 
+/// One bounded admission snapshot for the strict PCM path. A profile that cannot establish
+/// consistent identity must not become a newly named person merely because it has no link.
+nonisolated struct MeetingPCMSpeakerAdmission: Sendable {
+    let retainedProfiles: [MeetingSpeakerVoiceProfile]
+    let links: [MeetingSpeakerIdentityLink]
+    let identityTokens: Set<MeetingBackendSpeakerToken>
+    let currentProfileCount: Int
+    let rejectedCurrentProfileCount: Int
+    let selfInconsistentCurrentProfileCount: Int
+    let capacityExcludedCurrentProfileCount: Int
+    let matchingDiagnostics: String
+
+    /// Safe aggregate support data. No speaker identifiers, embeddings, distances or text.
+    var diagnosticFields: String {
+        "profiles=\(self.currentProfileCount) rejectedProfiles=\(self.rejectedCurrentProfileCount)"
+            + " selfInconsistentProfiles=\(self.selfInconsistentCurrentProfileCount)"
+            + " retainedProfiles=\(self.retainedProfiles.count) linkedProfiles=\(self.links.count)"
+            + " newIdentities=\(self.identityTokens.subtracting(self.links.map(\.token)).count)"
+            + " capacityExcludedProfiles=\(self.capacityExcludedCurrentProfileCount)"
+            + " \(self.matchingDiagnostics)"
+    }
+}
+
 nonisolated enum MeetingSpeakerVoiceMatcher {
     static let maximumDistance: Float = 0.25
     static let ambiguityMargin: Float = 0.10
@@ -168,26 +191,85 @@ nonisolated enum MeetingSpeakerVoiceMatcher {
         return worst
     }
 
+    private static func admittedProfiles(
+        _ profiles: [MeetingSpeakerVoiceProfile], allowedTokens: Set<MeetingBackendSpeakerToken>
+    ) -> [MeetingSpeakerVoiceProfile] {
+        let counts = Dictionary(grouping: profiles, by: \.token)
+        return profiles.filter {
+            allowedTokens.contains($0.token) && counts[$0.token]?.count == 1
+                && (self.distance($0, $0).map { $0 <= self.maximumDistance } ?? false)
+        }
+    }
+
+    /// Shares the matcher's exact validity and distance rules with product identity admission.
+    /// Matching may use a current observation beyond the reference budget if it links to an
+    /// already retained identity, but an unretained new identity always stays unassigned.
+    static func pcmAdmission(
+        priorProfiles: [MeetingSpeakerVoiceProfile], currentProfiles: [MeetingSpeakerVoiceProfile],
+        epoch: MeetingAnalysisEpochID
+    ) -> MeetingPCMSpeakerAdmission {
+        let allProfiles = priorProfiles + currentProfiles
+        let allowedTokens = Set(allProfiles.map(\.token))
+        let valid = self.admittedProfiles(allProfiles, allowedTokens: allowedTokens)
+        let matching = self.match(validProfiles: valid, measuredEpoch: epoch)
+        let links = matching.links
+            .filter { $0.token.analysisEpochID == epoch }
+        let retained = Array(valid.prefix(MeetingSpeakerVoiceSamples.maximumProfiles))
+        let identityTokens = Set(retained.filter { $0.token.analysisEpochID == epoch }.map(\.token))
+            .union(links.map(\.token))
+        let validCurrent = valid.filter { $0.token.analysisEpochID == epoch }
+        return MeetingPCMSpeakerAdmission(
+            retainedProfiles: retained, links: links, identityTokens: identityTokens,
+            currentProfileCount: currentProfiles.count,
+            rejectedCurrentProfileCount: currentProfiles.count - validCurrent.count,
+            selfInconsistentCurrentProfileCount: currentProfiles.filter {
+                self.distance($0, $0).map { $0 > self.maximumDistance } ?? false
+            }.count,
+            capacityExcludedCurrentProfileCount: validCurrent.filter { !identityTokens.contains($0.token) }.count,
+            matchingDiagnostics: matching.diagnosticFields
+        )
+    }
+
+    private nonisolated struct MatchingResult {
+        var links: [MeetingSpeakerIdentityLink] = []
+        var eligibleReferenceComparisons = 0
+        var thresholdFailedCandidates = 0
+        var ambiguityRejectedObservations = 0
+        var sameEpochCollisions = 0
+        var nearestDistanceBins = [Int](repeating: 0, count: 4)
+
+        var diagnosticFields: String {
+            "referenceComparisons=\(self.eligibleReferenceComparisons) thresholdFailedCandidates=\(self.thresholdFailedCandidates)"
+                + " ambiguityRejectedObservations=\(self.ambiguityRejectedObservations) sameEpochCollisions=\(self.sameEpochCollisions)"
+                + " nearestDistanceBins=\(self.nearestDistanceBins.map(String.init).joined(separator: ","))"
+        }
+    }
+
     /// Complete-link comparison prevents gradual drift from joining different people. Distinct
     /// slots in the same epoch can never merge, including when both propose the same identity.
     static func links(
         profiles: [MeetingSpeakerVoiceProfile],
         allowedTokens: Set<MeetingBackendSpeakerToken>
     ) -> [MeetingSpeakerIdentityLink] {
-        let counts = Dictionary(grouping: profiles, by: \.token)
-        let valid = profiles.filter {
-            allowedTokens.contains($0.token) && counts[$0.token]?.count == 1
-                && (self.distance($0, $0).map { $0 <= self.maximumDistance } ?? false)
-        }
+        let valid = self.admittedProfiles(profiles, allowedTokens: allowedTokens)
+        return self.match(validProfiles: valid).links
+    }
+
+    /// The optional measured epoch limits diagnostics to the current PCM observation. Bins
+    /// are aggregate candidate distances <=0.10, <=0.25, <=0.50, >0.50, not voice signatures.
+    private static func match(
+        validProfiles valid: [MeetingSpeakerVoiceProfile], measuredEpoch: MeetingAnalysisEpochID? = nil
+    ) -> MatchingResult {
         let epochs = Dictionary(grouping: valid, by: { $0.token.analysisEpochID })
         var clusters: [[MeetingSpeakerVoiceProfile]] = []
-        var links: [MeetingSpeakerIdentityLink] = []
+        var result = MatchingResult()
         for epoch in epochs.keys.sorted(by: {
             ($0.trackID.uuidString, $0.ordinal, $0.generation) < ($1.trackID.uuidString, $1.ordinal, $1.generation)
         }) {
             let observations = (epochs[epoch] ?? []).sorted { $0.token.label < $1.token.label }
             var proposals: [MeetingBackendSpeakerToken: Int] = [:]
             for observation in observations {
+                let measuresObservation = epoch == measuredEpoch
                 let candidates = clusters.indices.compactMap { index -> (Int, Float)? in
                     let cluster = clusters[index]
                     guard let root = cluster.first, root.token.analysisEpochID.trackID == epoch.trackID,
@@ -195,11 +277,22 @@ nonisolated enum MeetingSpeakerVoiceMatcher {
                     else { return nil }
                     let distances = cluster.compactMap { self.distance(observation, $0) }
                     guard distances.count == cluster.count, let worst = distances.max() else { return nil }
+                    if measuresObservation {
+                        result.eligibleReferenceComparisons += distances.count
+                        if worst > self.maximumDistance { result.thresholdFailedCandidates += 1 }
+                    }
                     return (index, worst)
                 }.sorted { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 < $1.1 }
-                guard let best = candidates.first, best.1 <= self.maximumDistance,
-                      candidates.count == 1 || candidates[1].1 - best.1 >= self.ambiguityMargin
-                else { continue }
+                guard let best = candidates.first else { continue }
+                if measuresObservation {
+                    let bin = best.1 <= 0.10 ? 0 : (best.1 <= 0.25 ? 1 : (best.1 <= 0.50 ? 2 : 3))
+                    result.nearestDistanceBins[bin] += 1
+                }
+                guard best.1 <= self.maximumDistance else { continue }
+                guard candidates.count == 1 || candidates[1].1 - best.1 >= self.ambiguityMargin else {
+                    if measuresObservation { result.ambiguityRejectedObservations += 1 }
+                    continue
+                }
                 proposals[observation.token] = best.0
             }
             let collisions = Dictionary(grouping: proposals.values, by: { $0 })
@@ -207,13 +300,17 @@ nonisolated enum MeetingSpeakerVoiceMatcher {
                 if let index = proposals[observation.token], collisions[index]?.count == 1,
                    let root = clusters[index].first
                 {
-                    links.append(.init(token: observation.token, canonicalToken: root.token))
+                    result.links.append(.init(token: observation.token, canonicalToken: root.token))
                     clusters[index].append(observation)
                 } else {
+                    if epoch == measuredEpoch, let index = proposals[observation.token],
+                       (collisions[index]?.count ?? 0) > 1 {
+                        result.sameEpochCollisions += 1
+                    }
                     clusters.append([observation])
                 }
             }
         }
-        return links
+        return result
     }
 }

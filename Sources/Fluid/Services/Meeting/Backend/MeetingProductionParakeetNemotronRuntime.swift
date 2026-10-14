@@ -401,6 +401,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let duration = Double(samples.count) / 16_000
         var activity: [MeetingBackendSpeakerActivity] = []
         var currentProfiles: [MeetingSpeakerVoiceProfile] = []
+        var voiceExcerptCount = 0
+        var voiceEncodingFailed = false
         if configuration.speakerLabelsEnabled {
             guard !PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(configuration.diarizationFingerprint) else {
                 throw MeetingNemotronModelReadinessError.modelNotInstalled(path: MeetingNemotronModelLocator.defaultPackageURL().path)
@@ -422,30 +424,42 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 )
             }
             activity = phase.activity
+            voiceExcerptCount = phase.voiceSamples.count
             // Voice identity is optional evidence. Offline missing embeddings preserve the
             // transcript and explicit uncertainty, rather than merging slots by index.
             do { currentProfiles = try await self.speakerVoiceProfiles(samples: phase.voiceSamples) }
             catch {
                 try Task.checkCancellation()
                 currentProfiles = []
+                voiceEncodingFailed = true
             }
         }
         try Task.checkCancellation()
-        let allProfiles = priorProfiles + currentProfiles
-        let allowedTokens = Set(allProfiles.map(\.token))
-        let links = MeetingSpeakerVoiceMatcher.links(profiles: allProfiles, allowedTokens: allowedTokens)
-            .filter { $0.token.analysisEpochID == epoch }
-        let retained = Array(allProfiles.prefix(MeetingSpeakerVoiceSamples.maximumProfiles))
-        let identityTokens = Set(retained.filter { $0.token.analysisEpochID == epoch }.map(\.token))
-            .union(links.map(\.token))
+        let admission = MeetingSpeakerVoiceMatcher.pcmAdmission(
+            priorProfiles: priorProfiles, currentProfiles: currentProfiles, epoch: epoch
+        )
         let units = MeetingParakeetNemotronBackend.pcmUnits(result: ASRTranscriptionResult(text: output.text),
                                                            words: output.words, epoch: epoch, duration: duration,
-                                                           activity: activity, identityTokens: identityTokens)
+                                                           activity: activity, identityTokens: admission.identityTokens)
         let batch = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat).assemblePCMWindow(attemptID: attemptID, epoch: epoch,
                                                                       offset: offset, duration: duration, units: units,
-                                                                      identityLinks: links, priorSpeakers: priorSpeakers)
+                                                                      identityLinks: admission.links, priorSpeakers: priorSpeakers)
         try Task.checkCancellation()
-        self.pcmIdentityState.commit(profiles: retained, speakers: batch.speakers)
+        if configuration.speakerLabelsEnabled {
+            let assigned = batch.segments.filter { $0.attributionState == .assigned }.count
+            let ambiguous = batch.segments.filter { $0.attributionState == .overlappingSpeakers }.count
+            let activityCount = activity.count
+            let excerptCount = voiceExcerptCount
+            let encodingFailed = voiceEncodingFailed
+            let admissionDiagnostics = admission.diagnosticFields
+            let unassigned = batch.segments.count - assigned - ambiguous
+            DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
+                "[meeting/pcm] phase=speaker.admission activitySegments=\(activityCount) cleanVoiceExcerpts=\(excerptCount)"
+                    + " voiceEncodingFailed=\(encodingFailed) \(admissionDiagnostics)"
+                    + " assignedUnits=\(assigned) ambiguousUnits=\(ambiguous) unassignedUnits=\(unassigned)"
+            }
+        }
+        self.pcmIdentityState.commit(profiles: admission.retainedProfiles, speakers: batch.speakers)
         return batch
     }
 
