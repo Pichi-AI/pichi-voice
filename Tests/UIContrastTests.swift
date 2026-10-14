@@ -77,14 +77,15 @@ struct UIContrastTests {
     static func verifyProminentAppearance(theme: AppTheme, scheme: ColorScheme, suffix: String,
                                          directory: URL) throws -> Int {
         guard #available(macOS 26, *) else { return 0 }
-        let appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)!
+        let nativeScheme = theme.palette.nativeColorScheme(fallback: scheme)
+        let appearance = NSAppearance(named: nativeScheme == .dark ? .darkAqua : .aqua)!
         var failure: Error?
         var checks = 0
         appearance.performAsCurrentDrawingAppearance {
             do {
                 for active in [true, false] {
                     for (toneName, tone): (String, Color?) in [("accent", nil), ("red", .red)] {
-                        let fill = active ? (tone ?? theme.palette.accent) : (scheme == .dark ? Color.black : Color.white)
+                        let fill = active ? (tone ?? theme.palette.accent) : (nativeScheme == .dark ? Color.black : Color.white)
                         // System label ink is translucent. Compare its actual composite
                         // on the neutral reference fill, not opaque brand text tokens.
                         let nativeInk = NSColor.labelColor.usingColorSpace(.sRGB)!
@@ -187,6 +188,10 @@ struct UIContrastTests {
         let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         if CommandLine.arguments.contains("--segmented-only") {
             try await FluidSegmentedPickerTests.run(directory: directory)
+            return
+        }
+        if CommandLine.arguments.contains("--native-appearance-only") {
+            try await NativePaletteAppearanceTests.run(directory: directory)
             return
         }
         let packages = [
@@ -418,6 +423,7 @@ struct UIContrastTests {
         print("Production prominent active/inactive foreground: \(prominentAppearanceChecks) reference-fill rendering checks passed")
         self.verifyConstruction()
         try await FluidSegmentedPickerTests.run(directory: directory)
+        try await NativePaletteAppearanceTests.run(directory: directory)
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }

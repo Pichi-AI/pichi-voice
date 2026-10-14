@@ -346,18 +346,47 @@ final class MeetingRecoveryTests: XCTestCase {
         let ambient = MeetingBackendID(rawValue: "ambient-future-backend")
         settings.meetingTranscriptionBackendID = ambient
         let dir = self.makeTempDirectory()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = MeetingSessionStore(rootDirectory: dir)
+        let loadEntered = (1...4).map { self.expectation(description: "Retention loadAll \($0) entered") }
+        let store = GatedLoadAllStore(inner: MeetingSessionStore(rootDirectory: dir)) { index in
+            guard loadEntered.indices.contains(index - 1) else { return XCTFail("Unexpected retention loadAll \(index)") }
+            loadEntered[index - 1].fulfill()
+        }
         let capture = StubCaptureController()
         let track = self.makeMicrophoneTrack(chunks: [])
         capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
         capture.stopResult = .init(tracks: [track], stoppedAt: Date())
         let processing = MemoryCheckpointProcessingController()
+        let arbiter = StubArbiter()
         var preparations = 0
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
-            audioArbiter: StubArbiter(), settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { configuration in
+            audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { configuration in
                 if configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID { throw MeetingProcessingError.modelUnavailable }
             })
+        self.addTeardownBlock { @MainActor in
+            await store.openAllGates()
+            await coordinator.shutdownForTermination()
+            try? FileManager.default.removeItem(at: dir)
+        }
+        // A future change that incorrectly joins held maintenance inside Stop must fail
+        // a bounded expectation, then release its controlled store wait before cleanup.
+        func stopWithDeadline() async throws -> MeetingSession {
+            let returned = self.expectation(description: "Stop returns with joined audio handback")
+            var outcome: Result<MeetingSession, Error>?
+            let stop = Task { @MainActor in
+                do { outcome = .success(try await coordinator.stopAndTranscribe()) }
+                catch { outcome = .failure(error) }
+                returned.fulfill()
+            }
+            await self.fulfillment(of: [returned], timeout: 2)
+            guard let outcome else {
+                await store.openAllGates()
+                stop.cancel()
+                await stop.value
+                throw GateTimeoutError()
+            }
+            await stop.value
+            return try outcome.get()
+        }
         var configuration = self.makeConfiguration()
         configuration.mode = .inRoom
         configuration.languageCode = "ru"
@@ -377,12 +406,49 @@ final class MeetingRecoveryTests: XCTestCase {
         // A subsequent ordinary request still uses the selected model and its normal owner.
         configuration.transcriptionBackendID = nil
         configuration.languageCode = "auto"
-        let normal = try await coordinator.startRecording(configuration: configuration)
-        XCTAssertEqual(normal.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
-        XCTAssertEqual(preparations, 1)
-        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
-        _ = try await coordinator.stopAndTranscribe()
-        XCTAssertTrue(coordinator.isQuiescent)
+        for attempt in 1...2 {
+            let normal = try await coordinator.startRecording(configuration: configuration)
+            XCTAssertEqual(normal.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
+            XCTAssertEqual(capture.startCount, attempt)
+            XCTAssertEqual(preparations, attempt)
+            let startSweep = (attempt - 1) * 2 + 1
+            let stopSweep = startSweep + 1
+            // Successful Start also schedules retention. Hold it explicitly so the Stop
+            // sweep cannot hide behind a transient quiescent gap between queued tasks.
+            await self.fulfillment(of: [loadEntered[startSweep - 1]], timeout: 2)
+            capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+            let completed = try await stopWithDeadline()
+            XCTAssertEqual(completed.state, .completed)
+            XCTAssertEqual(coordinator.state, .completed(normal.id))
+            XCTAssertEqual(capture.stopCount, attempt)
+            XCTAssertEqual(arbiter.acquireCount, attempt)
+            XCTAssertEqual(arbiter.releaseCount, attempt, "Stop joins each audio handback exactly once")
+            XCTAssertFalse(coordinator.isRecording)
+            XCTAssertFalse(coordinator.isProcessing)
+            XCTAssertFalse(coordinator.isQuiescent, "Held maintenance must keep the mutation gate closed")
+            await store.openGate(startSweep)
+            await self.fulfillment(of: [loadEntered[stopSweep - 1]], timeout: 2)
+            XCTAssertFalse(coordinator.isQuiescent, "Post-processing maintenance is still held")
+            let quiescent = self.expectation(description: "Maintenance releases the real quiescence gate")
+            var observing = true
+            let subscription = coordinator.objectWillChange.sink { _ in
+                // ObservableObject sends in willSet. Inspect on the next MainActor job,
+                // after the setter commits the gate's new value.
+                Task { @MainActor in
+                    guard observing, coordinator.isQuiescent else { return }
+                    observing = false
+                    quiescent.fulfill()
+                }
+            }
+            await store.openGate(stopSweep)
+            await self.fulfillment(of: [quiescent], timeout: 2)
+            observing = false
+            subscription.cancel()
+            XCTAssertTrue(coordinator.isQuiescent)
+            XCTAssertEqual(arbiter.releaseCount, attempt)
+        }
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
     }
 
     func testOwnedBackendChangeDuringPromptCancelsThatOwnersAdmission() async throws {
@@ -5557,6 +5623,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var onPreflight: (@Sendable () async -> Void)?
     private(set) var preflightCount = 0
     private(set) var startCount = 0
+    private(set) var stopCount = 0
     private var eventHandler: (@Sendable (MeetingCaptureEvent) -> Void)?
 
     func emit(_ event: MeetingCaptureEvent) { self.eventHandler?(event) }
@@ -5585,6 +5652,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
+        self.stopCount += 1
         try await self.onStop?()
         if let stopError { throw stopError }
         return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
@@ -5944,6 +6012,54 @@ private actor GatedRecoverableStore: MeetingSessionStoring {
         }
         return try await self.inner.loadRecoverable()
     }
+}
+
+/// Holds each real retention `loadAll` until the test releases that exact invocation.
+/// Other storage operations remain real, so capture and audio handback can finish while held.
+private actor GatedLoadAllStore: MeetingSessionStoring {
+    private let inner: MeetingSessionStore
+    private let entered: @Sendable (Int) -> Void
+    private var nextIndex = 0
+    private var openIndices = Set<Int>()
+    private var allOpen = false
+    private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    init(inner: MeetingSessionStore, entered: @escaping @Sendable (Int) -> Void) {
+        self.inner = inner; self.entered = entered
+    }
+
+    func openGate(_ index: Int) {
+        self.openIndices.insert(index)
+        self.continuations.removeValue(forKey: index)?.resume()
+    }
+
+    func openAllGates() {
+        self.allOpen = true
+        let pending = Array(self.continuations.values)
+        self.continuations.removeAll()
+        for continuation in pending { continuation.resume() }
+    }
+
+    func loadAll() async throws -> [MeetingSession] {
+        self.nextIndex += 1
+        let index = self.nextIndex
+        if !self.allOpen, !self.openIndices.contains(index) {
+            await withCheckedContinuation { continuation in
+                self.continuations[index] = continuation
+                self.entered(index)
+            }
+        }
+        return try await self.inner.loadAll()
+    }
+
+    func create(_ session: MeetingSession) async throws { try await self.inner.create(session) }
+    func save(_ session: MeetingSession) async throws { try await self.inner.save(session) }
+    func load(id: MeetingSessionID) async throws -> MeetingSession? { try await self.inner.load(id: id) }
+    func loadRecoverable() async throws -> [MeetingSession] { try await self.inner.loadRecoverable() }
+    func sessionDirectory(for id: MeetingSessionID) async throws -> URL { try await self.inner.sessionDirectory(for: id) }
+    func existingSessionDirectory(for id: MeetingSessionID) async throws -> URL? { try await self.inner.existingSessionDirectory(for: id) }
+    func delete(id: MeetingSessionID) async throws { try await self.inner.delete(id: id) }
+    func deleteAudioFiles(for id: MeetingSessionID) async throws { try await self.inner.deleteAudioFiles(for: id) }
 }
 
 /// Wraps a real `MeetingSessionStore`; `save(_:)` records a "store.save.start" event, then either

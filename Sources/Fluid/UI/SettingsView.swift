@@ -2894,15 +2894,13 @@ struct FillerWordsEditor: View {
             HStack(spacing: 8) {
                 TextField("Add word", text: self.$newWord)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 100)
+                    .frame(minWidth: 100, maxWidth: .infinity)
                     .onSubmit { self.addWord() }
 
                 Button("Add") { self.addWord() }
                     .fluidOutlinedButton()
                     .controlSize(.small)
                     .disabled(self.newWord.trimmingCharacters(in: .whitespaces).isEmpty)
-
-                Spacer()
 
                 Button("Reset") {
                     self.fillerWords = SettingsStore.defaultFillerWords
