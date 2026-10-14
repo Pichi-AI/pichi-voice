@@ -1,4 +1,7 @@
 import Foundation
+#if os(iOS)
+import Darwin
+#endif
 
 // Stage A of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md`: the contract that sits *beneath*
 // the existing pipeline. `MeetingProcessingControlling` and `TranscriptionProvider` are unchanged;
@@ -60,6 +63,58 @@ nonisolated enum MeetingBackendInputKind: String, Hashable, Sendable {
     case boundedMicrophonePCM
 }
 
+/// Capture privacy and deployment reach are separate from the ASR configuration identity.
+/// `nil` physical identity covers desktop, Simulator and unresolved hardware; it does not
+/// authorize extrapolating a measured failure to an entire chip or device generation.
+nonisolated struct MeetingPCMAdmissionContext: Equatable, Sendable {
+    let physicalDeviceModel: String?
+    let operatingSystemVersion: String
+    let piiRedactionEnabled: Bool
+
+    static func current(piiRedactionEnabled: Bool) -> Self {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        var physicalDeviceModel: String?
+        #if os(iOS) && !targetEnvironment(simulator)
+        var system = utsname()
+        if uname(&system) == 0 {
+            physicalDeviceModel = withUnsafeBytes(of: system.machine) { bytes in
+                String(decoding: bytes.prefix(while: { $0 != 0 }), as: UTF8.self)
+            }
+        }
+        #endif
+        return Self(physicalDeviceModel: physicalDeviceModel,
+                    operatingSystemVersion: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
+                    piiRedactionEnabled: piiRedactionEnabled)
+    }
+}
+
+/// One measured unsupported strict-input combination, owned by the registered backend.
+/// Artifact identity prevents a CPU failure for one export from banning other exports.
+nonisolated struct MeetingPCMAdmissionRestriction: Equatable, Sendable {
+    let physicalDeviceModel: String
+    let operatingSystemVersion: String
+    let asrArtifactFingerprint: String
+    let speakerLabelsEnabled: Bool
+    let piiRedactionEnabled: Bool
+    let modelDisplayName: String
+    let alternativeModelDisplayName: String
+
+    func matches(configuration: MeetingFinalProcessingConfiguration, context: MeetingPCMAdmissionContext) -> Bool {
+        context.physicalDeviceModel == self.physicalDeviceModel
+            && context.operatingSystemVersion == self.operatingSystemVersion
+            && configuration.asrArtifactFingerprint == self.asrArtifactFingerprint
+            && configuration.speakerLabelsEnabled == self.speakerLabelsEnabled
+            && context.piiRedactionEnabled == self.piiRedactionEnabled
+    }
+
+    var localizedDescription: String {
+        PichiLocalization.format(
+            "%@ with speaker identification and sensitive data redaction can be stopped by the system in the background on this iPad. For recording without saving audio, select %@ in Voice Engine settings.",
+            self.modelDisplayName, self.alternativeModelDisplayName
+        )
+    }
+}
+
 nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     let id: MeetingBackendID
     let version: String
@@ -74,6 +129,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// typed failure, never a silent reinterpretation.
     let resultContract: MeetingBackendResultContract
     let supportedInputs: Set<MeetingBackendInputKind>
+    let pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction]
     /// Human-readable, non-exhaustive statements of what this backend cannot guarantee.
     let knownLimits: [String]
     /// The backend's real analysis/resample rate, when it has one. The pipeline records it on the
@@ -94,7 +150,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         analysisSampleRate: Double? = nil,
         diarizationDependencies: Set<MeetingDiarizationDependency> = [],
         allowsTranscriptOnlyOnUnsupportedHardware: Bool = false,
-        supportedInputs: Set<MeetingBackendInputKind> = [.recordedChunks]
+        supportedInputs: Set<MeetingBackendInputKind> = [.recordedChunks],
+        pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction] = []
     ) {
         self.id = id
         self.version = version
@@ -104,6 +161,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.supportedFinalPrecisions = supportedFinalPrecisions
         self.resultContract = resultContract
         self.supportedInputs = supportedInputs
+        self.pcmAdmissionRestrictions = pcmAdmissionRestrictions
         self.knownLimits = knownLimits
         self.analysisSampleRate = analysisSampleRate
         self.diarizationDependencies = diarizationDependencies
@@ -131,7 +189,15 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         }
     }
 
-    func validatePCMInput(_ request: MeetingBackendRequest) throws {
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode,
+                          admissionContext: MeetingPCMAdmissionContext) throws {
+        try self.validatePCMInput(configuration: configuration, mode: mode)
+        if let restriction = self.pcmAdmissionRestrictions.first(where: { $0.matches(configuration: configuration, context: admissionContext) }) {
+            throw MeetingBackendError.unsupportedPCMConfiguration(backend: self.id, restriction: restriction)
+        }
+    }
+
+    func validatePCMInput(_ request: MeetingBackendRequest, admissionContext: MeetingPCMAdmissionContext? = nil) throws {
         try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode)
         guard request.configuration.languageCode == request.session.languageCode else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: request.session.languageCode)
@@ -141,6 +207,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
               request.session.audioTracks.allSatisfy({ $0.kind == .microphone && $0.chunks.isEmpty }) else {
             throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
         }
+        try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode,
+            admissionContext: admissionContext ?? .current(piiRedactionEnabled: request.session.piiRedactionEnabled == true))
     }
 }
 
@@ -313,6 +381,10 @@ protocol MeetingTranscriptionBackend: AnyObject {
     /// validate their immutable provider options; the default rejects file-only backends.
     func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws
 
+    /// Additive context admission retains existing backend-specific validation overrides.
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode,
+                          admissionContext: MeetingPCMAdmissionContext) throws
+
     /// The selected backend owns strict PCM dispatch through the same registered runtime. The
     /// host capability is bound to this exact request, as it is for the file executor.
     func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning
@@ -334,6 +406,12 @@ extension MeetingTranscriptionBackend {
         throw MeetingBackendError.unsupportedInput(backend: self.descriptor.id, input: .boundedMicrophonePCM)
     }
 
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode,
+                          admissionContext: MeetingPCMAdmissionContext) throws {
+        try self.descriptor.validatePCMInput(configuration: configuration, mode: mode, admissionContext: admissionContext)
+        try self.validatePCMInput(configuration: configuration, mode: mode)
+    }
+
     func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning {
         throw MeetingBackendError.unsupportedInput(backend: self.descriptor.id, input: .boundedMicrophonePCM)
     }
@@ -343,6 +421,7 @@ nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {
     case unknownBackend(MeetingBackendID)
     case backendDescriptorMismatch(backend: MeetingBackendID)
     case unsupportedInput(backend: MeetingBackendID, input: MeetingBackendInputKind)
+    case unsupportedPCMConfiguration(backend: MeetingBackendID, restriction: MeetingPCMAdmissionRestriction)
     /// A registered factory produced a backend whose descriptor claims a different identity than the
     /// one that was requested. Selection would otherwise be a lie: the caller asked for one backend
     /// and a different one would run, carrying its own limits and precisions.
@@ -373,6 +452,8 @@ nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {
             return PichiLocalization.format("Meeting backend \"%@\" produced capabilities different from its registration.", backend.rawValue)
         case let .unsupportedInput(backend, input):
             return PichiLocalization.format("Meeting backend \"%@\" does not support %@ input.", backend.rawValue, input.rawValue)
+        case let .unsupportedPCMConfiguration(_, restriction):
+            return restriction.localizedDescription
         case let .backendIdentityMismatch(requested, produced):
             return "Meeting backend \"\(requested.rawValue)\" resolved to a backend identifying "
                 + "itself as \"\(produced.rawValue)\"."

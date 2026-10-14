@@ -616,6 +616,23 @@
         }
       }
     },
+    "%@ with speaker identification and sensitive data redaction can be stopped by the system in the background on this iPad. For recording without saving audio, select %@ in Voice Engine settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ with speaker identification and sensitive data redaction can be stopped by the system in the background on this iPad. For recording without saving audio, select %@ in Voice Engine settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сочетание %@ с определением участников и удалением чувствительных данных может быть остановлено системой в фоне на этом iPad. Для записи без сохранения аудио выберите %@ в настройках распознавания речи."
+          }
+        }
+      }
+    },
     "%@ words": {
       "extractionState": "manual",
       "localizations": {
@@ -26606,6 +26623,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ранее"
+          }
+        }
+      }
+    },
+    "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На iPad Pro 12,9 дюйма (2-го поколения) с iPadOS 17.7.10 публичная INT8-версия недоступна для записи без сохранения аудио, если одновременно включены определение участников и удаление чувствительных данных. Для этого сочетания используйте Whisper Tiny."
           }
         }
       }
