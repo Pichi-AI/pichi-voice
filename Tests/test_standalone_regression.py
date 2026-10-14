@@ -53,8 +53,8 @@ class StandaloneRunnerTests(unittest.TestCase):
 
     def test_current_registry_covers_every_standalone_and_only_update_prompt_opts_in(self):
         RUNNER.validate_registry(ROOT)
-        self.assertEqual(len(RUNNER.PROBES), 55)
-        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 44)
+        self.assertEqual(len(RUNNER.PROBES), 56)
+        self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 45)
         self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 7)
         self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 4)
         self.assertEqual([probe.name for probe in RUNNER.PROBES if probe.requires_ui], ["update_prompt"])
