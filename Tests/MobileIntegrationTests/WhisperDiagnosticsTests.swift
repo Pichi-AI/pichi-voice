@@ -116,13 +116,14 @@ private enum WhisperDiagnosticCases {
         // Approved synthetic benchmark traces, including quiet RU at 1% gain.
         // These are encoder-quality scalars, independent of absent token.p data.
         for chunk in [
-            quality(avgLogprob: -0.4, noSpeechProbability: 0.1),
-            quality(avgLogprob: -0.6, noSpeechProbability: 0.057),
-            quality(avgLogprob: -0.849, noSpeechProbability: 0.702),
-            quality(avgLogprob: -1, compressionRatio: 2.4, noSpeechProbability: 0.899),
+            quality(avgLogprob: -0.18514045, compressionRatio: 0.8135593, noSpeechProbability: 0.002179833),
+            quality(avgLogprob: -0.17152354, compressionRatio: 0.74418604, noSpeechProbability: 0.0036504273),
+            quality(avgLogprob: -0.29947317, compressionRatio: 0.82539684, noSpeechProbability: 0.009763503),
         ] {
             try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [chunk]) == .accepted, "Valid speech quality must remain accepted")
         }
+        let boundary = quality(avgLogprob: -1, compressionRatio: 2.4, noSpeechProbability: 0.899)
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [boundary]) == .accepted, "Inclusive quality boundaries must remain accepted")
         try require(WhisperShortInputPolicy.evaluate(hasText: false, chunks: []) == .empty, "An empty successful decode is not a capture failure")
     }
 
