@@ -180,6 +180,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift \
     Sources/Fluid/Branding/BrandDistribution.swift \
+    Sources/Fluid/Branding/BrandAppearanceController.swift \
     Sources/Fluid/Theme/FluidTypography.swift \
     Sources/Fluid/Theme/AppTheme.swift \
     Sources/Fluid/Theme/ThemeEnvironment.swift \

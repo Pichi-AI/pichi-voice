@@ -12,6 +12,12 @@ final class SettingsStore: ObservableObject {
     let accentColor = Color.purple
 }
 
+// The appearance observer is real; this icon dependency never touches an app
+// bundle, installed brand state or application icon in nonactivating tests.
+@MainActor enum PichiBrandMark {
+    static var appIcon: NSImage { NSImage(size: NSSize(width: 16, height: 16)) }
+}
+
 @main
 struct UIContrastTests {
     // A renderer's inherited ink is applied around its configuration label, as
