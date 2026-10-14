@@ -785,7 +785,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         }
     }
 
-    func testExplicitSavedBackendPrecedesRegisteredModelWithoutChangingPreferences() {
+    func testRegisteredModelRouteKeepsAmbientSavedFallbackWithoutChangingPreferences() {
         let settings = SettingsStore.shared
         let defaults = UserDefaults.standard
         let speechModelKey = "SelectedSpeechModel"
@@ -806,15 +806,15 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             (.productionDefault, .productionDefault, .productionDefault),
             (unknown, unknown, unknown),
         ]
-        let models: [(model: SettingsStore.SpeechModel, defaultBackend: MeetingBackendID)] = [
-            (.gigaam, .gigaam), (.whisperTiny, .whisperTiny), (.whisperSmall, .productionDefault),
+        let models: [(model: SettingsStore.SpeechModel, registeredBackend: MeetingBackendID?)] = [
+            (.gigaam, .gigaam), (.whisperTiny, .whisperTiny), (.whisperSmall, nil),
         ]
         for (saved, english, nonEnglish) in selections {
             settings.meetingTranscriptionBackendID = saved
             for (languageCode, fallback) in [("en", english), ("fr", nonEnglish), ("ru", nonEnglish)] {
-                for (model, defaultBackend) in models {
+                for (model, registeredBackend) in models {
                     settings.selectedSpeechModel = model
-                    let expected = saved == .productionDefault ? defaultBackend : fallback
+                    let expected = registeredBackend ?? fallback
                     XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode), expected)
                     XCTAssertEqual(
                         PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode, selectedModelID: model.rawValue),

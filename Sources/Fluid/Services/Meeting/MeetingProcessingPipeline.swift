@@ -5,6 +5,7 @@ import Foundation
 
 @MainActor
 protocol MeetingProcessingControlling: AnyObject {
+    func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor?
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws
     func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
@@ -19,6 +20,10 @@ protocol MeetingProcessingControlling: AnyObject {
 }
 
 extension MeetingProcessingControlling {
+    func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
+        configuration.audioStorageMode == .memoryOnly
+            ? try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID) : nil
+    }
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
         throw MeetingBackendError.unsupportedInput(backend: backendID, input: .boundedMicrophonePCM)
     }
@@ -1432,6 +1437,23 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                     savedBackendID: settings.meetingTranscriptionBackendID)
             }
         }
+    }
+
+    /// Admit both retained and strict input through the existing registry before preparation.
+    /// Optional metadata on injected factories keeps their established runtime validation.
+    func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
+        if configuration.audioStorageMode == .memoryOnly {
+            return try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID)
+        }
+        guard self.backendRegistry.contains(backendID) else { throw MeetingBackendError.unknownBackend(backendID) }
+        guard let descriptor = self.backendRegistry.descriptor(for: backendID) else { return nil }
+        guard descriptor.supportedLanguageCodes.contains(configuration.languageCode) else {
+            throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: configuration.languageCode)
+        }
+        guard descriptor.supportedInputs.contains(.recordedChunks) else {
+            throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
+        }
+        return descriptor
     }
 
     func prepareSpeakerDependencies(for descriptor: MeetingBackendDescriptor, session: MeetingSession) async throws {

@@ -311,6 +311,9 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var audioStorageMode: MeetingAudioStorageMode? = nil
     var speakerLabelsEnabled: Bool? = nil
     var piiRedactionEnabled: Bool? = nil
+    /// An explicit request override, separate from ambient saved-backend preferences.
+    /// Nil keeps the selected speech model's registered route.
+    var transcriptionBackendID: String? = nil
 
     init(
         mode: MeetingCaptureMode,
@@ -324,7 +327,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         timestampDefaultTitle: Bool = false,
         audioStorageMode: MeetingAudioStorageMode = .retainedFiles,
         speakerLabelsEnabled: Bool = true,
-        piiRedactionEnabled: Bool = false
+        piiRedactionEnabled: Bool = false,
+        transcriptionBackendID: String? = nil
     ) {
         self.mode = mode
         self.title = title
@@ -338,6 +342,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.audioStorageMode = audioStorageMode
         self.speakerLabelsEnabled = speakerLabelsEnabled
         self.piiRedactionEnabled = piiRedactionEnabled
+        self.transcriptionBackendID = transcriptionBackendID
     }
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {

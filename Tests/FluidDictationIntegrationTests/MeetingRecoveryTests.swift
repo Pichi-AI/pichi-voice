@@ -114,7 +114,8 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.mode = .inRoom
         configuration.languageCode = "en"
         for backendID in [MeetingBackendID.legacyCompatibility, .init(rawValue: "synthetic-unknown")] {
-            settings.meetingTranscriptionBackendID = backendID
+            settings.meetingTranscriptionBackendID = .productionDefault
+            configuration.transcriptionBackendID = backendID.rawValue
             do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unsupported strict selection must fail before admission") }
             catch {
                 let expected: MeetingBackendError = backendID == .legacyCompatibility
@@ -132,7 +133,56 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(coordinator.isQuiescent)
     }
 
-    func testStrictBackendChangedDuringPromptIsRevalidatedBeforeSessionAllocation() async throws {
+    func testExplicitRetainedBackendRefusedBeforePreparationOrPermission() async throws {
+        let suite = "ExplicitRetainedBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        var preparations = 0
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Refused request cannot load ASR"); return ASRService() },
+            managesModelResidency: false, settings: settings)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+            audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 },
+            prepareRecordingDependencies: { _ in XCTFail("Refused request cannot prepare speaker models") })
+        let unknown = MeetingBackendID(rawValue: "explicit-unknown")
+        for (backend, language, expected) in [
+            (unknown, "en", MeetingBackendError.unknownBackend(unknown)),
+            (.legacyCompatibility, "ru", .unsupportedLanguage(backend: .legacyCompatibility, languageCode: "ru")),
+        ] {
+            var configuration = self.makeConfiguration()
+            configuration.mode = .inRoom
+            configuration.languageCode = language
+            configuration.transcriptionBackendID = backend.rawValue
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Explicit invalid request must be rejected") }
+            catch { XCTAssertEqual(error as? MeetingBackendError, expected) }
+        }
+        XCTAssertEqual(preparations, 0)
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testExplicitBackendRequestRoundTripsWithoutChangingLegacyDefault() throws {
+        var configuration = self.makeConfiguration()
+        let legacy = try JSONDecoder().decode(MeetingCaptureConfiguration.self,
+            from: JSONEncoder().encode(configuration))
+        XCTAssertNil(legacy.transcriptionBackendID)
+        configuration.transcriptionBackendID = "explicit-request"
+        let pinned = try JSONDecoder().decode(MeetingCaptureConfiguration.self,
+            from: JSONEncoder().encode(configuration))
+        XCTAssertEqual(pinned.transcriptionBackendID, "explicit-request")
+    }
+
+    func testBackendChangeDuringPromptCancelsFrozenAdmission() async throws {
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel
         let originalBackend = settings.meetingTranscriptionBackendID
@@ -156,12 +206,12 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.languageCode = "en"
         configuration.speakerLabelsEnabled = false
         do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Changed backend must be revalidated") }
-        catch { XCTAssertEqual(error as? MeetingBackendError, .unsupportedInput(backend: .legacyCompatibility, input: .boundedMicrophonePCM)) }
+        catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(modelChecks, 1)
         XCTAssertEqual(capture.preflightCount, 1)
         XCTAssertEqual(capture.startCount, 0)
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
         let sessions = try await store.loadAll()
         XCTAssertTrue(sessions.isEmpty)
         XCTAssertTrue(coordinator.isQuiescent)
@@ -214,7 +264,7 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(settings.meetingTranscriptionBackendID, .productionDefault)
     }
 
-    func testOwnedBackendChangedDuringPromptIsRevalidatedAgainstThatOwner() async throws {
+    func testOwnedBackendChangeDuringPromptCancelsThatOwnersAdmission() async throws {
         let shared = SettingsStore.shared
         let previousBackend = shared.meetingTranscriptionBackendID
         defer { shared.meetingTranscriptionBackendID = previousBackend }
@@ -241,11 +291,11 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.audioStorageMode = .memoryOnly
         configuration.speakerLabelsEnabled = false
         do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Owned backend change must be revalidated") }
-        catch { XCTAssertEqual(error as? MeetingBackendError, .unsupportedInput(backend: .legacyCompatibility, input: .boundedMicrophonePCM)) }
+        catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(capture.preflightCount, 1)
         XCTAssertEqual(capture.startCount, 0)
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
         let sessions = try await store.loadAll()
         XCTAssertTrue(sessions.isEmpty)
         XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)

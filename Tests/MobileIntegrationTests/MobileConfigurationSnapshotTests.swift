@@ -85,6 +85,32 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         try configuration.validate()
     }
 
+    func testSelectedSpeechModelDoesNotPromoteAmbientBackendToRequestOverride() async throws {
+        let suite = "MobileAmbientBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.meetingSaveAudio = false
+        settings.meetingSpeakerLabelsEnabled = false
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic", displayName: "Synthetic microphone")
+        let services = AppServices(store: MeetingSessionStore(rootDirectory: root), settings: settings,
+            microphoneResolver: { _ in microphone })
+        let unknown = MeetingBackendID(rawValue: "ambient-future-backend")
+        for (model, backend) in [(SettingsStore.SpeechModel.whisperTiny, MeetingBackendID.whisperTiny), (.gigaam, .gigaam)] {
+            settings.selectedSpeechModel = model
+            for saved in [MeetingBackendID.legacyCompatibility, unknown] {
+                settings.meetingTranscriptionBackendID = saved
+                let configuration = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic meeting")
+                XCTAssertNil(configuration.transcriptionBackendID)
+                XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
+                    selectedModelID: model.rawValue, savedBackendID: saved), backend)
+                XCTAssertEqual(settings.selectedSpeechModel, model)
+                XCTAssertEqual(settings.meetingTranscriptionBackendID, saved)
+            }
+        }
+    }
+
     func testFreshSettingsRetainAudioAndSpeakerLabelsWithoutPIIRedaction() async throws {
         let suiteName = "MobileConfigurationSnapshotTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

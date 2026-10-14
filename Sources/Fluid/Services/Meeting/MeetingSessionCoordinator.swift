@@ -412,6 +412,10 @@ final class MeetingSessionCoordinator: ObservableObject {
         try Task.checkCancellation()
         try configuration.validate()
         let selectedModelID = self.settings.selectedSpeechModel.rawValue
+        let savedBackendID = self.settings.meetingTranscriptionBackendID
+        let requestedBackendID = configuration.transcriptionBackendID.map(MeetingBackendID.init(rawValue:))
+            ?? PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
+                selectedModelID: selectedModelID, savedBackendID: savedBackendID)
         if PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
             _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
                 asrModel: selectedModelID,
@@ -432,26 +436,27 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Reject unsupported strict input through the real backend factory before download
         // owners or microphone permission prompts run. Repeat after prompts in case selection
         // changed while they were open; final preparation still binds the exact session request.
-        let initialBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
-            selectedModelID: selectedModelID, savedBackendID: self.settings.meetingTranscriptionBackendID)
-        let initialPCMDescriptor = configuration.audioStorageMode == .memoryOnly
-            ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: initialBackendID) : nil
+        let initialDescriptor = try self.processing.validateRecordingInput(
+            configuration: configuration, backendID: requestedBackendID)
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         try await self.validateRecordingModels()
         try Task.checkCancellation()
-        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
-        let dependencyDescriptor = initialPCMDescriptor
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
+        let dependencyDescriptor = initialDescriptor
             ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
         if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
            CPUArchitecture.isAppleSilicon || !dependencyDescriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
             try await self.prepareRecordingDependencies(dependencyDescriptor.diarizationDependencies)
         }
         try Task.checkCancellation()
-        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
         try await self.capture.preflightPermissions()
         try Task.checkCancellation()
-        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
         guard self.startReservation == reservation,
               self.activeSession?.id == passiveOffer?.id,
               !self.hasBlockingActivityTaskExceptStart,
@@ -485,15 +490,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             // Model installation and permission prompts run before the capture lease. Keep
             // their chosen model pinned; only freeze its installed artifact after preparation.
-            guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
+            guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
             recordingModelID = selectedModelID
-            recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(
-                languageCode: configuration.languageCode,
-                selectedModelID: recordingModelID,
-                savedBackendID: self.settings.meetingTranscriptionBackendID
-            )
-            let admittedPCMDescriptor = configuration.audioStorageMode == .memoryOnly
-                ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: recordingBackendID) : nil
+            recordingBackendID = requestedBackendID
+            let admittedPCMDescriptor = try self.processing.validateRecordingInput(
+                configuration: configuration, backendID: recordingBackendID)
             if configuration.speakerLabelsEnabled != false,
                let descriptor = admittedPCMDescriptor ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID),
                CPUArchitecture.isAppleSilicon || !descriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
@@ -501,6 +503,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 try Task.checkCancellation()
                 guard self.startReservation == reservation,
                       self.settings.selectedSpeechModel.rawValue == recordingModelID,
+                      self.settings.meetingTranscriptionBackendID == savedBackendID,
                       self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
             }
             recordingASRConfiguration = PichiMeetingProviderFactory.configuration(
