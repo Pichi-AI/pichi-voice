@@ -128,29 +128,45 @@ final class MeetingProviderOptionsTests: XCTestCase {
     }
 
     @MainActor
-    func testOwnedBackendPreferenceOverridesSharedSelectionWithoutChangingRollbackSemantics() {
+    func testOwnedModelSelectionAndSavedFallbackDoNotUseSharedSettings() {
         let shared = SettingsStore.shared
-        let previousModel = shared.selectedSpeechModel
-        let previousBackend = shared.meetingTranscriptionBackendID
-        defer { shared.selectedSpeechModel = previousModel; shared.meetingTranscriptionBackendID = previousBackend }
+        let keys = ["SelectedSpeechModel", "MeetingTranscriptionBackendID"]
+        let originals = keys.map { shared.defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, originals) {
+                if let value { shared.defaults.set(value, forKey: key) }
+                else { shared.defaults.removeObject(forKey: key) }
+            }
+        }
         shared.selectedSpeechModel = .whisperTiny
         shared.meetingTranscriptionBackendID = .whisperTiny
-        let modelID = PichiMeetingProviderFactory.gigaamModelID
-        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
-            savedBackendID: .productionDefault), .gigaam)
-        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
-            savedBackendID: .gigaam), .gigaam)
-        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
-            savedBackendID: .whisperTiny), .whisperTiny)
-        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "en", selectedModelID: modelID,
-            savedBackendID: .legacyCompatibility), .legacyCompatibility)
-        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
-            savedBackendID: .legacyCompatibility), .productionDefault)
         let unknown = MeetingBackendID(rawValue: "synthetic-unknown-owner")
-        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID,
-            savedBackendID: unknown), unknown)
-        // Convenience callers retain the shared owner's explicit preference.
-        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: modelID), .whisperTiny)
+        let ownedModelID = PichiMeetingProviderFactory.gigaamModelID
+        // The owner's registered speech choice is authoritative. Ambient saved values
+        // are fallback preferences, not the explicit per-request capture override.
+        for saved in [MeetingBackendID.productionDefault, .gigaam, .whisperTiny, .legacyCompatibility, unknown] {
+            for language in ["en", "ru"] {
+                XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+                    selectedModelID: ownedModelID, savedBackendID: saved), .gigaam)
+            }
+        }
+        // An unregistered model still consumes only the supplied owner's saved fallback.
+        let unregisteredModelID = SettingsStore.SpeechModel.whisperSmall.rawValue
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: unregisteredModelID))
+        for (saved, english, nonEnglish) in [
+            (MeetingBackendID.productionDefault, MeetingBackendID.productionDefault, MeetingBackendID.productionDefault),
+            (.whisperTiny, .whisperTiny, .whisperTiny),
+            (.legacyCompatibility, .legacyCompatibility, .productionDefault),
+            (unknown, unknown, unknown),
+        ] {
+            for (language, expected) in [("en", english), ("fr", nonEnglish), ("ru", nonEnglish)] {
+                XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+                    selectedModelID: unregisteredModelID, savedBackendID: saved), expected)
+            }
+        }
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: ownedModelID), .gigaam)
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru"), .whisperTiny)
+        XCTAssertEqual(shared.selectedSpeechModel, .whisperTiny)
         XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
     }
 
