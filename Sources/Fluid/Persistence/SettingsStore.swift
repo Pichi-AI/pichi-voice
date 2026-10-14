@@ -5296,6 +5296,18 @@ final class SettingsStore: ObservableObject {
         /// Trusted localization template. The picker inserts the model name exactly once.
         var importFolderPrompt: String { "Choose the folder containing the %@ model files." }
 
+        var defaultDownloadSourceName: String? { self == .gigaam ? "Hugging Face" : nil }
+
+        var modelFolderSourceLabel: String? {
+            guard self == .gigaam else { return nil }
+            return PichiGigaAMModelStore.shared.usesImportedModelSource ? "Imported model folder" : "Hugging Face (default)"
+        }
+
+        var importFolderInstructions: String? {
+            guard self == .gigaam else { return nil }
+            return "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported."
+        }
+
         // MARK: - Display Properties
 
         var displayName: String {

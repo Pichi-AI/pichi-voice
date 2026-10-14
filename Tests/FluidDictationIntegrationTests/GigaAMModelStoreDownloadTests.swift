@@ -53,7 +53,7 @@ final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let gate = DownloadGate()
-        let store = PichiGigaAMModelStore(directory: fixture.directory, downloadDescriptor: fixture.descriptor) { _, _, _ in
+        let store = PichiGigaAMModelStore(directory: fixture.directory, downloadDescriptor: fixture.descriptor, preferences: fixture.preferences, environment: [:]) { _, _, _ in
             await gate.started()
             do {
                 try await Task.sleep(for: .seconds(30))
@@ -79,7 +79,7 @@ final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
         let alias = fixture.directory.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: alias) }
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: fixture.directory)
-        let store = PichiGigaAMModelStore(directory: alias, downloadDescriptor: fixture.descriptor) { _, _, _ in
+        let store = PichiGigaAMModelStore(directory: alias, downloadDescriptor: fixture.descriptor, preferences: fixture.preferences, environment: [:]) { _, _, _ in
             XCTFail("Unsafe model directory must fail before downloading")
             throw URLError(.unknown)
         }
@@ -88,30 +88,136 @@ final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path).isEmpty)
     }
 
-    func testExistingRegisteredLocalImportKeepsPriorityWithoutDownload() async throws {
+    func testPublicDefaultIgnoresOldPrivateFilesAndLegacyDirectoryPreference() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
-        let existing = try XCTUnwrap(GigaAMModelCatalog.models.first)
-        for name in [existing.modelFile] + [existing.vocabularyFile].compactMap({ $0 }) {
-            try Data("synthetic probe".utf8).write(to: fixture.directory.appendingPathComponent(name))
-        }
-        let store = PichiGigaAMModelStore(directory: fixture.directory, downloadDescriptor: fixture.descriptor) { _, _, _ in
-            XCTFail("An existing registered import must keep its selection")
-            throw URLError(.unknown)
-        }
+        let old = try fixture.writeImported(to: fixture.directory)
+        fixture.preferences.set(old.path, forKey: "pichiGigaAMModelDirectory")
+        let store = fixture.store()
+        XCTAssertFalse(store.modelsExistOnDisk(), "Old private weights must not satisfy public-source readiness")
+        XCTAssertFalse(store.usesImportedModelSource)
         let installed = try await store.ensureInstalled()
-        XCTAssertEqual(installed.descriptor.id, existing.id)
-        // Discovery is a cheap UI probe. Native load still requires the full digests.
-        XCTAssertThrowsError(try installed.descriptor.verify(in: installed.directory))
+        XCTAssertEqual(installed.descriptor, fixture.descriptor)
+        XCTAssertEqual(try store.installedModelFingerprint(), fixture.descriptor.fingerprint)
+        XCTAssertTrue(fixture.importedDescriptor.filesExist(in: old), "Changing defaults must retain private files")
     }
 
-    private struct Fixture: Sendable {
+    func testVerifiedImportPersistsExplicitSelectionAndRestoringDefaultRetainsBothArtifacts() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let source = fixture.directory.appendingPathComponent("import-source", isDirectory: true)
+        try fixture.writeImported(to: source)
+        let store = fixture.store()
+        _ = try await store.ensureInstalled()
+        try await store.importModel(from: source)
+        let imported = try store.installedModel()
+        XCTAssertTrue(store.usesImportedModelSource)
+        XCTAssertEqual(imported.descriptor, fixture.importedDescriptor)
+        XCTAssertEqual(imported.directory.lastPathComponent, fixture.importedDescriptor.id)
+        XCTAssertEqual(try fixture.store().installedModelFingerprint(), fixture.importedDescriptor.fingerprint,
+                       "Explicit import selection must survive a new provider/store")
+        try await store.restoreDefaultModelSource()
+        XCTAssertFalse(store.usesImportedModelSource)
+        XCTAssertEqual(try fixture.store().installedModelFingerprint(), fixture.descriptor.fingerprint)
+        XCTAssertTrue(fixture.importedDescriptor.filesExist(in: imported.directory))
+        XCTAssertTrue(fixture.descriptor.filesExist(in: try store.installedModel().directory))
+        let pinned = try store.installedModel(matchingFingerprint: fixture.importedDescriptor.fingerprint)
+        XCTAssertEqual(pinned.directory, imported.directory, "Existing meetings must still locate their pinned import")
+        let pinnedStore = PichiGigaAMModelStore(directory: imported.directory, downloadDescriptor: fixture.descriptor,
+                                              importDescriptors: [fixture.importedDescriptor], preferences: fixture.preferences,
+                                              environment: [:])
+        XCTAssertEqual(try pinnedStore.installedModelFingerprint(), fixture.importedDescriptor.fingerprint)
+    }
+
+    func testFailedOrCancelledImportNeverSelectsPrivateArtifact() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let source = fixture.directory.appendingPathComponent("import-source", isDirectory: true)
+        try fixture.writeImported(to: source)
+        let store = fixture.store()
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try await store.importModel(from: source)
+        }
+        do { try await cancelled.value; XCTFail("Cancelled import must not commit selection") }
+        catch is CancellationError {}
+        XCTAssertFalse(store.usesImportedModelSource)
+        try Data("corrupt".utf8).write(to: source.appendingPathComponent(fixture.importedDescriptor.modelFile))
+        do { try await store.importModel(from: source); XCTFail("Import must verify full digests before selection") }
+        catch GigaAMError.checksumMismatch {}
+        XCTAssertFalse(store.usesImportedModelSource)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent(fixture.importedDescriptor.id).path))
+    }
+
+    func testMissingExplicitImportDoesNotSilentlyFallBackToPublicDownload() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let source = fixture.directory.appendingPathComponent("import-source", isDirectory: true)
+        try fixture.writeImported(to: source)
+        let store = fixture.store()
+        try await store.importModel(from: source)
+        try FileManager.default.removeItem(at: try store.installedModel().directory)
+        XCTAssertFalse(store.modelsExistOnDisk())
+        do { _ = try await store.ensureInstalled(); XCTFail("An explicit missing source must remain missing") }
+        catch GigaAMError.missingModels {}
+        XCTAssertTrue(store.usesImportedModelSource)
+        try await store.restoreDefaultModelSource()
+        let installed = try await store.ensureInstalled()
+        XCTAssertEqual(installed.descriptor, fixture.descriptor)
+    }
+
+    func testPublicPreparationFreezesArtifactWhileExplicitSelectionChanges() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let source = fixture.directory.appendingPathComponent("import-source", isDirectory: true)
+        try fixture.writeImported(to: source)
+        let gate = DownloadGate()
+        let store = fixture.store(downloadGate: gate)
+        let operation = Task { try await store.ensureInstalled() }
+        await gate.waitUntilStarted()
+        do { try await store.importModel(from: source) }
+        catch {
+            await gate.open()
+            _ = try? await operation.value
+            throw error
+        }
+        await gate.open()
+        let installed = try await operation.value
+        XCTAssertEqual(installed.descriptor, fixture.descriptor, "The operation must return its captured public artifact")
+        XCTAssertEqual(try store.installedModel().descriptor, fixture.importedDescriptor,
+                       "A later source selection governs only subsequent operations")
+        let pinned = try store.installedModel(matchingFingerprint: fixture.descriptor.fingerprint)
+        XCTAssertEqual(pinned.directory, installed.directory)
+    }
+
+    func testEnvironmentOverrideIsExplicitAndReadOnly() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = PichiGigaAMModelStore(downloadDescriptor: fixture.descriptor,
+                                         importDescriptors: [fixture.importedDescriptor], preferences: fixture.preferences,
+                                         environment: ["PICHI_GIGAAM_MODEL_DIR": fixture.directory.path]) { _, _, _ in
+            XCTFail("External override must never receive downloaded weights")
+            throw URLError(.unknown)
+        }
+        do { _ = try await store.ensureInstalled(); XCTFail("Empty external source must remain read-only") }
+        catch GigaAMError.missingModels {}
+        try fixture.writeImported(to: fixture.directory)
+        let installed = try await store.ensureInstalled()
+        XCTAssertEqual(installed.descriptor, fixture.importedDescriptor)
+    }
+
+    private struct Fixture: @unchecked Sendable {
         let directory: URL
         let descriptor: GigaAMModelDescriptor
+        let importedDescriptor: GigaAMModelDescriptor
+        let preferences: UserDefaults
+        let preferencesSuite: String
         let modelBytes = Data("synthetic ONNX artifact fixture".utf8)
         let vocabularyBytes = Data("<unk> 0\n<blk> 1\n".utf8)
 
         init() throws {
+            self.preferencesSuite = "GigaAMModelStoreTests.\(UUID().uuidString)"
+            self.preferences = UserDefaults(suiteName: self.preferencesSuite)!
             self.directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
             self.descriptor = GigaAMModelDescriptor(
@@ -120,10 +226,24 @@ final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
                 downloadBaseURL: URL(string: "https://fixture.invalid/pinned-revision/")!,
                 modelByteCount: Int64(self.modelBytes.count), vocabularyByteCount: Int64(self.vocabularyBytes.count)
             )
+            self.importedDescriptor = GigaAMModelDescriptor(
+                id: "synthetic-import", modelFile: "local.fp16.onnx", modelSHA256: Self.hash(self.modelBytes),
+                vocabularyFile: "local-vocab.txt", vocabularySHA256: Self.hash(self.vocabularyBytes), endOfUtteranceThreshold: 0.48
+            )
         }
 
-        func store(modelOverride: Data? = nil, statusCode: Int = 200) -> PichiGigaAMModelStore {
-            PichiGigaAMModelStore(directory: self.directory, downloadDescriptor: self.descriptor) { source, maximumBytes, progress in
+        @discardableResult
+        func writeImported(to root: URL) throws -> URL {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try self.modelBytes.write(to: root.appendingPathComponent(self.importedDescriptor.modelFile))
+            try self.vocabularyBytes.write(to: root.appendingPathComponent(self.importedDescriptor.vocabularyFile!))
+            return root
+        }
+
+        func store(modelOverride: Data? = nil, statusCode: Int = 200, downloadGate: DownloadGate? = nil) -> PichiGigaAMModelStore {
+            PichiGigaAMModelStore(directory: self.directory, downloadDescriptor: self.descriptor,
+                                 importDescriptors: [self.importedDescriptor], preferences: self.preferences, environment: [:]) { source, maximumBytes, progress in
+                if let downloadGate { await downloadGate.started(); await downloadGate.waitUntilOpen() }
                 let bytes = source.lastPathComponent == self.descriptor.modelFile ? modelOverride ?? self.modelBytes : self.vocabularyBytes
                 let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 try bytes.write(to: temporaryURL)
@@ -132,12 +252,17 @@ final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
             }
         }
 
-        func remove() { try? FileManager.default.removeItem(at: self.directory) }
+        func remove() {
+            try? FileManager.default.removeItem(at: self.directory)
+            self.preferences.removePersistentDomain(forName: self.preferencesSuite)
+        }
         private static func hash(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
     }
 
     private actor DownloadGate {
         private var didStart = false
+        private var isOpen = false
+        private var openWaiter: CheckedContinuation<Void, Never>?
         private var waiter: CheckedContinuation<Void, Never>?
         private(set) var didEnd = false
 
@@ -151,5 +276,14 @@ final nonisolated class GigaAMModelStoreDownloadTests: XCTestCase {
             await withCheckedContinuation { self.waiter = $0 }
         }
         func ended() { self.didEnd = true }
+        func waitUntilOpen() async {
+            if self.isOpen { return }
+            await withCheckedContinuation { self.openWaiter = $0 }
+        }
+        func open() {
+            self.isOpen = true
+            self.openWaiter?.resume()
+            self.openWaiter = nil
+        }
     }
 }
