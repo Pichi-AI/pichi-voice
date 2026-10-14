@@ -97,3 +97,101 @@ separate deterministic lifecycle test.
 protocol, cancellation, and stop failure. Keep the outer XCTest/process watchdog for an OS service
 that does not return; the cooperative operation deadline never abandons an owned capture task.
 No private speech, recordings, model paths, or outcome should be committed.
+
+## Prepared browser fixture and automatic end barriers
+
+The original manual browser fixture remains available without query parameters. For the bounded
+continuity trial, [meeting_continuity_fixture.py](../../tools/meeting_continuity_fixture.py) serves
+only the fixture HTML and explicitly named synthetic WAVs on `127.0.0.1`. It does not serve the
+protocol root, recordings, profiles, outcomes, or arbitrary files. It never starts capture,
+launches or terminates a process, operates UI, requests permissions, or loads a model.
+
+First run this tiny offline slice with private mock ready/ack files. It plays no audio and starts
+no native capture:
+
+```bash
+python3 -S tools/test_meeting_continuity_fixture.py \
+  FixtureTests.test_first_phase_slice_automatic_end_drains_then_retains_native_clock
+python3 -S tools/test_meeting_continuity_fixture.py
+```
+
+Before a new hardware trial, review the concrete operator sequence and obtain a new coordinated
+UI/audio lease. An earlier unsuccessful run or expired lease does not authorize another trial.
+Keep the existing native 100-second trial and 60-second phase bounds. Use a fresh UUID, an owned
+canonical protocol root with mode `0700`, and a separate explicit synthetic stimulus directory.
+Start the helper before native capture creates any protocol files:
+
+```bash
+set -euo pipefail
+pichi_fixture_token="$(python3 -S tools/meeting_continuity_fixture.py token)"
+python3 -S tools/meeting_continuity_fixture.py serve \
+  --root "$pichi_capture_root" --run-id "$pichi_capture_run_id" \
+  --token "$pichi_fixture_token" --port "$pichi_fixture_port" \
+  --stimulus-dir "$pichi_stimulus_dir" \
+  --wav browser-before.wav --wav browser-after.wav
+```
+
+The placeholders are local operator values, never committed paths. Keep the server owned by this
+trial and join its shutdown afterward. Open this URL in the owned isolated browser through CUA:
+
+```text
+http://127.0.0.1:PORT/meeting_browser_speech_stimulus.html?runID=UUID&token=TOKEN&phase=browserBefore&stimulus=browser-before.wav
+```
+
+Click **Prepare received WebRTC speech** before starting native capture. Preparation decodes the
+WAV and connects the local peer pair behind a playback gate. It sends no speech. Save and inspect
+the native screenshot immediately. Only after the browser shows **Prepared** and the process
+identity and other operator artifacts are ready should the parent start native capture. This
+keeps model/tool preparation outside the native 100-second interval.
+
+Use this sequence without extra state fetches between a known action and its required screenshot:
+
+1. Wait for matching `capture-ready.json`; atomically send command 1 with the actual owned browser
+   identity. Require `wait-ack --sequence 1` to succeed, then use CUA to click **Play received WebRTC
+   speech**, save a native screenshot, and inspect it.
+2. The prepared fixture authenticates a `starting` event against native command/ack 1 before
+   releasing speech. Its natural `AudioBufferSourceNode.onended` event posts `ended`. The server
+   waits 0.5 seconds for the local WebRTC/PCM tail, atomically writes command 2, and waits for native
+   ack 2. The page reports **Native end acknowledged (2)**. The parent checks ack 2 before closing
+   the owned browser. An operator response or screenshot round trip cannot delay this end marker.
+3. After actual owned browser exit, send command 3 and require ack 3. Prepare the distinct owned
+   second-source process behind its existing playback gate; send command 4 with its actual identity
+   and require ack 4. Authenticate its `starting` event, release the gate, wait for that exact owned
+   process's successful exit, and post `ended`. The server writes command 5 after the same PCM tail
+   and requires native ack 5. Stop progression on any failed command or process exit.
+4. Keep the browser actually absent for at least eight seconds after ack 3. Restart only the owned
+   isolated browser and retain actual launch/new PID evidence. Send command 6 and require ack 6.
+   Open the same fixture with `phase=browserAfter&stimulus=browser-after.wav`, then prepare it using
+   CUA. Save and inspect a screenshot after each UI action. Send command 7 and require ack 7, then
+   click Play through CUA. Natural playback completion automatically writes command 8 and waits
+   for native ack 8. Join capture/test teardown and owned fixtures before releasing the UI slot.
+
+The parent still owns every UI action and screenshot. These events are synthetic stimulus
+barriers, not proof that sound reached the persisted system track; the unchanged native PCM,
+metadata and optional ASR assertions establish that result. The server only emits the expected
+end command after matching native begin evidence. It rejects wrong tokens/runs, stale or changed
+ready files, duplicate/skipped phases, symlinks, and unexpected acknowledgements. A failure stops
+progression. Its private `fixture-events.jsonl` retains native begin/end clocks and the drain
+receipt; Python elapsed times are diagnostic receipts and never substitute for native PCM clocks.
+
+The read-only CLI gate exits nonzero on a missed, stopped, invalid or skipped acknowledgement:
+
+```bash
+set -euo pipefail
+python3 -S tools/meeting_continuity_fixture.py wait-ack \
+  --root "$pichi_capture_root" --run-id "$pichi_capture_run_id" --sequence 4
+python3 -S tools/meeting_continuity_fixture.py event \
+  --port "$pichi_fixture_port" --run-id "$pichi_capture_run_id" \
+  --token "$pichi_fixture_token" --phase secondSource --event starting
+# Release the parent-owned playback gate here, then join the exact owned process.
+wait "$pichi_owned_player_pid"
+python3 -S tools/meeting_continuity_fixture.py event \
+  --port "$pichi_fixture_port" --run-id "$pichi_capture_run_id" \
+  --token "$pichi_fixture_token" --phase secondSource --event ended
+```
+
+The parent must set `pichi_owned_player_pid` from the actual gated child it owns; never wait for an
+unrelated PID or infer playback completion from a fixed sleep. Do not continue after a failed
+gate using a semicolon-separated command sequence in a shell without `set -e`. Ack failures,
+protocol deadlines and actual process exit failures are test failures, not reasons to expand the
+native limits or claim a capture pass.

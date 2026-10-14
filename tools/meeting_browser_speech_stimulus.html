@@ -14,14 +14,48 @@
   No microphone, camera, account, or external signaling service is used.</p>
 <button id="direct">Play local speech</button>
 <button id="rtc">Play received WebRTC speech</button>
+<button id="prepare" hidden>Prepare received WebRTC speech</button>
 <p id="status" role="status">Ready. Start meeting capture before playback.</p>
 <audio id="output" controls></audio>
 <script>
   const output = document.querySelector('#output');
   const status = document.querySelector('#status');
   const buttons = [...document.querySelectorAll('button')];
+  const parameters = new URLSearchParams(location.search);
+  const instrumented = ['runID', 'token', 'phase', 'stimulus'].some(key => parameters.has(key));
+  const phase = parameters.get('phase');
+  const stimulus = instrumented ? parameters.get('stimulus') : 'speech.wav';
+  let preparedStart = null;
+  let playbackActive = false;
+  async function phaseEvent(event) {
+    if (!instrumented) return;
+    const response = await fetch('/phase-event', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runID: parameters.get('runID'), token: parameters.get('token'), phase, event })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Native phase barrier failed');
+    return result;
+  }
+  async function completed(message) {
+    if (instrumented && !playbackActive) return;
+    playbackActive = false;
+    try {
+      const ack = await phaseEvent('ended');
+      status.textContent = instrumented ? `${message} Native end acknowledged (${ack.sequence}).` : message;
+      buttons.forEach(button => button.disabled = instrumented);
+    } catch (error) { fail(error); }
+  }
   let cleanup = async () => {};
-  async function play(received) {
+  async function play(received, prepareOnly = false) {
+    if (instrumented && !prepareOnly) {
+      if (!received || !preparedStart) { fail(new Error('Prepare WebRTC before starting native capture')); return; }
+      buttons.forEach(button => button.disabled = true);
+      const start = preparedStart;
+      preparedStart = null;
+      try { await phaseEvent('starting'); playbackActive = true; start(); } catch (error) { fail(error); }
+      return;
+    }
     await cleanup();
     buttons.forEach(button => button.disabled = true);
     const resources = [];
@@ -36,8 +70,8 @@
     };
     try {
       if (!received) {
-        output.src = 'speech.wav';
-        output.onended = () => { status.textContent = 'Direct speech complete.'; buttons.forEach(button => button.disabled = false); };
+        output.src = stimulus;
+        output.onended = () => completed('Direct speech complete.');
         await output.play();
         status.textContent = 'Playing direct browser speech.';
         return;
@@ -45,7 +79,7 @@
       const context = new AudioContext();
       resources.push(context);
       await context.resume();
-      const buffer = await context.decodeAudioData(await (await fetch('speech.wav')).arrayBuffer());
+      const buffer = await context.decodeAudioData(await (await fetch(stimulus)).arrayBuffer());
       const source = context.createBufferSource();
       source.buffer = buffer;
       const destination = context.createMediaStreamDestination();
@@ -96,19 +130,37 @@
       } finally {
         clearTimeout(timeout);
       }
-      source.onended = () => {
-        status.textContent = 'Received WebRTC speech complete.';
-        buttons.forEach(button => button.disabled = false);
+      source.onended = () => completed('Received WebRTC speech complete.');
+      const start = () => {
+        source.start();
+        status.textContent = 'Playing received WebRTC browser speech.';
       };
-      source.start();
-      status.textContent = 'Playing received WebRTC browser speech.';
+      if (prepareOnly) {
+        preparedStart = start;
+        status.textContent = 'Prepared. Await native begin acknowledgement before Play.';
+        document.querySelector('#rtc').disabled = false;
+      } else start();
     } catch (error) { fail(error); }
   }
   function fail(error) {
+    preparedStart = null;
+    playbackActive = false;
     status.textContent = `Playback failed: ${error.message}`;
-    buttons.forEach(button => button.disabled = false);
+    buttons.forEach(button => button.disabled = instrumented);
     cleanup();
   }
   document.querySelector('#direct').onclick = () => play(false);
   document.querySelector('#rtc').onclick = () => play(true);
+  document.querySelector('#prepare').onclick = () => play(true, true);
+  if (instrumented) {
+    buttons.forEach(button => button.disabled = true);
+    const valid = /^[0-9a-f-]{36}$/i.test(parameters.get('runID') || '') &&
+      /^[A-Za-z0-9_-]{32,128}$/.test(parameters.get('token') || '') &&
+      ['browserBefore', 'browserAfter'].includes(phase) &&
+      /^[A-Za-z0-9][A-Za-z0-9_-]*\.wav$/.test(stimulus || '');
+    output.controls = false;
+    document.querySelector('#prepare').hidden = false;
+    document.querySelector('#prepare').disabled = !valid;
+    status.textContent = valid ? 'Prepare WebRTC before starting native capture.' : 'Invalid opt-in fixture parameters.';
+  }
 </script>
