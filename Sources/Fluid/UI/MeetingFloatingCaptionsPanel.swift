@@ -223,13 +223,14 @@ struct MeetingFloatingCaptionsContent: View {
         VStack(alignment: .leading, spacing: 10) {
             self.header
 
-            if rows.isEmpty {
+            if rows.isEmpty && self.coordinator.pendingSpeech.tokens.isEmpty {
                 Text("Listening…")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                MeetingLiveBubbleScrollList(rows: rows, hidesPartialFromAccessibility: false)
+                MeetingLiveBubbleScrollList(rows: rows, pending: self.coordinator.pendingSpeech,
+                                           hidesPartialFromAccessibility: false)
             }
         }
         .padding(14)

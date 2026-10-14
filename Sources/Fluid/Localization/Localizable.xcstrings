@@ -51469,6 +51469,23 @@
           }
         }
       }
+    },
+    "Audio captured, waiting for transcription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio captured, waiting for transcription"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио записано, ожидается распознавание"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

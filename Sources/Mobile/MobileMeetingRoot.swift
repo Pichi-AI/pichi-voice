@@ -299,7 +299,8 @@ struct MobileMeetingRoot: View {
                     .accessibilityIdentifier("meeting.liveAvailability")
             case .available: EmptyView()
             }
-            MeetingLiveBubbleScrollList(rows: MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript), documentStyle: true)
+            MeetingLiveBubbleScrollList(rows: MeetingLiveBubbleComposer.rows(for: coordinator.liveTranscript),
+                                       pending: coordinator.pendingSpeech, documentStyle: true)
                 .frame(height: max(200, geometry.size.height - 250))
                 .accessibilityIdentifier("meeting.liveTranscript")
             if session.speakerLabelsEnabled != false {
