@@ -187,6 +187,28 @@ nonisolated struct BrandLogo: Codable, Equatable, Sendable {
         return data
     }
 
+    /// Structural validity alone permits legacy fully transparent artwork.
+    /// Keep that data importable, but never use it as a visible app locator.
+    func visibleData() throws -> Data? {
+        let data = try self.validatedData()
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return data
+        default:
+            // Full resolution avoids missing a small nontransparent mark. The
+            // validated 4096-side limit bounds this RGBA buffer to 64 MiB.
+            guard let context = CGContext(data: nil, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue), let pixels = context.data else { return nil }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let rgba = UnsafeBufferPointer<UInt8>(start: pixels.assumingMemoryBound(to: UInt8.self),
+                count: context.bytesPerRow * image.height)
+            return stride(from: 3, to: rgba.count, by: 4).contains(where: { rgba[$0] != 0 }) ? data : nil
+        }
+    }
+
     private static func validatedType(_ data: Data) throws -> String {
         guard data.count <= Self.maximumBytes,
               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
@@ -208,6 +230,26 @@ nonisolated struct BrandLogos: Codable, Equatable, Sendable {
     var light: BrandLogo?
     var dark: BrandLogo?
     var menuBar: BrandLogo?
+
+    enum Role: String {
+        case primary, light, dark, menuBar
+    }
+
+    /// The existing appearance/menu variants fall back to usable primary art.
+    /// Nil leaves the caller free to show its neutral, theme-aware locator.
+    func visibleData(for role: Role) -> Data? {
+        let preferred: BrandLogo?
+        switch role {
+        case .primary: preferred = nil
+        case .light: preferred = self.light
+        case .dark: preferred = self.dark
+        case .menuBar: preferred = self.menuBar
+        }
+        for logo in [preferred, self.primary].compactMap({ $0 }) {
+            if let data = try? logo.visibleData() { return data }
+        }
+        return nil
+    }
 
     func validate() throws {
         let logos = [self.primary, self.light, self.dark, self.menuBar].compactMap { $0 }

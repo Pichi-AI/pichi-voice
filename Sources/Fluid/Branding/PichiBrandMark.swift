@@ -13,24 +13,30 @@ struct PichiBrandMark: View {
 
     #if canImport(AppKit)
     private static var imageCache: [String: NSImage] = [:]
+    private static var unavailableImages: Set<String> = []
     private static var imageRevision = -1
-    static var customImage: NSImage? { self.image(AppBrand.package.logos?.primary, key: "primary") }
+    static var customImage: NSImage? { self.image(AppBrand.package.logos, role: .primary, key: "primary") }
 
     static var packagedIcon: NSImage {
         AppBrand.distribution.appIconAsset.flatMap { NSImage(named: $0) }
-            ?? self.image(AppBrand.packagedPackage.logos?.primary, key: "packaged")
+            ?? self.image(AppBrand.packagedPackage.logos, role: .primary, key: "packaged")
             ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
             ?? NSImage(size: NSSize(width: 32, height: 32))
     }
 
-    private static func image(_ logo: BrandLogo?, key: String) -> NSImage? {
+    private static func image(_ logos: BrandLogos?, role: BrandLogos.Role, key: String) -> NSImage? {
         let revision = BrandPackageStore.shared.revision
         if self.imageRevision != revision {
             self.imageCache.removeAll()
+            self.unavailableImages.removeAll()
             self.imageRevision = revision
         }
         if let image = self.imageCache[key] { return image }
-        guard let logo, let data = Data(base64Encoded: logo.base64), let image = NSImage(data: data) else { return nil }
+        guard !self.unavailableImages.contains(key) else { return nil }
+        guard let data = logos?.visibleData(for: role), let image = NSImage(data: data) else {
+            self.unavailableImages.insert(key)
+            return nil
+        }
         self.imageCache[key] = image
         return image
     }
@@ -42,28 +48,44 @@ struct PichiBrandMark: View {
     }
 
     static var menuBarIcon: NSImage? {
-        let explicitMenuLogo = self.image(AppBrand.package.logos?.menuBar, key: "menuBar")
+        let explicitMenuLogo = self.image(AppBrand.package.logos, role: .menuBar, key: "menuBar")
         let source = explicitMenuLogo
             ?? (BrandPackageStore.shared.hasOverride ? self.customImage : AppBrand.distribution.menuBarAsset.flatMap { NSImage(named: $0) })
             ?? self.customImage
+            ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
         guard let image = source?.copy() as? NSImage else { return nil }
         image.size = NSSize(width: 18, height: 18)
-        image.isTemplate = explicitMenuLogo != nil || !BrandPackageStore.shared.hasOverride
+        image.isTemplate = true
         return image
     }
 
     #else
-    private static func image(_ logo: BrandLogo?, key: String) -> UIImage? {
-        guard let logo, let data = Data(base64Encoded: logo.base64) else { return nil }
-        return UIImage(data: data)
+    private static var imageCache: [String: UIImage] = [:]
+    private static var unavailableImages: Set<String> = []
+    private static var imageRevision = -1
+    private static func image(_ logos: BrandLogos?, role: BrandLogos.Role, key: String) -> UIImage? {
+        let revision = BrandPackageStore.shared.revision
+        if self.imageRevision != revision {
+            self.imageCache.removeAll()
+            self.unavailableImages.removeAll()
+            self.imageRevision = revision
+        }
+        if let image = self.imageCache[key] { return image }
+        guard !self.unavailableImages.contains(key) else { return nil }
+        guard let data = logos?.visibleData(for: role), let image = UIImage(data: data) else {
+            self.unavailableImages.insert(key)
+            return nil
+        }
+        self.imageCache[key] = image
+        return image
     }
-    static var customImage: UIImage? { self.image(AppBrand.package.logos?.primary, key: "primary") }
+    static var customImage: UIImage? { self.image(AppBrand.package.logos, role: .primary, key: "primary") }
     #endif
 
     var body: some View {
         let variant = self.theme.variant ?? self.colorScheme
         Group {
-            if let image = Self.image(variant == .dark ? AppBrand.package.logos?.dark : AppBrand.package.logos?.light, key: variant == .dark ? "dark" : "light") ?? Self.customImage {
+            if let image = Self.image(AppBrand.package.logos, role: variant == .dark ? .dark : .light, key: variant == .dark ? "dark" : "light") {
                 #if canImport(AppKit)
                 Image(nsImage: image).resizable()
                 #else
