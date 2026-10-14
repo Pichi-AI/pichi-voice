@@ -173,6 +173,60 @@ quiet = quiet.replace('    func makeBody(configuration: Configuration) -> some V
     '    @ViewBuilder\n    func makeBody(configuration: Configuration) -> some View {', 1)
 with Path(sys.argv[1]).open('a') as output:
     output.write(quiet)
+# Keep the two native sidebar labels bound to the real common helper, their
+# different icon constructors and the production hover/selected surface.
+content = Path('Sources/Fluid/ContentView.swift').read_text()
+assert content.count('private func sidebarLabel<Icon: View>') == 1
+helper = snippet('Sources/Fluid/ContentView.swift',
+    '    private func sidebarLabel<Icon: View>', '    private func sidebarNavigationLink(')
+main = snippet('Sources/Fluid/ContentView.swift',
+    '    private func sidebarNavigationLink(', '    private var themePreferenceButton:')
+settings = snippet('Sources/Fluid/ContentView.swift',
+    '                    NavigationLink(value: section) {', '                }\n            }\n            .listStyle(.sidebar)')
+assert 'self.sidebarLabel(section.title, isSelected: isSelected)' in settings
+assert 'self.sidebarLabel(item.title, isSelected: isSelected)' in main
+assert 'Color.primary' not in helper and 'Color.secondary' not in helper
+cache = snippet('Sources/Fluid/ContentView.swift',
+    '@MainActor\nprivate enum SidebarSymbolCache {', 'private struct SidebarChromeButtonStyle:')
+hover = snippet('Sources/Fluid/ContentView.swift',
+    'extension View {\n    func sidebarOptionHover(', 'private struct AccessibilitySettingsFloatingGuideView:')
+with Path(sys.argv[1]).open('a') as output:
+    output.write(cache + '\n' + hover)
+    output.write('struct ProductionSidebarFixture: View {\n'
+        ' @ObservedObject var state: NativeSidebarContrastTests.State\n'
+        ' @Environment(\\.theme) private var theme\n'
+        ' let family: NativeSidebarContrastTests.Family\n'
+        ' private var selectedSidebarItem: SidebarItem? { self.state.selection }\n'
+        ' private var accessibilityReduceMotion: Bool { true }\n'
+        ' var body: some View {\n'
+        '  List(selection: self.$state.selection) {\n'
+        '   ForEach(self.state.items) { section in\n'
+        '    let isSelected = self.state.selection == section\n'
+        '    if self.family == .main { self.sidebarNavigationLink(section, systemImage: section.systemImage) }\n'
+        '    else {\n' + settings + '\n    }\n'
+        '   }\n  }.listStyle(.sidebar).accentColor(self.theme.palette.accent)\n'
+        ' }\n' + helper + '\n' + main + '\n}\n')
+    chrome = snippet('Sources/Fluid/ContentView.swift',
+        'private struct SidebarChromeButtonStyle: ButtonStyle {', 'extension View {\n    func sidebarOptionHover(')
+    chrome = chrome.replace('private struct SidebarChromeButtonStyle: ButtonStyle {',
+        'struct ProductionSidebarChromeFixture: View {', 1)
+    chrome = chrome.replace('    let reduceMotion: Bool', '    let reduceMotion = true', 1)
+    chrome = chrome.replace('    func makeBody(configuration: Configuration) -> some View {',
+        '    let isPressed: Bool\n'
+        '    struct Configuration { let isPressed: Bool; var label: some View { Text("Marginal sidebar").frame(width: 160, height: 44) } }\n'
+        '    var body: some View { self.makeBody(configuration: Configuration(isPressed: self.isPressed)) }\n'
+        '    @ViewBuilder\n    func makeBody(configuration: Configuration) -> some View {', 1)
+    output.write(chrome)
+    hover_fixture = hover[hover.index('private struct SidebarOptionHoverModifier:'):]
+    hover_fixture = hover_fixture.replace('private struct SidebarOptionHoverModifier: ViewModifier {',
+        'struct ProductionSidebarHoveredFixture: View {', 1)
+    hover_fixture = hover_fixture.replace('    let isSelected: Bool', '    let isSelected = false', 1)
+    hover_fixture = hover_fixture.replace('    let reduceMotion: Bool', '    let reduceMotion = true', 1)
+    hover_fixture = hover_fixture.replace('    @State private var isHovered = false', '    @State private var isHovered = true', 1)
+    hover_fixture = hover_fixture.replace('    func body(content: Content) -> some View {',
+        '    var body: some View {\n        let content = Text("Marginal hovered row").frame(width: 160, height: 44)', 1)
+    hover_fixture = hover_fixture.replace('        content\n            .frame(', '        return content\n            .frame(', 1)
+    output.write(hover_fixture)
 PY
 
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
@@ -193,5 +247,6 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
     Sources/Fluid/UI/AISettingsComponents.swift \
     "$task_test_dir/ProductionLabels.swift" \
-    Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift -o "$task_test_dir/tests"
+    Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
+    Tests/NativeSidebarContrastTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$task_test_dir" "$@"
