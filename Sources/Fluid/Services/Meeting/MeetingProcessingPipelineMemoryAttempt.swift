@@ -154,7 +154,8 @@ extension MeetingProcessingPipeline {
                 } else {
                     let ordered = speech.segments.sorted { $0.start < $1.start }
                     partial = ordered.first.map {
-                        MeetingLivePartial(id: speechPreviewID, text: ordered.map(\.text).joined(separator: " "), start: $0.start.seconds)
+                        MeetingLivePartial(id: speechPreviewID, text: ordered.map(\.text).joined(separator: " "),
+                            start: $0.start.seconds, end: ordered.map { $0.end.seconds }.max())
                     }
                 }
                 try Task.checkCancellation()

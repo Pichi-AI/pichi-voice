@@ -70,25 +70,26 @@ struct MeetingPendingSpeechProjectionTests {
         print("PASS bounded state and timed replacement")
         var partials = MeetingPendingSpeechProjection()
         feed(&partials, duration: 4, rms: Self.speech)
-        let before = partials.snapshot.tokens.count, turnID = UUID()
+        let before = partials.snapshot.tokens, turnID = UUID()
         var partial = MeetingLiveTranscriptSnapshot.empty
         partial.revision = 1
         partial.partials[.you] = .init(id: turnID, text: "Approved words", start: 0)
         partials.reconcile(visible: partial)
-        try require(partials.snapshot.tokens.count == before - 2, "Untimed partial retires only its visible word delta")
+        try require(partials.snapshot.tokens == before, "Untimed partial must not erase unknown audio coverage")
         partial.revision = 2
+        partial.partials[.you]?.end = 1.5
         partials.reconcile(visible: partial)
-        try require(partials.snapshot.tokens.count == before - 2, "Repeated hypotheses cannot consume later captured audio")
+        try require(partials.snapshot.tokens == before.filter { $0.end > 1.5 }, "Timed partial replaces only processed coverage")
         partial.revision = 3
-        partial.partials[.you]?.text = "Approved words now"
+        partial.partials[.you]?.text = String(repeating: "Approved word ", count: 80)
         partials.reconcile(visible: partial)
-        try require(partials.snapshot.tokens.count == before - 3, "Growing partial retires only one additional block")
+        try require(partials.snapshot.tokens == before.filter { $0.end > 1.5 }, "Many delayed words cannot erase newly captured audio")
         let afterGrowth = partials.snapshot
         partial.revision = 2
         partial.partials[.you]?.text = "Older revision with many invented words"
         partials.reconcile(visible: partial)
         try require(partials.snapshot == afterGrowth, "Late recognition revisions cannot erase progress")
-        print("PASS conservative partial deltas and stale revisions")
+        print("PASS timed partial coverage and stale revisions")
         partial.revision = 4
         partial.utterances = (0..<200).map { _ in
             .init(id: UUID(), speaker: .you, text: "Older approved turn", start: 0, end: 0.1)
@@ -96,13 +97,15 @@ struct MeetingPendingSpeechProjectionTests {
         partial.partials[.you]?.text = "Approved words now"
         partials.reconcile(visible: partial)
         partial.revision = 5
+        partial.partials[.you] = .init(id: turnID, text: "Next window", start: 1.5, end: 3)
         partials.reconcile(visible: partial)
-        try require(partials.snapshot.tokens == afterGrowth.tokens, "Many closed turns cannot evict active partial credit")
-        print("PASS long-session partial accounting")
+        try require(partials.snapshot.tokens == before.filter { $0.end > 3 }, "Reused preview identity with fewer words still replaces the next window")
+        let afterNextWindow = partials.snapshot.tokens
+        print("PASS next-window and long-session partial coverage")
         var empty = MeetingLiveTranscriptSnapshot.empty
         empty.revision = 6
         partials.reconcile(visible: empty)
-        try require(partials.snapshot.tokens == afterGrowth.tokens, "Empty or privacy-held recognition leaves pending capture visible")
+        try require(partials.snapshot.tokens == afterNextWindow, "Empty or privacy-held recognition leaves pending capture visible")
         print("PASS held privacy and empty hypotheses")
         var sources = MeetingPendingSpeechProjection()
         feed(&sources, duration: 3, rms: Self.speech)

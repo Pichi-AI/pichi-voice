@@ -31,6 +31,9 @@ nonisolated struct MeetingLivePartial: Sendable, Equatable, Identifiable {
     var id: UUID
     var text: String
     var start: TimeInterval
+    /// Upper capture bound for actually visible speech. Nil when publication cannot
+    /// safely map its text prefix back to a complete audio fragment.
+    var end: TimeInterval? = nil
 }
 
 /// In-memory only. Never written into `MeetingSession.transcriptSegments`, so it can never reach
@@ -329,8 +332,6 @@ nonisolated struct MeetingPendingSpeechProjection {
         var lastEnd: Double?
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
-    private var partialWordCounts: [UUID: Int] = [:]
-    private var partialIDs: [UUID] = []
     private var nextID: UInt64 = 0
     private var visibleRevision: UInt64 = 0
     private(set) var snapshot = MeetingPendingSpeechSnapshot(isCapturing: true)
@@ -384,7 +385,7 @@ nonisolated struct MeetingPendingSpeechProjection {
 
     /// Only caller-approved, actually visible captions retire blocks. PII-held words and
     /// unavailable/empty hypotheses cannot clear captured progress. Timed closed turns remove
-    /// their own coverage; untimed partials conservatively retire only newly visible word count.
+    /// their own coverage. Untimed prefixes retain progress until coverage is known.
     mutating func reconcile(visible: MeetingLiveTranscriptSnapshot) {
         guard visible.revision > self.visibleRevision else { return }
         self.visibleRevision = visible.revision
@@ -394,48 +395,27 @@ nonisolated struct MeetingPendingSpeechProjection {
             self.snapshot.tokens.removeAll {
                 $0.source == utterance.speaker && $0.end <= utterance.end + 0.000_001 && $0.end > utterance.start
             }
-            // Closed turns no longer need untimed word-count credit. Keeping all closed IDs
-            // in this small cache would evict the active partial after a long meeting.
-            if self.partialWordCounts.removeValue(forKey: utterance.id) != nil {
-                self.partialIDs.removeAll { $0 == utterance.id }
-            }
         }
         for (source, partial) in visible.partials {
             guard partial.start.isFinite, partial.start >= 0,
+                  let end = partial.end, end.isFinite, end > partial.start,
+                  !partial.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !visible.finalizedTurnIDs.contains(partial.id),
                   !visible.utterances.contains(where: { $0.id == partial.id }) else { continue }
-            let count = Self.wordCount(partial.text)
-            var remaining = max(0, count - (self.partialWordCounts[partial.id] ?? 0))
             self.snapshot.tokens.removeAll {
-                guard remaining > 0, $0.source == source, $0.end > partial.start else { return false }
-                remaining -= 1
-                return true
+                $0.source == source && $0.end > partial.start && $0.end <= end + 0.000_001
             }
-            self.remember(partial.id, words: count)
         }
         if self.snapshot.tokens != before { self.snapshot.revision &+= 1 }
     }
 
     mutating func stop() {
         self.tracks.removeAll()
-        self.partialWordCounts.removeAll()
-        self.partialIDs.removeAll()
         self.snapshot.tokens.removeAll()
         self.snapshot.isCapturing = false
         self.snapshot.revision &+= 1
     }
 
-    private mutating func remember(_ id: UUID, words: Int) {
-        if self.partialWordCounts[id] == nil { self.partialIDs.append(id) }
-        self.partialWordCounts[id] = max(words, self.partialWordCounts[id] ?? 0)
-        while self.partialIDs.count > 128 {
-            self.partialWordCounts.removeValue(forKey: self.partialIDs.removeFirst())
-        }
-    }
-
-    private static func wordCount(_ text: String) -> Int {
-        text.split(whereSeparator: { $0.isWhitespace }).count
-    }
 }
 
 /// Synchronous metadata tee. Reads the caller-owned PCM once without retaining or copying

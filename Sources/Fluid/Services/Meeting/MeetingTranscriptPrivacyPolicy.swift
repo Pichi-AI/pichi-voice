@@ -55,7 +55,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         copy.livePreview = nil
         if let id = provisionalPreviewID, let text = projection.provisionalText, !text.isEmpty,
            let first = batch.segments.filter({ provisionalSegmentIDs.contains($0.id) }).min(by: { $0.start < $1.start }) {
-            copy.livePreview = .init(id: id, text: text, start: first.start.seconds)
+            copy.livePreview = .init(id: id, text: text, start: first.start.seconds, end: projection.provisionalEnd)
         }
         for i in copy.speakers.indices {
             copy.speakers[i].displayName = try await redactor.redact(copy.speakers[i].displayName)
@@ -102,6 +102,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     private struct SegmentProjection {
         let segments: [MeetingTranscriptSegment]
         let provisionalText: String?
+        let provisionalEnd: TimeInterval?
     }
 
     private static func redactedSegments(_ segments: [MeetingTranscriptSegment], using redactor: any TranscriptTextRedacting,
@@ -110,6 +111,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         var copy = segments
         let groups = Dictionary(grouping: segments.indices) { segments[$0].sourceTrackID }
         var provisionalText: String?
+        var provisionalEnd: TimeInterval?
         for (trackID, indices) in groups {
             let ordered = indices.sorted { a, b in
                 segments[a].start == segments[b].start ? a < b : segments[a].start < segments[b].start
@@ -125,9 +127,16 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 provisionalText = ordered.filter { provisionalSegmentIDs.contains(segments[$0].id) }
                     .map { preview[$0] ?? "" }.filter { !$0.isEmpty }.joined(separator: " ")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                // A partially admitted segment has no known word-level endpoint. Retire
+                // captured progress only through complete, privacy-approved fragments.
+                provisionalEnd = ordered.filter {
+                    provisionalSegmentIDs.contains(segments[$0].id)
+                        && projected.provisionalCompleteKeys.contains($0)
+                        && !(preview[$0] ?? "").isEmpty
+                }.map { segments[$0].end.seconds }.max()
             }
         }
-        return .init(segments: copy, provisionalText: provisionalText)
+        return .init(segments: copy, provisionalText: provisionalText, provisionalEnd: provisionalEnd)
     }
 
     private struct TextFragment {
@@ -138,6 +147,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
     private struct TextProjection {
         let canonical: [Int: String]
         let provisional: [Int: String]?
+        let provisionalCompleteKeys: Set<Int>
     }
 
     private static func projectedTexts(_ fragments: [TextFragment], prefix: String, separator: String = " ",
@@ -147,6 +157,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         }
         var rangesByFragment: [Int: [TranscriptRedactedSpan]] = [:]
         var provisional: [Int: String]?
+        var provisionalCompleteKeys: Set<Int> = []
         var cursor = 0
         while cursor < fragments.count {
             try Task.checkCancellation()
@@ -181,6 +192,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                                      replacement: span.replacement)
                     }
                     approved[key] = try self.replacing(source.substring(with: admitted), spans: spans)
+                    if NSMaxRange(range) <= limit { provisionalCompleteKeys.insert(key) }
                 }
                 provisional = approved
             }
@@ -204,7 +216,7 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 result[fragment.key] = try self.replacing(fragment.text, spans: spans)
             }
         }
-        return .init(canonical: result, provisional: provisional)
+        return .init(canonical: result, provisional: provisional, provisionalCompleteKeys: provisionalCompleteKeys)
     }
 
     private static func validate(_ output: TranscriptTextRedaction, for input: String) throws {

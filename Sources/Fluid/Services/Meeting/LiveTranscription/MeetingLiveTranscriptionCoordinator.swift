@@ -289,7 +289,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         guard let origin = self.originBox.current else { return }
         let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
         let speaker = Self.speaker(for: kind)
-        let partial = MeetingLivePartial(id: id, text: text, start: startSeconds)
+        let partial = MeetingLivePartial(id: id, text: text, start: startSeconds,
+            end: end.isNumeric ? MeetingLiveTimeConversion.sessionSeconds(pts: end, origin: origin) : nil)
         self.publish { $0.settingPartial(partial, for: speaker) }
     }
 
