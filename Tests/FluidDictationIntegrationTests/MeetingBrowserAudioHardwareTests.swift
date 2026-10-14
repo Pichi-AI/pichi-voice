@@ -2,6 +2,8 @@
 
 import AVFoundation
 import CoreGraphics
+import CoreMedia
+import CryptoKit
 import Darwin
 @testable import FluidVoice_Debug
 import Foundation
@@ -380,7 +382,7 @@ private struct BrowserCaptureReport: Encodable {
     let speechText: String?
 }
 
-private struct BrowserCaptureTrackMetrics: Encodable {
+fileprivate struct BrowserCaptureTrackMetrics: Encodable {
     let kind: String
     let sourceIdentifier: String
     let captureMethod: String?
@@ -396,7 +398,7 @@ private struct BrowserCaptureTrackMetrics: Encodable {
     var peak: Double
 }
 
-private struct BrowserCaptureEventSummary: Encodable {
+fileprivate struct BrowserCaptureEventSummary: Encodable {
     var trackHealthEvents = 0
     var finalizedChunkEvents = 0
     var captureMethodChanges = 0
@@ -404,7 +406,7 @@ private struct BrowserCaptureEventSummary: Encodable {
     var droppedInterruptionDetails = 0
 }
 
-private final class BrowserCaptureEvents: @unchecked Sendable {
+fileprivate final class BrowserCaptureEvents: @unchecked Sendable {
     private let lock = NSLock()
     private var counts = BrowserCaptureEventSummary()
     private var retainedInterruptions: [MeetingSessionEvent] = []
@@ -444,19 +446,21 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         }
         let options = try SystemContinuityOptions(environment: environment)
         try options.prepareRoot()
+        var capturedReport: SystemContinuityReport?
         do {
             try MeetingBrowserAudioHardwareTests.require(CGPreflightScreenCaptureAccess(), "System audio is not preflight-authorized.")
             try MeetingBrowserAudioHardwareTests.require(
                 AVCaptureDevice.authorizationStatus(for: .audio) == .authorized, "Microphone is not preflight-authorized."
             )
             let report = try await self.capture(options)
+            capturedReport = report
             try MeetingBrowserAudioHardwareTests.write(report, to: options.root.appendingPathComponent("outcome.json"))
             XCTAssertTrue(report.failures.isEmpty, report.failures.joined(separator: " "))
         } catch {
-            try? MeetingBrowserAudioHardwareTests.write(
-                SystemContinuityReport(runID: options.runID, status: "failed", failures: [error.localizedDescription]),
-                to: options.root.appendingPathComponent("outcome.json")
-            )
+            var report = capturedReport ?? SystemContinuityReport(runID: options.runID, status: "failed", failures: [])
+            report.status = "failed"
+            report.failures.append(error.localizedDescription)
+            try? MeetingBrowserAudioHardwareTests.write(report, to: options.root.appendingPathComponent("outcome.json"))
             throw error
         }
     }
@@ -480,14 +484,16 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         let events = BrowserCaptureEvents()
         var protocolState = SystemContinuityProtocol(runID: options.runID)
         let immutableSession = session
-        let start: MeetingCaptureStartResult
+        var start: MeetingCaptureStartResult?
+        var stopped: MeetingCaptureStopResult?
         let captureStart = SystemContinuityProtocol.hostSeconds()
         do {
-            start = try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 12) {
+            let started = try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 12) {
                 try await engine.start(session: immutableSession, configuration: configuration,
                                        sessionDirectory: directory, eventHandler: { events.record($0) })
             }
-            session.audioTracks = start.tracks
+            start = started
+            session.audioTracks = started.tracks
             session.state = .recording
             try await store.save(session)
             try MeetingBrowserAudioHardwareTests.write(
@@ -528,6 +534,7 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
             let stop = try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 12) {
                 try await engine.stop(sessionID: sessionID)
             }
+            stopped = stop
             session.audioTracks = stop.tracks
             session.endedAt = stop.stoppedAt
             session.state = .interrupted // Capture probe does not claim meeting processing completed.
@@ -537,92 +544,167 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
             try await store.save(session)
             await engine.shutdownForTermination()
         } catch {
-            await engine.shutdownForTermination()
-            if case let MeetingCaptureError.captureStopFailed(_, partial) = error {
-                session.audioTracks = partial.tracks
-                session.endedAt = partial.stoppedAt
-            }
-            session.state = .failed
-            session.events = events.interruptions()
-            session.updatedAt = Date()
-            try? await store.save(session)
-            throw error
+            let failure = await Self.finalizeFailure(
+                error, session: session, stopped: stopped, captureStarted: start != nil,
+                engine: engine, store: store, events: events
+            )
+            return Self.report(
+                session: failure.session, directory: directory, runID: options.runID,
+                captureScope: start?.captureScope, protocolState: protocolState,
+                events: events, failures: failure.failures
+            )
         }
-        var report = SystemContinuityReport(runID: options.runID, status: "failed", failures: [])
+        var report = Self.report(
+            session: session, directory: directory, runID: options.runID,
+            captureScope: start?.captureScope, protocolState: protocolState, events: events, failures: []
+        )
+        do {
+            if report.applicationAudioScope != "systemAudio" || report.capturedApplication != nil || report.captureScope != "systemAudio" {
+                report.failures.append("Capture/session metadata did not identify the all-system source truthfully.")
+            }
+            if Set(report.tracks.map(\.kind)) != Set(["applicationAudio", "microphone"]) {
+                report.failures.append("Capture did not preserve separate system and microphone tracks.")
+            }
+            for track in report.tracks where track.chunkCount == 0 || track.finalizedChunkCount != track.chunkCount
+                || track.persistedBytes == 0 || track.decodedFrames == 0 || track.nonFiniteSamples != 0 {
+                report.failures.append("\(track.kind) contains missing, unfinished, empty, or invalid PCM.")
+            }
+            let terminal: [MeetingInterruptionKind] = [.writerFailure, .diskExhausted, .permissionRevoked,
+                                                       .captureStoppedUnexpectedly, .applicationExited, .microphoneDisconnected]
+            for kind in terminal where report.events?.interruptionsByKind[kind.rawValue, default: 0] ?? 0 > 0 {
+                report.failures.append("Capture emitted terminal interruption \(kind.rawValue).")
+            }
+            if report.events?.droppedInterruptionDetails ?? 0 > 0 { report.failures.append("Interruption evidence overflowed.") }
+            let track = try XCTUnwrap(session.audioTracks.first { $0.kind == .applicationAudio })
+            if track.sourceIdentifier != "system-audio" { report.failures.append("System track has an application-specific identifier.") }
+            // Epoch clock resets can alter the writer's canonical PTS mapping. This probe deliberately
+            // rejects ambiguous evidence instead of assigning old audio to a later external phase.
+            if track.chunks.contains(where: { $0.discontinuities.contains { $0.kind == .clockDiscontinuity } }) {
+                report.failures.append("Clock reset prevents unambiguous host-time phase matching in this probe.")
+            }
+            var phaseSamples: [[Float]] = []
+            for phase in protocolState.phases {
+                let saved = try await Self.samples(in: phase, track: track, directory: directory)
+                let samples = saved.samples
+                let metrics = SystemContinuityPhaseMetrics(phase: phase, samples: samples, chunkCount: saved.chunkCount)
+                report.phases.append(metrics)
+                phaseSamples.append(samples)
+                if metrics.rms <= 0.001 || metrics.peak <= 0.01 || metrics.nonSilentSeconds < 0.5
+                    || metrics.nonFiniteSamples != 0 || metrics.decodedSeconds < 0.5 {
+                    report.failures.append("\(phase.name) has no valid speech signal in its own persisted system-audio time window.")
+                }
+            }
+            if let modelDirectory = options.modelDirectory {
+                let modelStore = PichiGigaAMModelStore(directory: modelDirectory)
+                let fingerprint = try modelStore.installedModelFingerprint()
+                let provider = PichiGigaAMProvider(modelStore: modelStore, expectedModelFingerprint: fingerprint)
+                do {
+                    try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 30) { @MainActor in try await provider.prepare() }
+                    for index in report.phases.indices {
+                        let samples = phaseSamples[index]
+                        let text = try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 30) { @MainActor in
+                            try await provider.transcribeFinal(samples).text
+                        }
+                        report.phases[index].speechText = text
+                        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            report.failures.append("\(report.phases[index].phase.name) produced an empty transcript.")
+                        }
+                        if let expected = options.expectedText[report.phases[index].phase.name],
+                           !text.localizedCaseInsensitiveContains(expected) {
+                            report.failures.append("\(report.phases[index].phase.name) transcript lacks its distinct expected synthetic phrase.")
+                        }
+                    }
+                    await provider.unloadModel()
+                } catch is CancellationError {
+                    await provider.unloadModel()
+                    throw CancellationError()
+                } catch {
+                    await provider.unloadModel()
+                    report.failures.append("Per-phase saved speech verification failed: \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            // Post-capture decode/model failures must not replace finalized capture evidence.
+            report.failures.append("Saved phase evidence verification failed: \(error.localizedDescription)")
+        }
+        report.status = report.failures.isEmpty ? "passed" : "failed"
+        return report
+    }
+
+    /// Stop returns authoritative finalized tracks, including when runtime stop itself failed.
+    /// Shutdown is always joined, but its Void result must never replace that stop evidence.
+    fileprivate static func finalizeFailure(
+        _ error: Error, session initialSession: MeetingSession, stopped: MeetingCaptureStopResult?,
+        captureStarted: Bool, engine: any MeetingCaptureControlling,
+        store: MeetingSessionStore, events: BrowserCaptureEvents
+    ) async -> (session: MeetingSession, failures: [String]) {
+        var session = initialSession
+        var failures = [error.localizedDescription]
+        var stop = stopped
+        if case let MeetingCaptureError.captureStopFailed(_, partial) = error { stop = partial }
+        if stop == nil {
+            do {
+                let sessionID = session.id
+                stop = try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 12) {
+                    try await engine.stop(sessionID: sessionID)
+                }
+            } catch {
+                if case let MeetingCaptureError.captureStopFailed(_, partial) = error { stop = partial }
+                if captureStarted || !Self.isNoActiveCapture(error) {
+                    failures.append("Capture teardown failed: \(error.localizedDescription)")
+                }
+            }
+        }
+        await engine.shutdownForTermination()
+        if let stop {
+            session.audioTracks = stop.tracks
+            session.endedAt = stop.stoppedAt
+            session.recoveryResolvedAt = stop.stoppedAt
+        } else {
+            // A joined deadline can discard a completed stop value. Reconcile durable track
+            // manifests through the existing store, rather than decoding a second JSON schema.
+            do {
+                if let recovered = try await store.load(id: session.id) {
+                    session.audioTracks = recovered.audioTracks
+                }
+            } catch { failures.append("Finalized track reconciliation failed: \(error.localizedDescription)") }
+            session.endedAt = Date()
+        }
+        session.timebase.firstPresentationTime = session.audioTracks.flatMap(\.chunks).map(\.presentationStart).min()
+        session.state = .failed
+        session.events = events.interruptions()
+        session.updatedAt = session.endedAt ?? Date()
+        do { try await store.save(session) }
+        catch { failures.append("Failed capture session save failed: \(error.localizedDescription)") }
+        return (session, failures)
+    }
+
+    private static func isNoActiveCapture(_ error: Error) -> Bool {
+        if case MeetingCaptureError.noActiveCapture = error { return true }
+        return false
+    }
+
+    fileprivate static func report(
+        session: MeetingSession, directory: URL, runID: UUID, captureScope: MeetingCaptureScope?,
+        protocolState: SystemContinuityProtocol, events: BrowserCaptureEvents, failures: [String]
+    ) -> SystemContinuityReport {
+        var report = SystemContinuityReport(runID: runID, status: "failed", failures: failures)
         report.sessionDirectory = directory.path
+        report.sessionState = session.state.rawValue
+        report.endedAt = session.endedAt
         report.applicationAudioScope = session.applicationAudioScope?.rawValue
         report.capturedApplication = session.capturedApplication?.bundleIdentifier
-        report.captureScope = start.captureScope.map { String(describing: $0) }
+        report.captureScope = captureScope.map { String(describing: $0) }
+        report.protocolComplete = protocolState.isComplete
         report.browserAbsentSeconds = protocolState.browserAbsentSeconds
         report.commands = protocolState.commands
         report.acknowledgements = protocolState.acknowledgements
+        report.phaseWindows = protocolState.phases
         report.events = events.summary()
-        report.tracks = try session.audioTracks.map { try MeetingBrowserAudioHardwareTests.measure($0, in: directory) }
-        if report.applicationAudioScope != "systemAudio" || report.capturedApplication != nil || report.captureScope != "systemAudio" {
-            report.failures.append("Capture/session metadata did not identify the all-system source truthfully.")
+        for track in session.audioTracks {
+            do { report.tracks.append(try MeetingBrowserAudioHardwareTests.measure(track, in: directory)) }
+            catch { report.failures.append("\(track.kind.rawValue) saved PCM measurement failed: \(error.localizedDescription)") }
         }
-        if Set(report.tracks.map(\.kind)) != Set(["applicationAudio", "microphone"]) {
-            report.failures.append("Capture did not preserve separate system and microphone tracks.")
-        }
-        for track in report.tracks where track.chunkCount == 0 || track.finalizedChunkCount != track.chunkCount
-            || track.persistedBytes == 0 || track.decodedFrames == 0 || track.nonFiniteSamples != 0 {
-            report.failures.append("\(track.kind) contains missing, unfinished, empty, or invalid PCM.")
-        }
-        let terminal: [MeetingInterruptionKind] = [.writerFailure, .diskExhausted, .permissionRevoked,
-                                                   .captureStoppedUnexpectedly, .applicationExited, .microphoneDisconnected]
-        for kind in terminal where report.events?.interruptionsByKind[kind.rawValue, default: 0] ?? 0 > 0 {
-            report.failures.append("Capture emitted terminal interruption \(kind.rawValue).")
-        }
-        if report.events?.droppedInterruptionDetails ?? 0 > 0 { report.failures.append("Interruption evidence overflowed.") }
-        let track = try XCTUnwrap(session.audioTracks.first { $0.kind == .applicationAudio })
-        if track.sourceIdentifier != "system-audio" { report.failures.append("System track has an application-specific identifier.") }
-        // Epoch clock resets can alter the writer's canonical PTS mapping. This probe deliberately
-        // rejects ambiguous evidence instead of assigning old audio to a later external phase.
-        if track.chunks.contains(where: { $0.discontinuities.contains { $0.kind == .clockDiscontinuity } }) {
-            report.failures.append("Clock reset prevents unambiguous host-time phase matching in this probe.")
-        }
-        var phaseSamples: [[Float]] = []
-        for phase in protocolState.phases {
-            let saved = try await Self.samples(in: phase, track: track, directory: directory)
-            let samples = saved.samples
-            let metrics = SystemContinuityPhaseMetrics(phase: phase, samples: samples, chunkCount: saved.chunkCount)
-            report.phases.append(metrics)
-            phaseSamples.append(samples)
-            if metrics.rms <= 0.001 || metrics.peak <= 0.01 || metrics.nonSilentSeconds < 0.5
-                || metrics.nonFiniteSamples != 0 || metrics.decodedSeconds < 0.5 {
-                report.failures.append("\(phase.name) has no valid speech signal in its own persisted system-audio time window.")
-            }
-        }
-        if let modelDirectory = options.modelDirectory {
-            let modelStore = PichiGigaAMModelStore(directory: modelDirectory)
-            let fingerprint = try modelStore.installedModelFingerprint()
-            let provider = PichiGigaAMProvider(modelStore: modelStore, expectedModelFingerprint: fingerprint)
-            do {
-                try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 30) { @MainActor in try await provider.prepare() }
-                for index in report.phases.indices {
-                    let samples = phaseSamples[index]
-                    let text = try await MeetingBrowserAudioHardwareTests.withDeadline(seconds: 30) { @MainActor in
-                        try await provider.transcribeFinal(samples).text
-                    }
-                    report.phases[index].speechText = text
-                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        report.failures.append("\(report.phases[index].phase.name) produced an empty transcript.")
-                    }
-                    if let expected = options.expectedText[report.phases[index].phase.name],
-                       !text.localizedCaseInsensitiveContains(expected) {
-                        report.failures.append("\(report.phases[index].phase.name) transcript lacks its distinct expected synthetic phrase.")
-                    }
-                }
-                await provider.unloadModel()
-            } catch is CancellationError {
-                await provider.unloadModel()
-                throw CancellationError()
-            } catch {
-                await provider.unloadModel()
-                report.failures.append("Per-phase saved speech verification failed: \(error.localizedDescription)")
-            }
-        }
-        report.status = report.failures.isEmpty ? "passed" : "failed"
         return report
     }
 
@@ -728,7 +810,7 @@ private struct SystemContinuityReady: Encodable {
     let durationSeconds: Double
 }
 
-private struct SystemContinuityCommand: Codable {
+fileprivate struct SystemContinuityCommand: Codable {
     let runID: UUID
     let sequence: Int
     let action: String
@@ -738,13 +820,13 @@ private struct SystemContinuityCommand: Codable {
     let processID: Int32?
 }
 
-private struct SystemContinuityAck: Codable {
+fileprivate struct SystemContinuityAck: Codable {
     let runID: UUID
     let sequence: Int
     let machAbsoluteHostSeconds: Double
 }
 
-private struct SystemContinuityPhase: Encodable {
+fileprivate struct SystemContinuityPhase: Encodable {
     let name: String
     let bundleID: String?
     let executablePath: String
@@ -754,7 +836,7 @@ private struct SystemContinuityPhase: Encodable {
 }
 
 /// Only external phase evidence is trusted here, never inferred from RMS or ASR timing.
-private struct SystemContinuityProtocol {
+fileprivate struct SystemContinuityProtocol {
     static let phaseNames = ["browserBefore", "secondSource", "browserAfter"]
     let runID: UUID
     private(set) var sequence = 0
@@ -828,7 +910,7 @@ private struct SystemContinuityProtocol {
     }
 }
 
-private struct SystemContinuityPhaseMetrics: Encodable {
+fileprivate struct SystemContinuityPhaseMetrics: Encodable {
     let phase: SystemContinuityPhase
     let decodedSeconds: Double
     let chunkCount: Int
@@ -860,11 +942,15 @@ private struct SystemContinuityPhaseMetrics: Encodable {
     }
 }
 
-private struct SystemContinuityReport: Encodable {
+fileprivate struct SystemContinuityReport: Encodable {
     let runID: UUID
     var status: String
     var failures: [String]
     var sessionDirectory: String?
+    var sessionState: String?
+    var endedAt: Date?
+    var protocolComplete = false
+    var phaseWindows: [SystemContinuityPhase] = []
     var applicationAudioScope: String?
     var capturedApplication: String?
     var captureScope: String?
@@ -948,6 +1034,230 @@ final class MeetingSystemAudioContinuityProtocolTests: XCTestCase {
             SystemContinuityCommand(runID: runID, sequence: 8, action: "end", phase: "browserAfter", bundleID: nil, executablePath: nil, processID: nil),
         ]
     }
+}
+
+/// Synthetic persisted PCM plus a capture-controller seam verifies failure evidence without
+/// opening audio devices, loading a model, or depending on an interactive browser.
+@MainActor
+final class MeetingSystemAudioContinuityFailureEvidenceTests: XCTestCase {
+    func testLateFirstPhaseRetainsFinalizedCaptureAndAcceptedProtocolEvidence() async throws {
+        let fixture = try await self.fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
+        var protocolState = SystemContinuityProtocol(runID: UUID())
+        _ = try protocolState.accept(self.begin(runID: protocolState.runID), at: 100)
+        let end = SystemContinuityCommand(runID: protocolState.runID, sequence: 2, action: "end",
+                                          phase: "browserBefore", bundleID: nil, executablePath: nil, processID: nil)
+        let primary: Error
+        do {
+            _ = try protocolState.accept(end, at: 160.01)
+            return XCTFail("A late first phase must remain a failed protocol.")
+        } catch { primary = error }
+        let events = BrowserCaptureEvents()
+        events.record(.interrupted(kind: .sourceLost, trackID: fixture.stop.tracks[0].id, detail: nil))
+        events.record(.chunkFinalized(trackID: fixture.stop.tracks[0].id,
+                                      chunk: fixture.stop.tracks[0].chunks[0],
+                                      format: MeetingAudioFormat(codec: "pcm", sampleRate: 16_000, channelCount: 1, bitRate: nil)))
+        let engine = ContinuityEvidenceCaptureController(outcome: .stopped(fixture.stop))
+        let failure = await MeetingSystemAudioContinuityHardwareTests.finalizeFailure(
+            primary, session: fixture.session, stopped: nil, captureStarted: true,
+            engine: engine, store: fixture.store, events: events
+        )
+        let report = MeetingSystemAudioContinuityHardwareTests.report(
+            session: failure.session, directory: fixture.directory, runID: protocolState.runID,
+            captureScope: .systemAudio, protocolState: protocolState, events: events, failures: failure.failures
+        )
+        XCTAssertEqual(report.status, "failed")
+        XCTAssertFalse(report.protocolComplete)
+        XCTAssertEqual(report.failures.first, primary.localizedDescription)
+        XCTAssertEqual(report.commands.map(\.sequence), [1])
+        XCTAssertEqual(report.acknowledgements.map(\.sequence), [1])
+        XCTAssertEqual(report.phaseWindows.count, 1)
+        XCTAssertEqual(report.phaseWindows[0].startHostSeconds, report.phaseWindows[0].endHostSeconds)
+        XCTAssertTrue(report.phases.isEmpty, "An unclosed phase must not masquerade as verified speech.")
+        XCTAssertEqual(report.events?.finalizedChunkEvents, 1)
+        XCTAssertEqual(report.events?.interruptionsByKind["sourceLost"], 1)
+        XCTAssertEqual(report.sessionState, "failed")
+        XCTAssertEqual(report.endedAt, fixture.stop.stoppedAt)
+        XCTAssertEqual(report.applicationAudioScope, "systemAudio")
+        XCTAssertNil(report.capturedApplication)
+        XCTAssertEqual(report.captureScope, "systemAudio")
+        XCTAssertEqual(report.tracks.count, 2)
+        let encodedReport = try JSONSerialization.jsonObject(with: JSONEncoder().encode(report)) as? [String: Any]
+        XCTAssertEqual((encodedReport?["commands"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual((encodedReport?["phaseWindows"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual(encodedReport?["protocolComplete"] as? Bool, false)
+        XCTAssertTrue(report.tracks.allSatisfy { $0.finalizedChunkCount == 1 && $0.decodedFrames == 1600 && $0.rms > 0.1 })
+        let loaded = try await fixture.store.load(id: fixture.session.id)
+        let saved = try XCTUnwrap(loaded)
+        XCTAssertEqual(saved.state, .failed)
+        XCTAssertEqual(saved.audioTracks, fixture.stop.tracks)
+        XCTAssertEqual(saved.endedAt, fixture.stop.stoppedAt)
+        XCTAssertEqual(saved.events.count, 1)
+        let calls = await engine.calls()
+        XCTAssertEqual(calls, ["stop", "shutdown"])
+    }
+
+    func testTeardownFailureRetainsPartialStopAndOriginalFailure() async throws {
+        let fixture = try await self.fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
+        let engine = ContinuityEvidenceCaptureController(outcome: .partial(fixture.stop))
+        let primary = BrowserCaptureFailure(message: "operator protocol failed")
+        let failure = await MeetingSystemAudioContinuityHardwareTests.finalizeFailure(
+            primary, session: fixture.session, stopped: nil, captureStarted: true,
+            engine: engine, store: fixture.store, events: BrowserCaptureEvents()
+        )
+        XCTAssertEqual(failure.failures.count, 2)
+        XCTAssertEqual(failure.failures.first, primary.localizedDescription)
+        XCTAssertTrue(failure.failures[1].contains("synthetic runtime stop failure"))
+        XCTAssertEqual(failure.session.audioTracks, fixture.stop.tracks)
+        XCTAssertEqual(failure.session.endedAt, fixture.stop.stoppedAt)
+        XCTAssertEqual(failure.session.recoveryResolvedAt, fixture.stop.stoppedAt)
+        let calls = await engine.calls()
+        XCTAssertEqual(calls, ["stop", "shutdown"])
+    }
+
+    func testAlreadyReturnedPartialStopIsNotReplacedByNoActiveCapture() async throws {
+        let fixture = try await self.fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
+        let engine = ContinuityEvidenceCaptureController(outcome: .noActive)
+        let primary = MeetingCaptureError.captureStopFailed("synthetic runtime stop failure", partialResult: fixture.stop)
+        let failure = await MeetingSystemAudioContinuityHardwareTests.finalizeFailure(
+            primary, session: fixture.session, stopped: nil, captureStarted: true,
+            engine: engine, store: fixture.store, events: BrowserCaptureEvents()
+        )
+        XCTAssertEqual(failure.failures, [primary.localizedDescription])
+        XCTAssertEqual(failure.session.audioTracks, fixture.stop.tracks)
+        let calls = await engine.calls()
+        XCTAssertEqual(calls, ["shutdown"])
+    }
+
+    func testFailureAfterSuccessfulStopKeepsReturnedTracksWithoutStoppingAgain() async throws {
+        let fixture = try await self.fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
+        let engine = ContinuityEvidenceCaptureController(outcome: .noActive)
+        let primary = BrowserCaptureFailure(message: "synthetic session save failed after stop")
+        let failure = await MeetingSystemAudioContinuityHardwareTests.finalizeFailure(
+            primary, session: fixture.session, stopped: fixture.stop, captureStarted: true,
+            engine: engine, store: fixture.store, events: BrowserCaptureEvents()
+        )
+        XCTAssertEqual(failure.failures, [primary.localizedDescription])
+        XCTAssertEqual(failure.session.audioTracks, fixture.stop.tracks)
+        XCTAssertEqual(failure.session.endedAt, fixture.stop.stoppedAt)
+        let calls = await engine.calls()
+        XCTAssertEqual(calls, ["shutdown"])
+    }
+
+    func testNoReturnedStopReconcilesDurableManifestAfterJoinedShutdown() async throws {
+        let fixture = try await self.fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
+        for track in fixture.stop.tracks {
+            try MeetingBrowserAudioHardwareTests.write(track, to: fixture.directory.appendingPathComponent("tracks/" + track.kind.rawValue + "/track.json"))
+        }
+        let engine = ContinuityEvidenceCaptureController(outcome: .noActive)
+        let failure = await MeetingSystemAudioContinuityHardwareTests.finalizeFailure(
+            BrowserCaptureFailure(message: "stop deadline elapsed"), session: fixture.session,
+            stopped: nil, captureStarted: true, engine: engine, store: fixture.store, events: BrowserCaptureEvents()
+        )
+        XCTAssertEqual(failure.failures.count, 2, "Missing stop result must remain visible even when disk PCM is recoverable.")
+        XCTAssertEqual(failure.session.audioTracks, fixture.stop.tracks.sorted { $0.kind.rawValue < $1.kind.rawValue })
+        XCTAssertNotNil(failure.session.endedAt)
+        XCTAssertEqual(failure.session.timebase.firstPresentationTime, fixture.stop.tracks[0].chunks[0].presentationStart)
+        let calls = await engine.calls()
+        XCTAssertEqual(calls, ["stop", "shutdown"])
+    }
+
+    func testStartupFailureStillJoinsShutdownWithoutInventingStopFailure() async throws {
+        let fixture = try await self.fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory.deletingLastPathComponent().deletingLastPathComponent()) }
+        var session = fixture.session
+        session.audioTracks = []
+        session.state = .preparing
+        try await fixture.store.save(session)
+        let engine = ContinuityEvidenceCaptureController(outcome: .noActive)
+        let primary = BrowserCaptureFailure(message: "synthetic start failed")
+        let failure = await MeetingSystemAudioContinuityHardwareTests.finalizeFailure(
+            primary, session: session, stopped: nil, captureStarted: false,
+            engine: engine, store: fixture.store, events: BrowserCaptureEvents()
+        )
+        XCTAssertEqual(failure.failures, [primary.localizedDescription])
+        XCTAssertTrue(failure.session.audioTracks.isEmpty)
+        XCTAssertEqual(failure.session.state, .failed)
+        let calls = await engine.calls()
+        XCTAssertEqual(calls, ["stop", "shutdown"])
+    }
+
+    private func begin(runID: UUID) -> SystemContinuityCommand {
+        SystemContinuityCommand(runID: runID, sequence: 1, action: "begin", phase: "browserBefore",
+                                bundleID: "test.browser", executablePath: "/synthetic/browser", processID: 101)
+    }
+
+    private func fixture() async throws -> (session: MeetingSession, stop: MeetingCaptureStopResult, store: MeetingSessionStore, directory: URL) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ContinuityEvidence-" + UUID().uuidString)
+        let store = MeetingSessionStore(rootDirectory: root.appendingPathComponent("sessions"))
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+                                               machTimebaseDenominator: 1, firstPresentationTime: nil)
+        var session = MeetingSession(configuration: MeetingCaptureConfiguration(
+            mode: .onlineCall, title: "Synthetic failure evidence", languageCode: "ru", application: nil,
+            applicationAudioScope: .systemAudio,
+            microphone: MeetingMicrophoneIdentity(captureDeviceID: "synthetic-microphone", displayName: "Synthetic microphone")
+        ), timebase: timebase)
+        session.audioTracks = [.applicationAudio, .microphone].map { kind in
+            MeetingAudioTrack(id: UUID(), kind: kind, sourceIdentifier: kind == .applicationAudio ? "system-audio" : "synthetic-microphone",
+                              sourceDisplayName: kind.rawValue, format: nil, timebase: timebase, health: .waiting, chunks: [])
+        }
+        session.state = .recording
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        var tracks = session.audioTracks
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        for index in tracks.indices {
+            let path = "tracks/" + tracks[index].kind.rawValue + "/chunk_0.caf"
+            let url = directory.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+                let file = try AVAudioFile(forWriting: url, settings: format.settings)
+                let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1600))
+                buffer.frameLength = 1600
+                let samples = try XCTUnwrap(buffer.floatChannelData)[0]
+                for frame in 0..<1600 { samples[frame] = frame % 2 == 0 ? 0.25 : -0.25 }
+                try file.write(from: buffer)
+            }
+            let bytes = try XCTUnwrap((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value)
+            let digest = SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
+            tracks[index].chunks = [MeetingAudioChunk(id: UUID(), sequence: 0, relativeFilePath: path,
+                presentationStart: MeetingMediaTime(value: 100, timescale: 1),
+                presentationEnd: MeetingMediaTime(value: 1001, timescale: 10), discontinuities: [],
+                sha256: digest, byteCount: bytes, finalizationState: .finalized)]
+        }
+        return (session, MeetingCaptureStopResult(tracks: tracks, stoppedAt: Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down) + 1)), store, directory)
+    }
+}
+
+private actor ContinuityEvidenceCaptureController: MeetingCaptureControlling {
+    enum Outcome: Sendable {
+        case stopped(MeetingCaptureStopResult)
+        case partial(MeetingCaptureStopResult)
+        case noActive
+    }
+    let outcome: Outcome
+    private var invocationOrder: [String] = []
+    init(outcome: Outcome) { self.outcome = outcome }
+    func preflightPermissions() async throws { throw BrowserCaptureFailure(message: "Failure evidence tests must not request permissions.") }
+    func start(session: MeetingSession, configuration: MeetingCaptureConfiguration, sessionDirectory: URL,
+               eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
+               liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?) async throws -> MeetingCaptureStartResult {
+        throw BrowserCaptureFailure(message: "Failure evidence tests must not start hardware capture.")
+    }
+    func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
+        self.invocationOrder.append("stop")
+        switch self.outcome {
+        case let .stopped(result): return result
+        case let .partial(result): throw MeetingCaptureError.captureStopFailed("synthetic runtime stop failure", partialResult: result)
+        case .noActive: throw MeetingCaptureError.noActiveCapture
+        }
+    }
+    func shutdownForTermination() async { self.invocationOrder.append("shutdown") }
+    func calls() -> [String] { self.invocationOrder }
 }
 
 #endif
