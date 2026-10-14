@@ -832,6 +832,16 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         }
     }
 
+    /// Every chunk reports unreadable, so a manifest builds to explicit gaps without fixture audio.
+    private struct UnreadableFixtureObserver: MeetingChunkAudioObserving {
+        func observe(
+            chunk: MeetingAudioChunk,
+            trackID: MeetingAudioTrackID
+        ) -> MeetingChunkObservationResult {
+            .failed(.unreadable, detail: "fixture")
+        }
+    }
+
     func testPipelineSurfacesMalformedCanonicalEvidenceAsAValidationFailure() async throws {
         let session = self.makeSession()
         let trackID = try XCTUnwrap(session.audioTracks.first?.id)
