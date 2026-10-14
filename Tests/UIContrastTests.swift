@@ -142,8 +142,12 @@ struct UIContrastTests {
     }
 
     @MainActor
-    static func main() throws {
+    static func main() async throws {
         let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+        if CommandLine.arguments.contains("--segmented-only") {
+            try await FluidSegmentedPickerTests.run(directory: directory)
+            return
+        }
         let packages = [
             ("pichi", "Sources/Fluid/Branding/brand-package.json"),
             ("sber", "Configuration/BrandExamples/sber-demo.json"),
@@ -368,6 +372,7 @@ struct UIContrastTests {
         }
         print("Production disabled command glyph, Help and word metric: \(reviewChecks) review regression rendering checks passed")
         self.verifyConstruction()
+        try await FluidSegmentedPickerTests.run(directory: directory)
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }

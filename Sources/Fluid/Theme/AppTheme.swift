@@ -92,6 +92,7 @@ struct AppTheme {
         var inheritedFont: Font? = nil
         var brandStyle: BrandStyle? = nil
         var nativeBodyFont: NSFont { .fluidSystemFont(ofSize: 14, style: self.brandStyle) }
+        var nativeBodySmallFont: NSFont { .fluidSystemFont(ofSize: 13, style: self.brandStyle) }
 
         static var standard: Typography { self.standard(style: AppBrand.package.style) }
 

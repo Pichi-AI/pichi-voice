@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct BrandSettingsSection: View {
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.locale) private var interfaceLocale
     @State private var errorMessage: String?
     @State private var importing = false
 
@@ -14,13 +15,10 @@ struct BrandSettingsSection: View {
             HStack {
                 Text("Appearance").font(self.theme.typography.bodyStrong)
                 Spacer()
-                Picker("Theme", selection: Binding(get: { self.settings.themePreference }, set: { self.settings.themePreference = $0 })) {
-                    ForEach(SettingsStore.ThemePreference.allCases) { preference in
-                        // Let the native Text resolve its trusted UI key on every inherited locale change.
-                        Text(LocalizedStringKey(preference.displayName)).tag(preference)
-                    }
-                }
-                .labelsHidden().pickerStyle(.segmented).frame(width: 240)
+                FluidSegmentedPicker(title: "Theme", options: SettingsStore.ThemePreference.allCases.map {
+                    (value: $0, title: PichiLocalization.text($0.displayName, locale: self.interfaceLocale))
+                }, selection: Binding(get: { self.settings.themePreference }, set: { self.settings.themePreference = $0 }))
+                .frame(width: 240)
             }
             HStack {
                 VStack(alignment: .leading, spacing: 2) {

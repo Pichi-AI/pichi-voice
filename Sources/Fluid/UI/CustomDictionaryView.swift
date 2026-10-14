@@ -1407,12 +1407,9 @@ struct CustomDictionaryView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Word Priority")
                     .font(self.theme.typography.captionStrong)
-                Picker("Word Priority", selection: self.$boostTermStrength) {
-                    ForEach(BoostStrengthPreset.allCases) { preset in
-                        Text(PichiLocalization.text(preset.rawValue)).tag(preset)
-                    }
-                }
-                .pickerStyle(.segmented)
+                FluidSegmentedPicker(title: "Word Priority", options: BoostStrengthPreset.allCases.map {
+                    (value: $0, title: PichiLocalization.text($0.rawValue))
+                }, selection: self.$boostTermStrength)
                 Text(PichiLocalization.text(self.boostTermStrength.hint))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)

@@ -63,10 +63,10 @@ struct FluidIntelligenceDemoView: View {
                 }
                 .buttonStyle(.plain).disabled(self.busy).accessibilityLabel(PichiLocalization.text("Close demo"))
             }
-            Picker("Example", selection: self.$selected) {
-                ForEach(Self.examples.indices, id: \.self) { index in Text(PichiLocalization.text(Self.examples[index].title)).tag(index) }
-            }
-            .pickerStyle(.segmented).disabled(self.busy)
+            FluidSegmentedPicker(title: "Example", options: Self.examples.indices.map {
+                (value: $0, title: PichiLocalization.text(Self.examples[$0].title))
+            }, selection: self.$selected)
+            .disabled(self.busy)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     self.textPanel("You say", text: Self.examples[self.selected].spoken, accented: false)
