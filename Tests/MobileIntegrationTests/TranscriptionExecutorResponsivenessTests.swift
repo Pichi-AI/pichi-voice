@@ -7,7 +7,7 @@ import XCTest
 /// A bounded stand-in for synchronous native allocation/teardown. Its gate can
 /// only be opened by MainActor while the operation is running, so merely waiting
 /// for an asynchronous sleep would not prove responsiveness.
-private final nonisolated class BlockingNativeProbe: @unchecked Sendable {
+final nonisolated class BlockingNativeProbe: @unchecked Sendable {
     private let lock = NSLock()
     private let releaseGate = DispatchSemaphore(value: 0)
     private var entered = false

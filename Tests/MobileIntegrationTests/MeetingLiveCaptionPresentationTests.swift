@@ -142,6 +142,30 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testNativeScrollingRemainsResponsiveWhileNativeWorkIsBlocked() async throws {
+        let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
+        defer { host.close() }
+        let scroll = try await captionScroll(in: host)
+        try await settle(host, "Initial native document follows the bottom") { self.nearBottom(scroll) }
+        let probe = BlockingNativeProbe()
+        let executor = TranscriptionExecutor()
+        let work = Task { try await executor.runBlocking { probe.run() } }
+        defer { probe.release() }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while !probe.hasEntered, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(probe.hasEntered)
+        XCTAssertFalse(probe.hasFinished)
+        XCTAssertFalse(probe.ranOnMainThread)
+        let olderOffset = max(0, bottomOffset(scroll) - 250)
+        scroll.setContentOffset(CGPoint(x: 0, y: olderOffset), animated: false)
+        try await settle(host, "Native viewport can scroll while synchronous work is still running") {
+            abs(scroll.contentOffset.y - olderOffset) < 3 && !probe.hasFinished
+        }
+        capture(host, step: "01-scrolled-during-native-work", scheme: .light)
+        probe.release()
+        XCTAssertTrue(try await work.value)
+    }
+
     func testPendingWaveformsGrowAndBecomeRealTextInBothThemes() async throws {
         for scheme in [ColorScheme.light, .dark] {
             let originalRows = wordRows(count: 260)
