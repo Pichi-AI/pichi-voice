@@ -722,9 +722,8 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
             else { defaults.removeObject(forKey: speechModelKey) }
         }
-        // A registered speech model takes precedence over the saved meeting backend.
-        // Select an unregistered model so this fixture exercises the legacy fallback.
-        settings.selectedSpeechModel = .whisperTiny
+        // Use an unregistered model to isolate the saved legacy backend policy.
+        settings.selectedSpeechModel = .whisperSmall
         settings.meetingTranscriptionBackendID = .legacyCompatibility
         let marker = CocoaError(.userCancelled)
         var productionPreparations = 0
@@ -758,7 +757,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
             else { defaults.removeObject(forKey: speechModelKey) }
         }
-        settings.selectedSpeechModel = .whisperTiny
+        settings.selectedSpeechModel = .whisperSmall
         let unknown = MeetingBackendID(rawValue: "unknown-saved-backend")
         for pinned in [true, false] {
             settings.meetingTranscriptionBackendID = pinned ? .legacyCompatibility : unknown
@@ -786,7 +785,7 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         }
     }
 
-    func testRegisteredSpeechModelWinsOverSavedBackendWithoutChangingPreferences() {
+    func testExplicitSavedBackendPrecedesRegisteredModelWithoutChangingPreferences() {
         let settings = SettingsStore.shared
         let defaults = UserDefaults.standard
         let speechModelKey = "SelectedSpeechModel"
@@ -799,43 +798,37 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
             if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
             else { defaults.removeObject(forKey: speechModelKey) }
         }
-        settings.selectedSpeechModel = .gigaam
         let unknown = MeetingBackendID(rawValue: "unknown-saved-backend")
-        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperTiny.rawValue))
+        XCTAssertNotNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperTiny.rawValue))
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperSmall.rawValue))
         let selections: [(saved: MeetingBackendID, english: MeetingBackendID, nonEnglish: MeetingBackendID)] = [
             (.legacyCompatibility, .legacyCompatibility, .productionDefault),
             (.productionDefault, .productionDefault, .productionDefault),
             (unknown, unknown, unknown),
         ]
+        let models: [(model: SettingsStore.SpeechModel, defaultBackend: MeetingBackendID)] = [
+            (.gigaam, .gigaam), (.whisperTiny, .whisperTiny), (.whisperSmall, .productionDefault),
+        ]
         for (saved, english, nonEnglish) in selections {
             settings.meetingTranscriptionBackendID = saved
             for (languageCode, fallback) in [("en", english), ("fr", nonEnglish), ("ru", nonEnglish)] {
-                XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode), .gigaam)
-                XCTAssertEqual(
-                    PichiMeetingProviderFactory.selectedBackendID(
-                        languageCode: languageCode, selectedModelID: SettingsStore.SpeechModel.gigaam.rawValue
-                    ),
-                    .gigaam
-                )
-                XCTAssertEqual(
-                    PichiMeetingProviderFactory.selectedBackendID(
-                        languageCode: languageCode, selectedModelID: SettingsStore.SpeechModel.whisperTiny.rawValue
-                    ),
-                    fallback
-                )
+                for (model, defaultBackend) in models {
+                    settings.selectedSpeechModel = model
+                    let expected = saved == .productionDefault ? defaultBackend : fallback
+                    XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode), expected)
+                    XCTAssertEqual(
+                        PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode, selectedModelID: model.rawValue),
+                        expected
+                    )
+                    XCTAssertEqual(
+                        PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode,
+                            selectedModelID: model.rawValue, savedBackendID: saved),
+                        expected
+                    )
+                    XCTAssertEqual(settings.meetingTranscriptionBackendID, saved)
+                    XCTAssertEqual(settings.selectedSpeechModel, model)
+                }
             }
-            XCTAssertEqual(settings.meetingTranscriptionBackendID, saved)
-            XCTAssertEqual(settings.selectedSpeechModel, .gigaam)
-        }
-    }
-
-    /// Every chunk reports unreadable, so a manifest builds to explicit gaps without fixture audio.
-    private struct UnreadableFixtureObserver: MeetingChunkAudioObserving {
-        func observe(
-            chunk: MeetingAudioChunk,
-            trackID: MeetingAudioTrackID
-        ) -> MeetingChunkObservationResult {
-            .failed(.unreadable, detail: "fixture")
         }
     }
 
