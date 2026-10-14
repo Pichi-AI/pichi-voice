@@ -71,6 +71,47 @@ struct UIContrastTests {
             print("Actual native Button construction: 6 role/enabled checks and 3 enabled trigger-forwarding checks passed")
         }
     }
+    // Render the source-bound production foreground decision and real Button
+    // label constructor on reference fills. Native glass itself remains skipped.
+    @MainActor
+    static func verifyProminentAppearance(theme: AppTheme, scheme: ColorScheme, suffix: String,
+                                         directory: URL) throws -> Int {
+        guard #available(macOS 26, *) else { return 0 }
+        let appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)!
+        var failure: Error?
+        var checks = 0
+        appearance.performAsCurrentDrawingAppearance {
+            do {
+                for active in [true, false] {
+                    for (toneName, tone): (String, Color?) in [("accent", nil), ("red", .red)] {
+                        let fill = active ? (tone ?? theme.palette.accent) : (scheme == .dark ? Color.black : Color.white)
+                        // System label ink is translucent. Compare its actual composite
+                        // on the neutral reference fill, not opaque brand text tokens.
+                        let nativeInk = NSColor.labelColor.usingColorSpace(.sRGB)!
+                        let neutral = self.components(fill)
+                        let alpha = Double(nativeInk.alphaComponent)
+                        let nativeComposite = Color(.sRGB,
+                            red: Double(nativeInk.redComponent) * alpha + neutral[0] * (1 - alpha),
+                            green: Double(nativeInk.greenComponent) * alpha + neutral[1] * (1 - alpha),
+                            blue: Double(nativeInk.blueComponent) * alpha + neutral[2] * (1 - alpha))
+                        let ink = active ? theme.palette.foreground(on: tone ?? theme.palette.accent) : nativeComposite
+                        let button = ProminentGlassLabelFixture(tone: tone)
+                            .environment(\.appearsActive, active)
+                            .buttonStyle(InheritedWhiteInkRenderer())
+                            .padding(14)
+                            .background(fill)
+                        try self.verify(button, name: "prominent-appearance-\(active ? "active" : "inactive")-\(toneName)-\(suffix)",
+                            theme: theme, scheme: scheme, textBackground: self.components(fill), directory: directory,
+                            expectedForeground: ink, labelOnly: true)
+                        checks += 1
+                    }
+                }
+            } catch { failure = error }
+        }
+        if let failure { throw failure }
+        return checks
+    }
+
     static func components(_ color: Color) -> [Double] {
         let rgb = NSColor(color).usingColorSpace(.sRGB)!
         return [Double(rgb.redComponent), Double(rgb.greenComponent), Double(rgb.blueComponent)]
@@ -159,6 +200,7 @@ struct UIContrastTests {
         var checks = 0
         var actionChecks = 0
         var reviewChecks = 0
+        var prominentAppearanceChecks = 0
         for (name, path) in packages {
             let package = try BrandPackage.decode(Data(contentsOf: URL(fileURLWithPath: path)))
             for scheme: ColorScheme in [.light, .dark] {
@@ -190,9 +232,10 @@ struct UIContrastTests {
                             let theme = AppTheme.adaptive(accent: Color(hex: accentHex)!, colorScheme: scheme, package: package)
                             let suffix = "\(name)-\(scheme == .dark ? "dark" : "light")-\(variant)"
                             let foreground = theme.palette.accentForeground
+                            prominentAppearanceChecks += try self.verifyProminentAppearance(theme: theme, scheme: scheme, suffix: suffix, directory: directory)
                             let accentRGB = self.components(theme.palette.accent)
                             // Actual accessibility fallback controls use the same paired
-                            // foreground as native glass. Label pixels are rendered from
+                            // foreground as active native glass. Label pixels are rendered from
                             // fail-closed source excerpts, not copied surrogate labels.
                             try self.verify(ChooseFileActionFixture(),
                                 name: "fallback-choose-\(suffix)", theme: theme, scheme: scheme, textBackground: accentRGB,
@@ -334,6 +377,7 @@ struct UIContrastTests {
             for scheme: ColorScheme in [.light, .dark] {
                 let theme = AppTheme.adaptive(accent: Color(hex: accent)!, colorScheme: scheme, package: package)
                 let suffix = "\(name)-\(scheme == .dark ? "dark" : "light")"
+                prominentAppearanceChecks += try self.verifyProminentAppearance(theme: theme, scheme: scheme, suffix: suffix, directory: directory)
                 for (controlName, control) in [("help", AnyView(ProductionHelpActionFixture())),
                                                ("number", AnyView(ProductionHelpNumberFixture())),
                                                ("words", AnyView(ProductionWordMetricFixture()))] {
@@ -371,6 +415,7 @@ struct UIContrastTests {
             }
         }
         print("Production disabled command glyph, Help and word metric: \(reviewChecks) review regression rendering checks passed")
+        print("Production prominent active/inactive foreground: \(prominentAppearanceChecks) reference-fill rendering checks passed")
         self.verifyConstruction()
         try await FluidSegmentedPickerTests.run(directory: directory)
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
