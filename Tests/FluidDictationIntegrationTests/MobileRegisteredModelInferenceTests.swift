@@ -185,6 +185,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                         let file = root.appendingPathComponent("audio/\(name).wav")
                         let actualHash = SHA256.hash(data: try Data(contentsOf: file)).map { String(format: "%02x", $0) }.joined()
                         XCTAssertEqual(actualHash, hash, "The expected text must refer to this exact approved fixture")
+                        guard actualHash == hash else { throw NSError(domain: "UnapprovedTinyFixture", code: 1) }
                         let samples = try await self.pcm(name, in: root)
                         for scale: Float in [1, 0.01] {
                             let input = scale == 1 ? samples : samples.map { $0 * scale }
