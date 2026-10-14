@@ -82,6 +82,59 @@ nonisolated enum ParakeetSpeechModelCatalog {
             }
         }
 
+        /// Content identity for a frozen meeting attempt. This explicit disk operation
+        /// belongs to attempt preparation/snapshot work, never a model-card render.
+        /// Only registered model components and vocabulary enter the digest.
+        func installedArtifactFingerprint(at directory: URL) throws -> String? {
+            guard self.artifactsAreComplete(at: directory) else { return nil }
+            var files: [URL] = [directory.appendingPathComponent(self.vocabularyFile)]
+            var count = 0
+            for name in self.requiredModelNames {
+                let root = directory.appendingPathComponent(name, isDirectory: true)
+                var enumerationFailed = false
+                guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil,
+                                                                      errorHandler: { _, _ in
+                    enumerationFailed = true
+                    return false
+                }) else { return nil }
+                for case let file as URL in enumerator {
+                    try Task.checkCancellation()
+                    count += 1
+                    guard count <= 50_000 else { return nil }
+                    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                    switch attributes[.type] as? FileAttributeType {
+                    case .typeDirectory: break
+                    case .typeRegular: files.append(file)
+                    default: return nil
+                    }
+                }
+                guard !enumerationFailed else { return nil }
+            }
+            var digest = SHA256()
+            var totalBytes: Int64 = 0
+            let prefix = directory.standardizedFileURL.path + "/"
+            for file in files.sorted(by: { $0.path < $1.path }) {
+                try Task.checkCancellation()
+                guard file.standardizedFileURL.path.hasPrefix(prefix),
+                      file.resolvingSymlinksInPath().standardizedFileURL.path == file.standardizedFileURL.path else { return nil }
+                let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+                guard let byteCount = (attributes[.size] as? NSNumber)?.int64Value,
+                      byteCount >= 0, byteCount <= max(1_073_741_824, self.expectedDownloadBytes * 4) - totalBytes else { return nil }
+                totalBytes += byteCount
+                let relative = String(file.standardizedFileURL.path.dropFirst(prefix.count))
+                digest.update(data: Data("\(relative.utf8.count):\(relative)\n".utf8))
+                let input = try FileHandle(forReadingFrom: file)
+                defer { try? input.close() }
+                var content = SHA256()
+                while let bytes = try input.read(upToCount: 1_048_576), !bytes.isEmpty {
+                    try Task.checkCancellation()
+                    content.update(data: bytes)
+                }
+                digest.update(data: Data(content.finalize()))
+            }
+            return "sha256:" + digest.finalize().map { String(format: "%02x", $0) }.joined()
+        }
+
         /// Compact model folders are stable across releases; their exact installed
         /// archive revision must match before an existing cache may skip download.
         func installationRevisionMatches(at directory: URL) -> Bool {

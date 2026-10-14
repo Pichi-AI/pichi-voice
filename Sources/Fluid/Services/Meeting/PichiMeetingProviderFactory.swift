@@ -5,15 +5,26 @@ import Foundation
 @MainActor
 enum PichiMeetingProviderFactory {
     nonisolated static let gigaamModelID = "gigaam-v3-eou"
+    nonisolated static let whisperTinyModelID = "whisper-tiny"
+    nonisolated static let parakeetV3ModelID = "parakeet-tdt"
     // Retain the persisted identifier from the first downstream implementation.
     nonisolated static let transcriptOnlyDiarizationFingerprint = "unavailable:gigaam-transcript-only-v1"
+
+    /// Resource reach is part of a registered inference capability, not a model switch
+    /// in capture or the coordinator. These conservative admission values still require
+    /// sustained inference/thermal measurements on each supported physical device.
+    nonisolated struct LiveAdmission: Sendable, Equatable {
+        let minimumPhysicalMemoryBytes: UInt64
+        let maximumTrackCount: Int
+    }
 
     private nonisolated struct Registration: Sendable {
         let descriptor: MeetingBackendDescriptor
         let defaultLanguageCode: String
-        let providerFactory: @MainActor (MeetingFinalProcessingConfiguration) throws -> any TranscriptionProvider
-        let configurationSnapshot: @MainActor (String, String?) -> MeetingFinalProcessingConfiguration
-        let modelsExistOnDisk: @Sendable () -> Bool
+        let providerFactory: @MainActor @Sendable (MeetingFinalProcessingConfiguration) throws -> any TranscriptionProvider
+        let configurationSnapshot: @MainActor @Sendable (String, String?, Bool) -> MeetingFinalProcessingConfiguration
+        let modelsExistOnDisk: @MainActor @Sendable () -> Bool
+        let liveAdmission: LiveAdmission
     }
 
     private nonisolated static let registrations: [String: Registration] = [
@@ -27,22 +38,103 @@ enum PichiMeetingProviderFactory {
                 supportedFinalPrecisions: [.word, .utterance],
                 resultContract: .canonicalEvidence,
                 knownLimits: [
-                    "GigaAM is a Russian recognition model; other languages require another selected model.",
-                    "Word times come from CTC token frames. Text without usable word timings remains an utterance.",
-                    "Automatic speaker separation requires an installed Nemotron model and Apple Silicon.",
-                    "Without diarization, speaker identities remain unknown; microphone/application source tracks remain distinct.",
+                    "GigaAM supports Russian. For English or mixed speech, select a multilingual model.",
+                    "Speaker labels are automatic and can be uncertain in short or overlapping speech.",
+                    "Download the speaker models in Recording settings before an offline meeting.",
                 ],
-                analysisSampleRate: 16_000
+                analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching],
+                allowsTranscriptOnlyOnUnsupportedHardware: true,
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
             ),
             defaultLanguageCode: "ru",
             providerFactory: { configuration in
                 let store = configuration.asrArtifactDirectory.map { PichiGigaAMModelStore(directory: $0) } ?? .shared
                 return PichiGigaAMProvider(modelStore: store, expectedModelFingerprint: configuration.asrArtifactFingerprint)
             },
-            configurationSnapshot: { languageCode, artifactFingerprintOverride in
-                PichiMeetingProviderFactory.gigaamConfiguration(languageCode: languageCode, artifactFingerprintOverride: artifactFingerprintOverride)
+            configurationSnapshot: { languageCode, artifactFingerprintOverride, diarizationEnabled in
+                PichiMeetingProviderFactory.gigaamConfiguration(languageCode: languageCode, artifactFingerprintOverride: artifactFingerprintOverride,
+                                                               diarizationEnabled: diarizationEnabled)
             },
-            modelsExistOnDisk: { PichiGigaAMModelStore.shared.modelsExistOnDisk() }
+            modelsExistOnDisk: { PichiGigaAMModelStore.shared.modelsExistOnDisk() },
+            // Sustained buffered captions passed on a nominal 4 GB iPad reporting
+            // 4,166,696,960 physical bytes. Express this registration in decimal GB.
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4_000_000_000, maximumTrackCount: 2)
+        ),
+        PichiMeetingProviderFactory.whisperTinyModelID: Registration(
+            descriptor: MeetingBackendDescriptor(
+                id: .whisperTiny,
+                version: "1",
+                execution: .local,
+                supportedLanguageCodes: VoiceEngineLanguageCatalog.whisperSupportedLanguageCodes.union(["auto"]),
+                supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
+                supportedFinalPrecisions: [.word, .utterance],
+                resultContract: .canonicalEvidence,
+                knownLimits: [
+                    "Whisper Tiny is small and fast, with lower recognition accuracy.",
+                    "Mixed Russian and English speech may contain errors or transliteration.",
+                    "When different people speak in one transcript phrase, speaker labels may remain unknown.",
+                    "Download the speaker models in Recording settings before an offline meeting.",
+                ],
+                analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching],
+                allowsTranscriptOnlyOnUnsupportedHardware: true,
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
+            ),
+            defaultLanguageCode: "auto",
+            providerFactory: { try WhisperProvider(meetingConfiguration: $0) },
+            configurationSnapshot: { languageCode, fingerprint, diarizationEnabled in
+                let model = SettingsStore.SpeechModel.whisperTiny
+                let directory = AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
+                return MeetingFinalProcessingConfiguration(
+                    asrModel: model.rawValue,
+                    asrArtifactFingerprint: fingerprint ?? (try? WhisperProvider.installedArtifactFingerprint(for: model, directory: directory)),
+                    asrArtifactDirectory: directory,
+                    languageCode: languageCode,
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
+                    speakerLabelsEnabled: diarizationEnabled
+                )
+            },
+            modelsExistOnDisk: { SettingsStore.SpeechModel.whisperTiny.isInstalled },
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 2 * 1_073_741_824, maximumTrackCount: 2)
+        ),
+        PichiMeetingProviderFactory.parakeetV3ModelID: Registration(
+            descriptor: MeetingBackendDescriptor(
+                id: .parakeetV3,
+                version: "1",
+                execution: .local,
+                supportedLanguageCodes: VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.union(["auto"]),
+                supportedTrackKinds: Set(MeetingAudioTrackKind.allCases),
+                supportedFinalPrecisions: [.word, .utterance],
+                resultContract: .canonicalEvidence,
+                knownLimits: [
+                    "Parakeet v3 supports 25 languages, including Russian and English.",
+                    "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.",
+                    "Download the speaker models in Recording settings before an offline meeting.",
+                    "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.",
+                ],
+                analysisSampleRate: 16_000,
+                diarizationDependencies: [.speakerSeparation, .voiceMatching],
+                allowsTranscriptOnlyOnUnsupportedHardware: true,
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
+            ),
+            defaultLanguageCode: "auto",
+            providerFactory: { try FluidAudioProvider(meetingConfiguration: $0) },
+            configurationSnapshot: { languageCode, fingerprint, diarizationEnabled in
+                let descriptor = ParakeetSpeechModelCatalog.v3
+                let directory = descriptor.cacheDirectory(in: AppBrand.modelsDirectory)
+                let installed = descriptor.artifactsAreComplete(at: directory)
+                return MeetingFinalProcessingConfiguration(
+                    asrModel: PichiMeetingProviderFactory.parakeetV3ModelID,
+                    asrArtifactFingerprint: fingerprint ?? (installed ? (try? descriptor.installedArtifactFingerprint(at: directory)) : nil),
+                    asrArtifactDirectory: installed ? directory : nil,
+                    languageCode: languageCode,
+                    diarizationFingerprint: PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled),
+                    speakerLabelsEnabled: diarizationEnabled
+                )
+            },
+            modelsExistOnDisk: { SettingsStore.SpeechModel.parakeetTDT.isInstalled },
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2)
         ),
     ]
 
@@ -58,8 +150,12 @@ enum PichiMeetingProviderFactory {
         self.registrations[modelID]?.defaultLanguageCode
     }
 
-    nonisolated static func registeredModelsExistOnDisk(for modelID: String) -> Bool? {
+    static func registeredModelsExistOnDisk(for modelID: String) -> Bool? {
         self.registrations[modelID]?.modelsExistOnDisk()
+    }
+
+    nonisolated static func registeredLiveAdmission(for modelID: String) -> LiveAdmission? {
+        self.registrations[modelID]?.liveAdmission
     }
 
     nonisolated static func isTranscriptOnlyDiarizationFingerprint(_ value: String?) -> Bool {
@@ -96,65 +192,103 @@ enum PichiMeetingProviderFactory {
         return try FluidAudioProvider(meetingConfiguration: configuration)
     }
 
-    static func selectedBackendID(languageCode: String, selectedModelID: String? = nil) -> MeetingBackendID {
-        let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
-        if let registration = self.registrations[modelID] {
-            return registration.descriptor.id
+    static func selectedBackendID(languageCode: String, selectedModelID: String? = nil,
+                                  savedBackendID: MeetingBackendID? = nil) -> MeetingBackendID {
+        let saved = savedBackendID ?? SettingsStore.shared.meetingTranscriptionBackendID
+        // Explicit rollback/unknown choices retain their historical meaning. The packaged
+        // default lets a registered model choose its own backend; activation stores its ID.
+        if saved != .productionDefault {
+            return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
         }
-        let saved = SettingsStore.shared.meetingTranscriptionBackendID
-        return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
+        let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
+        return self.registrations[modelID]?.descriptor.id ?? saved
+    }
+
+    /// A registered provider's frozen configuration binds ASR and artifact identity. The
+    /// generic configuration of an unbound compatibility executor does not bind its ASR model.
+    nonisolated static func liveModelID(backendID: MeetingBackendID, configuration: MeetingFinalProcessingConfiguration,
+                                       selectedModelID: String) -> String {
+        guard self.registrations[configuration.asrModel]?.descriptor.id == backendID else { return selectedModelID }
+        return configuration.asrModel
+    }
+
+    /// Capability/option admission uses registered metadata only. Installed artifact identity
+    /// belongs to the later frozen attempt snapshot; probing it here would hash full weights on
+    /// the main actor before downloads, permissions or the audio lease.
+    static func validationConfiguration(backendID: MeetingBackendID, languageCode: String,
+                                        diarizationEnabled: Bool) -> MeetingFinalProcessingConfiguration {
+        if let modelID = self.registrations.first(where: { $0.value.descriptor.id == backendID })?.key {
+            return MeetingFinalProcessingConfiguration(asrModel: modelID, languageCode: languageCode,
+                diarizationFingerprint: "unavailable:input-admission", speakerLabelsEnabled: diarizationEnabled)
+        }
+        return MeetingFinalProcessingConfiguration(languageCode: languageCode,
+            diarizationFingerprint: "unavailable:input-admission", speakerLabelsEnabled: diarizationEnabled)
     }
 
     /// The returned value is frozen once per attempt and used by planning, ASR and metadata.
     static func configuration(
         backendID: MeetingBackendID,
         languageCode: String,
-        artifactFingerprintOverride: String? = nil
+        artifactFingerprintOverride: String? = nil,
+        diarizationEnabled: Bool = true
     ) -> MeetingFinalProcessingConfiguration {
         if let registration = self.registrations.values.first(where: { $0.descriptor.id == backendID }) {
-            return registration.configurationSnapshot(languageCode, artifactFingerprintOverride)
+            return registration.configurationSnapshot(languageCode, artifactFingerprintOverride, diarizationEnabled)
         }
-        return MeetingFinalProcessingConfiguration(languageCode: languageCode)
+        return MeetingFinalProcessingConfiguration(languageCode: languageCode,
+                                                  diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
+                                                  speakerLabelsEnabled: diarizationEnabled)
     }
 
     static func configuration(
         asrModel: String,
         languageCode: String,
-        artifactFingerprintOverride: String? = nil
+        artifactFingerprintOverride: String? = nil,
+        diarizationEnabled: Bool = true
     ) -> MeetingFinalProcessingConfiguration {
         if let registration = self.registrations[asrModel] {
-            return registration.configurationSnapshot(languageCode, artifactFingerprintOverride)
+            return registration.configurationSnapshot(languageCode, artifactFingerprintOverride, diarizationEnabled)
         }
-        return MeetingFinalProcessingConfiguration(asrModel: asrModel, languageCode: languageCode)
+        return MeetingFinalProcessingConfiguration(asrModel: asrModel, languageCode: languageCode,
+                                                  diarizationFingerprint: diarizationEnabled ? MeetingProcessingCheckpoint.currentDiarizationFingerprint : self.transcriptOnlyDiarizationFingerprint,
+                                                  speakerLabelsEnabled: diarizationEnabled)
     }
 
     private static func gigaamConfiguration(
         languageCode: String,
-        artifactFingerprintOverride: String?
+        artifactFingerprintOverride: String?,
+        diarizationEnabled: Bool
     ) -> MeetingFinalProcessingConfiguration {
         let installed = try? PichiGigaAMModelStore.shared.installedModel()
         let artifactFingerprint = installed.flatMap {
             try? PichiGigaAMModelStore(directory: $0.directory).installedModelFingerprint()
         }
-        let diarizationFingerprint: String
-        #if arch(arm64)
-        diarizationFingerprint = (try? MeetingNemotronModelLocator().locate()) == nil
-            ? self.transcriptOnlyDiarizationFingerprint
-            : MeetingProcessingCheckpoint.currentDiarizationFingerprint
-        #else
-        diarizationFingerprint = self.transcriptOnlyDiarizationFingerprint
-        #endif
+        let diarizationFingerprint = PichiMeetingProviderFactory.availableDiarizationFingerprint(enabled: diarizationEnabled)
         return MeetingFinalProcessingConfiguration(
             asrModel: self.gigaamModelID,
             asrArtifactFingerprint: artifactFingerprintOverride ?? artifactFingerprint,
             asrArtifactDirectory: installed?.directory,
             languageCode: languageCode,
-            diarizationFingerprint: diarizationFingerprint
+            diarizationFingerprint: diarizationFingerprint,
+            speakerLabelsEnabled: diarizationEnabled
         )
+    }
+
+    private static func availableDiarizationFingerprint(enabled: Bool) -> String {
+        guard enabled else { return self.transcriptOnlyDiarizationFingerprint }
+        #if arch(arm64)
+        guard (try? MeetingNemotronModelLocator().locate()) != nil,
+              (try? MeetingSpeakerVoiceModelArtifacts.validate()) != nil else { return self.transcriptOnlyDiarizationFingerprint }
+        return MeetingProcessingCheckpoint.currentDiarizationFingerprint + ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision
+        #else
+        return self.transcriptOnlyDiarizationFingerprint
+        #endif
     }
 }
 
 // Existing downstream source references retain their stable identity; registration owns the ID.
 extension MeetingBackendID {
     nonisolated static let gigaam = MeetingBackendID(rawValue: "local-gigaam-v3-eou-v1")
+    nonisolated static let whisperTiny = MeetingBackendID(rawValue: "local-whisper-tiny-multilingual-v1")
+    nonisolated static let parakeetV3 = MeetingBackendID(rawValue: "local-parakeet-tdt-v3-v1")
 }

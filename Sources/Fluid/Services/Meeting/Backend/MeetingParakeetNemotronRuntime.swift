@@ -67,6 +67,14 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch
+    /// A display-only speech observation after the ASR scope has drained, before attribution.
+    /// The owner must apply privacy and generation checks; this batch is not a durable result.
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch
+    nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws
     nonisolated func speakerVoiceProfiles(
         samples: [MeetingSpeakerVoiceSamples]
     ) async throws -> [MeetingSpeakerVoiceProfile]
@@ -84,8 +92,30 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 }
 
 extension MeetingParakeetNemotronRunning {
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
+        throw MeetingPCMInputError.unsupportedRuntime
+    }
+
+    /// Existing injected runtimes keep their original final operation without claiming an
+    /// early observation. Concrete adapters can implement the additive preview capability.
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+        try await self.recognizePCM(samples: samples, offset: offset, trackID: trackID,
+                                    attemptID: attemptID, configuration: configuration)
+    }
+
+    nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws {
+        throw MeetingModelResidencyError.unsupportedProvider
+    }
     /// Existing injected runtimes without a voice encoder retain separate speaker identities.
     nonisolated func speakerVoiceProfiles(
         samples _: [MeetingSpeakerVoiceSamples]
     ) async throws -> [MeetingSpeakerVoiceProfile] { [] }
+}
+
+nonisolated enum MeetingPCMInputError: LocalizedError {
+    case unsupportedRuntime
+    var errorDescription: String? { PichiLocalization.text("The selected meeting runtime does not support in-memory audio.") }
 }

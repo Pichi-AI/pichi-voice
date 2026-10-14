@@ -47,6 +47,19 @@ nonisolated enum MeetingBackendResultContract: String, Codable, Sendable {
 
 /// Identity/version, platform reach, execution locality, supported final precision, track topology
 /// and the limits a caller must not assume away.
+nonisolated enum MeetingDiarizationDependency: String, Hashable, Sendable {
+    case speakerSeparation
+    case voiceMatching
+}
+
+/// Recorded chunks and bounded in-memory input are separate admissions. A file executor is
+/// never substituted for strict microphone PCM merely because its ASR provider accepts samples.
+nonisolated enum MeetingBackendInputKind: String, Hashable, Sendable {
+    case recordedChunks
+    /// One microphone stream of bounded mono 16kHz windows, with canonical transcript assembly.
+    case boundedMicrophonePCM
+}
+
 nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     let id: MeetingBackendID
     let version: String
@@ -60,11 +73,14 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     /// backend never receives a manifest, and an outcome case other than the declared one is a
     /// typed failure, never a silent reinterpretation.
     let resultContract: MeetingBackendResultContract
+    let supportedInputs: Set<MeetingBackendInputKind>
     /// Human-readable, non-exhaustive statements of what this backend cannot guarantee.
     let knownLimits: [String]
     /// The backend's real analysis/resample rate, when it has one. The pipeline records it on the
     /// analysis manifest; `nil` leaves sample-rate conversion explicitly unknown (plan §3).
     let analysisSampleRate: Double?
+    let diarizationDependencies: Set<MeetingDiarizationDependency>
+    let allowsTranscriptOnlyOnUnsupportedHardware: Bool
 
     init(
         id: MeetingBackendID,
@@ -75,7 +91,10 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         supportedFinalPrecisions: Set<MeetingTextUnitPrecision>,
         resultContract: MeetingBackendResultContract,
         knownLimits: [String],
-        analysisSampleRate: Double? = nil
+        analysisSampleRate: Double? = nil,
+        diarizationDependencies: Set<MeetingDiarizationDependency> = [],
+        allowsTranscriptOnlyOnUnsupportedHardware: Bool = false,
+        supportedInputs: Set<MeetingBackendInputKind> = [.recordedChunks]
     ) {
         self.id = id
         self.version = version
@@ -84,8 +103,44 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.supportedTrackKinds = supportedTrackKinds
         self.supportedFinalPrecisions = supportedFinalPrecisions
         self.resultContract = resultContract
+        self.supportedInputs = supportedInputs
         self.knownLimits = knownLimits
         self.analysisSampleRate = analysisSampleRate
+        self.diarizationDependencies = diarizationDependencies
+        self.allowsTranscriptOnlyOnUnsupportedHardware = allowsTranscriptOnlyOnUnsupportedHardware
+    }
+
+    /// Pure admission: no runtime, artifact preparation, file reads or microphone access. The
+    /// strict capture path has one source, so admitting an online two-source topology would lose
+    /// a track rather than provide the file backend's semantics.
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        guard self.supportedInputs.contains(.boundedMicrophonePCM) else {
+            throw MeetingBackendError.unsupportedInput(backend: self.id, input: .boundedMicrophonePCM)
+        }
+        guard self.resultContract == .canonicalEvidence else {
+            throw MeetingBackendError.outcomeContractMismatch(backend: self.id, declared: self.resultContract)
+        }
+        guard self.analysisSampleRate == 16_000, !self.supportedFinalPrecisions.isEmpty else {
+            throw MeetingBackendError.unsupportedInput(backend: self.id, input: .boundedMicrophonePCM)
+        }
+        guard self.supportedLanguageCodes.contains(configuration.languageCode) else {
+            throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: configuration.languageCode)
+        }
+        guard mode == .inRoom, self.supportedTrackKinds.contains(.microphone) else {
+            throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
+        }
+    }
+
+    func validatePCMInput(_ request: MeetingBackendRequest) throws {
+        try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode)
+        guard request.configuration.languageCode == request.session.languageCode else {
+            throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: request.session.languageCode)
+        }
+        guard request.session.audioStorageMode == .memoryOnly,
+              request.session.audioTracks.count <= 1,
+              request.session.audioTracks.allSatisfy({ $0.kind == .microphone && $0.chunks.isEmpty }) else {
+            throw MeetingBackendError.unsupportedTrackTopology(backend: self.id)
+        }
     }
 }
 
@@ -254,6 +309,14 @@ protocol MeetingTranscriptionBackend: AnyObject {
     /// Validates compatibility and freezes an immutable plan. Runs before any model load.
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan
 
+    /// Pure strict-input validation, before any resource preparation. Implementations also
+    /// validate their immutable provider options; the default rejects file-only backends.
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws
+
+    /// The selected backend owns strict PCM dispatch through the same registered runtime. The
+    /// host capability is bound to this exact request, as it is for the file executor.
+    func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning
+
     /// `manifest` is the product-owned, already validated analysis manifest built from the frozen
     /// plan, present exactly when the descriptor declares the canonical evidence contract. Legacy
     /// backends always receive `nil` and must run exactly as before.
@@ -266,10 +329,20 @@ protocol MeetingTranscriptionBackend: AnyObject {
 
 extension MeetingTranscriptionBackend {
     var echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? { nil }
+
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        throw MeetingBackendError.unsupportedInput(backend: self.descriptor.id, input: .boundedMicrophonePCM)
+    }
+
+    func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning {
+        throw MeetingBackendError.unsupportedInput(backend: self.descriptor.id, input: .boundedMicrophonePCM)
+    }
 }
 
 nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {
     case unknownBackend(MeetingBackendID)
+    case backendDescriptorMismatch(backend: MeetingBackendID)
+    case unsupportedInput(backend: MeetingBackendID, input: MeetingBackendInputKind)
     /// A registered factory produced a backend whose descriptor claims a different identity than the
     /// one that was requested. Selection would otherwise be a lie: the caller asked for one backend
     /// and a different one would run, carrying its own limits and precisions.
@@ -296,6 +369,10 @@ nonisolated enum MeetingBackendError: LocalizedError, Equatable, Sendable {
         switch self {
         case let .unknownBackend(id):
             return "Meeting transcription backend \"\(id.rawValue)\" is not available."
+        case let .backendDescriptorMismatch(backend):
+            return PichiLocalization.format("Meeting backend \"%@\" produced capabilities different from its registration.", backend.rawValue)
+        case let .unsupportedInput(backend, input):
+            return PichiLocalization.format("Meeting backend \"%@\" does not support %@ input.", backend.rawValue, input.rawValue)
         case let .backendIdentityMismatch(requested, produced):
             return "Meeting backend \"\(requested.rawValue)\" resolved to a backend identifying "
                 + "itself as \"\(produced.rawValue)\"."

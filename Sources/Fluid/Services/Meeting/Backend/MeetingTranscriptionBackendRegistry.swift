@@ -76,6 +76,9 @@ final class MeetingTranscriptionBackendRegistry {
                 produced: backend.descriptor.id
             )
         }
+        if let declared = self.descriptors[id], backend.descriptor != declared {
+            throw MeetingBackendError.backendDescriptorMismatch(backend: id)
+        }
         return backend
     }
 }

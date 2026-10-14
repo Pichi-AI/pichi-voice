@@ -195,10 +195,22 @@ nonisolated struct FluidAudioProviderEnhancementOptions {
 
 #if arch(arm64)
 import FluidAudio
+import CoreML
 
 /// TranscriptionProvider implementation using FluidAudio (optimized for Apple Silicon)
 /// This wraps the existing FluidAudio-based ASR for use on Apple Silicon Macs.
 final class FluidAudioProvider: TranscriptionProvider {
+    /// Mobile capture and strict text-only inference keep the same model resident when
+    /// the app backgrounds. Select the documented CPU route at load time, never Metal.
+    static var platformModelConfiguration: MLModelConfiguration? {
+        #if os(iOS)
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuOnly
+        return configuration
+        #else
+        return nil
+        #endif
+    }
     private static let incrementalChunkingThresholdSamples = 240_000
     private static let incrementalAppendBlockSamples = 240_000
 
@@ -306,6 +318,7 @@ final class FluidAudioProvider: TranscriptionProvider {
     /// Opt-in pinned meeting options. When nil (legacy dictation), enhancement switches and
     /// the custom dictionary are still read live from `SettingsStore` at each call site.
     private let meetingOptions: MeetingProviderOptions?
+    private let meetingConfiguration: MeetingFinalProcessingConfiguration?
     /// Explicitly pinned enhancement options for offline/baseline runs. Precedence for each
     /// effective getter: fixed meeting policy, then this, then live `SettingsStore`.
     private let enhancementOptions: FluidAudioProviderEnhancementOptions?
@@ -322,6 +335,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.configureWordBoosting = configureWordBoosting
         self.updateCompactWeights = updateCompactWeights
         self.meetingOptions = nil
+        self.meetingConfiguration = nil
         self.enhancementOptions = enhancementOptions
         self.pronunciationStore = pronunciationStore
     }
@@ -339,6 +353,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.configureWordBoosting = false
         self.updateCompactWeights = false
         self.meetingOptions = options
+        self.meetingConfiguration = configuration
         self.enhancementOptions = nil
         self.pronunciationStore = .shared
     }
@@ -459,7 +474,15 @@ final class FluidAudioProvider: TranscriptionProvider {
         #else
         let cacheDirectory = AppBrand.modelsDirectory
         #endif
-        let modelCacheDirectory = descriptor.cacheDirectory(in: cacheDirectory)
+        let modelCacheDirectory = self.meetingConfiguration?.asrArtifactDirectory
+            ?? descriptor.cacheDirectory(in: cacheDirectory)
+        if let pinnedDirectory = self.meetingConfiguration?.asrArtifactDirectory,
+           !descriptor.artifactsAreComplete(at: pinnedDirectory) {
+            // A frozen external attempt is read-only. Setup owns installation/repair.
+            throw NSError(domain: "FluidAudioProvider", code: -4, userInfo: [
+                NSLocalizedDescriptionKey: "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run.",
+            ])
+        }
         DebugLogger.shared.info(
             "FluidAudioProvider: Starting model preparation for \(selectedModel.displayName) [version=\(modelVersion)]",
             source: "FluidAudioProvider"
@@ -529,10 +552,28 @@ final class FluidAudioProvider: TranscriptionProvider {
         }
 
         let loadStart = Date()
+        if let expected = self.meetingConfiguration?.asrArtifactFingerprint {
+            let verificationDescriptor = descriptor
+            let verification = Task.detached(priority: .userInitiated) {
+                try verificationDescriptor.installedArtifactFingerprint(at: modelCacheDirectory)
+            }
+            let actual = try await withTaskCancellationHandler {
+                try await verification.value
+            } onCancel: { verification.cancel() }
+            guard actual == expected else {
+                throw NSError(domain: "FluidAudioProvider", code: -5, userInfo: [
+                    NSLocalizedDescriptionKey: "The installed meeting model changed after this attempt was scheduled. Start a new processing run.",
+                ])
+            }
+        }
         // Download and load models
         let models: AsrModels
         do {
-            if descriptor.archiveURL != nil {
+            if self.meetingConfiguration?.asrArtifactDirectory != nil {
+                progressRelay.report(.loading)
+                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion,
+                                                         configuration: Self.platformModelConfiguration)
+            } else if descriptor.archiveURL != nil {
                 if installedHash == nil {
                     let release = descriptor
                     let validator: ParakeetArchiveDownloader.StageValidator?
@@ -553,10 +594,12 @@ final class FluidAudioProvider: TranscriptionProvider {
                 }
                 try Task.checkCancellation()
                 progressRelay.report(.loading)
-                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion)
+                models = try await AsrModels.loadLocalOnly(from: modelCacheDirectory, version: asrModelVersion,
+                                                         configuration: Self.platformModelConfiguration)
             } else {
                 models = try await AsrModels.downloadAndLoad(
                     to: modelCacheDirectory,
+                    configuration: Self.platformModelConfiguration,
                     version: asrModelVersion,
                     progressHandler: fluidAudioProgressHandler
                 )
@@ -661,6 +704,14 @@ final class FluidAudioProvider: TranscriptionProvider {
         try await self.transcribeFinal(samples)
     }
 
+    /// The library requires one second even when the meeting's final physical tail
+    /// is shorter. Pad only the inference input; capture duration and saved timing
+    /// remain the original PCM window. Ordinary dictation retains its existing policy.
+    private func meetingInferenceSamples(_ samples: [Float]) -> [Float] {
+        guard self.meetingOptions != nil, !samples.isEmpty, samples.count < 16_000 else { return samples }
+        return samples + [Float](repeating: 0, count: 16_000 - samples.count)
+    }
+
     func resetStreamingPreviewCache() {
         self.latestStreamingPreviewText = ""
         self.latestStreamingPreviewSampleCount = 0
@@ -703,7 +754,7 @@ final class FluidAudioProvider: TranscriptionProvider {
                     "FluidAudioProvider: Incremental preview failed (\(error.localizedDescription)); using full preview",
                     source: "FluidAudioProvider"
                 )
-                result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+                result = try await fullPreviewManager.transcribe(self.meetingInferenceSamples(samples), source: AudioSource.microphone)
             }
         } else {
             if !self.usesIncrementalDictation
@@ -711,7 +762,7 @@ final class FluidAudioProvider: TranscriptionProvider {
             {
                 self.resetIncrementalSession()
             }
-            result = try await fullPreviewManager.transcribe(samples, source: AudioSource.microphone)
+            result = try await fullPreviewManager.transcribe(self.meetingInferenceSamples(samples), source: AudioSource.microphone)
         }
         try self.requireCurrentRecording(generation)
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1187,7 +1238,13 @@ final class FluidAudioProvider: TranscriptionProvider {
         guard !outcome.textMayBeCorrected, let tokenTimings = outcome.tokenTimings else {
             return (outcome.result, [])
         }
-        return (outcome.result, Self.makeWordTimings(from: tokenTimings))
+        let words = Self.makeWordTimings(from: tokenTimings)
+        let duration = Double(samples.count) / 16_000
+        guard words.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
+            // Incomplete timing evidence never truncates otherwise valid wording.
+            return (outcome.result, [])
+        }
+        return (outcome.result, words)
     }
 
     static func makeWordTimings(from tokenTimings: [TokenTiming]) -> [ASRWordTiming] {
@@ -1217,7 +1274,7 @@ final class FluidAudioProvider: TranscriptionProvider {
         let textMayBeCorrected = self.isWordBoostingActive || !profiles.isEmpty
         await manager.setPronunciationCustomizationEnabled(!profiles.isEmpty)
         do {
-            let result = try await manager.transcribe(samples, source: AudioSource.microphone)
+            let result = try await manager.transcribe(self.meetingInferenceSamples(samples), source: AudioSource.microphone)
             let features = await manager.consumePronunciationEncoderFeatures()
             await manager.setPronunciationCustomizationEnabled(false)
             guard DictionaryMatcherExperiment.sharedFeaturesEnabled, let features, !profiles.isEmpty else {
@@ -1725,19 +1782,21 @@ final class FluidAudioProvider: TranscriptionProvider {
     var shouldClearCacheAfterCancellation: Bool {
         // Hosted downloads own their unpublished temporary files. A later load
         // cancellation must retain the verified, atomically published model.
-        self.resolvedSpeechModel.parakeetDescriptor?.archiveURL == nil
+        self.meetingConfiguration?.asrArtifactDirectory == nil && self.resolvedSpeechModel.parakeetDescriptor?.archiveURL == nil
     }
 
-    func clearCache() async throws {
-        let selectedModel = self.resolvedSpeechModel
+    func releaseResidency() async {
         self.automaticPronunciationProfiles = []
         self.didLoadAutomaticPronunciationProfiles = false
         self.recordingGeneration = UUID()
         self.resetIncrementalSession()
         self.temporalWarmRequest = nil
         let warmTask = self.temporalWarmTask
+        self.temporalWarmTask = nil
         warmTask?.cancel()
         await warmTask?.value
+        let streamingManager = self.streamingAsrManager
+        let finalManager = self.finalAsrManager
         self.isReady = false
         self.streamingAsrManager = nil
         self.finalAsrManager = nil
@@ -1748,6 +1807,13 @@ final class FluidAudioProvider: TranscriptionProvider {
         self.isWordBoostingActive = false
         self.boostedVocabularyTermsCount = 0
         self.boostedTermLookup = []
+        await streamingManager?.cleanup()
+        if let finalManager, finalManager !== streamingManager { await finalManager.cleanup() }
+    }
+
+    func clearCache() async throws {
+        let selectedModel = self.resolvedSpeechModel
+        await self.releaseResidency()
 
         guard let descriptor = selectedModel.parakeetDescriptor else {
             throw NSError(domain: "FluidAudioProvider", code: -1, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Parakeet model."])

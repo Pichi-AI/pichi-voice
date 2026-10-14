@@ -17,7 +17,8 @@ assert len(names) == 26, names
 # Values are inert and the real singleton initializer is guarded at compile time.
 (out / 'Brand.swift').write_text('nonisolated enum PichiLocalization { static func text(_ key: String) -> String { key } }; nonisolated enum AppBrand { static let keychainService = "synthetic-unused-service"; static let keychainAccount = "synthetic-unused-account" }\n')
 settings = Path('Sources/Fluid/Persistence/SettingsStore.swift').read_text()
-initializer = settings.split('    private init() {', 1)[1].split('\n    static func clampPrivateAI', 1)[0]
+initializer = settings.split('    private func initializeDesktopPreferences() {', 1)[1].split('\n    static func clampPrivateAI', 1)[0]
+assert 'self.initializeDesktopPreferences()' in settings.split('    init(defaults:', 1)[1].split('    #if os(macOS)', 2)[1]
 assert 'SecItem' not in initializer and 'fetchAllKeys' not in initializer
 assert 'DispatchQueue.main.async { self.refreshProviderAPIKeys() }' in initializer
 assert 'self.keychain.cachedKeys ?? [:]' in settings
