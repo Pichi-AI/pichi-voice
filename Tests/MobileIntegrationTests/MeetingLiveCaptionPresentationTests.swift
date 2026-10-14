@@ -142,6 +142,50 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testNativeSpeechQuietAndTextPreview() async throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let host = try CaptionNativeHost(rows: [
+                row("Сегодня обсудим инструкцию к препарату и условия хранения.", label: true),
+                row("Let's also look at the English version of the document."),
+                row("После встречи я пришлю актуальные материалы.")
+            ], scheme: scheme)
+            defer { host.close() }
+            try await settle(host, "Short review document is rendered") {
+                self.scrollViews(in: host.controller.view).contains { $0.bounds.height > 0 }
+            }
+            var projection = MeetingPendingSpeechProjection()
+            func feed(_ first: Int, _ last: Int, speech: Bool) {
+                for frame in first..<last {
+                    let time = Double(frame) * 0.02
+                    let rms: Float = speech ? 0.018 + 0.011 * Float(sin(time * 2 * .pi * 3)) : 0.001
+                    projection.observe(source: .you, start: time, end: time + 0.02,
+                        rms: rms, peak: rms * 3, zeroCrossingRate: 0.12)
+                }
+            }
+            feed(0, 100, speech: true)
+            host.model.pending = projection.snapshot
+            XCTAssertFalse(host.model.pending.tokens.isEmpty)
+            try await settle(host, "Speech waveforms are rendered") { true }
+            capture(host, step: "review-01-audio-pending", scheme: scheme)
+            feed(100, 400, speech: false)
+            host.model.pending = projection.snapshot
+            XCTAssertTrue(host.model.pending.tokens.isEmpty)
+            try await settle(host, "Quiet cleanup is rendered") { true }
+            capture(host, step: "review-02-after-quiet", scheme: scheme)
+            feed(400, 500, speech: true)
+            host.model.pending = projection.snapshot
+            XCTAssertFalse(host.model.pending.tokens.isEmpty)
+            let approved = "Документы доступны в разделе с материалами встречи."
+            projection.reconcile(visible: .init(revision: 1,
+                utterances: [.init(id: UUID(), speaker: .you, text: approved, start: 8, end: 10)]))
+            host.model.rows.append(row(approved))
+            host.model.pending = projection.snapshot
+            XCTAssertTrue(host.model.pending.tokens.isEmpty)
+            try await settle(host, "Approved text replaces its waveforms") { true }
+            capture(host, step: "review-03-text-replacement", scheme: scheme)
+        }
+    }
+
     func testNativeScrollingRemainsResponsiveWhileNativeWorkIsBlocked() async throws {
         let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: .light)
         defer { host.close() }
