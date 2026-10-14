@@ -270,54 +270,49 @@ struct DashboardView: View {
         let layout = horizontal
             ? AnyLayout(HStackLayout(alignment: .top, spacing: 18))
             : AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
-        return VStack(alignment: .leading, spacing: 18) {
-            Text("Make it yours").font(self.theme.typography.sectionTitle)
-            FluidGlassControlGroup {
-                layout {
-                    if !self.shortcut.isEmpty {
-                        VStack(spacing: 18) {
-                            Text("YOUR SHORTCUT")
-                                .font(.fluidSystem(size: 10, weight: .semibold))
-                                .tracking(1.4).foregroundStyle(self.theme.palette.secondaryText)
-                            self.shortcutKey
-                            if self.settings.primaryDictationShortcuts.count > 1 {
-                                Text("+\(self.settings.primaryDictationShortcuts.count - 1) more")
-                                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
-                            }
-                            Button(action: self.openShortcutSettings) {
-                                HStack(spacing: 6) {
-                                    Text("Change shortcut")
-                                    Image(systemName: "arrow.up.right").font(.fluidSystem(size: 10, weight: .medium))
+        return ThemedCard(style: .standard, padding: 20) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Make it yours").font(self.theme.typography.sectionTitle)
+                FluidGlassControlGroup {
+                    layout {
+                        if !self.shortcut.isEmpty {
+                            VStack(spacing: 18) {
+                                Text("YOUR SHORTCUT")
+                                    .font(.fluidSystem(size: 10, weight: .semibold))
+                                    .tracking(1.4).foregroundStyle(self.theme.palette.secondaryText)
+                                self.shortcutKey
+                                if self.settings.primaryDictationShortcuts.count > 1 {
+                                    Text("+\(self.settings.primaryDictationShortcuts.count - 1) more")
+                                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                                 }
-                                .font(self.theme.typography.captionStrong)
+                                Button(action: self.openShortcutSettings) {
+                                    HStack(spacing: 6) {
+                                        Text("Change shortcut")
+                                        Image(systemName: "arrow.up.right").font(.fluidSystem(size: 10, weight: .medium))
+                                    }
+                                    .font(self.theme.typography.captionStrong)
+                                }
+                                .fluidOutlinedButton()
                             }
-                            .fluidGlassAction()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16).padding(.horizontal, 14)
+                            .disabled(self.busy)
+                            .frame(width: horizontal ? 220 : nil)
+                        }
+                        VStack(alignment: .leading, spacing: 0) {
+                            DashboardQuickAction(title: "Vocabulary", detail: "Names & terms", icon: "text.book.closed") {
+                                self.selectedSidebarItem = .customDictionary
+                            }
+                            .disabled(self.busy)
+                            Divider().padding(.leading, 46).padding(.trailing, 12)
+                            DashboardQuickAction(title: "Writing style", detail: "Make it sound like you", icon: "wand.and.stars") {
+                                self.selectedSidebarItem = .cleanupStyles
+                            }
+                            .disabled(self.busy)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16).padding(.horizontal, 14)
-                        .disabled(self.busy)
-                        .frame(width: horizontal ? 220 : nil)
                     }
-                    VStack(alignment: .leading, spacing: 0) {
-                        DashboardQuickAction(title: "Vocabulary", detail: "Names & terms", icon: "text.book.closed") {
-                            self.selectedSidebarItem = .customDictionary
-                        }
-                        .disabled(self.busy)
-                        Divider().padding(.leading, 46).padding(.trailing, 12)
-                        DashboardQuickAction(title: "Writing style", detail: "Make it sound like you", icon: "wand.and.stars") {
-                            self.selectedSidebarItem = .cleanupStyles
-                        }
-                        .disabled(self.busy)
-                    }
-                    .frame(maxWidth: .infinity)
                 }
-            }
-        }
-        .padding(20)
-        .background(self.reduceTransparency ? self.theme.palette.cardBackground : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 24))
-        .background {
-            if !self.reduceTransparency {
-                RoundedRectangle(cornerRadius: 24).fill(.ultraThinMaterial)
             }
         }
     }
@@ -352,24 +347,17 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var shortcutKey: some View {
-        let button = Button(action: self.openShortcutSettings) {
+        Button(action: self.openShortcutSettings) {
             Text(self.settings.primaryDictationShortcuts.first?.displayString ?? PichiLocalization.text("Off"))
                 .font(.fluidSystem(size: 25, weight: .medium))
                 .lineLimit(2).minimumScaleFactor(0.5)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-                .frame(width: 126, height: 64)
-                .contentShape(RoundedRectangle(cornerRadius: 18))
+                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FluidOutlinedButtonStyle(height: 64, fillsWidth: true))
+        .frame(width: 126, height: 64)
         .help(PichiLocalization.format("%@ — Change your dictation shortcuts", self.shortcut))
         .accessibilityLabel(PichiLocalization.format("Dictation shortcuts: %@", self.shortcut))
-        if #available(macOS 26, *), !self.reduceTransparency {
-            button.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
-        } else {
-            button.background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(self.theme.palette.cardBorder, lineWidth: 1))
-        }
     }
 }
 
@@ -456,7 +444,12 @@ private struct DashboardQuickAction: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 16)
-            .background(Color.primary.opacity(self.hovered ? 0.045 : 0), in: RoundedRectangle(cornerRadius: 12))
+            .background(self.hovered && self.isEnabled ? self.theme.palette.elevatedCardBackground : .clear, in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(self.hovered && self.isEnabled ? self.theme.palette.secondaryText : .clear, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
