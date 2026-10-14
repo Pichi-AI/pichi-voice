@@ -106,7 +106,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var previousIDs: Set<UUID> = []
         var previousPartial: MeetingLivePartial?
         let requiresBackground = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_BACKGROUND"] == "1"
-        var backgroundSeconds = 0
+        var backgroundSeconds: TimeInterval = 0
         var backgroundUpdates = 0
         var wasBackground = false
         do {
@@ -120,20 +120,30 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let captureStart = ProcessInfo.processInfo.systemUptime
             var previousResourceTime = captureStart
             var previousCPU = DiagnosticProcessCPUTime.capture()
+            var previousObservationTime = captureStart
             print("[PHYSICAL_STRICT_E2E] speech_started model=\(model.rawValue) duration=\(duration)")
-            for second in 1...duration {
-                let remaining = captureStart + Double(second) - ProcessInfo.processInfo.systemUptime
-                if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
+            while ProcessInfo.processInfo.systemUptime - captureStart < Double(duration) {
+                // Do not backfill observations after a delayed MainActor resume.
+                let remaining = max(0, Double(duration) - (ProcessInfo.processInfo.systemUptime - captureStart))
+                try await Task.sleep(nanoseconds: UInt64(min(1, remaining) * 1_000_000_000))
+                let now = ProcessInfo.processInfo.systemUptime
+                let elapsed = now - captureStart
+                let second = Int(elapsed.rounded(.down))
                 guard coordinator.isRecording else {
                     XCTFail("Strict \(model.rawValue) stopped at second \(second), before completing paced input")
                     throw MeetingMemoryAudioError.overload
                 }
                 let snapshot = coordinator.liveTranscript
                 let isBackground = UIApplication.shared.applicationState == .background
-                if isBackground { backgroundSeconds += 1 }
+                let observationInterval = now - previousObservationTime
+                // Only credit adjacent background observations at the expected cadence.
+                // A long scheduling gap provides no evidence about the intervening state.
+                if isBackground && wasBackground && observationInterval <= 2 {
+                    backgroundSeconds += min(observationInterval, 1.25)
+                }
                 let ids = Set(snapshot.utterances.filter { !$0.text.isEmpty }.map(\.id))
                 if !ids.isEmpty || snapshot.partials.values.contains(where: { !$0.text.isEmpty }) {
-                    firstTextSecond = firstTextSecond ?? second
+                    firstTextSecond = firstTextSecond ?? Int(elapsed.rounded(.up))
                 }
                 let partial = snapshot.partials[.you]
                 if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
@@ -147,9 +157,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 previousIDs = ids
                 previousPartial = partial
                 wasBackground = isBackground
+                previousObservationTime = now
                 print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) background=\(isBackground)")
-                if second.isMultiple(of: 15) {
-                    let now = ProcessInfo.processInfo.systemUptime
+                if now - previousResourceTime >= 15 {
                     let cpu = DiagnosticProcessCPUTime.capture()
                     let cpuMS = previousCPU.flatMap { earlier in cpu?.milliseconds(since: earlier) } ?? -1
                     let wallMS = Int64((now - previousResourceTime) * 1_000)
@@ -158,12 +168,14 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     previousResourceTime = now
                 }
             }
+            let capturedSeconds = ProcessInfo.processInfo.systemUptime - captureStart
             player.stop()
+            XCTAssertGreaterThanOrEqual(capturedSeconds, Double(duration))
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
             XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
             if requiresBackground {
-                XCTAssertGreaterThanOrEqual(backgroundSeconds, duration == 300 ? 280 : 20,
+                XCTAssertGreaterThanOrEqual(backgroundSeconds, duration == 300 ? 280.0 : 20.0,
                                             "The host must actually leave the foreground during paced recording")
                 XCTAssertGreaterThan(backgroundUpdates, 0, "Safe text must advance between actual background observations")
             }
@@ -188,7 +200,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let payload = try MeetingSharePayload.transcript(data: MeetingTranscriptExporter.json(for: completed), title: completed.title, fileExtension: "json")
             XCTAssertFalse(payload.includesAudio)
             payload.cleanup()
-            print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) duration=\(duration) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates) backgroundSeconds=\(backgroundSeconds) backgroundUpdates=\(backgroundUpdates) lastUpdateSecond=\(lastUpdateSecond)")
+            print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) duration=\(duration) capturedSeconds=\(capturedSeconds) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates) backgroundSeconds=\(backgroundSeconds) backgroundUpdates=\(backgroundUpdates) lastUpdateSecond=\(lastUpdateSecond) lastBackgroundUpdateSecond=\(lastBackgroundUpdateSecond)")
             // This is one service composition, not application termination. Stopping the
             // coordinator already joins capture/model work; terminating the shared model
             // residency here would invalidate later tests in this same hosted process.
