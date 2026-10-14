@@ -374,10 +374,12 @@ extension PichiMeetingSummaryDocument {
                 result.append(character)
             }
         }
-        let sections: [(String, [PichiMeetingSummaryItem], Bool)] = [
+        var sections: [(String, [PichiMeetingSummaryItem], Bool)] = [
             ("Recap", self.summary, false), ("Decisions", self.decisions, false),
             ("Action items", self.actions, true), ("Questions and answers", self.openQuestions, false),
         ]
+        if let changes = self.changes, !changes.isEmpty { sections.append(("Corrections", changes, false)) }
+        if let answers = self.answers, !answers.isEmpty { sections.append(("Answers", answers, false)) }
         return sections.map { key, items, actions in
             "## " + literal(PichiLocalization.text(key, language: language, bundle: bundle)) + "\n\n" + items.map { item in
                 var lines: [String] = []
@@ -414,10 +416,12 @@ extension PichiMeetingSummaryDocument {
 
     /// Localize export chrome for the requested output language; all model/source data stays verbatim.
     nonisolated func copyText(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
-        let sections: [(String, [PichiMeetingSummaryItem])] = [
+        var sections: [(String, [PichiMeetingSummaryItem])] = [
             ("Recap", self.summary), ("Decisions", self.decisions),
             ("Action items", self.actions), ("Questions and answers", self.openQuestions),
         ]
+        if let changes = self.changes, !changes.isEmpty { sections.append(("Corrections", changes)) }
+        if let answers = self.answers, !answers.isEmpty { sections.append(("Answers", answers)) }
         return sections.map { key, items in
             PichiLocalization.text(key, language: language, bundle: bundle) + "\n" + items.map { item in
                 "- " + (item.superseded == true ? PichiLocalization.text("[Superseded] ", language: language, bundle: bundle) : "")

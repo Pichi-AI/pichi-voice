@@ -1798,6 +1798,52 @@ final class PichiMeetingSummaryTests: XCTestCase {
         }
     }
 
+    func testUnrelatedChangeAndAnswerPreserveGroundedFactsAndCurrentCommitments() async throws {
+        var session = self.separateCommitmentsSession()
+        var answer = session.transcriptSegments[6]
+        answer.id = UUID()
+        answer.start = .init(value: 105_000, timescale: 1000)
+        answer.end = .init(value: 106_000, timescale: 1000)
+        answer.text = "Проверка каталога завершена: доступно семь записей."
+        session.transcriptSegments.append(answer)
+        var reviewed = self.separateCommitmentsDocument(session)
+        let cancellation = session.transcriptSegments[4]
+        reviewed.summary.removeAll { $0.evidence.contains { $0.segmentID == cancellation.id } }
+        reviewed.changes = [.init(text: cancellation.text,
+                                 evidence: [.init(segmentID: cancellation.id, quote: cancellation.text)])]
+        reviewed.answers = [.init(text: answer.text, evidence: [.init(segmentID: answer.id, quote: answer.text)])]
+        let transport = SupportReviewTransport(responses: [try self.json(reviewed), try self.json(reviewed),
+                                                         #"{"updates":[]}"#, #"{"updates":[]}"#, #"{"updates":[]}"#])
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+            .generate(session: session, configuration: self.configuration())
+        XCTAssertEqual(result.decisions, reviewed.decisions, "A different proposal's cancellation must not supersede the release decision")
+        XCTAssertEqual(result.actions, reviewed.actions, "Unrelated later evidence must not change either commitment or its own citations")
+        XCTAssertEqual(result.openQuestions, reviewed.openQuestions)
+        XCTAssertEqual(result.changes, reviewed.changes, "A change stated only in its source ledger must survive publication")
+        XCTAssertEqual(result.answers, reviewed.answers, "A definite unrelated answer must remain visible without resolving the launch question")
+        XCTAssertTrue(self.separateCommitmentIssues(result, session: session).isEmpty)
+        XCTAssertEqual(try JSONDecoder().decode(PichiMeetingSummaryDocument.self, from: JSONEncoder().encode(result)), result)
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+        let requests = await transport.requests
+        XCTAssertEqual(requests.count, 5, "The existing extraction, review and three ledgers suffice without a new pass or repair")
+        for request in requests.suffix(3) {
+            let input = try XCTUnwrap(request.messages.last?["content"] as? String)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            let isQuestion = (request.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting open questions")
+            XCTAssertEqual(sources.map(\.text), [isQuestion ? answer.text : cancellation.text])
+            let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
+            XCTAssertTrue(candidates.allSatisfy { $0["laterSourceIndexes"] as? [Int] == [0] },
+                          "The later citation is structurally legal while remaining unrelated to all supplied work")
+            let format = try XCTUnwrap(request.extraParameters["response_format"] as? [String: Any])
+            let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
+            let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+            let updates = try XCTUnwrap(properties["updates"] as? [String: Any])
+            XCTAssertNil(updates["minItems"], "Eligible witnesses must not force a semantic match or nonempty response")
+        }
+    }
+
     func testLedgerScopeMetadataUsesStrictLaterSourcesForEachCandidateAndRetainsZeroEligibleItem() async throws {
         var fixture = self.ledgerRepairFixture()
         let last = fixture.session.transcriptSegments[3]
@@ -1815,15 +1861,15 @@ final class PichiMeetingSummaryTests: XCTestCase {
         _ = try ModelSource.catalog(from: fields)
         let candidates = try XCTUnwrap(fields["candidates"] as? [[String: Any]])
         XCTAssertEqual(candidates.compactMap { $0["index"] as? Int }, [0, 1])
-        XCTAssertEqual(candidates[0]["allowedSourceIndexes"] as? [Int], [1, 2, 3])
-        XCTAssertEqual(candidates[1]["allowedSourceIndexes"] as? [Int], [2, 3], "An equal-time witness legal for another candidate remains forbidden here")
+        XCTAssertEqual(candidates[0]["laterSourceIndexes"] as? [Int], [1, 2, 3])
+        XCTAssertEqual(candidates[1]["laterSourceIndexes"] as? [Int], [2, 3], "An equal-time witness legal for another candidate remains forbidden here")
         let format = try XCTUnwrap(requests[0].extraParameters["response_format"] as? [String: Any])
         let schema = try XCTUnwrap((format["json_schema"] as? [String: Any])?["schema"] as? [String: Any])
         let schemaProperties = try XCTUnwrap(schema["properties"] as? [String: Any])
         let updates = try XCTUnwrap(schemaProperties["updates"] as? [String: Any])
         let branches = try XCTUnwrap((updates["items"] as? [String: Any])?["anyOf"] as? [[String: Any]])
         XCTAssertEqual(branches.count, 2)
-        XCTAssertTrue((requests[0].messages.first?["content"] as? String ?? "").contains("ONLY from its allowedSourceIndexes"))
+        XCTAssertTrue((requests[0].messages.first?["content"] as? String ?? "").contains("ONLY from its laterSourceIndexes"))
     }
 
     func testNoEligibleFutureWitnessMakesNoLedgerRequestAndPreservesOriginalQuestions() async throws {
@@ -2195,6 +2241,18 @@ final class PichiMeetingSummaryTests: XCTestCase {
         document.openQuestions[0].resolved = true
         XCTAssertEqual(self.separateCommitmentIssues(document, session: session),
                        ["Source for the cancelled proposal must not support current unrelated work", "The launch-date question must remain unanswered"])
+    }
+
+    func testSeparateCommitmentOracleRejectsSupersededReleaseAndUnrelatedReleaseCitation() {
+        let session = self.separateCommitmentsSession()
+        let expected = self.separateCommitmentsDocument(session)
+        var historical = expected
+        historical.decisions[0].superseded = true
+        XCTAssertEqual(self.separateCommitmentIssues(historical, session: session), ["Retain the report-release decision"])
+        var unrelated = expected
+        unrelated.decisions[0].evidence.append(.init(segmentID: session.transcriptSegments[4].id,
+                                                   quote: session.transcriptSegments[4].text))
+        XCTAssertEqual(self.separateCommitmentIssues(unrelated, session: session), ["Retain the report-release decision"])
     }
 
     func testSupportReviewRecoversSeparateDecisionAndAssignedTaskFromRecapOnlyCandidate() async throws {
@@ -2761,13 +2819,15 @@ final class PichiMeetingSummaryTests: XCTestCase {
 
     func testCommitmentReviewRevisionInvalidatesPriorPromptCacheIdentity() throws {
         let configuration = self.configuration()
-        let priorPayload: [String: Any] = ["version": 19, "provider": configuration.providerID,
-            "model": configuration.modelID, "endpoint": configuration.baseURL, "language": configuration.language,
-            "execution": configuration.execution.identity, "connection": configuration.connectionOptions]
-        let priorData = try JSONSerialization.data(withJSONObject: priorPayload, options: [.sortedKeys])
-        let priorIdentity = SHA256.hash(data: priorData).map { String(format: "%02x", $0) }.joined()
-        XCTAssertNotEqual(configuration.baseCacheIdentity, priorIdentity,
-                          "A summary from the previous review prompt cannot be treated as current without regeneration")
+        for version in [19, 20] {
+            let priorPayload: [String: Any] = ["version": version, "provider": configuration.providerID,
+                "model": configuration.modelID, "endpoint": configuration.baseURL, "language": configuration.language,
+                "execution": configuration.execution.identity, "connection": configuration.connectionOptions]
+            let priorData = try JSONSerialization.data(withJSONObject: priorPayload, options: [.sortedKeys])
+            let priorIdentity = SHA256.hash(data: priorData).map { String(format: "%02x", $0) }.joined()
+            XCTAssertNotEqual(configuration.baseCacheIdentity, priorIdentity,
+                              "A summary from either prior generation contract cannot be treated as current without regeneration")
+        }
     }
 
     @MainActor
@@ -3014,8 +3074,11 @@ final class PichiMeetingSummaryTests: XCTestCase {
             check(b.superseded != true, "B's uncompleted commitment remains current")
             check(Set(b.evidence.map(\.segmentID)) == Set([session.transcriptSegments[2].id]), "B evidence must support only B's report task")
         }
-        check(document.decisions.contains { $0.evidence.contains { $0.segmentID == session.transcriptSegments[1].id }
-            && $0.superseded != true }, "Retain the report-release decision")
+        let release = document.decisions.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[1].id }
+            && $0.superseded != true }
+        check(release.count == 1 && release.allSatisfy {
+            Set($0.evidence.map(\.segmentID)) == Set([session.transcriptSegments[1].id])
+        }, "Retain the report-release decision")
         let cancellation = document.allItems.filter { $0.evidence.contains { $0.segmentID == session.transcriptSegments[4].id } }
         check(!cancellation.isEmpty,
               "Retain the explicit endpoint-proposal cancellation")

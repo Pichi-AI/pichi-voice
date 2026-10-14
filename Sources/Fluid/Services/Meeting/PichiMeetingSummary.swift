@@ -16,7 +16,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     var baseCacheIdentity: String {
         // Hash a canonical payload rather than delimiter-joining user-controlled values.
         // Credentials and the temporary inference alias never become persisted metadata.
-        let payload: [String: Any] = ["version": 20, "provider": self.providerID, "model": self.modelID,
+        let payload: [String: Any] = ["version": 21, "provider": self.providerID, "model": self.modelID,
                                       "endpoint": self.baseURL, "language": self.language,
                                       "execution": self.execution.identity, "connection": self.connectionOptions]
         let data = (try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])) ?? Data()
@@ -168,7 +168,9 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         }
         try Task.checkCancellation()
         let document = PichiMeetingSummaryDocument(summary: PichiMeetingSummaryDocument.unique(recap),
-                                                   decisions: decisions, actions: actions, openQuestions: questions)
+                                                   decisions: decisions, actions: actions, openQuestions: questions,
+                                                   changes: changes.isEmpty ? nil : changes,
+                                                   answers: answers.isEmpty ? nil : answers)
         // Reconciliation can add citations to otherwise valid chunk results.
         // Enforce the same canonical limits before callers publish or persist it.
         return try document.validated(against: turns)
@@ -435,7 +437,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         let index: Int
         let lastSourceSeconds: TimeInterval
         let item: PichiMeetingSummaryItem
-        let allowedSourceIndexes: [Int]
+        let laterSourceIndexes: [Int]
     }
     private struct LedgerChange: Codable {
         let sourceSeconds: TimeInterval
@@ -502,7 +504,11 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
         Include an update only when a later change explicitly cancels, postpones or replaces that candidate. A discussion or unrelated change does not supersede it. A change earlier than lastSourceSeconds cannot supersede the candidate.
         Never invent or rewrite a candidate, owner or date. Do not omit a candidate just because it is not mentioned again. Each update must cite an exact supplied later change quote. Empty updates is valid. If uncertain, leave the candidate unchanged.
         """
-        let scopedPrompt = prompt + "\nFor each candidate, select evidence ONLY from its allowedSourceIndexes. These are request-local legal later witnesses for that candidate, not answers or semantic matches. Still verify that the selected later speech directly establishes the claimed update. Never borrow another candidate's allowed list."
+        let scopedPrompt = prompt + """
+
+        Before selecting an update, match the specific work, object or unresolved issue identified by the later statement to that same candidate. A shared speaker, later timestamp, overlapping topic or legal source index does not establish this match. Cancelling one proposal does not cancel a different decision or task. Do not add evidence merely to confirm an unchanged state: the source must establish the claimed change for that same item. If no supplied candidate matches the changed work or object, return an empty updates array; never choose the closest candidate. A pronoun or abbreviated reference may identify the same work unambiguously from the supplied context; exact repetition of a title is not required.
+        For each candidate, select evidence ONLY from its laterSourceIndexes. These are request-local legal later witnesses for that candidate, not answers or semantic matches. Still verify that the selected later speech directly establishes the claimed update. Never borrow another candidate's list.
+        """
         for events in eventBatches {
             let catalog = try self.sources(events.flatMap { $0.item.evidence }, turns: turns)
             let candidates = result.enumerated().filter { resolvingQuestions ? $0.element.resolved != true : $0.element.superseded != true }.compactMap { entry -> LedgerCandidate? in
@@ -516,7 +522,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                 // request. The original ledger item remains intact for later batches.
                 guard !allowed.isEmpty else { return nil }
                 return LedgerCandidate(index: entry.offset, lastSourceSeconds: lastSourceSeconds, item: entry.element,
-                                       allowedSourceIndexes: allowed)
+                                       laterSourceIndexes: allowed)
             }
             var candidateBatches: [[LedgerCandidate]] = []
             var candidateBatch: [LedgerCandidate] = []
@@ -526,7 +532,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             var schemaEnumValues = catalog.count
             for candidate in candidates {
                 let cost = try self.encoded(candidate).count
-                let enumCost = candidate.allowedSourceIndexes.count + 1 + (actionStates ? PichiMeetingSummaryActionStatus.allCases.count : 0)
+                let enumCost = candidate.laterSourceIndexes.count + 1 + (actionStates ? PichiMeetingSummaryActionStatus.allCases.count : 0)
                 if !candidateBatch.isEmpty, candidateSize + cost > 6000
                     || schemaEnumValues + enumCost > PichiMeetingSummaryTransport.maximumLedgerSchemaEnumValues {
                     candidateBatches.append(candidateBatch); candidateBatch = []; candidateSize = 0; schemaEnumValues = catalog.count
@@ -536,7 +542,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
             if !candidateBatch.isEmpty { candidateBatches.append(candidateBatch) }
             for candidates in candidateBatches {
                 try Task.checkCancellation()
-                let scopes = Dictionary(uniqueKeysWithValues: candidates.map { ($0.index, $0.allowedSourceIndexes) })
+                let scopes = Dictionary(uniqueKeysWithValues: candidates.map { ($0.index, $0.laterSourceIndexes) })
                 guard let original = try JSONSerialization.jsonObject(with: Data(self.encoded(LedgerRequest(candidates: candidates, changes: events)).utf8)) as? [String: Any]
                 else { throw PichiMeetingSummaryError.invalidOutput }
                 let input = try self.preparedInput(original, sources: catalog)
@@ -605,7 +611,7 @@ nonisolated struct PichiMeetingSummaryGenerator: Sendable {
                   updated.insert(update.index).inserted, (1...8).contains(update.evidence.count),
                   actionStates ? update.hasStatus : !update.hasStatus
             else { throw PichiMeetingSummaryError.invalidEvidence }
-            let legalEvidence = Set(catalog.filter { candidate.allowedSourceIndexes.contains($0.sourceIndex) }.map(\.evidence))
+            let legalEvidence = Set(catalog.filter { candidate.laterSourceIndexes.contains($0.sourceIndex) }.map(\.evidence))
             for evidence in update.evidence {
                 guard legalEvidence.contains(evidence), let evidenceTime = times[evidence.segmentID], evidenceTime > candidate.lastSourceSeconds,
                       let event = events.first(where: { event in
