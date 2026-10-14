@@ -193,8 +193,8 @@ private struct MobileVoiceEngineSettings: View {
                             if settings.selectedSpeechModel == model { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                         }
                         Text(PichiLocalization.text(model.cardDescription)).font(theme.typography.bodySmall)
-                        Text(PichiLocalization.text(model.languageSupport)).font(theme.typography.bodySmall).foregroundStyle(.secondary)
-                        Text(model.downloadSize).font(theme.typography.caption).foregroundStyle(.secondary)
+                        Text(PichiLocalization.text(model.languageSupport)).font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
+                        Text(model.downloadSize).font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                         if let descriptor = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.id) {
                             DisclosureGroup(PichiLocalization.text("About the model")) {
                                 ForEach(descriptor.knownLimits, id: \.self) { limitation in
@@ -289,7 +289,7 @@ private struct MobilePrivacySettings: View {
                 Toggle(PichiLocalization.text("Save audio recordings"), isOn: $settings.meetingSaveAudio)
                     .accessibilityIdentifier("privacy.saveAudio")
                 Text(PichiLocalization.text("When disabled, audio is never written to files, including temporary files. Only the transcript is saved."))
-                    .font(theme.typography.caption).foregroundStyle(.secondary)
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 if settings.meetingSaveAudio {
                     Picker(PichiLocalization.text("Keep recordings"), selection: $settings.meetingAudioRetentionPolicy) {
                         ForEach(MeetingAudioRetentionPolicy.allCases, id: \.rawValue) { policy in
@@ -297,7 +297,7 @@ private struct MobilePrivacySettings: View {
                         }
                     }.accessibilityIdentifier("privacy.retention")
                     Text(PichiLocalization.text("Applies to past meetings too. Transcripts are always kept."))
-                        .font(theme.typography.caption).foregroundStyle(.secondary)
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 }
             }
             Section(PichiLocalization.text("Sensitive data")) {
@@ -324,15 +324,15 @@ private struct MobilePrivacySettings: View {
                         .accessibilityIdentifier("privacy.pii.cancel")
                 }
                 Text(PichiLocalization.text("Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."))
-                    .font(theme.typography.caption).foregroundStyle(.secondary)
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 if settings.meetingSaveAudio {
                     Text(PichiLocalization.text("Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."))
-                        .font(theme.typography.caption).foregroundStyle(.secondary)
+                        .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
                 }
             }
             Section {
                 Text(PichiLocalization.text("Changes apply to new meetings. Audio retention also applies to existing recordings."))
-                    .font(theme.typography.caption).foregroundStyle(.secondary)
+                    .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
             }
         }.navigationTitle(PichiLocalization.text("Privacy")).accessibilityIdentifier("settings.privacy.detail")
     }
