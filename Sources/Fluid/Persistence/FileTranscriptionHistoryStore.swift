@@ -118,9 +118,15 @@ nonisolated struct FileTranscriptionEntry: Codable, Identifiable, Equatable {
 
     /// Relative time string for display
     var relativeTimeString: String {
+        self.relativeTimeString(locale: .current)
+    }
+
+    func relativeTimeString(locale: Locale, relativeTo reference: Date = Date()) -> String {
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: self.timestamp, relativeTo: Date())
+        formatter.dateTimeStyle = .named
+        formatter.unitsStyle = .full
+        formatter.locale = locale
+        return formatter.localizedString(for: self.timestamp, relativeTo: reference)
     }
 
     /// Full formatted date string

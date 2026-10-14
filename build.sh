@@ -75,7 +75,6 @@ run_public_build() {
         -configuration Debug
         -destination 'platform=macOS'
         -derivedDataPath "${DERIVED_DATA_PATH}"
-        build
     )
 
     cd "${PROJECT_DIR}"
@@ -83,7 +82,7 @@ run_public_build() {
     if [ "${signing_mode}" = "unsigned" ]; then
         echo "Running unsigned public FluidVoice build..."
         echo "Accessibility, Screen Recording, and microphone permissions may need to be granted again after rebuilding."
-        exec xcodebuild "${build_args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+        exec xcodebuild "${build_args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
     fi
 
     signing_identity_hash="$(resolve_development_identity_hash)"
@@ -121,12 +120,46 @@ EOF
     fi
 
     echo "Running signed public FluidVoice build..."
-    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
-    xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}"
+    xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}" build
 
-    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
+    # Read the trusted application target's resolved settings, including brand overrides.
+    # JSON avoids evaluating build-setting text or guessing a product name from the brand.
+    app_path="$(xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}" \
+        -showBuildSettings -json | python3 -c '
+import json, os, pathlib, sys
+try:
+    records = json.load(sys.stdin)
+    if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+        raise ValueError("build settings must be an array of target records")
+    applications = []
+    for record in records:
+        if record.get("target") != "fluid":
+            continue
+        settings = record.get("buildSettings")
+        if not isinstance(settings, dict):
+            raise ValueError("application build settings must be an object")
+        if settings.get("PRODUCT_TYPE") == "com.apple.product-type.application":
+            applications.append(settings)
+    if len(applications) != 1:
+        raise ValueError("expected one application target")
+    settings = applications[0]
+    directory = settings["TARGET_BUILD_DIR"]
+    product = settings["FULL_PRODUCT_NAME"]
+    if not isinstance(directory, str) or not pathlib.Path(directory).is_absolute():
+        raise ValueError("TARGET_BUILD_DIR must be absolute")
+    if not isinstance(product, str) or product != pathlib.Path(product).name or not product.endswith(".app"):
+        raise ValueError("FULL_PRODUCT_NAME must name an application bundle")
+    root = os.path.realpath(sys.argv[1])
+    path = os.path.join(directory, product)
+    if os.path.commonpath([root, os.path.realpath(path)]) != root:
+        raise ValueError("application bundle escapes DerivedData")
+    print(path)
+except (KeyError, TypeError, ValueError) as error:
+    sys.exit("Unable to resolve signed application product: " + str(error))
+' "${DERIVED_DATA_PATH}")"
+    echo "Build product: ${app_path}"
     ctranscribe_framework="${app_path}/Contents/Frameworks/CTranscribe.framework"
-    if [ ! -d "${app_path}" ]; then
+    if [ ! -d "${app_path}" ] || [ -L "${app_path}" ]; then
         echo "Signed build product is missing: ${app_path}" >&2
         exit 1
     fi
@@ -169,7 +202,7 @@ EOF
         --options runtime --timestamp=none \
         --preserve-metadata=identifier,requirements,flags "${ctranscribe_framework}"
 
-    entitlements_file="$(mktemp -t fluidvoice-entitlements)"
+    entitlements_file="$(mktemp "${TMPDIR:-/tmp}/fluidvoice-entitlements.XXXXXX")"
     if ! codesign --display --entitlements :- "${app_path}" > "${entitlements_file}" 2>/dev/null; then
         rm -f "${entitlements_file}"
         echo "Unable to read existing app entitlements: ${app_path}" >&2
@@ -196,6 +229,12 @@ EOF
         fi
     fi
     rm -f "${entitlements_file}"
+
+    # fv-serve is embedded and signed by the Xcode build; fail here rather than ship an app without it.
+    if [ ! -x "${app_path}/Contents/Helpers/fv-serve" ]; then
+        echo "fv-serve is missing from the built app: ${app_path}" >&2
+        exit 1
+    fi
 
     echo "Verifying the signed app..."
     codesign --verify --deep --strict "${app_path}"

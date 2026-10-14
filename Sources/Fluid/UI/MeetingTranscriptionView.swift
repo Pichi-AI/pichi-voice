@@ -14,6 +14,21 @@ nonisolated struct MeetingApplicationOption: Identifiable, Equatable, Sendable {
     }
 }
 
+extension [MeetingApplicationOption] {
+    /// The usual meeting sources first, then the rest with background helpers last.
+    @MainActor
+    var pickerSections: (usual: [MeetingApplicationOption], others: [MeetingApplicationOption]) {
+        MeetingAppRegistry.pickerSections(
+            self,
+            bundleIdentifier: { $0.identity.bundleIdentifier },
+            name: { $0.identity.displayName },
+            isBackgroundItem: { option in
+                option.identity.processID.flatMap { NSRunningApplication(processIdentifier: $0) }?.activationPolicy != .regular
+            }
+        )
+    }
+}
+
 struct MeetingMicrophoneOption: Identifiable, Equatable {
     let id: String
     let identity: MeetingMicrophoneIdentity
@@ -28,6 +43,9 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var mode: MeetingCaptureMode = .onlineCall
     var title: String = Self.defaultTitle(mode: .onlineCall, applicationDisplayName: nil)
     var selectedApplicationID: String?
+    /// Stable intent survives source refreshes; the process ID is resolved before admission.
+    var selectedApplicationBundleIdentifier: String?
+    var applicationAudioScope: MeetingApplicationAudioScope = .systemAudio
     var usesAutomaticApplication = true
     var selectedMicrophoneID: String?
     /// Once true, the default title stops following the selected application/mode.
@@ -37,16 +55,105 @@ struct MeetingTranscriptionSetupDraft: Equatable {
     var browserDetectionEnabled: Bool
 
     init(settings: SettingsStore = .shared) {
-        let defaults = settings.meetingRecordingDefaults
-        self.autoDetectEnabled = settings.meetingAutoDetectEnabled
-        self.browserDetectionEnabled = settings.meetingAutoDetectBrowserEnabled
+        self.init(
+            defaults: settings.meetingRecordingDefaults,
+            autoDetectEnabled: settings.meetingAutoDetectEnabled,
+            browserDetectionEnabled: settings.meetingAutoDetectBrowserEnabled,
+            fallbackLanguageCode: PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "ru"
+        )
+    }
+
+    init(
+        defaults: MeetingRecordingDefaults,
+        autoDetectEnabled: Bool,
+        browserDetectionEnabled: Bool,
+        fallbackLanguageCode: String
+    ) {
+        self.autoDetectEnabled = autoDetectEnabled
+        self.browserDetectionEnabled = browserDetectionEnabled
         self.languageCode = defaults.languageCode
-            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: settings.selectedSpeechModel.rawValue) ?? "ru"
+            ?? fallbackLanguageCode
         self.mode = defaults.mode
+        self.applicationAudioScope = defaults.effectiveApplicationAudioScope
         self.title = Self.defaultTitle(mode: defaults.mode, applicationDisplayName: nil)
+        self.usesAutomaticApplication = defaults.usesAutomaticApplication
+        self.selectedApplicationBundleIdentifier = defaults.usesAutomaticApplication ? nil : defaults.applicationBundleIdentifier
         self.selectedApplicationID = nil
         // Left unset here: selectPreferredMicrophone decides once identities load.
         self.selectedMicrophoneID = nil
+    }
+
+    mutating func chooseApplication(_ application: MeetingApplicationIdentity?) {
+        self.applicationAudioScope = .selectedApplication
+        self.usesAutomaticApplication = application == nil
+        self.selectedApplicationID = application.map { MeetingApplicationOption(identity: $0).id }
+        self.selectedApplicationBundleIdentifier = application?.bundleIdentifier
+    }
+
+    mutating func chooseSystemAudio() {
+        self.applicationAudioScope = .systemAudio
+        self.usesAutomaticApplication = false
+        self.selectedApplicationID = nil
+        self.selectedApplicationBundleIdentifier = nil
+    }
+
+    mutating func refreshApplicationSelection(
+        from identities: [MeetingApplicationIdentity],
+        automaticTarget: MeetingAutoDetector.ResolvedTarget?
+    ) {
+        guard self.applicationAudioScope == .selectedApplication else { self.selectedApplicationID = nil; return }
+        let options = identities.map(MeetingApplicationOption.init)
+        if self.usesAutomaticApplication {
+            self.selectedApplicationID = options.first {
+                $0.identity.bundleIdentifier == automaticTarget?.bundleIdentifier && $0.identity.processID == automaticTarget?.pid
+            }?.id
+        } else if !options.contains(where: { $0.id == self.selectedApplicationID }) {
+            self.selectedApplicationID = options.first {
+                $0.identity.bundleIdentifier == self.selectedApplicationBundleIdentifier
+            }?.id
+        }
+    }
+
+    func resolvedRecordingApplication(
+        from identities: [MeetingApplicationIdentity],
+        automaticTarget: MeetingAutoDetector.ResolvedTarget?
+    ) throws -> MeetingApplicationIdentity? {
+        if self.mode == .onlineCall, self.applicationAudioScope == .systemAudio { return nil }
+        let selected = identities.first { MeetingApplicationOption(identity: $0).id == self.selectedApplicationID }
+        if self.mode == .onlineCall, self.usesAutomaticApplication {
+            guard let selected, let automaticTarget,
+                  selected.bundleIdentifier == automaticTarget.bundleIdentifier,
+                  selected.processID == automaticTarget.pid else { throw MeetingCaptureError.applicationNotSelected }
+        }
+        return try MeetingCaptureSourceCatalog.resolveRecordingApplication(
+            mode: self.mode,
+            usesAutomaticApplication: self.usesAutomaticApplication,
+            selectedApplication: selected,
+            automaticTarget: automaticTarget,
+            applications: identities
+        )
+    }
+
+    func recordingDefaults(
+        microphone: MeetingMicrophoneIdentity,
+        applications: [MeetingApplicationIdentity]
+    ) throws -> MeetingRecordingDefaults {
+        let application = applications.first { MeetingApplicationOption(identity: $0).id == self.selectedApplicationID }
+        if self.mode == .onlineCall, self.applicationAudioScope == .selectedApplication, !self.usesAutomaticApplication, application == nil {
+            throw MeetingCaptureError.applicationNotSelected
+        }
+        let savedApplication = self.mode == .onlineCall && self.applicationAudioScope == .selectedApplication && !self.usesAutomaticApplication ? application : nil
+        return MeetingRecordingDefaults(
+            isConfigured: true,
+            mode: self.mode,
+            applicationBundleIdentifier: savedApplication?.bundleIdentifier,
+            applicationDisplayName: savedApplication?.displayName,
+            applicationAudioScope: self.mode == .onlineCall ? self.applicationAudioScope : nil,
+            microphoneCaptureDeviceID: microphone.captureDeviceID,
+            microphoneCoreAudioUID: microphone.coreAudioUID,
+            microphoneRole: .unknown,
+            languageCode: self.languageCode
+        )
     }
 
     static func defaultTitle(mode: MeetingCaptureMode, applicationDisplayName: String?) -> String {
@@ -107,6 +214,8 @@ struct MeetingTranscriptionView: View {
     @State private var pendingBackupSetupRefresh = false
     @State private var cachedSystemDefaultMicrophoneUID: String?
     @State private var isShowingMeetingSettings: Bool
+    /// Which tab the settings sheet opens on; set just before it is shown.
+    @State private var meetingSettingsInitialSection: MeetingSettingsSection = .recording
     @State private var applications: [MeetingApplicationOption] = []
     @State private var microphones: [MeetingMicrophoneOption] = []
     @State private var isRefreshingSources = false
@@ -179,7 +288,8 @@ struct MeetingTranscriptionView: View {
                         onEditSetup: self.openMeetingSettings,
                         isRetrying: self.isRetrying,
                         onCloseSelection: self.closeCanvasAction,
-                        summaryASRService: self.asrService
+                        summaryASRService: self.asrService,
+                        onOpenIntegrations: self.openMeetingIntegrations
                     )
                     .padding(.trailing, self.isMeetingHistoryVisible && geometry.size.width >= 900 ? 272 : 0)
                     .allowsHitTesting(!self.isMeetingHistoryVisible || geometry.size.width >= 900)
@@ -217,7 +327,8 @@ struct MeetingTranscriptionView: View {
                             onDeleteAudioRequest: { self.pendingDeleteAudioSessionID = $0 },
                             onDeleteRequest: { self.pendingDeleteSessionID = $0 },
                             onRename: { self.renameMeetingSession(sessionID: $0, to: $1) },
-                            onRecordAgain: self.recordAgain
+                            onRecordAgain: self.recordAgain,
+                            onOpenIntegrations: self.openMeetingIntegrations
                         )
                         .frame(width: min(272, geometry.size.width))
                         .disabled(self.summaryActivity.selectionLock != nil)
@@ -285,12 +396,16 @@ struct MeetingTranscriptionView: View {
         .onChange(of: self.setupDraft.selectedApplicationID) { _, _ in
             self.regenerateDefaultTitleIfNeeded()
         }
+        .onChange(of: self.setupDraft.applicationAudioScope) { _, _ in
+            self.selectPreferredApplication(from: self.applications.map(\.identity))
+            self.regenerateDefaultTitleIfNeeded()
+        }
         .onChange(of: self.setupDraft.usesAutomaticApplication) { _, automatic in
-            guard automatic else { return }
+            guard automatic, self.setupDraft.applicationAudioScope == .selectedApplication else { return }
             self.selectPreferredApplication(from: self.applications.map(\.identity))
         }
         .onChange(of: self.appServices.meetingAutomaticTarget) { _, _ in
-            guard self.setupDraft.usesAutomaticApplication, !self.isShowingMeetingSettings,
+            guard self.setupDraft.applicationAudioScope == .selectedApplication, self.setupDraft.usesAutomaticApplication, !self.isShowingMeetingSettings,
                   self.coordinator.isQuiescent, !self.isStarting else { return }
             self.selectPreferredApplication(from: self.applications.map(\.identity))
             Task { await self.refreshSources(requestPermissions: false) }
@@ -321,7 +436,8 @@ struct MeetingTranscriptionView: View {
                 onOpenVoiceEngine: self.onOpenVoiceEngine,
                 onCancel: self.cancelMeetingSettings,
                 onSave: self.saveMeetingSettings,
-                onModelImported: { Task { await self.refreshModelReadiness() } }
+                onModelImported: { Task { await self.refreshModelReadiness() } },
+                initialSection: self.meetingSettingsInitialSection
             )
             .background(FluidSheetOutsideDismiss(onCancel: self.cancelMeetingSettings))
             .interactiveDismissDisabled()
@@ -465,20 +581,18 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    /// True only when an actual app will be captured; otherwise recording is mic-only.
-    private var capturesMeetingAudio: Bool {
-        guard self.setupDraft.mode == .onlineCall, let id = self.setupDraft.selectedApplicationID else { return false }
-        return self.applications.contains { $0.id == id }
-    }
-
     private var effectiveCaptureMode: MeetingCaptureMode {
-        self.capturesMeetingAudio ? .onlineCall : .inRoom
+        self.setupDraft.mode
     }
 
     private var readiness: MeetingSetupReadiness {
         let microphoneStatus = self.cachedMicrophoneStatus
         let microphoneReady = microphoneStatus == .authorized
-        let meetingAudioReady = !self.capturesMeetingAudio || self.cachedScreenCaptureAccess
+        let applicationResolved = self.setupDraft.applicationAudioScope == .systemAudio || (try? self.setupDraft.resolvedRecordingApplication(
+            from: self.applications.map(\.identity),
+            automaticTarget: self.appServices.meetingAutomaticTarget
+        )) != nil
+        let meetingAudioReady = self.setupDraft.mode == .inRoom || (applicationResolved && self.cachedScreenCaptureAccess)
         let modelReady = self.cachedModelReady
         let conflictingActivity = self.asrService.activeExclusiveActivity
         let activityReady = conflictingActivity == nil
@@ -508,8 +622,12 @@ struct MeetingTranscriptionView: View {
             blockingMessage = PichiLocalization.text("Allow microphone access, then refresh sources.")
         } else if self.microphones.isEmpty {
             blockingMessage = PichiLocalization.text("Connect a microphone, then refresh sources.")
-        } else if !meetingAudioReady {
+        } else if self.setupDraft.mode == .onlineCall && !self.cachedScreenCaptureAccess {
             blockingMessage = PichiLocalization.text("Allow Screen & System Audio access, then refresh sources.")
+        } else if self.setupDraft.mode == .onlineCall && !applicationResolved {
+            blockingMessage = self.setupDraft.usesAutomaticApplication
+                ? PichiLocalization.text("No call was detected. Choose its app under Change, or choose In person for microphone-only recording.")
+                : PichiLocalization.text("The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change.")
         } else if !self.cachedStorageReady {
             let trackCount = MeetingPCMStoragePolicy.trackCount(for: self.effectiveCaptureMode)
             blockingMessage = PichiLocalization.format("Free at least %@ of storage before recording.", MeetingPCMStoragePolicy.requiredFreeSpaceDescription(trackCount: trackCount))
@@ -522,7 +640,8 @@ struct MeetingTranscriptionView: View {
 
         return MeetingSetupReadiness(
             isCheckingSources: self.isRefreshingSources,
-            meetingAudioStatus: meetingAudioReady ? PichiLocalization.text("Ready") : PichiLocalization.text("Access required"),
+            meetingAudioStatus: meetingAudioReady ? PichiLocalization.text("Ready")
+                : (self.cachedScreenCaptureAccess ? PichiLocalization.text("Source unavailable") : PichiLocalization.text("Access required")),
             meetingAudioReady: meetingAudioReady,
             microphoneStatus: microphoneStatusText,
             microphoneReady: microphoneReady && !self.microphones.isEmpty,
@@ -663,21 +782,7 @@ struct MeetingTranscriptionView: View {
     }
 
     private func selectPreferredApplication(from identities: [MeetingApplicationIdentity]) {
-        let options = identities.map(MeetingApplicationOption.init)
-        if self.setupDraft.usesAutomaticApplication {
-            let target = self.appServices.meetingAutomaticTarget
-            self.setupDraft.selectedApplicationID = options.first {
-                $0.identity.bundleIdentifier == target?.bundleIdentifier && $0.identity.processID == target?.pid
-            }?.id
-            return
-        }
-        if let selectedID = setupDraft.selectedApplicationID,
-           options.contains(where: { $0.id == selectedID })
-        {
-            return
-        }
-
-        self.setupDraft.selectedApplicationID = nil
+        self.setupDraft.refreshApplicationSelection(from: identities, automaticTarget: self.appServices.meetingAutomaticTarget)
     }
 
     private func startRecording() {
@@ -687,18 +792,27 @@ struct MeetingTranscriptionView: View {
               readiness.storageReady,
               readiness.microphoneReady,
               readiness.meetingAudioReady,
-              let configuration = self.captureConfiguration
+              let configuration = self.captureConfiguration,
+              let recordingDefaults = try? self.setupDraft.recordingDefaults(
+                  microphone: configuration.microphone,
+                  applications: self.applications.map(\.identity)
+              )
         else {
             self.actionErrorMessage = readiness.blockingMessage.map(PichiLocalization.text) ?? PichiLocalization.text("Finish meeting setup before recording.")
             return
         }
         self.isStarting = true
         self.actionErrorMessage = nil
+        let defaultsBeforeStart = self.settings.meetingRecordingDefaults
 
         Task {
             defer { self.isStarting = false }
             do {
                 _ = try await self.coordinator.startRecording(configuration: configuration)
+                // A restore or another window's settings change supersedes this older start.
+                if !self.pendingBackupSetupRefresh, self.settings.meetingRecordingDefaults == defaultsBeforeStart {
+                    self.settings.meetingRecordingDefaults = recordingDefaults
+                }
             } catch {
                 self.actionErrorMessage = error.localizedDescription
             }
@@ -716,28 +830,23 @@ struct MeetingTranscriptionView: View {
         var microphone = microphoneOption.identity
         microphone.role = .unknown
 
-        // No resolved app means a mic-only recording, never a refusal to record.
-        let applicationOption = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
-        var application = self.setupDraft.mode == .onlineCall ? applicationOption?.identity : nil
-        if application != nil, self.setupDraft.usesAutomaticApplication {
-            if let target = self.appServices.meetingAutomaticTarget,
-               application?.bundleIdentifier == target.bundleIdentifier,
-               application?.processID == target.pid
-            {
-                application?.windowID = target.windowID
-            } else {
-                application = nil
-            }
-        }
+        let application: MeetingApplicationIdentity?
+        do {
+            application = try self.setupDraft.resolvedRecordingApplication(
+                from: self.applications.map(\.identity),
+                automaticTarget: self.appServices.meetingAutomaticTarget
+            )
+        } catch { return nil }
 
         return MeetingCaptureConfiguration(
-            mode: application == nil ? .inRoom : .onlineCall,
+            mode: self.setupDraft.mode,
             title: title,
             languageCode: self.setupDraft.languageCode,
             platform: application.map {
                 MeetingPlatformProfile(identifier: $0.bundleIdentifier, displayName: $0.displayName)
             },
             application: application,
+            applicationAudioScope: self.setupDraft.mode == .onlineCall ? self.setupDraft.applicationAudioScope : nil,
             microphone: microphone,
             timestampDefaultTitle: !self.setupDraft.titleWasEdited
         )
@@ -928,7 +1037,7 @@ struct MeetingTranscriptionView: View {
             return nil
         }
         var application: MeetingApplicationIdentity?
-        if session.mode == .onlineCall {
+        if session.mode == .onlineCall, session.effectiveApplicationAudioScope == .selectedApplication {
             guard let bundleIdentifier = session.capturedApplication?.bundleIdentifier,
                   let resolved = self.applications.first(where: { $0.identity.bundleIdentifier == bundleIdentifier })
             else {
@@ -943,6 +1052,7 @@ struct MeetingTranscriptionView: View {
             languageCode: session.languageCode,
             platform: session.platform,
             application: application,
+            applicationAudioScope: session.applicationAudioScope,
             microphone: microphone,
             timestampDefaultTitle: session.defaultTitleBase != nil
         )
@@ -1045,7 +1155,6 @@ struct MeetingTranscriptionView: View {
         do {
             try self.coordinator.resetForNewMeeting()
             self.selectedHistorySessionID = nil
-            self.setupDraft.usesAutomaticApplication = true
             self.selectPreferredApplication(from: self.applications.map(\.identity))
             self.resetDraftTitleToDefault()
             self.actionErrorMessage = nil
@@ -1101,7 +1210,17 @@ struct MeetingTranscriptionView: View {
         return true
     }
 
+    /// Opens FluidMeet settings on the Integrations tab, from a meeting's More menu.
+    private func openMeetingIntegrations() {
+        self.openMeetingSettings(section: .integrations)
+    }
+
     private func openMeetingSettings() {
+        self.openMeetingSettings(section: .recording)
+    }
+
+    private func openMeetingSettings(section: MeetingSettingsSection) {
+        self.meetingSettingsInitialSection = section
         self.setupDraft.autoDetectEnabled = SettingsStore.shared.meetingAutoDetectEnabled
         self.setupDraft.browserDetectionEnabled = SettingsStore.shared.meetingAutoDetectBrowserEnabled
         self.setupDraftBeforeEditing = self.setupDraft
@@ -1134,26 +1253,17 @@ struct MeetingTranscriptionView: View {
             return
         }
 
-        // Automatic is session-scoped and never rewrites the user's legacy saved source.
-        // Source availability is checked again when recording starts.
+        // Persist explicit intent by stable bundle; Automatic clears the saved manual source.
         let settings = SettingsStore.shared
-        let previousDefaults = settings.meetingRecordingDefaults
-        let application = self.applications.first(where: { $0.id == self.setupDraft.selectedApplicationID })
-        if self.setupDraft.mode == .onlineCall, !self.setupDraft.usesAutomaticApplication, application == nil {
+        do {
+            settings.meetingRecordingDefaults = try self.setupDraft.recordingDefaults(
+                microphone: microphone.identity,
+                applications: self.applications.map(\.identity)
+            )
+        } catch {
             self.actionErrorMessage = PichiLocalization.text("Choose an available audio source or Automatic before saving.")
             return
         }
-
-        settings.meetingRecordingDefaults = MeetingRecordingDefaults(
-            isConfigured: true,
-            mode: self.setupDraft.mode,
-            applicationBundleIdentifier: previousDefaults.applicationBundleIdentifier,
-            applicationDisplayName: previousDefaults.applicationDisplayName,
-            microphoneCaptureDeviceID: microphone.identity.captureDeviceID,
-            microphoneCoreAudioUID: microphone.identity.coreAudioUID,
-            microphoneRole: .unknown,
-            languageCode: self.setupDraft.languageCode
-        )
 
         let previousRetentionPolicy = settings.meetingAudioRetentionPolicy
         settings.meetingAutoDetectEnabled = self.setupDraft.autoDetectEnabled
@@ -1323,8 +1433,8 @@ struct MeetingTranscriptionCanvas: View {
     var onEditSetup: (() -> Void)? = nil
     let isRetrying: Bool
     let onCloseSelection: (() -> Void)?
-
     var summaryASRService: ASRService? = nil
+    var onOpenIntegrations: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
@@ -1434,7 +1544,8 @@ struct MeetingTranscriptionCanvas: View {
                         onRenameSession: { title in self.onRenameSession(session.id, title) },
                         onAssignSpeakers: { names in await self.onAssignSpeakers(session.id, names) },
                         onClose: self.onCloseSelection,
-                        summaryASRService: self.summaryASRService
+                        summaryASRService: self.summaryASRService,
+                        onOpenIntegrations: self.onOpenIntegrations
                     )
                 }
             case let .failed(session, message):
@@ -1518,7 +1629,7 @@ private struct MeetingHeaderIconButton: View {
     var body: some View {
         Button(action: self.action) {
             Label(self.label, systemImage: self.systemImage)
-                .foregroundStyle(self.isSelected ? self.theme.palette.accent : self.theme.palette.primaryText)
+                .foregroundStyle(self.isSelected ? self.theme.palette.accentText : self.theme.palette.primaryText)
         }
         .buttonStyle(.automatic)
         .help(self.label)
@@ -1542,6 +1653,7 @@ private struct MeetingHistoryInspector: View {
     let onDeleteRequest: (MeetingSessionID) -> Void
     let onRename: (MeetingSessionID, String) -> Void
     let onRecordAgain: (MeetingSession) -> Void
+    var onOpenIntegrations: (() -> Void)? = nil
 
     @State private var renameSessionID: MeetingSessionID?
     @State private var renameDraft = ""
@@ -1604,11 +1716,11 @@ private struct MeetingHistoryInspector: View {
             .padding(.bottom, self.theme.metrics.spacing.md)
 
             HStack(spacing: self.theme.metrics.spacing.sm) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Image(systemName: "magnifyingglass").foregroundStyle(self.theme.palette.secondaryText)
                 TextField("Search meetings", text: self.$searchText).textFieldStyle(.plain)
                 if !self.searchText.isEmpty {
                     Button { self.searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(self.theme.palette.secondaryText)
                     }
                     .buttonStyle(.plain)
                     .meetingHoverFeedback()
@@ -1625,7 +1737,7 @@ private struct MeetingHistoryInspector: View {
             if let errorMessage, !self.sessions.isEmpty {
                 Text(PichiLocalization.text(errorMessage))
                     .font(.fluidSystem(.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .padding(self.theme.metrics.spacing.md)
             }
 
@@ -1707,7 +1819,7 @@ private struct MeetingHistoryInspector: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(self.theme.materials.sidebar)
+        .background(self.theme.palette.sidebarBackground)
         .alert("Rename Meeting", isPresented: Binding(
             get: { self.renameSessionID != nil },
             set: { if !$0 { self.renameSessionID = nil } }
@@ -1771,6 +1883,10 @@ private struct MeetingHistoryInspector: View {
                 self.onDeleteAudioRequest(session.id)
             }
             .disabled(!self.isQuiescent)
+        }
+        if let onOpenIntegrations {
+            Divider()
+            Button("Integrations…", systemImage: "link", action: onOpenIntegrations)
         }
         Divider()
         Button("Delete Meeting…", systemImage: "trash", role: .destructive) {
@@ -1932,7 +2048,7 @@ private struct MeetingHistoryRow: View {
     }
 
     private var actionColor: Color {
-        self.session.state == .interrupted ? self.theme.palette.warning : self.theme.palette.accent
+        self.session.state == .interrupted ? self.theme.palette.warning : self.theme.palette.accentText
     }
 
     private var rowBackground: Color {
@@ -1942,7 +2058,7 @@ private struct MeetingHistoryRow: View {
     }
 
     private var sourceName: String {
-        self.session.capturedApplication?.displayName ?? PichiLocalization.text("In-room")
+        self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
     }
 
     private var statusText: String {
@@ -1993,7 +2109,6 @@ private struct MeetingSetupCanvas: View {
     let onEditSetup: () -> Void
 
     @Environment(\.theme) private var theme
-    @State private var documentSection = MeetingDocumentSection.transcript
 
     private var systemsReady: Bool {
         !self.readiness.isCheckingSources &&
@@ -2009,7 +2124,7 @@ private struct MeetingSetupCanvas: View {
     }
 
     private var resolvedApplication: MeetingApplicationOption? {
-        guard self.draft.mode == .onlineCall else { return nil }
+        guard self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .selectedApplication else { return nil }
         return self.applications.first(where: { $0.id == self.draft.selectedApplicationID })
     }
 
@@ -2020,31 +2135,34 @@ private struct MeetingSetupCanvas: View {
     }
 
     private var planHeadline: String {
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("Record audio from all apps.") }
         if let app = resolvedApplication { return PichiLocalization.format("%@ is open.", app.identity.displayName) }
         return PichiLocalization.text(self.draft.mode == .inRoom ? "In-person meeting." : "No call open.")
     }
 
     private var planDetail: String {
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("System audio and your mic will be recorded, including apps opened during the meeting.") }
         if let app = resolvedApplication { return PichiLocalization.format("%@ and your mic will be recorded.", app.identity.displayName) }
         if self.draft.mode == .inRoom { return PichiLocalization.text("Your mic will record the room.") }
         if self.readiness.showScreenRecordingSettingsAction {
-            return PichiLocalization.text("Your mic will record the room. Allow Screen & System Audio access to capture meeting apps too.")
+            return PichiLocalization.text("Allow Screen & System Audio access, then refresh sources.")
         }
-        if self.applications.isEmpty { return PichiLocalization.text("Your mic will record the room. No meeting apps are available to capture yet.") }
-        return PichiLocalization.text("Your mic will record the room. If a call is running, pick its app under Change.")
+        return PichiLocalization.text("Choose the application that contains the online meeting.")
     }
 
     private var sourceLabel: String {
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("System audio") }
         if let app = resolvedApplication { return app.identity.displayName }
-        return self.draft.mode == .inRoom ? PichiLocalization.text("In person") : PichiLocalization.text("Automatic")
+        if self.draft.mode == .inRoom { return PichiLocalization.text("In person") }
+        return PichiLocalization.text(self.draft.usesAutomaticApplication ? "Automatic" : "Source unavailable")
     }
 
     private var meetingApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) != nil }
+        self.applications.pickerSections.usual
     }
 
     private var otherApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) == nil }
+        self.applications.pickerSections.others
     }
 
     var body: some View {
@@ -2057,13 +2175,7 @@ private struct MeetingSetupCanvas: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            MeetingDocumentTabs(selection: self.$documentSection, primaryTitle: "Meeting home", primaryIcon: "house", isEnabled: !self.isStarting)
-
-            if self.documentSection == .summary {
-                MeetingSummaryView()
-            } else {
-                self.recordingSetup
-            }
+            self.recordingSetup
         }
     }
 
@@ -2115,14 +2227,17 @@ private struct MeetingSetupCanvas: View {
             self.sourceEntry(PichiLocalization.text("In person · mic only"), systemImage: "person.2", selected: self.draft.mode == .inRoom) {
                 self.draft.mode = .inRoom
             }
+            self.sourceEntry(PichiLocalization.text("System audio · all apps"), systemImage: "speaker.wave.2", selected: self.draft.mode == .onlineCall && self.draft.applicationAudioScope == .systemAudio) {
+                self.draft.mode = .onlineCall
+                self.draft.chooseSystemAudio()
+            }
             self.sourceEntry(
                 PichiLocalization.text("Automatic · follows a detected call"),
                 systemImage: "wand.and.stars",
-                selected: self.draft.mode == .onlineCall && self.draft.usesAutomaticApplication
+                selected: self.draft.mode == .onlineCall && self.draft.applicationAudioScope == .selectedApplication && self.draft.usesAutomaticApplication
             ) {
                 self.draft.mode = .onlineCall
-                self.draft.usesAutomaticApplication = true
-                self.draft.selectedApplicationID = nil
+                self.draft.chooseApplication(nil)
             }
             if !self.meetingApplications.isEmpty {
                 Divider()
@@ -2159,11 +2274,10 @@ private struct MeetingSetupCanvas: View {
     }
 
     private func applicationEntry(_ option: MeetingApplicationOption) -> some View {
-        let selected = self.draft.mode == .onlineCall && !self.draft.usesAutomaticApplication && self.draft.selectedApplicationID == option.id
+        let selected = self.draft.mode == .onlineCall && self.draft.applicationAudioScope == .selectedApplication && !self.draft.usesAutomaticApplication && self.draft.selectedApplicationID == option.id
         return self.sourceEntry(option.identity.displayName, systemImage: "app", selected: selected) {
             self.draft.mode = .onlineCall
-            self.draft.usesAutomaticApplication = false
-            self.draft.selectedApplicationID = option.id
+            self.draft.chooseApplication(option.identity)
         }
     }
 
@@ -2199,12 +2313,12 @@ private struct MeetingSetupCanvas: View {
                     Image(systemName: "clock.arrow.circlepath")
                         .foregroundStyle(self.theme.palette.secondaryText)
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                        Text("Last meeting").font(self.theme.typography.caption).foregroundStyle(.secondary)
+                        Text("Last meeting").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                         Text(recentSession.title).font(self.theme.typography.bodyStrong).lineLimit(2)
                     }
                     Spacer()
                     Text(Self.durationText(recentSession.duration))
-                        .font(self.theme.typography.codeCaption).foregroundStyle(.secondary)
+                        .font(self.theme.typography.codeCaption).foregroundStyle(self.theme.palette.secondaryText)
                 }
             }
         }

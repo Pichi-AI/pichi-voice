@@ -3,6 +3,20 @@ import Foundation
 import XCTest
 
 final class PichiLocalizationTests: XCTestCase {
+    func testHoldSpaceMuteCopyUsesCompiledEnglishAndRussianResources() {
+        let copy = [
+            "Hold Space to Mute": "Отключать микрофон при удержании пробела",
+            "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority.": "Во время диктовки удерживайте пробел, чтобы отключить микрофон, и отпустите для продолжения. Короткое нажатие вводит пробел. Другие сочетания клавиш с пробелом имеют приоритет.",
+            "Muted": "Микрофон выключен",
+            "Dictation muted. Release Space to resume.": "Микрофон диктовки выключен. Отпустите пробел для продолжения.",
+            "Release Space to resume dictation": "Отпустите пробел, чтобы продолжить диктовку",
+        ]
+        for (key, russian) in copy {
+            XCTAssertEqual(PichiLocalization.text(key, language: .russian, bundle: .main), russian)
+            XCTAssertEqual(PichiLocalization.text(key, language: .english, bundle: .main), key)
+        }
+    }
+
     func testMissingAndUnknownPreferencesDefaultToRussianIndependentlyOfSpeechLanguage() throws {
         let suite = "PichiLocalizationTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -143,6 +157,15 @@ final class PichiLocalizationTests: XCTestCase {
         XCTAssertEqual(PichiLocalization.format("%lld words", language: .english, bundle: .main, arguments: [2]), "2 words")
         XCTAssertEqual(PichiLocalization.format("%lld entries", language: .russian, bundle: .main, arguments: [22]), "22 записи")
         XCTAssertEqual(PichiLocalization.format("%lld percent", language: .russian, bundle: .main, arguments: [21]), "21 процент")
+    }
+
+    func testCompiledStatsStreakUnitUsesNativeQuantityWithoutRepeatingTheNumber() {
+        let russian = [0: "дней подряд", 1: "день подряд", 2: "дня подряд", 5: "дней подряд",
+                       11: "дней подряд", 21: "день подряд", 22: "дня подряд"]
+        for (count, expected) in russian {
+            XCTAssertEqual(PichiLocalization.formattedStreakUnit(days: count, language: .russian, bundle: .main), expected)
+            XCTAssertEqual(PichiLocalization.formattedStreakUnit(days: count, language: .english, bundle: .main), count == 1 ? "day streak" : "days in a row")
+        }
     }
 
     func testCompiledSettingsCopyLocalizesDescriptionsAndSelectedOptionsWithoutChangingStoredIDs() {

@@ -112,10 +112,25 @@ nonisolated struct BrandPalette: Codable, Equatable, Sendable {
             throw BrandProfile.ValidationError.invalid("Theme must define every supported color token.")
         }
         for value in self.colors.values { try BrandProfile.validateColor(value) }
-        // Validate readable text across the actual surfaces used by the shared theme.
-        for background in ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"] {
-            guard Self.contrast(self.colors["primaryText"]!, self.colors[background]!) >= 4.5,
-                  Self.contrast(self.colors["secondaryText"]!, self.colors[background]!) >= 3 else {
+        let backgrounds = ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"]
+        // Accent and status colors also appear as labels and standalone icons,
+        // so they need readable contrast independently of paired button text.
+        // Any alpha blend of the defined opaque surfaces stays inside their
+        // per-channel RGB envelope. Its luminance is bounded by these extremes,
+        // including saturated hue mixtures that darken below both endpoints.
+        // One polarity and sufficient contrast at both extremes protects all
+        // those blends. This deliberately rejects some multicolor palettes.
+        let backgroundChannels = backgrounds.map { Self.channels(self.colors[$0]!) }
+        let darkest = Self.luminance((0..<3).map { channel in backgroundChannels.map { $0[channel] }.min()! })
+        let lightest = Self.luminance((0..<3).map { channel in backgroundChannels.map { $0[channel] }.max()! })
+        let foregrounds: [(String, Double)] = ["primaryText", "secondaryText", "tertiaryText", "warning", "success"].map {
+            (self.colors[$0]!, $0 == "primaryText" ? 4.5 : 3)
+        } + [(accent, 3)]
+        for (foreground, requiredContrast) in foregrounds {
+            let luminance = Self.luminance(foreground)
+            guard (luminance < darkest || luminance > lightest),
+                  Self.contrast(luminance, darkest) >= requiredContrast,
+                  Self.contrast(luminance, lightest) >= requiredContrast else {
                 throw BrandProfile.ValidationError.invalid("Theme text needs more contrast against its backgrounds.")
             }
         }
@@ -125,15 +140,25 @@ nonisolated struct BrandPalette: Codable, Equatable, Sendable {
     }
 
     static func contrast(_ first: String, _ second: String) -> Double {
-        let values = [self.luminance(first), self.luminance(second)]
-        return (values.max()! + 0.05) / (values.min()! + 0.05)
+        self.contrast(self.luminance(first), self.luminance(second))
+    }
+
+    private static func contrast(_ first: Double, _ second: Double) -> Double {
+        (max(first, second) + 0.05) / (min(first, second) + 0.05)
     }
 
     static func luminance(_ color: String) -> Double {
-        guard let rgb = UInt32(color.dropFirst(), radix: 16) else { return 0 }
-        let channels = [Double((rgb >> 16) & 255), Double((rgb >> 8) & 255), Double(rgb & 255)].map { value -> Double in
-            let normalized = value / 255
-            return normalized <= 0.04045 ? normalized / 12.92 : pow((normalized + 0.055) / 1.055, 2.4)
+        self.luminance(self.channels(color))
+    }
+
+    private static func channels(_ color: String) -> [Double] {
+        let rgb = UInt32(color.dropFirst(), radix: 16) ?? 0
+        return [Double((rgb >> 16) & 255), Double((rgb >> 8) & 255), Double(rgb & 255)].map { $0 / 255 }
+    }
+
+    private static func luminance(_ components: [Double]) -> Double {
+        let channels = components.map { value -> Double in
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
         }
         return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
     }

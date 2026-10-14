@@ -119,6 +119,10 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private let cloudSession: URLSession
     private let cloudAuthorization: CloudTextProviderAuthorization
 
+    /// Learns which models reject `temperature` so later requests stop sending it.
+    private let temperatureSupport: ModelTemperatureSupport
+    private let ownedSessionDidCreate: (@Sendable (LLMClientSessionLifetime) -> Void)?
+
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = Self.defaultTimeoutSeconds
@@ -132,14 +136,19 @@ final nonisolated class LLMClient: @unchecked Sendable {
         self.localSession = URLSession(configuration: localConfig, delegate: CloudTextProviderTransport.redirectPolicy, delegateQueue: nil)
         self.cloudSession = CloudTextProviderTransport.session
         self.cloudAuthorization = .shared
+        self.temperatureSupport = .shared
+        self.ownedSessionDidCreate = nil
     }
 
     /// Test seam for deterministic transport fixtures; callers own the session configuration.
-    init(session: URLSession) {
+    init(session: URLSession, temperatureSupport: ModelTemperatureSupport = .shared,
+         ownedSessionDidCreate: (@Sendable (LLMClientSessionLifetime) -> Void)? = nil) {
         self.session = session
         self.localSession = session
         self.cloudSession = session
         self.cloudAuthorization = CloudTextProviderAuthorization(session: session)
+        self.temperatureSupport = temperatureSupport
+        self.ownedSessionDidCreate = ownedSessionDidCreate
     }
 
     // MARK: - Response Types
@@ -151,6 +160,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let content: String
         /// Parsed tool calls for agentic modes (nil if none)
         let toolCalls: [ToolCall]
+        /// Non-streaming completion metadata; callers can reject partial text without changing other workflows.
+        var isIncomplete = false
     }
 
     struct ToolCall: @unchecked Sendable {
@@ -186,7 +197,7 @@ final nonisolated class LLMClient: @unchecked Sendable {
         let apiKey: String
         let streaming: Bool
         let tools: [[String: Any]]
-        let temperature: Double?
+        var temperature: Double?
 
         /// Optional token limit (max_tokens or max_completion_tokens depending on model)
         var maxTokens: Int?
@@ -278,12 +289,28 @@ final nonisolated class LLMClient: @unchecked Sendable {
             }
             self.benchmark(config, "call_return")
             return response
+        } catch let failure as HTTPRejection where config.temperature != nil && failure.reason == .temperatureRejected {
+            if let boundedLocalSession {
+                await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
+            }
+            try Task.checkCancellation()
+            // Models keep dropping `temperature` (Opus 4.7+, Haiku 5.5, gpt-5...). The 400 arrives
+            // before any streamed output, so retrying once without it cannot duplicate text.
+            DebugLogger.shared.warning(
+                "LLMClient: \(config.model) rejected temperature; retrying without it",
+                source: "LLMClient"
+            )
+            self.temperatureSupport.record([config.model: false], baseURL: config.baseURL)
+            var retryConfig = config
+            retryConfig.temperature = nil
+            return try await self.call(retryConfig)
         } catch {
             if let boundedLocalSession {
                 await boundedLocalSession.lifetime.invalidateAndWait(for: boundedLocalSession.session)
             }
             self.benchmark(config, "call_fail")
-            throw error
+            // Internal protocol classification never escapes to presentation.
+            throw (error as? HTTPRejection)?.outwardError ?? error
         }
     }
 
@@ -640,7 +667,52 @@ final nonisolated class LLMClient: @unchecked Sendable {
         configuration.timeoutIntervalForResource = timeout
         let lifetime = LLMClientSessionLifetime()
         let session = URLSession(configuration: configuration, delegate: lifetime, delegateQueue: nil)
+        self.ownedSessionDidCreate?(lifetime)
         return (session, lifetime)
+    }
+
+    // Retain only a stable wire reason after inspecting a bounded error. The
+    // registered-provider body remains redacted in every public error and log.
+    private enum HTTPRejectionReason { case temperatureRejected }
+    private struct HTTPRejection: Error {
+        let reason: HTTPRejectionReason
+        let outwardError: LLMError
+    }
+    private static let maximumHTTPErrorBytes = 64 * 1024
+
+    private func boundedHTTPErrorBody(_ bytes: URLSession.AsyncBytes) async throws -> (data: Data, complete: Bool) {
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < Self.maximumHTTPErrorBytes else { return (data, false) }
+            data.append(byte)
+        }
+        return (data, true)
+    }
+
+    private func httpFailure(status: Int, body: (data: Data, complete: Bool), request: URLRequest) -> Error {
+        let outward = LLMError.httpError(status, self.safeHTTPErrorBody(body.data, request: request))
+        guard status == 400, body.complete, Self.temperatureWasRejected(in: body.data) else { return outward }
+        return HTTPRejection(reason: .temperatureRejected, outwardError: outward)
+    }
+
+    private static func temperatureWasRejected(in data: Data) -> Bool {
+        guard data.count <= self.maximumHTTPErrorBytes,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        let fields = root["error"] as? [String: Any] ?? root
+        let parameter = fields["param"] as? String
+        if let parameter, !parameter.isEmpty, parameter != "temperature" { return false }
+        let codes = [fields["code"] as? String, fields["type"] as? String].compactMap { $0?.lowercased() }
+        // A value/range rejection is not evidence of an unsupported parameter.
+        if codes.contains(where: { ["invalid_value", "unsupported_value", "out_of_range", "invalid_parameter_value"].contains($0) }) {
+            return false
+        }
+        if parameter == "temperature", codes.contains("unsupported_parameter") { return true }
+        guard let message = (root["error"] as? String) ?? fields["message"] as? String else { return false }
+        let wireMessage = message.lowercased()
+        guard wireMessage.range(of: #"\btemperature\b"#, options: .regularExpression) != nil else { return false }
+        return ["unsupported", "not supported", "does not support", "deprecated", "not allowed", "not permitted"]
+            .contains { wireMessage.contains($0) }
     }
 
     private func safeHTTPErrorBody(_ data: Data, request: URLRequest) -> String {
@@ -653,15 +725,19 @@ final nonisolated class LLMClient: @unchecked Sendable {
     private func processNonStreaming(request: URLRequest, config: Config, session: URLSession) async throws -> Response {
         DebugLogger.shared.debug("LLMClient: Making non-streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
+            let body = try await self.boundedHTTPErrorBody(bytes)
+            let errText = self.safeHTTPErrorBody(body.data, request: request)
+            DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode): \(errText.prefix(200))", source: "LLMClient")
+            throw self.httpFailure(status: http.statusCode, body: body, request: request)
+        }
+        // Successful replies retain the same complete Data and parsing contract.
+        var data = Data()
+        for try await byte in bytes { try Task.checkCancellation(); data.append(byte) }
         try Task.checkCancellation()
         self.benchmark(config, "response_data bytes=\(data.count)")
-
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let errText = self.safeHTTPErrorBody(data, request: request)
-            DebugLogger.shared.error("LLMClient: HTTP error \(http.statusCode): \(errText.prefix(200))", source: "LLMClient")
-            throw LLMError.httpError(http.statusCode, errText)
-        }
 
         DebugLogger.shared.debug("LLMClient: Non-streaming response received (\(data.count) bytes)", source: "LLMClient")
 
@@ -669,18 +745,27 @@ final nonisolated class LLMClient: @unchecked Sendable {
             throw LLMError.invalidResponse
         }
 
-        let parsed: Response
+        var parsed: Response
         if OllamaChatAdapter.supports(config.baseURL) {
             self.benchmark(config, "native_timing \(OllamaChatAdapter.timingDiagnostics(json))")
             parsed = self.parseMessageResponse(try OllamaChatAdapter.message(json, completed: true))
         } else if self.isResponsesRequest(request) {
             parsed = try self.parseResponsesResponse(json)
+            let status = json["status"] as? String
+            let output = json["output"] as? [[String: Any]] ?? []
+            parsed.isIncomplete = (status != nil && status != "completed") ||
+                json["incomplete_details"] is [String: Any] ||
+                output.contains { $0["status"] as? String == "incomplete" }
         } else {
             guard let choices = json["choices"] as? [[String: Any]],
                   let choice = choices.first,
                   let message = choice["message"] as? [String: Any]
             else { throw LLMError.invalidResponse }
             parsed = self.parseMessageResponse(message)
+            // Only truncation counts; compatible servers use varied names for a normal stop.
+            if let reason = choice["finish_reason"] as? String {
+                parsed.isIncomplete = ["length", "max_tokens", "content_filter"].contains(reason.lowercased())
+            }
         }
         self.benchmark(config, "response_decoded")
         return parsed
@@ -690,15 +775,12 @@ final nonisolated class LLMClient: @unchecked Sendable {
         DebugLogger.shared.debug("LLMClient: Starting Responses streaming request to \(request.url?.absoluteString ?? "unknown")", source: "LLMClient")
 
         let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
         self.benchmark(config, "response_headers")
 
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
-            let errText = self.safeHTTPErrorBody(errorData, request: request)
-            throw LLMError.httpError(http.statusCode, errText)
+            let body = try await self.boundedHTTPErrorBody(bytes)
+            throw self.httpFailure(status: http.statusCode, body: body, request: request)
         }
 
         var contentBuffer: [String] = []
@@ -806,12 +888,8 @@ final nonisolated class LLMClient: @unchecked Sendable {
 
         // Check for HTTP errors
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            var errorData = Data()
-            for try await byte in bytes {
-                errorData.append(byte)
-            }
-            let errText = self.safeHTTPErrorBody(errorData, request: request)
-            throw LLMError.httpError(http.statusCode, errText)
+            let body = try await self.boundedHTTPErrorBody(bytes)
+            throw self.httpFailure(status: http.statusCode, body: body, request: request)
         }
 
         // Create the appropriate parser for this model

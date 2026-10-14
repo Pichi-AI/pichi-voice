@@ -2,6 +2,9 @@ import Foundation
 
 extension SettingsStore {
     enum Keys {
+        static let fillerWordDefaultsMigrationV2 = "FillerWordDefaultsMigrationV2"
+        static let fillerWordDefaultsMigrationV1 = "FillerWordDefaultsMigrationV1"
+        static let holdSpaceToMute = "HoldSpaceToMute"
         static let meetingSaveAudio = "MeetingSaveAudio"
         static let meetingSpeakerLabelsEnabled = "MeetingSpeakerLabelsEnabled"
         static let meetingPIIRedactionEnabled = "MeetingPIIRedactionEnabled"

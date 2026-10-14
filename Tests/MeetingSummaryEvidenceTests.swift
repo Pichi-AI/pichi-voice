@@ -46,6 +46,7 @@ struct MeetingSummaryEvidenceTests {
               markdown.contains("1\\:05 · Мария \\[Speaker\\]"), markdown.contains("Status\\: Requested"), !markdown.contains(id.uuidString)
         else { throw Failure("Structured Markdown omitted fields, source time or safe literal punctuation") }
         try literalMarkdownRoundTrip(id: id)
+        try retainedChangesAndAnswers()
         document.actions[0].superseded = true
         guard !document.copyMarkdown(language: .english).contains("Status\\: Requested")
         else { throw Failure("Superseded action retained an advertised current state") }
@@ -107,6 +108,91 @@ struct MeetingSummaryEvidenceTests {
             }
         }
         print("Meeting summary evidence checks passed: cited fields, source coverage, admission bounds, legacy/typed task metadata and literal structured Markdown round trips.")
+    }
+
+    static func retainedChangesAndAnswers() throws {
+        let correction = PichiMeetingSummaryTurn(id: UUID(), seconds: 65, speaker: "Синтетический участник А",
+            text: #"Предложение <old> отменили. Остаётся https://example.org/api и C:\reports."#)
+        let answer = PichiMeetingSummaryTurn(id: UUID(), seconds: 90, speaker: "Синтетический участник Б",
+            text: "Проверка каталога завершена: доступно семь записей.")
+        let change = PichiMeetingSummaryItem(text: correction.text,
+            evidence: [.init(segmentID: correction.id, quote: correction.text)])
+        let response = PichiMeetingSummaryItem(text: answer.text,
+            evidence: [.init(segmentID: answer.id, quote: answer.text)])
+        let sources = [correction, answer]
+        var document = PichiMeetingSummaryDocument(summary: [response], decisions: [], actions: [], openQuestions: [],
+                                                   changes: [change], answers: [response])
+        _ = try document.validated(against: sources)
+        let roundTrip = try JSONDecoder().decode(PichiMeetingSummaryDocument.self, from: JSONEncoder().encode(document))
+        guard roundTrip == document else { throw Failure("Retained change/answer facts did not round trip") }
+        let markdown = document.copyMarkdown(language: .english, sources: sources)
+        let blocks = CommandMarkdownParser.parse(markdown)
+        let headings: [String] = blocks.compactMap {
+            if case let .heading(text, level) = $0.content, level == 2 { return String(text.characters) }
+            return nil
+        }
+        let quotes: [AttributedString] = blocks.compactMap {
+            if case let .quote(text) = $0.content { return text }
+            return nil
+        }
+        guard headings.suffix(2) == ["Corrections", "Answers"],
+              quotes.contains(where: { String($0.characters) == correction.text }),
+              quotes.contains(where: { String($0.characters) == answer.text }),
+              quotes.allSatisfy({ $0.runs.allSatisfy { $0.link == nil && $0.inlinePresentationIntent == nil } }),
+              !markdown.contains(correction.id.uuidString), !markdown.contains(answer.id.uuidString)
+        else { throw Failure("Change/answer Markdown lost literal sources, activated markup or omitted its sections") }
+        let text = document.copyText(language: .english)
+        guard text.contains("Corrections\n"), text.contains("Answers\n"),
+              text.contains(correction.text), text.contains(answer.text)
+        else { throw Failure("Plain copy omitted retained change/answer facts or translated source text") }
+        // Exercise Foundation's real localized lookup with the current catalog's
+        // units, rather than giving the copy methods a test-only translator.
+        let catalogURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("Sources/Fluid/Localization/Localizable.xcstrings")
+        let catalog = try JSONSerialization.jsonObject(with: Data(contentsOf: catalogURL)) as! [String: Any]
+        let strings = catalog["strings"] as! [String: Any]
+        let bundleURL = FileManager.default.temporaryDirectory.appendingPathComponent("SyntheticSummaryCopy-\(UUID().uuidString).bundle")
+        try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bundleURL) }
+        var headingsByLanguage: [PichiInterfaceLanguage: [String]] = [:]
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            var units: [String: String] = [:]
+            for key in ["Corrections", "Answers"] {
+                let entry = strings[key] as! [String: Any]
+                let locales = entry["localizations"] as! [String: Any]
+                let locale = locales[language.rawValue] as! [String: Any]
+                units[key] = (locale["stringUnit"] as! [String: Any])["value"] as? String
+            }
+            headingsByLanguage[language] = [units["Corrections"]!, units["Answers"]!]
+            let localeURL = bundleURL.appendingPathComponent("\(language.rawValue).lproj")
+            try FileManager.default.createDirectory(at: localeURL, withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: units, format: .binary, options: 0)
+                .write(to: localeURL.appendingPathComponent("Localizable.strings"))
+        }
+        guard let bundle = Bundle(url: bundleURL) else { throw Failure("Synthetic localized copy bundle unavailable") }
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            let localizedMarkdown = document.copyMarkdown(language: language, bundle: bundle, sources: sources)
+            let localizedText = document.copyText(language: language, bundle: bundle)
+            for heading in headingsByLanguage[language]! {
+                guard localizedMarkdown.contains("## \(heading)"), localizedText.contains("\(heading)\n")
+                else { throw Failure("Localized change/answer headers fell back or disappeared") }
+            }
+            let localizedQuotes = CommandMarkdownParser.parse(localizedMarkdown).compactMap { block -> String? in
+                if case let .quote(value) = block.content { return String(value.characters) }
+                return nil
+            }
+            guard localizedQuotes.contains(correction.text), localizedQuotes.contains(answer.text),
+                  localizedText.contains(correction.text), localizedText.contains(answer.text)
+            else { throw Failure("Interface localization changed source facts or evidence") }
+        }
+        for empty in [nil, []] as [[PichiMeetingSummaryItem]?] {
+            document.changes = empty; document.answers = empty
+            let legacyMarkdown = document.copyMarkdown(language: .english)
+            let legacyText = document.copyText(language: .english)
+            guard !legacyMarkdown.contains("## Corrections"), !legacyMarkdown.contains("## Answers"),
+                  !legacyText.contains("Corrections\n"), !legacyText.contains("Answers\n")
+            else { throw Failure("Legacy or empty supplemental ledgers created phantom copy sections") }
+        }
     }
 
     static func literalMarkdownRoundTrip(id: UUID) throws {

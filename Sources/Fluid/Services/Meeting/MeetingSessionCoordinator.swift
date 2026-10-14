@@ -110,6 +110,8 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var latestCompletedSession: MeetingSession?
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
     @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
+    /// When live captions last heard words in the current recording. Nil without live captions.
+    private(set) var lastLiveSpeechAt: Date?
 
     /// Sustained application-audio silence, in seconds, before the silence watchdog degrades the session.
     private static let silenceWatchdogThresholdSeconds: TimeInterval = 90
@@ -301,8 +303,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     var sourceDisplayName: String {
-        self.currentSession?.capturedApplication?.displayName
-            ?? (self.currentSession?.mode == .inRoom ? "In-room meeting" : "Meeting audio")
+        self.currentSession?.audioSourceDisplayName ?? "Meeting audio"
     }
 
     var microphoneDisplayName: String {
@@ -317,8 +318,9 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     /// Used by the auto-detection Start path: `preferredBundleIdentifier` is the detected app.
-    /// When `requirePreferredApplication` is true, that app must be available — no Zoom/Chrome/Teams
-    /// fallback. `preferredWindowID` is threaded onto the resulting identity when it still matches.
+    /// For selected-application scope, `requirePreferredApplication` requires that exact app.
+    /// For system scope, detection is a start/title hint and cannot narrow the captured audio.
+    /// `preferredWindowID` is threaded onto narrow identities when it still matches.
     /// SCK content and microphone identities are refreshed here rather than reused.
     func defaultConfiguration(
         mode: MeetingCaptureMode,
@@ -329,16 +331,24 @@ final class MeetingSessionCoordinator: ObservableObject {
     ) async throws -> MeetingCaptureConfiguration {
         if let defaultConfigurationResolver { return try await defaultConfigurationResolver(mode, title) }
         #if os(macOS)
+        // Freeze source intent and language before microphone/source discovery suspends.
+        let defaults = self.settings.meetingRecordingDefaults
+        let scope = defaults.effectiveApplicationAudioScope
+        let languageCode = defaults.languageCode
+            ?? PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
+        let storageMode: MeetingAudioStorageMode = self.settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
+        let speakerLabelsEnabled = self.settings.meetingSpeakerLabelsEnabled
+        let piiRedactionEnabled = self.settings.meetingPIIRedactionEnabled
         let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: self.preferredMicrophoneUID()
         )
         var application: MeetingApplicationIdentity?
-        if mode == .onlineCall {
+        if mode == .onlineCall, scope == .selectedApplication {
             let applications = try await MeetingCaptureSourceCatalog.availableApplications()
             var resolved = try MeetingCaptureSourceCatalog.resolveApplication(
                 from: applications,
-                preferredBundleIdentifier: preferredBundleIdentifier,
-                requirePreferredApplication: requirePreferredApplication
+                preferredBundleIdentifier: defaults.usesAutomaticApplication ? preferredBundleIdentifier : defaults.applicationBundleIdentifier,
+                requirePreferredApplication: requirePreferredApplication || !defaults.usesAutomaticApplication
             )
             if let preferredWindowID, resolved.bundleIdentifier == preferredBundleIdentifier {
                 resolved.windowID = preferredWindowID
@@ -350,14 +360,14 @@ final class MeetingSessionCoordinator: ObservableObject {
         return MeetingCaptureConfiguration(
             mode: mode,
             title: title,
-            languageCode: self.settings.meetingRecordingDefaults.languageCode
-                ?? PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru",
+            languageCode: languageCode,
             application: application,
+            applicationAudioScope: mode == .onlineCall ? scope : nil,
             microphone: microphone,
             timestampDefaultTitle: true,
-            audioStorageMode: self.settings.meetingSaveAudio ? .retainedFiles : .memoryOnly,
-            speakerLabelsEnabled: self.settings.meetingSpeakerLabelsEnabled,
-            piiRedactionEnabled: self.settings.meetingPIIRedactionEnabled
+            audioStorageMode: storageMode,
+            speakerLabelsEnabled: speakerLabelsEnabled,
+            piiRedactionEnabled: piiRedactionEnabled
         )
         #else
         throw MeetingProcessingError.modelUnavailable
@@ -402,7 +412,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         try Task.checkCancellation()
         try configuration.validate()
         let selectedModelID = self.settings.selectedSpeechModel.rawValue
-        if PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
+        let savedBackendID = self.settings.meetingTranscriptionBackendID
+        let requestedBackendID = configuration.transcriptionBackendID.map(MeetingBackendID.init(rawValue:))
+            ?? PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
+                selectedModelID: selectedModelID, savedBackendID: savedBackendID)
+        if configuration.transcriptionBackendID == nil,
+           PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
             _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
                 asrModel: selectedModelID,
                 languageCode: configuration.languageCode
@@ -422,26 +437,41 @@ final class MeetingSessionCoordinator: ObservableObject {
         // Reject unsupported strict input through the real backend factory before download
         // owners or microphone permission prompts run. Repeat after prompts in case selection
         // changed while they were open; final preparation still binds the exact session request.
-        let initialBackendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
-            selectedModelID: selectedModelID, savedBackendID: self.settings.meetingTranscriptionBackendID)
-        let initialPCMDescriptor = configuration.audioStorageMode == .memoryOnly
-            ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: initialBackendID) : nil
+        let initialDescriptor = try self.processing.validateRecordingInput(
+            configuration: configuration, backendID: requestedBackendID)
+        // Explicit registered requests require a preinstalled artifact. Capture its identity
+        // before any dependency work or permission prompt and retain this exact snapshot.
+        let explicitRecordingConfiguration: MeetingFinalProcessingConfiguration?
+        if configuration.transcriptionBackendID != nil {
+            let snapshot = PichiMeetingProviderFactory.configuration(backendID: requestedBackendID,
+                languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true)
+            let registeredOverride = PichiMeetingProviderFactory.registeredBackendDescriptor(for: snapshot.asrModel)?.id == requestedBackendID
+            try PichiMeetingProviderFactory.validateRecordingConfiguration(snapshot,
+                isAppleSilicon: CPUArchitecture.isAppleSilicon, requiresInstalledArtifact: registeredOverride)
+            try self.validateFrozenRecordingConfiguration(snapshot)
+            explicitRecordingConfiguration = snapshot
+        } else { explicitRecordingConfiguration = nil }
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
-        try await self.validateRecordingModels()
+        // This callback belongs to the ambient selected-ASR lifecycle. Explicit requests
+        // are prepared by the existing requested-backend pipeline/runtime owners below.
+        if configuration.transcriptionBackendID == nil { try await self.validateRecordingModels() }
         try Task.checkCancellation()
-        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
-        let dependencyDescriptor = initialPCMDescriptor
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
+        let dependencyDescriptor = initialDescriptor
             ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
         if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
            CPUArchitecture.isAppleSilicon || !dependencyDescriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
             try await self.prepareRecordingDependencies(dependencyDescriptor.diarizationDependencies)
         }
         try Task.checkCancellation()
-        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
         try await self.capture.preflightPermissions()
         try Task.checkCancellation()
-        guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
+        guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
         guard self.startReservation == reservation,
               self.activeSession?.id == passiveOffer?.id,
               !self.hasBlockingActivityTaskExceptStart,
@@ -475,15 +505,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             // Model installation and permission prompts run before the capture lease. Keep
             // their chosen model pinned; only freeze its installed artifact after preparation.
-            guard self.settings.selectedSpeechModel.rawValue == selectedModelID else { throw CancellationError() }
+            guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
+              self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
             recordingModelID = selectedModelID
-            recordingBackendID = PichiMeetingProviderFactory.selectedBackendID(
-                languageCode: configuration.languageCode,
-                selectedModelID: recordingModelID,
-                savedBackendID: self.settings.meetingTranscriptionBackendID
-            )
-            let admittedPCMDescriptor = configuration.audioStorageMode == .memoryOnly
-                ? try self.processing.validateMemoryAudioInput(configuration: configuration, backendID: recordingBackendID) : nil
+            recordingBackendID = requestedBackendID
+            let admittedPCMDescriptor = try self.processing.validateRecordingInput(
+                configuration: configuration, backendID: recordingBackendID)
             if configuration.speakerLabelsEnabled != false,
                let descriptor = admittedPCMDescriptor ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID),
                CPUArchitecture.isAppleSilicon || !descriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
@@ -491,9 +518,10 @@ final class MeetingSessionCoordinator: ObservableObject {
                 try Task.checkCancellation()
                 guard self.startReservation == reservation,
                       self.settings.selectedSpeechModel.rawValue == recordingModelID,
+                      self.settings.meetingTranscriptionBackendID == savedBackendID,
                       self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
             }
-            recordingASRConfiguration = PichiMeetingProviderFactory.configuration(
+            recordingASRConfiguration = explicitRecordingConfiguration ?? PichiMeetingProviderFactory.configuration(
                 backendID: recordingBackendID,
                 languageCode: configuration.languageCode,
                 diarizationEnabled: configuration.speakerLabelsEnabled ?? true
@@ -545,6 +573,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
+        self.lastLiveSpeechAt = nil
         if configuration.audioStorageMode != .memoryOnly {
         liveTranscriptionCoordinator.start(
             mode: configuration.mode,
@@ -1723,11 +1752,16 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func publishLiveTranscript(_ snapshot: MeetingLiveTranscriptSnapshot, generation: UUID, redactor: (any TranscriptTextRedacting)?) {
-        guard let redactor else { self.liveTranscript = snapshot; return }
+        guard let redactor else {
+            if snapshot.hasNewWords(since: self.liveTranscript) { self.lastLiveSpeechAt = Date() }
+            self.liveTranscript = snapshot
+            return
+        }
         self.livePrivacyPublication.submit(snapshot, generation: generation, using: redactor,
             publish: { [weak self] safe, generation in
                 guard let self, self.liveTranscriptionCoordinator != nil,
                       self.liveTranscript.accepts(safe, generation: generation, activeGeneration: self.captureGeneration) else { return }
+                if safe.hasNewWords(since: self.liveTranscript) { self.lastLiveSpeechAt = Date() }
                 self.liveTranscript = safe
             }, failed: { [weak self] generation in
                 guard let self, self.captureGeneration == generation else { return }

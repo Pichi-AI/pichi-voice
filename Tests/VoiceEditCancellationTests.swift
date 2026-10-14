@@ -14,6 +14,16 @@ import Foundation
 
 enum DeliveryFailure { case targetRestoreFailed }
 enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(DeliveryFailure) }
+@MainActor enum TypingService {
+    struct RecordingTargetContext { let pid:Int; let window:Int?; let element:Int? }
+    struct CapturedFocusTarget { let pid:Int; let window:Int?; let element:Int }
+    static func captureSystemFocusTarget()->CapturedFocusTarget? { .init(pid:1,window:10,element:10) }
+}
+@MainActor final class NotchContentState {
+    static let shared=NotchContentState()
+    var recordingTargetContext:TypingService.RecordingTargetContext? = .init(pid:1,window:10,element:10)
+    var recordingTargetPID:Int?=1
+}
 
 @MainActor final class RewriteDouble {
     var originalText = "original"
@@ -35,6 +45,7 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
     var finishes = 0
     func setProcessing(_: Bool) {}
     func finishProcessingAndHideOverlay() async { self.finishes += 1 }
+    func finishProcessingKeepingOverlayVisible() { self.finishes += 1 }
 }
 
 @MainActor final class ASRDouble {
@@ -42,13 +53,17 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
     var writes = 0
     var resume: CheckedContinuation<Void, Never>?
     var failure = false
+    var text=""
+    var focusTarget:TypingService.CapturedFocusTarget?
     func typeTextToActiveField(
-        _: String,
+        _ text: String,
         preferredTargetPID _: Int?,
         preserveTranscriptOnClipboard _: Bool,
+        requiredFocusTarget:TypingService.CapturedFocusTarget?,
         isOutputValid: @escaping @MainActor () -> Bool
     ) async -> TextDeliveryResult {
         self.deliveries += 1
+        self.text=text; self.focusTarget=requiredFocusTarget
         await withCheckedContinuation { self.resume = $0 }
         guard isOutputValid() else { return .cancelled }
         if self.failure { return .recoverableFailure(.targetRestoreFailed) }
@@ -67,18 +82,22 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
     var focus: CheckedContinuation<Bool, Never>?
     var failures = 0
     var hides = 0
-    func resolveTypingTargetPID() -> (pid: Int?, shouldRestoreOriginalFocus: Bool) { (1, self.restoreFocus) }
+    var preparedTarget:TypingService.RecordingTargetContext?
+    var failedTranscript=""
+    func resolveTypingTargetPID(returnToStartingField:Bool,context:TypingService.RecordingTargetContext?,fallbackOriginalPID:Int?) -> (pid: Int?, shouldRestoreOriginalFocus: Bool) { (context?.pid ?? fallbackOriginalPID,self.restoreFocus) }
     func prepareRecordingTargetForDelivery(
         _: String,
         keepBackup _: Bool,
+        targetContext:TypingService.RecordingTargetContext?,
         isOutputValid: @escaping @MainActor () -> Bool
     ) async -> Bool {
         guard isOutputValid() else { return false }
+        self.preparedTarget=targetContext
         let result = await withCheckedContinuation { self.focus = $0 }
         return result && isOutputValid()
     }
 
-    func showTextDeliveryFailure(_: DeliveryFailure, transcript _: String) { self.failures += 1 }
+    func showTextDeliveryFailure(_: DeliveryFailure, transcript:String) { self.failures += 1; self.failedTranscript=transcript }
     func hideOverlayAfterOutput() { self.hides += 1 }
 }
 
@@ -140,6 +159,24 @@ enum TextDeliveryResult { case delivered, cancelled, recoverableFailure(Delivery
             precondition(owner.failures == (outcome == "failure" ? 1 : 0))
             precondition(owner.rewriteModeService.clears == (outcome == "failure" ? 0 : 1))
         }
-        print("Voice Edit cancellation: 8 production-path scenarios passed")
+        // A new capture/draft during the awaited model/focus steps cannot change this output.
+        for fails in [false,true] {
+            NotchContentState.shared.recordingTargetContext = .init(pid:1,window:10,element:10)
+            let owner=VoiceEditOwner()
+            let pending=Task { await owner.processRewriteWithVoiceInstruction("rewrite",appInfo:context,lifecycleID:7) }
+            await self.waitUntil { owner.rewriteModeService.respond != nil }
+            NotchContentState.shared.recordingTargetContext = .init(pid:2,window:20,element:20)
+            owner.rewriteModeService.respond?.resume()
+            await self.waitUntil { owner.focus != nil }
+            precondition(owner.preparedTarget?.element==10)
+            owner.rewriteModeService.rewrittenText="newer pending draft"
+            owner.focus?.resume(returning:true)
+            await self.waitUntil { owner.asr.resume != nil }
+            precondition(owner.asr.text=="rewrite" && owner.asr.focusTarget?.element==10)
+            owner.asr.failure=fails; owner.asr.resume?.resume(); await pending.value
+            precondition(owner.rewriteModeService.rewrittenText=="newer pending draft" && owner.rewriteModeService.clears==0)
+            precondition(fails ? owner.failedTranscript=="rewrite" : owner.menuBarManager.finishes==1)
+        }
+        print("Voice Edit cancellation: 10 production-path scenarios passed")
     }
 }

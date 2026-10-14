@@ -15,6 +15,7 @@ extension View {
     /// Applies an app theme to the view hierarchy.
     func appTheme(_ theme: AppTheme) -> some View {
         self.font(theme.typography.inheritedFont)
+        .foregroundStyle(theme.palette.primaryText)
         .environment(\.theme, theme)
         .buttonStyle(FluidOutlinedButtonStyle())
     }

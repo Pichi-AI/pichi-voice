@@ -13,9 +13,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleVersion</key>
-	<string>27</string>
+	<string>31</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.6.10-beta.8</string>
+	<string>1.6.12-beta.1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSApplicationCategoryType</key>
@@ -25,9 +25,9 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>$(PICHI_PRODUCT_NAME) needs microphone access to record your voice for speech-to-text transcription. Speech recognition runs on this Mac. AI enhancement may use a provider you configure.</string>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>$(PICHI_PRODUCT_NAME) needs system audio access to record the meeting application you explicitly select. Meeting audio stays on this Mac.</string>
+	<string>$(PICHI_PRODUCT_NAME) needs system audio access to record the selected application or all system audio, according to your meeting settings. Meeting audio stays on this Mac.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>$(PICHI_PRODUCT_NAME) needs Screen &amp; System Audio access to record audio from the meeting application you explicitly select.</string>
+	<string>$(PICHI_PRODUCT_NAME) needs Screen &amp; System Audio access to record the selected application or all system audio, according to your meeting settings.</string>
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSAppleEventsUsageDescription</key>

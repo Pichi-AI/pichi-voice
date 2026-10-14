@@ -122,6 +122,12 @@ struct PichiMeetingSummaryView: View {
                 self.summarySection(PichiLocalization.text("Decisions"), items: document.decisions)
                 self.summarySection(PichiLocalization.text("Action items"), items: document.actions, actions: true)
                 self.summarySection(PichiLocalization.text("Questions and answers"), items: document.openQuestions, questions: true)
+                if let changes = document.changes, !changes.isEmpty {
+                    self.summarySection(PichiLocalization.text("Corrections"), items: changes)
+                }
+                if let answers = document.answers, !answers.isEmpty {
+                    self.summarySection(PichiLocalization.text("Answers"), items: answers)
+                }
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Button("Copy summary", systemImage: "doc.on.doc") { self.copy(document) }
                         .meetingGlassAction()
@@ -314,72 +320,5 @@ struct PichiMeetingSummaryView: View {
         NSPasteboard.general.clearContents()
         let sources = (self.controller.documentSourceSession ?? self.session).map(PichiMeetingSummaryInput.turns(for:)) ?? []
         NSPasteboard.general.setString(document.copyMarkdown(language: language, sources: sources), forType: .string)
-    }
-}
-
-extension PichiMeetingSummaryDocument {
-    /// Assemble readable Markdown from canonical structured fields. Source text
-    /// remains literal when rendered; escaped punctuation cannot create links/HTML.
-    nonisolated func copyMarkdown(language: PichiInterfaceLanguage, bundle: Bundle = .main, sources: [PichiMeetingSummaryTurn] = []) -> String {
-        func literal(_ value: String) -> String {
-            value.reduce(into: "") { result, character in
-                // Escaping ':' also prevents Foundation's URL scanner from
-                // swallowing subsequent literal escapes in a URL or HTML tag.
-                if "\\`*_{}[]()#+-.!|><&:".contains(character) { result.append("\\") }
-                result.append(character)
-            }
-        }
-        let sections: [(String, [PichiMeetingSummaryItem], Bool)] = [
-            ("Recap", self.summary, false), ("Decisions", self.decisions, false),
-            ("Action items", self.actions, true), ("Questions and answers", self.openQuestions, false),
-        ]
-        return sections.map { key, items, actions in
-            "## " + literal(PichiLocalization.text(key, language: language, bundle: bundle)) + "\n\n" + items.map { item in
-                var lines: [String] = []
-                if actions, let title = item.title { lines.append("### " + literal(title)) }
-                let marker = (item.superseded == true ? PichiLocalization.text(item.status == .completed ? "[Completed later] " : "[Superseded] ", language: language, bundle: bundle) : "")
-                    + (item.resolved == true ? PichiLocalization.text("[Answered] ", language: language, bundle: bundle) : "")
-                lines.append(literal(marker + item.text))
-                if actions {
-                    if item.superseded != true {
-                        let status = item.status.map { PichiLocalization.format("Status: %@", language: language, bundle: bundle,
-                            arguments: [$0.text(language: language, bundle: bundle)]) }
-                            ?? PichiLocalization.text("Task status not specified", language: language, bundle: bundle)
-                        lines.append("- " + literal(status))
-                    }
-                    let urgency = item.urgency.flatMap { urgency in urgency == .unspecified ? nil
-                        : PichiLocalization.format("Urgency: %@", language: language, bundle: bundle,
-                            arguments: [urgency.text(language: language, bundle: bundle)]) }
-                        ?? PichiMeetingSummaryActionUrgency.unspecified.text(language: language, bundle: bundle)
-                    lines.append("- " + literal(urgency))
-                }
-                if let owner = item.owner { lines.append("- " + literal(PichiLocalization.text("Owner: ", language: language, bundle: bundle) + owner)) }
-                if let deadline = item.deadline { lines.append("- " + literal(PichiLocalization.text("Due: ", language: language, bundle: bundle) + deadline)) }
-                for evidence in item.evidence {
-                    if let turn = sources.first(where: { $0.id == evidence.segmentID }), turn.seconds.isFinite, turn.seconds < Double(Int.max) {
-                        let seconds = Int(max(0, turn.seconds))
-                        lines.append("> " + literal("\(seconds / 60):\(String(format: "%02d", seconds % 60)) · \(turn.speaker)"))
-                    }
-                    lines.append(evidence.quote.components(separatedBy: .newlines).map { "> " + literal($0) }.joined(separator: "\n"))
-                }
-                return lines.joined(separator: "\n\n")
-            }.joined(separator: "\n\n")
-        }.joined(separator: "\n\n")
-    }
-
-    /// Localize export chrome for the requested output language; all model/source data stays verbatim.
-    nonisolated func copyText(language: PichiInterfaceLanguage, bundle: Bundle = .main) -> String {
-        let sections: [(String, [PichiMeetingSummaryItem])] = [
-            ("Recap", self.summary), ("Decisions", self.decisions),
-            ("Action items", self.actions), ("Questions and answers", self.openQuestions),
-        ]
-        return sections.map { key, items in
-            PichiLocalization.text(key, language: language, bundle: bundle) + "\n" + items.map { item in
-                "- " + (item.superseded == true ? PichiLocalization.text("[Superseded] ", language: language, bundle: bundle) : "")
-                    + (item.resolved == true ? PichiLocalization.text("[Answered] ", language: language, bundle: bundle) : "")
-                    + item.text + (item.owner.map { " (\($0))" } ?? "") + (item.deadline.map { " [\($0)]" } ?? "")
-                    + "\n" + item.evidence.map { "  > \($0.quote)" }.joined(separator: "\n")
-            }.joined(separator: "\n")
-        }.joined(separator: "\n\n")
     }
 }

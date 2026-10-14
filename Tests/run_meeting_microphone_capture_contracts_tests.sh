@@ -14,10 +14,10 @@ d = source.index('/// Pure decision for the new-meeting sheet', c)
 pathlib.Path(sys.argv[1]).write_text('import Foundation\n' + source[a:b] + '\n' + source[c:d])
 PY
 xcrun swiftc -parse-as-library -swift-version 6 "$task_test_dir/Identity.swift" \
-    Sources/Fluid/Services/Meeting/MeetingMicrophoneCaptureContracts.swift \
+    Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Tests/MeetingMicrophoneCaptureContractsTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"
-xcrun swiftc -parse-as-library -typecheck -swift-version 6 -target arm64-apple-ios18.0 \
+xcrun swiftc -parse-as-library -typecheck -swift-version 6 -target arm64-apple-ios17.0 \
     -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" "$task_test_dir/Identity.swift" \
-    Sources/Fluid/Services/Meeting/MeetingMicrophoneCaptureContracts.swift \
+    Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Tests/MeetingMicrophoneCaptureContractsTests.swift

@@ -68,10 +68,10 @@ struct LiquidBar: View {
             HStack(spacing: 4) {
                 Image(systemName: self.icon)
                     .font(self.theme.typography.tiny)
-                    .foregroundStyle(self.color)
+                    .foregroundStyle(self.theme.palette.readableText(self.color))
                 Text(PichiLocalization.text(self.label))
                     .font(self.theme.typography.tinyStrong)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             // Liquid Container (Capsule Glass)
@@ -152,7 +152,7 @@ struct LiquidBar: View {
             // Percentage (shows target, not animated)
             Text("\(Int(self.fillPercent * 100))%")
                 .font(self.theme.typography.metricTiny)
-                .foregroundStyle(self.fillPercent > 0 ? self.color : .secondary)
+                .foregroundStyle(self.fillPercent > 0 ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
                 .contentTransition(.numericText())
         }
         .onAppear {

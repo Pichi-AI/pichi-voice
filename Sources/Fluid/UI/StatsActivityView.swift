@@ -55,7 +55,7 @@ struct StatsActivityView: View {
                             .font(self.theme.typography.title)
                         Text("Small moments. A growing habit.")
                             .font(self.theme.typography.bodySmall)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                     }
                     Spacer(minLength: 12)
                     Menu {
@@ -79,7 +79,7 @@ struct StatsActivityView: View {
                         .monospacedDigit()
                     Text("words in \(self.days) days")
                         .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                     Spacer()
                 }
                 ViewThatFits(in: .horizontal) {
@@ -98,7 +98,7 @@ struct StatsActivityView: View {
                 }
                 Text("Hover a square for details.")
                     .font(self.theme.typography.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                 HStack {
                     Text("\(period.activeDays) active days")
                         .font(self.theme.typography.captionStrong)
@@ -112,11 +112,11 @@ struct StatsActivityView: View {
                     }
                     Text(PichiLocalization.text("scale.more", defaultValue: "More")).font(self.theme.typography.captionSmall)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 if period.totalWords == 0 {
                     Text("Your first dictation lights up a square. Come back to see your progress grow.")
                         .font(self.theme.typography.bodySmall)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,12 +135,11 @@ struct StatsActivityView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(self.selectedDay(period).map { PichiLocalization.format("%@ · %@ words", $0.date.formatted(.dateTime.month(.abbreviated).day().locale(self.interfaceLocale)), $0.words.formatted()) } ?? PichiLocalization.text("Day by day · hover to explore"))
                 .font(self.theme.typography.captionStrong)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
             Chart(period.days) { day in
                 BarMark(x: .value(PichiLocalization.text("Date"), day.date, unit: .day), y: .value(PichiLocalization.text("Words"), day.words))
-                    .foregroundStyle(self.theme.palette.accent.opacity(0.7))
+                    .foregroundStyle(self.hoveredDate == nil && self.selectedDate == nil || day.date == (self.hoveredDate ?? self.selectedDate) ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                     .cornerRadius(2)
-                    .opacity(self.hoveredDate == nil && self.selectedDate == nil || day.date == (self.hoveredDate ?? self.selectedDate) ? 1 : 0.35)
             }
             .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: .dateTime.month(.abbreviated).day().locale(self.interfaceLocale)) } }
             .chartYAxis(.hidden)
@@ -153,13 +152,13 @@ struct StatsActivityView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(PichiLocalization.text(title))
                 .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
             Text(words.formatted())
                 .font(self.theme.typography.title)
                 .monospacedDigit()
             Text("words")
                 .font(self.theme.typography.captionSmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 
@@ -184,19 +183,19 @@ struct StatsActivityView: View {
                 Text("Words add up").font(self.theme.typography.sectionTitle)
                 Text(self.growthCaption(period))
                     .font(self.theme.typography.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
                 Chart(period.days) { day in
                     AreaMark(x: .value(PichiLocalization.text("Date"), day.date), y: .value(PichiLocalization.text("Words"), day.cumulativeWords))
-                        .foregroundStyle(LinearGradient(colors: [self.theme.palette.accent.opacity(0.24), self.theme.palette.accent.opacity(0.01)], startPoint: .top, endPoint: .bottom))
+                        .foregroundStyle(LinearGradient(colors: [self.theme.palette.accentText.opacity(0.24), self.theme.palette.accentText.opacity(0.01)], startPoint: .top, endPoint: .bottom))
                     LineMark(x: .value(PichiLocalization.text("Date"), day.date), y: .value(PichiLocalization.text("Words"), day.cumulativeWords))
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                     if selected?.date == day.date {
                         RuleMark(x: .value(PichiLocalization.text("Date"), day.date))
-                            .foregroundStyle(self.theme.palette.secondaryText.opacity(0.4))
+                            .foregroundStyle(self.theme.palette.secondaryText)
                         PointMark(x: .value(PichiLocalization.text("Date"), day.date), y: .value(PichiLocalization.text("Words"), day.cumulativeWords))
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundStyle(self.theme.palette.accentText)
                     }
                 }
                 .statsChartInteraction(onInspect: { x, proxy, pin in self.inspectDate(x, proxy: proxy, pin: pin) }, onExit: { self.hoveredDate = nil })
@@ -206,7 +205,7 @@ struct StatsActivityView: View {
                 .frame(height: 150)
                 Text("Cumulative words · selected period")
                     .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }
@@ -236,13 +235,12 @@ struct StatsActivityView: View {
                 Text("Your weekly rhythm").font(self.theme.typography.sectionTitle)
                 Text(self.weekdayCaption(period))
                     .font(self.theme.typography.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(1)
                 Chart(period.weekdays) { day in
                     BarMark(x: .value(PichiLocalization.text("Weekday"), day.label), y: .value(PichiLocalization.text("Average words"), day.averageWords))
-                        .foregroundStyle(self.theme.palette.accent.opacity(day.averageWords == period.peakWeekdayAverage ? 1 : 0.35))
+                        .foregroundStyle(day.averageWords == period.peakWeekdayAverage ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                         .cornerRadius(4)
-                        .opacity(self.hoveredWeekday == nil && self.pinnedWeekday == nil || day.label == (self.hoveredWeekday ?? self.pinnedWeekday) ? 1 : 0.4)
                         .accessibilityLabel(day.fullLabel)
                         .accessibilityValue(PichiLocalization.format("%lld words per day on average", Int(day.averageWords.rounded())))
                 }
@@ -259,7 +257,7 @@ struct StatsActivityView: View {
                 .frame(height: 150)
                 Text("Average words per weekday · includes quiet days")
                     .font(self.theme.typography.captionSmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }

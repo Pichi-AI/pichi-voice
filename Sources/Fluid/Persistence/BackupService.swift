@@ -10,7 +10,7 @@ struct BackupFileVersion: Codable, Equatable {
 struct SettingsBackupPayload: Codable, Equatable {
     let selectedProviderID: String
     let selectedModelByProvider: [String: String]
-    let savedProviders: [SettingsStore.SavedProvider]
+    var savedProviders: [SettingsStore.SavedProvider]
     let modelReasoningConfigs: [String: SettingsStore.ModelReasoningConfig]
     let privateAIPrefixKVCacheEnabled: Bool?
     let privateAIBoostEnabled: Bool?
@@ -63,6 +63,7 @@ struct SettingsBackupPayload: Codable, Equatable {
     let shareAnonymousAnalytics: Bool
     let pressAndHoldMode: Bool
     let hotkeyMode: HotkeyActivationMode?
+    var holdSpaceToMute: Bool? = nil
     let enableStreamingPreview: Bool
     // Optional so backups created before incremental Parakeet finalization still decode.
     let experimentalParakeetUnifiedFinalEnabled: Bool?
@@ -148,6 +149,12 @@ struct SettingsBackupPayload: Codable, Equatable {
     // Nonsecret folder/scope metadata only. Old backups preserve current values.
     // swiftlint:disable:next discouraged_optional_collection
     var providerConnectionOptions: [String: [String: String]]? = nil
+
+    nonisolated func redactingProviderCredentials() -> Self {
+        var snapshot = self
+        snapshot.savedProviders = self.savedProviders.map { $0.redactingAPIKey() }
+        return snapshot
+    }
 }
 
 struct AppBackupDocument: Codable, Equatable {
@@ -161,6 +168,19 @@ struct AppBackupDocument: Codable, Equatable {
     // Optional so backups created before pronunciation matching still decode.
     // swiftlint:disable:next discouraged_optional_collection
     let pronunciationProfiles: [PronunciationDictionaryProfile]?
+
+    nonisolated func redactingProviderCredentials() -> Self {
+        Self(
+            schemaVersion: self.schemaVersion,
+            appVersion: self.appVersion,
+            exportedAt: self.exportedAt,
+            settings: self.settings.redactingProviderCredentials(),
+            promptProfiles: self.promptProfiles,
+            appPromptBindings: self.appPromptBindings,
+            transcriptionHistory: self.transcriptionHistory,
+            pronunciationProfiles: self.pronunciationProfiles
+        )
+    }
 }
 
 enum BackupServiceError: LocalizedError {
@@ -217,7 +237,9 @@ final class BackupService {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(document)
+        // Legacy preference values can still contain a key if Keychain migration
+        // failed. Export sanitizes a value copy without changing live storage.
+        return try encoder.encode(document.redactingProviderCredentials())
     }
 
     func decode(_ data: Data) throws -> AppBackupDocument {
@@ -228,7 +250,7 @@ final class BackupService {
         do {
             let document = try decoder.decode(AppBackupDocument.self, from: migratedData)
             try self.validate(document)
-            return document
+            return document.redactingProviderCredentials()
         } catch let error as BackupServiceError {
             throw error
         } catch {

@@ -63,4 +63,3 @@ private nonisolated func logTranscriptionExecutorPhase(_ phase: String, sessionI
         source: "ASRBenchmark"
     )
 }
-

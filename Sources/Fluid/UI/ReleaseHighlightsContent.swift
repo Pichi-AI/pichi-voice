@@ -18,41 +18,40 @@ struct ReleaseHighlightsContent {
     let release: String
     let title: String
     let subtitle: String
+    var officialSiteNotice: String? = nil
     let features: [Feature]
 
     static func current(hasPrivateAI: Bool) -> Self {
         Self(
-            release: "1.6.10",
-            title: "Say hello to what’s new.",
-            subtitle: AppBrand.text("Three new ways to make FluidVoice yours."),
+            release: "1.6.12",
+            title: "Meeting summaries and agent integrations",
+            subtitle: "Meeting detection, model compatibility, and read-only agent access.",
             features: [
                 Feature(
-                    id: "fluidmeet",
+                    id: "summaries",
                     preview: .meeting,
-                    eyebrow: "YOUR MEETINGS, ORGANIZED",
-                    title: AppBrand.text("Introducing FluidMeet"),
-                    detail: "Stay in the conversation. Local recording, live captions, and AI summaries.",
-                    action: AppBrand.text("Open FluidMeet"),
+                    eyebrow: "YOUR MEETINGS, WITH SOURCES",
+                    title: "Meeting summaries with sources",
+                    detail: "Generate grounded summaries with transcript source references. Existing provider connections share the meeting workspace.",
+                    action: "Open meetings",
                     destination: .meetings
                 ),
                 Feature(
-                    id: "redesign",
-                    preview: .dashboard,
-                    eyebrow: "A FRESH PERSPECTIVE",
-                    title: "Beautifully redesigned",
-                    detail: "Your own dashboard. Search across the app. Everything feels right at home.",
-                    action: "See the new look",
-                    destination: .dashboard
+                    id: "integrations",
+                    preview: .meeting,
+                    eyebrow: "MEET YOUR CODING AGENTS",
+                    title: "Connect your coding agents",
+                    detail: "Let coding agents read completed transcripts and saved summaries after enabling read-only sharing in meeting settings.",
+                    action: "Open meetings",
+                    destination: .meetings
                 ),
                 Feature(
-                    id: "models",
+                    id: "compatibility",
                     preview: .models,
-                    eyebrow: hasPrivateAI ? "ON YOUR MAC. FOR YOU." : "YOUR AI, YOUR WAY",
-                    title: hasPrivateAI ? "Meet the Fluid models" : "Find your AI",
-                    detail: hasPrivateAI
-                        ? "Fast cleanup to thoughtful rewrites. Explore local AI built for your words."
-                        : "Choose your AI provider and make every dictation sound more like you.",
-                    action: hasPrivateAI ? "Explore the models" : "Explore AI providers",
+                    eyebrow: "YOUR AI, YOUR WAY",
+                    title: "AI provider compatibility",
+                    detail: "Sampling support follows provider metadata; local and cloud connections keep their existing configuration.",
+                    action: "Explore AI providers",
                     destination: .aiProviders
                 ),
             ]

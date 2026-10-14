@@ -53,8 +53,6 @@ source += section('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveM
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift', 'nonisolated struct MeetingBackendID:', 'nonisolated enum MeetingBackendExecutionLocality:')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift', 'nonisolated enum MeetingBackendEvidenceSchema', 'nonisolated extension MeetingFinalTextUnit: Codable')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift', 'nonisolated struct MeetingSpeakerVoiceProfile:', '/// Explicit identity evidence across resets.')
-source += section('Sources/Fluid/Services/Meeting/MeetingPostProcessing.swift', 'nonisolated struct MeetingPostProcessingOutput:', '/// The prepared scope')
-source += section('Sources/Fluid/Services/Meeting/Backend/MeetingResultSidecarStore.swift', 'nonisolated struct MeetingResultSidecarReference:', 'nonisolated enum MeetingResultSidecarStoreError:')
 Path(sys.argv[1]).write_text(source)
 PY
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
@@ -62,7 +60,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
-    Sources/Fluid/Services/Meeting/MeetingMicrophoneCaptureContracts.swift \
+    Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingPCMTranscriptBatch.swift \
     Sources/Fluid/Services/Privacy/TranscriptTextRedacting.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptPrivacyPolicy.swift \

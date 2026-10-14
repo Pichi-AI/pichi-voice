@@ -21,6 +21,16 @@ def declaration(source: str, marker: str) -> str:
     return source[start:end]
 
 
+def array_literal(source: str, marker: str) -> str:
+    start = source.index("[", source.index(marker) + len(marker))
+    depth = 1
+    end = start + 1
+    while depth:
+        depth += (source[end] == "[") - (source[end] == "]")
+        end += 1
+    return source[start:end]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-ref", help="Optional pre-fix git ref for reproduction checks")
@@ -58,14 +68,89 @@ def main() -> None:
         "private func applyPendingBackupSetupRefresh()",
         "private func finishRestoredMeetingSettingsIfPending()",
     ))
+    # Use the compiled provider's actual metadata/default policy, without importing
+    # inference adapters or making model installation queries in this UI probe.
+    factory_source = (ROOT / "Sources/Fluid/Services/Meeting/PichiMeetingProviderFactory.swift").read_text()
+    factory = factory_source[factory_source.index("enum PichiMeetingProviderFactory {"):
+                             factory_source.index("    static func validateRecordingConfiguration(")] + "}\n"
+    for field in ("providerFactory", "configurationSnapshot", "modelsExistOnDisk", "admissionArtifactFingerprint"):
+        factory = "\n".join(line for line in factory.splitlines()
+                            if not line.strip().startswith(f"let {field}:"))
+        while f"{field}: {{" in factory:
+            clause = declaration(factory, f"{field}: {{")
+            factory = factory.replace(clause + ",", "").replace(clause, "")
+    factory = factory.replace(declaration(factory, "    static func registeredModelsExistOnDisk("), "")
+    # Strict PCM/device admission is not consulted by these backup UI handlers.
+    # Omit its stored restriction payload as well as its callbacks, rather than
+    # introducing fake artifact identities, display names or admission validators.
+    while "pcmAdmissionRestrictions:" in factory:
+        clause = "pcmAdmissionRestrictions: " + array_literal(factory, "pcmAdmissionRestrictions:")
+        factory = factory.replace(clause + ",", "").replace(clause, "")
+    factory += "\n" + declaration(factory_source, "extension MeetingBackendID {") + "\n"
+    backend_source = (ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift").read_text()
+    metadata = "\n".join(declaration(backend_source, marker) for marker in (
+        "nonisolated struct MeetingBackendID:",
+        "nonisolated enum MeetingBackendExecutionLocality:",
+        "nonisolated enum MeetingBackendResultContract:",
+        "nonisolated enum MeetingDiarizationDependency:",
+        "nonisolated enum MeetingBackendInputKind:",
+        "nonisolated struct MeetingBackendDescriptor:",
+    ))
+    # PCM admission is exercised by the native backend tests, not these UI handlers.
+    # Keep UI metadata fields/initializer; omit strict-PCM payload and validators below.
+    for marker in ("    func validatePCMInput(configuration:", "    func validatePCMInput(_ request:"):
+        while marker in metadata:
+            metadata = metadata.replace(declaration(metadata, marker), "")
+    metadata = "\n".join(line for line in metadata.splitlines() if not any(
+        fragment in line for fragment in (
+            "let pcmAdmissionRestrictions:", "pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction]",
+            "self.pcmAdmissionRestrictions =",
+        )
+    ))
+    language_source = (ROOT / "Sources/Fluid/Persistence/VoiceEngineLanguageCatalog.swift").read_text()
+    whisper_marker = "    nonisolated static let whisperSupportedLanguageCodes: Set<String> = "
+    whisper_languages = array_literal(language_source, whisper_marker)
+    parakeet_source = (ROOT / "Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift").read_text()
+    parakeet_v3 = parakeet_source[parakeet_source.index("    static let v3 = Descriptor("):]
+    parakeet_languages = array_literal(parakeet_v3, "supportedLanguageCodes:")
+    # Substitute only the immutable catalog array so the real language policy compiles
+    # without unrelated Parakeet artifact-verification/filesystem dependencies.
+    parakeet_policy = next(line for line in language_source.splitlines()
+                           if "static let parakeetV3LanguageIDs =" in line)
+    parakeet_policy = parakeet_policy.replace("ParakeetSpeechModelCatalog.v3.supportedLanguageCodes",
+                                             parakeet_languages)
+    metadata += "\nenum VoiceEngineLanguageCatalog {\n" + whisper_marker + whisper_languages + "\n"
+    metadata += parakeet_policy + "\n}\n"
+    metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text(),
+                                   "nonisolated enum MeetingAudioTrackKind:")
+    metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift").read_text(),
+                                   "nonisolated enum MeetingTextUnitPrecision:") + "\n"
+    models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text()
+    model_declarations = "\n".join(declaration(models, marker) for marker in (
+        "nonisolated enum MeetingCaptureMode:",
+        "nonisolated enum MeetingApplicationAudioScope:",
+        "nonisolated enum MeetingMicrophoneRole:",
+        "nonisolated struct MeetingRecordingDefaults:",
+        "nonisolated struct MeetingApplicationIdentity:",
+        "nonisolated struct MeetingMicrophoneIdentity:",
+    ))
+    application_option = declaration(source, "nonisolated struct MeetingApplicationOption:")
+    capture = (ROOT / "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift").read_text()
+    application_resolver = declaration(capture, "static func resolveRecordingApplication(")
+    recording_start = declaration(source, "private func startRecording()")
     swift = r'''
 import Foundation
+nonisolated final class UserDefaults: @unchecked Sendable {
+    static let standard = UserDefaults()
+    func string(forKey key: String) -> String? { nil }
+    func set(_ value: Any?, forKey key: String) { fatalError("Unexpected preference write") }
+}
 
-enum MeetingCaptureMode { case onlineCall, inRoom }
-struct Defaults { var languageCode: String? = "en"; var mode: MeetingCaptureMode = .onlineCall }
 final class SettingsStore {
     static let shared = SettingsStore()
-    var meetingRecordingDefaults = Defaults()
+    struct SpeechModel { let rawValue: String }
+    var selectedSpeechModel = SpeechModel(rawValue: PichiMeetingProviderFactory.gigaamModelID)
+    var meetingRecordingDefaults = MeetingRecordingDefaults.unconfigured
     var meetingAutoDetectEnabled = true
     var meetingAutoDetectBrowserEnabled = true
     var meetingAudioRetentionPolicy = 7
@@ -73,6 +158,14 @@ final class SettingsStore {
 struct Identity { let id: String }
 struct Option { let identity: Identity }
 final class Coordinator { var isQuiescent = true; var activeLanguage = "en" }
+''' + metadata + factory + model_declarations + '\n' + application_option + r'''
+enum MeetingAutoDetector {
+    struct ResolvedTarget { let bundleIdentifier: String; let pid: Int32; let windowID: UInt32? }
+}
+enum MeetingCaptureError: Error { case applicationNotSelected, applicationUnavailable(String) }
+enum MeetingCaptureSourceCatalog {
+''' + application_resolver + r'''
+}
 ''' + draft + r'''
 final class Harness {
     let coordinator = Coordinator()
@@ -120,17 +213,49 @@ func check(_ ok: Bool, _ message: String) {
     if !ok { fatalError(message) }
 }
 func restored(_ language: String = "fr", _ mode: MeetingCaptureMode = .inRoom) {
-    SettingsStore.shared.meetingRecordingDefaults = Defaults(languageCode: language, mode: mode)
+    var defaults = MeetingRecordingDefaults.unconfigured
+    defaults.languageCode = language; defaults.mode = mode
+    SettingsStore.shared.meetingRecordingDefaults = defaults
 }
 func fresh() -> Harness {
     restored("en", .onlineCall)
     SettingsStore.shared.meetingAutoDetectEnabled = true
     SettingsStore.shared.meetingAutoDetectBrowserEnabled = true
     SettingsStore.shared.meetingAudioRetentionPolicy = 7
+    SettingsStore.shared.selectedSpeechModel = .init(rawValue: PichiMeetingProviderFactory.gigaamModelID)
     return Harness()
 }
+@MainActor final class StartCoordinator {
+    var calls = 0
+    var continuation: CheckedContinuation<Void, Never>?
+    func startRecording(configuration: StartConfiguration) async throws {
+        calls += 1
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func finish() { continuation?.resume(); continuation = nil }
+}
+struct StartConfiguration { let microphone: MeetingMicrophoneIdentity }
+struct StartReadiness {
+    let activityReady = true, storageReady = true, microphoneReady = true, meetingAudioReady = true
+    let blockingMessage: String? = nil
+}
+@MainActor final class StartHarness {
+    let settings = SettingsStore.shared
+    let coordinator = StartCoordinator()
+    let readiness = StartReadiness()
+    let captureConfiguration: StartConfiguration? = StartConfiguration(microphone: MeetingMicrophoneIdentity(captureDeviceID: "mic", displayName: "Mic"))
+    let applications = [MeetingApplicationOption(identity: MeetingApplicationIdentity(bundleIdentifier: "manual.app", processID: 42, displayName: "Manual App"))]
+    var setupDraft = MeetingTranscriptionSetupDraft()
+    var isStarting = false, pendingBackupSetupRefresh = false
+    var actionErrorMessage: String?
+    init() { setupDraft.chooseApplication(applications[0].identity) }
+    func waitForStart() async { while coordinator.continuation == nil { await Task.yield() } }
+    func finish() async { coordinator.finish(); while isStarting { await Task.yield() } }
+''' + recording_start + r'''
+    func start() { startRecording() }
+}
 @main enum Tests {
- static func main() {
+ @MainActor static func main() async {
     // Reproduce pre-fix: real production draft is a value snapshot, not a settings binding.
     let baseline = fresh()
     restored()
@@ -188,13 +313,47 @@ func fresh() -> Harness {
     check(rapid.setupDraft.languageCode == "de" && rapid.setupDraft.mode == .onlineCall, "rapid change-back restore keeps latest values")
     restored("fr", .inRoom); rapid.notifyRestore(); restored("de", .inRoom); rapid.notifyRestore()
     check(rapid.setupDraft.languageCode == "de" && !rapid.pendingBackupSetupRefresh, "same-mode repeated restores consume latest language without stale pending state")
-    let legacy = fresh(); SettingsStore.shared.meetingRecordingDefaults.languageCode = nil
-    legacy.notifyRestore()
-    check(legacy.setupDraft.languageCode == "en" && legacy.hardwareQueries == 0, "legacy language defaults to English without source discovery")
+    for (modelID, expectedDefault) in [
+        (PichiMeetingProviderFactory.gigaamModelID, "ru"),
+        (PichiMeetingProviderFactory.whisperTinyModelID, "auto"),
+        (PichiMeetingProviderFactory.parakeetV3ModelID, "auto"),
+    ] {
+        let legacy = fresh()
+        SettingsStore.shared.selectedSpeechModel = .init(rawValue: modelID)
+        SettingsStore.shared.meetingRecordingDefaults.languageCode = nil
+        legacy.notifyRestore()
+        check(PichiMeetingProviderFactory.registeredBackendDescriptor(for: modelID) != nil,
+              "restored model retains its real registration")
+        check(PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID)?.contains(expectedDefault) == true,
+              "default language is supported by actual registered metadata")
+        check(legacy.setupDraft.languageCode == expectedDefault && legacy.hardwareQueries == 0,
+              "legacy language uses selected provider metadata without source discovery")
+        SettingsStore.shared.meetingRecordingDefaults.languageCode = "de"
+        legacy.notifyRestore()
+        check(legacy.setupDraft.languageCode == "de", "explicit restored language takes precedence over selected provider metadata")
+    }
+    check(PichiMeetingProviderFactory.defaultLanguageCode(for: "unknown-synthetic-model") == nil
+          && PichiMeetingProviderFactory.registeredLanguageCodes(for: "unknown-synthetic-model") == nil,
+          "unknown models do not acquire fabricated registration metadata")
     let missing = fresh(); missing.microphones = []; missing.applications = []
     restored(); missing.notifyRestore()
     check(missing.setupDraft.selectedMicrophoneID == nil && missing.setupDraft.selectedApplicationID == nil, "missing cached sources stay unselected")
     check(missing.hardwareQueries == 0 && !missing.pendingBackupSetupRefresh, "missing sources do not create a permanent pending restore")
+
+    for superseded in 0..<3 {
+        SettingsStore.shared.meetingRecordingDefaults = .unconfigured
+        let start = StartHarness()
+        start.start(); await start.waitForStart()
+        if superseded > 0 { restored("fr", .inRoom) }
+        if superseded == 1 { start.pendingBackupSetupRefresh = true }
+        await start.finish()
+        let saved = SettingsStore.shared.meetingRecordingDefaults
+        if superseded == 0 {
+            check(saved.mode == .onlineCall && saved.applicationBundleIdentifier == "manual.app", "successful quick Change/Start persists manual source")
+        } else {
+            check(saved.mode == .inRoom && saved.languageCode == "fr" && saved.applicationBundleIdentifier == nil, "backup or another window's settings during start supersede older frozen defaults")
+        }
+    }
     print("PASS: \(assertions) production-handler assertions")
  }
 }
@@ -204,7 +363,9 @@ func fresh() -> Harness {
         swift_file = directory / "Tests.swift"
         swift_file.write_text(swift)
         executable = directory / "tests"
-        subprocess.run(["xcrun", "swiftc", "-parse-as-library", str(swift_file), "-o", str(executable)],
+        subprocess.run(["xcrun", "swiftc", "-parse-as-library",
+                        str(ROOT / "Sources/Fluid/Localization/PichiLocalization.swift"),
+                        str(swift_file), "-o", str(executable)],
                        env=env, check=True, timeout=60)
         subprocess.run([str(executable)], env=env, check=True, timeout=15)
 

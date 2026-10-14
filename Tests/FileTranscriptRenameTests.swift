@@ -69,6 +69,19 @@ final class DebugLogger {
         legacy.removeValue(forKey: "searchRevision")
         let decoded = try JSONDecoder().decode(FileTranscriptionEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
         precondition(decoded.displayTitle == original.fileName && decoded.searchRevision == nil)
-        print("File transcript rename: 9 checks passed")
+        let reference = Date(timeIntervalSince1970: 1_790_000_000)
+        let localizedCases: [(String, [String])] = [
+            ("ru_RU", ["позавчера", "вчера", "сейчас", "завтра", "послезавтра"]),
+            ("en_US", ["2 days ago", "yesterday", "now", "tomorrow", "in 2 days"]),
+        ]
+        for (identifier, expected) in localizedCases {
+            for (offset, text) in zip(-2...2, expected) {
+                let entry = FileTranscriptionEntry(timestamp: reference.addingTimeInterval(Double(offset) * 86_400),
+                    fileName: "synthetic.wav", duration: 1, processingTime: 1, confidence: 1, text: "Synthetic")
+                let formatted = entry.relativeTimeString(locale: Locale(identifier: identifier), relativeTo: reference)
+                precondition(formatted == text, "\(identifier) offset \(offset): \(formatted)")
+            }
+        }
+        print("File transcript rename: 9 checks; readable RU/EN relative dates: 10 checks passed")
     }
 }

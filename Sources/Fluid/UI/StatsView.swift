@@ -35,7 +35,7 @@ struct StatsView: View {
                         Spacer()
                         Text("From your saved history")
                             .font(self.theme.typography.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 16)], spacing: 16) {
                         self.timeSavedCard
@@ -102,7 +102,7 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.stats.formattedTimeSaved(typingWPM: self.settings.userTypingWPM))
                     .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(self.theme.palette.primaryText)
 
                 Button {
                     self.editingWPM = "\(self.settings.userTypingWPM)"
@@ -114,7 +114,7 @@ struct StatsView: View {
                         Image(systemName: "pencil")
                             .font(.fluidSystem(size: 9))
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                 }
                 .buttonStyle(.plain)
             }
@@ -137,12 +137,12 @@ struct StatsView: View {
 
                 Text("words per minute")
                     .font(.fluidSystem(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             Text("Average typing: 40 WPM\nProfessional: 65-75 WPM")
                 .font(.fluidSystem(size: 10))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(self.theme.palette.tertiaryText)
 
             HStack {
                 Button("Cancel") {
@@ -161,6 +161,8 @@ struct StatsView: View {
         }
         .padding(16)
         .frame(width: 220)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.cardBackground)
     }
 
     // MARK: - Total Words Card
@@ -170,7 +172,7 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.formatNumber(self.stats.totalWords))
                     .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(self.theme.palette.primaryText)
 
                 let today = self.historyStore.wordsToday
                 if today > 0 {
@@ -180,7 +182,7 @@ struct StatsView: View {
                 } else {
                     Text("Start dictating")
                         .font(.fluidSystem(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
             }
         }
@@ -194,16 +196,16 @@ struct StatsView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text("\(self.stats.currentStreak)")
                         .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                        .foregroundStyle(self.stats.currentStreak > 0 ? self.theme.palette.warning : .primary)
+                        .foregroundStyle(self.stats.currentStreak > 0 ? self.theme.palette.warning : self.theme.palette.primaryText)
 
                     Text(PichiLocalization.text(self.stats.currentStreak == 1 ? "day" : "days"))
                         .font(.fluidSystem(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
 
                 Text("Best: \(self.stats.bestStreak) days")
                     .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }
@@ -215,11 +217,11 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.formatNumber(self.stats.fluidFixedWords))
                     .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(self.theme.palette.primaryText)
 
                 Text(PichiLocalization.text(self.stats.fluidFixedWords == 0 ? "Words fixed by Smart mode show up here" : "words fixed for you by Smart mode"))
                     .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }
@@ -229,11 +231,11 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text(self.formatNumber(self.stats.totalCharacters))
                     .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(self.theme.palette.primaryText)
 
                 Text("keys you never had to press")
                     .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }
@@ -243,11 +245,11 @@ struct StatsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("\(self.historyStore.entries.count)")
                     .font(.fluidSystem(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(self.theme.palette.primaryText)
 
                 Text("Avg: \(self.stats.averageWordsPerTranscription) words each")
                     .font(.fluidSystem(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
         }
     }
@@ -263,10 +265,9 @@ struct StatsView: View {
             } label: {
                 Label("Reset All Stats", systemImage: "trash")
                     .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
             .buttonStyle(.plain)
-            .opacity(self.historyStore.entries.isEmpty ? 0.3 : 0.7)
             .disabled(self.historyStore.entries.isEmpty)
 
             Spacer()
@@ -296,6 +297,7 @@ struct StatsView: View {
 // MARK: - Stat Card Component
 
 private struct StatCard<Content: View>: View {
+    @Environment(\.theme) private var theme
     let title: String
     let icon: String
     @ViewBuilder let content: Content
@@ -305,7 +307,7 @@ private struct StatCard<Content: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label(AppBrand.text(self.title), systemImage: self.icon)
                     .font(.fluidSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
 
                 self.content
             }

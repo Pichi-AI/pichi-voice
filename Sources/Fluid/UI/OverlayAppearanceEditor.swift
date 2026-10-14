@@ -83,7 +83,7 @@ struct OverlayAppearanceEditor: View {
                                     Image(systemName: "checkmark.circle.fill")
                                 }
                             }
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
                             .frame(minHeight: 30)
                         }
                         .padding(9)
@@ -134,7 +134,7 @@ struct OverlayAppearanceEditor: View {
                                     if self.settings.overlayTint == tint {
                                         Image(systemName: "checkmark")
                                             .font(.fluidSystem(size: 11, weight: .bold))
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(AppTheme.Palette.contrastingInk(on: tint.color))
                                     }
                                 }
                                 .padding(3)
@@ -206,7 +206,7 @@ struct OverlayAppearanceEditor: View {
             HStack(spacing: 7) {
                 Image(systemName: symbol)
                     .font(.fluidSystem(size: 12, weight: .semibold))
-                    .foregroundStyle(selected ? (value == 1 ? Color.orange : Color.indigo) : self.theme.palette.secondaryText)
+                    .foregroundStyle(selected ? self.theme.palette.readableText(value == 1 ? Color.orange : Color.indigo) : self.theme.palette.secondaryText)
                 Text(PichiLocalization.text(value == 1 ? "backdrop.light" : "backdrop.dark", defaultValue: title))
                     .font(.fluidSystem(size: 12, weight: .semibold))
             }
@@ -236,9 +236,15 @@ struct OverlayAppearanceEditor: View {
                     .font(self.theme.typography.caption.monospacedDigit()).foregroundStyle(self.theme.palette.secondaryText)
             }
             HStack {
-                Text(PichiLocalization.text(low)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .leading)
+                Text(PichiLocalization.text(low))
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(1).fixedSize()
+                    .frame(minWidth: 48, alignment: .leading)
                 Slider(value: value, in: range, step: 0.05).accessibilityLabel(PichiLocalization.text(title))
-                Text(PichiLocalization.text(high)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText).frame(width: 48, alignment: .trailing)
+                Text(PichiLocalization.text(high))
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
+                    .lineLimit(1).fixedSize()
+                    .frame(minWidth: 48, alignment: .trailing)
             }
         }
     }

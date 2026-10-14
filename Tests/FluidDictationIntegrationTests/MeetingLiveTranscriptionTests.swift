@@ -35,6 +35,68 @@ final class MeetingModelPreparationQueueTests: XCTestCase {
         XCTAssertEqual(completed, 20)
     }
 
+    private actor PreparationGate {
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var isOpen = false
+        func wait() async {
+            if self.isOpen { return }
+            await withCheckedContinuation { self.continuation = $0 }
+        }
+
+        func open() {
+            self.isOpen = true
+            self.continuation?.resume()
+            self.continuation = nil
+        }
+    }
+
+    func testCancelledQueuedPreparationReturnsBeforeActivePreparationFinishes() async throws {
+        let queue = MeetingModelPreparationQueue()
+        let gate = PreparationGate()
+        let active = expectation(description: "active preparation holds the cache")
+        let cancelled = expectation(description: "cancelled waiter returns while cache is occupied")
+        let waiting = expectation(description: "second preparation is admitted to the queue")
+        let first = Task {
+            try await queue.run {
+                active.fulfill()
+                await gate.wait()
+            }
+        }
+        await fulfillment(of: [active], timeout: 2)
+        let second = Task {
+            do {
+                try await queue.run { XCTFail("Cancelled preparation must not load a model") }
+                XCTFail("Expected cancellation")
+            } catch is CancellationError {
+                cancelled.fulfill()
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+        let admission = Task {
+            while !Task.isCancelled {
+                if await queue.queuedPreparationCount == 1 {
+                    waiting.fulfill()
+                    return
+                }
+                await Task.yield()
+            }
+        }
+        await fulfillment(of: [waiting], timeout: 2)
+        admission.cancel()
+        let queuedCount = await queue.queuedPreparationCount
+        XCTAssertEqual(queuedCount, 1)
+        second.cancel()
+        await fulfillment(of: [cancelled], timeout: 2)
+        await gate.open()
+        _ = await first.result
+        _ = await second.result
+        let counter = Counter()
+        try await queue.run { await counter.enter(); await counter.leave() }
+        let completed = await counter.completed
+        XCTAssertEqual(completed, 1)
+    }
+
     func testFailureAndCancellationDoNotPoisonNextPreparation() async throws {
         let queue = MeetingModelPreparationQueue()
         let counter = Counter()
@@ -103,6 +165,25 @@ final class MeetingLiveTranscriptSnapshotTests: XCTestCase {
         XCTAssertFalse(MeetingLiveTranscriptSnapshot.empty.accepts(latest, generation: generation, activeGeneration: UUID()))
         XCTAssertEqual(current.revision, 2, "Rejected deliveries do not mutate existing captions")
         XCTAssertNotEqual(current.availability, .available)
+    }
+
+    func testNewWordsCountAsSpeechAndCaptionHousekeepingDoesNot() {
+        let empty = MeetingLiveTranscriptSnapshot.empty
+        let partial = MeetingLivePartial(id: UUID(), text: "so the", start: 1)
+        let talking = empty.settingPartial(partial, for: .them)
+        XCTAssertTrue(talking.hasNewWords(since: empty))
+        XCTAssertFalse(talking.hasNewWords(since: talking))
+
+        var longer = partial
+        longer.text = "so the plan"
+        XCTAssertTrue(talking.settingPartial(longer, for: .them).hasNewWords(since: talking))
+
+        let finished = talking.inserting(self.utterance(.them, "so the plan", start: 1, end: 2)).settingPartial(nil, for: .them)
+        XCTAssertTrue(finished.hasNewWords(since: talking))
+
+        XCTAssertFalse(talking.settingPartial(nil, for: .them).hasNewWords(since: talking), "a caption going away is not speech")
+        XCTAssertFalse(finished.settingAvailability(.available).hasNewWords(since: finished))
+        XCTAssertFalse(finished.markingFinalized(UUID()).hasNewWords(since: finished))
     }
 
     private func utterance(_ speaker: MeetingLiveSpeaker, _ text: String, start: TimeInterval, end: TimeInterval) -> MeetingLiveUtterance {

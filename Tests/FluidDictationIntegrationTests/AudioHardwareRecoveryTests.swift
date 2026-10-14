@@ -870,12 +870,11 @@ private final nonisolated class RecoveryInput: DirectCoreAudioInputControlling, 
         return true
     }
 
-    func emit() {
+    func emit(samples: [Float] = [Float](repeating: 0.5, count: 48), hostTime: UInt64 = 0) {
         let handler = self.lock.withLock { self.handler }
-        let samples = [Float](repeating: 0.5, count: 48)
         samples.withUnsafeBufferPointer { buffer in
             guard let baseAddress = buffer.baseAddress else { return }
-            handler?(baseAddress, buffer.count, 48_000, 0, 0)
+            handler?(baseAddress, buffer.count, 48_000, hostTime, 0)
         }
     }
 }
@@ -1251,6 +1250,43 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testDictationMuteSurvivesAbnormalStartupRetryAndResumesTimestampedPCM() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.35) { fixture in
+            await fixture.service.stopWithoutTranscription()
+            fixture.service.micStatus = .authorized
+            XCTAssertFalse(fixture.service.isAsrReady, "This capture regression must not start model inference")
+            let starting = Task { await fixture.service.start() }
+            defer { starting.cancel() }
+            try await fixture.waitForBuiltInStartCount(1)
+            fixture.service.setDictationMuted(true)
+            XCTAssertTrue(fixture.service.isDictationMuted)
+            let muteGeneration = fixture.service.dictationMuteGeneration
+            let failedGeneration = fixture.controller.snapshot.generation
+            fixture.controller.simulateAbnormalStopNotificationForTesting(generation: failedGeneration)
+
+            let outcome = await starting.value
+            XCTAssertEqual(outcome, .started)
+            XCTAssertEqual(fixture.hardware.startCount(deviceID: 100), 2)
+            XCTAssertGreaterThan(fixture.controller.snapshot.generation, failedGeneration)
+            XCTAssertEqual(fixture.service.dictationMuteGeneration, muteGeneration)
+            XCTAssertTrue(fixture.service.isDictationMuted, "A route retry must retain the logical recording's mute")
+            XCTAssertTrue(fixture.service.audioRouteRecoveryStateForTesting.acceptingPCM)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.9, count: 4800))
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, [], "Muted retry PCM must be excluded while still satisfying startup readiness")
+
+            fixture.service.setDictationMuted(false)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.2, count: 4800))
+            let resumed = fixture.service.audioRouteRecoveryStateForTesting.samples
+            XCTAssertEqual(resumed.count, 1600, accuracy: 1)
+            XCTAssertTrue(resumed.allSatisfy { $0 == 0.2 }, "Resumed PCM must contain only post-mute speech")
+            XCTAssertFalse(fixture.service.isDictationMuted)
+            XCTAssertFalse(fixture.service.showError)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
+        }
+    }
+
+    @MainActor
     func testAbnormalStartupRetiresAnAlreadyScheduledRouteRecovery() async throws {
         try await withASRRecoveryFixture(queryDelay: 0, builtInStartDelay: 0.35) { fixture in
             await fixture.service.stopWithoutTranscription()
@@ -1427,6 +1463,44 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testDictationMuteSurvivesInputReplacementAndCancelRestartClearsIt() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0.12) { fixture in
+            let prefix = fixture.service.audioRouteRecoveryStateForTesting.samples
+            let muteGeneration = fixture.service.dictationMuteGeneration
+            fixture.service.setDictationMuted(true)
+            fixture.hardware.emitLatest(deviceID: 200, samples: Array(repeating: 0.9, count: 4800))
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, prefix)
+            fixture.service.triggerAudioRouteRecoveryForTesting()
+            try await fixture.waitForBuiltInRecovery()
+            fixture.assertSessionPreserved()
+            XCTAssertEqual(fixture.service.dictationMuteGeneration, muteGeneration)
+            XCTAssertTrue(fixture.service.isDictationMuted)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.9, count: 4800))
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, prefix, "Replacement input must retain the original mute exclusions")
+
+            await fixture.service.stopWithoutTranscription()
+            XCTAssertFalse(fixture.service.isDictationMuted)
+            XCTAssertEqual(fixture.service.audioRouteRecoveryStateForTesting.samples, [])
+            fixture.service.micStatus = .authorized
+            XCTAssertFalse(fixture.service.isAsrReady, "This capture regression must not start model inference")
+            let outcome = await fixture.service.start()
+            XCTAssertEqual(outcome, .started)
+            XCTAssertGreaterThan(fixture.service.dictationMuteGeneration, muteGeneration)
+            XCTAssertFalse(fixture.service.isDictationMuted)
+            // A late release from the cancelled recording must not suppress this recording.
+            fixture.service.setDictationMuted(false)
+            fixture.hardware.emitLatest(deviceID: 100, samples: Array(repeating: 0.2, count: 4800))
+            let restarted = fixture.service.audioRouteRecoveryStateForTesting.samples
+            XCTAssertGreaterThanOrEqual(restarted.count, 1600)
+            XCTAssertTrue(restarted.suffix(1600).allSatisfy { $0 == 0.2 }, "A new logical recording must reset the old mute timeline")
+            XCTAssertFalse(restarted.contains(0.9))
+            XCTAssertFalse(fixture.service.showError)
+            fixture.assertSettingsPreserved()
+            await fixture.service.stopWithoutTranscription()
+        }
+    }
+
+    @MainActor
     func testTransientScanFailureRetriesWithoutAbandoningRecording() async throws {
         try await withASRRecoveryFixture(queryDelay: 0.12, queryFailures: 1) { fixture in
             fixture.service.triggerAudioRouteRecoveryForTesting()
@@ -1543,6 +1617,102 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
             fixture.assertSessionPreserved()
         }
     }
+
+    @MainActor
+    func testRecoveryFixtureTerminatesOnlyItsOwnedMediaService() async throws {
+        var retainedFixture: ASRRecoveryFixture?
+        let unrelatedTransport = RecoveryMediaTransport()
+        let unrelated = MediaPlaybackService(transport: unrelatedTransport, settle: {})
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            retainedFixture = fixture
+            XCTAssertTrue(fixture.service.mediaPlaybackOwnerForTesting === fixture.media)
+            XCTAssertFalse(fixture.service.mediaPlaybackOwnerForTesting === MediaPlaybackService.shared,
+                           "Terminal fixture cleanup must never own the app's shared media service")
+        }
+        let fixture = try XCTUnwrap(retainedFixture)
+        let ownedQueries = await fixture.mediaTransport.queryCount
+        fixture.media.recordingStarted(sessionID: 123, enabled: true)
+        await fixture.media.waitUntilSettled()
+        let ignoredQueries = await fixture.mediaTransport.queryCount
+        XCTAssertEqual(ignoredQueries, ownedQueries, "The fixture's private media owner is terminal after cleanup")
+
+        unrelated.recordingStarted(sessionID: 456, enabled: true)
+        await unrelated.waitUntilSettled()
+        let paused = await unrelatedTransport.commands
+        XCTAssertEqual(paused, [.pause], "Unrelated media owners remain usable after fixture shutdown")
+        unrelated.sessionFinished(sessionID: 456)
+        await unrelated.waitUntilSettled()
+        let restored = await unrelatedTransport.commands
+        XCTAssertEqual(restored, [.pause, .play])
+        await unrelated.shutdown()
+    }
+
+    @MainActor
+    func testRecoveryFixtureUsesItsPrivateMicrophoneCoordinator() async throws {
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            let injected = try XCTUnwrap(fixture.service.microphonePreferenceCoordinatorForTesting)
+            XCTAssertFalse(injected === AppServices.shared.microphonePreferenceCoordinator)
+            XCTAssertEqual(injected.inputDeviceForCapture()?.uid, fixture.hardware.builtIn.uid)
+            XCTAssertNil(injected.inputDeviceForCapture(excluding: [fixture.hardware.builtIn.uid]),
+                         "Default capture selection must honor the injected device policy and exclusions")
+            let observer = AppServices.shared.audioObserver
+            let tick = observer.inputAvailabilityTick
+            let delivered = self.expectation(description: "Active format callback delivered")
+            fixture.service.recoveryFormatInvalidationDidFinishForTesting = { delivered.fulfill() }
+            defer { fixture.service.recoveryFormatInvalidationDidFinishForTesting = nil }
+            fixture.service.recoveryFormatInvalidationHandlerForTesting(.init(
+                generation: fixture.controller.snapshot.generation, deviceID: 200,
+                reason: "fixture_active_format_change", wasRunning: true
+            ))
+            await self.fulfillment(of: [delivered], timeout: 1)
+            XCTAssertEqual(observer.inputAvailabilityTick, tick + 1,
+                           "An active callback must still publish the existing availability event")
+            try await fixture.waitForBuiltInRecovery()
+            XCTAssertEqual(injected.confirmedActiveInputUID, fixture.hardware.builtIn.uid,
+                           "Recovery confirmation must stay in the fixture-owned coordinator")
+            fixture.assertSettingsPreserved()
+        }
+    }
+
+    @MainActor
+    func testRecoveryFixtureTeardownRejectsLateEventsAndRestoresRawPreferences() async throws {
+        let original = ASRRecoveryFixture.rawPreferences()
+        var retainedFixture: ASRRecoveryFixture?
+        var retainedCallback: (@Sendable (DirectCoreAudioLifecycleController.FormatInvalidation) -> Void)?
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            retainedFixture = fixture
+            retainedCallback = fixture.service.recoveryFormatInvalidationHandlerForTesting
+            fixture.service.triggerAudioRouteRecoveryForTesting()
+            try await fixture.waitForBuiltInRecovery()
+            fixture.assertSettingsPreserved()
+        }
+        let fixture = try XCTUnwrap(retainedFixture)
+        XCTAssertTrue(NSDictionary(dictionary: original).isEqual(to: ASRRecoveryFixture.rawPreferences()),
+                      "Joined teardown must restore exact presence and values, without coupled settings setters")
+        let queries = fixture.hardware.queryCount
+        fixture.service.triggerAudioRouteRecoveryForTesting()
+        XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.pending,
+                       "A retained callback owner must not rearm recovery after teardown")
+        XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.recovering)
+        XCTAssertEqual(fixture.controller.snapshot.phase, .shutDown)
+        XCTAssertEqual(fixture.hardware.queryCount, queries)
+        let observer = AppServices.shared.audioObserver
+        let tick = observer.inputAvailabilityTick
+        let delivered = self.expectation(description: "Retained callback delivered after teardown")
+        fixture.service.recoveryFormatInvalidationDidFinishForTesting = { delivered.fulfill() }
+        defer { fixture.service.recoveryFormatInvalidationDidFinishForTesting = nil }
+        try XCTUnwrap(retainedCallback)(.init(
+            generation: fixture.controller.snapshot.generation, deviceID: 200,
+            reason: "fixture_late_format_change", wasRunning: true
+        ))
+        await self.fulfillment(of: [delivered], timeout: 1)
+        XCTAssertEqual(observer.inputAvailabilityTick, tick,
+                       "The actual queued callback must not publish shared availability after shutdown")
+        XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.pending)
+        XCTAssertEqual(fixture.hardware.queryCount, queries)
+        XCTAssertTrue(NSDictionary(dictionary: original).isEqual(to: ASRRecoveryFixture.rawPreferences()),
+                      "Late route events must not change the restored preferences")
+    }
 }
 
 @MainActor
@@ -1555,15 +1725,9 @@ private func withASRRecoveryFixture(
     builtInStartDelay: TimeInterval = 0,
     _ body: (ASRRecoveryFixture) async throws -> Void
 ) async throws {
-    // The hosted app also performs its normal startup device reconciliation.
-    // Seed those existing inputs below the fake pair so that unrelated startup
-    // discovery cannot masquerade as a recovery-induced preference change.
-    let query = DirectCoreAudioLifecycleController(packetHandler: { _, _, _, _, _ in }, onFormatInvalidated: { _ in })
-    let liveInputs = try await query.readDeviceSnapshot().devices.filter(\.hasInput)
     let fixture = ASRRecoveryFixture(
         queryDelay: queryDelay,
         queryFailures: queryFailures,
-        liveInputs: liveInputs,
         externalStopDelay: externalStopDelay,
         operationTimeout: operationTimeout,
         firstQueryDelay: firstQueryDelay,
@@ -1574,17 +1738,32 @@ private func withASRRecoveryFixture(
         try await fixture.start()
         try await body(fixture)
     } catch {
-        await fixture.service.finishAudioRouteRecoveryTest()
+        await fixture.service.shutdownForTermination()
         throw error
     }
-    await fixture.service.finishAudioRouteRecoveryTest()
+    await fixture.service.shutdownForTermination()
 }
 
 @MainActor
 private final class ASRRecoveryFixture {
+    static let preferenceKeys = [
+        "MicrophonePriority", "PreferredInputDeviceUID", "SuppressedMicrophoneUIDs",
+        "MicrophoneSelectionMode", "AppOnlyMicrophoneSelectionMigrationVersion",
+        "ShowMicrophoneChangeAlerts", "PauseMediaDuringTranscription",
+    ]
+
+    static func rawPreferences() -> [String: Any] {
+        let defaults = UserDefaults.standard
+        return Dictionary(uniqueKeysWithValues: self.preferenceKeys.compactMap { key in
+            defaults.object(forKey: key).map { (key, $0) }
+        })
+    }
+
     let service: ASRService
     let controller: DirectCoreAudioLifecycleController
     let hardware: ASRRecoveryHardware
+    let mediaTransport: RecoveryMediaTransport
+    let media: MediaPlaybackService
     private let restore: () -> Void
     private let outputUID: String?
     private let modelID: String
@@ -1595,32 +1774,25 @@ private final class ASRRecoveryFixture {
     init(
         queryDelay: TimeInterval,
         queryFailures: Int,
-        liveInputs: [AudioDevice.Device],
         externalStopDelay: TimeInterval,
         operationTimeout: TimeInterval?,
         firstQueryDelay: TimeInterval?,
         builtInStartDelay: TimeInterval
     ) {
+        let original = Self.rawPreferences()
         let settings = SettingsStore.shared
-        let priority = settings.microphonePriority
-        let preferred = settings.preferredInputDeviceUID
-        let suppressed = settings.suppressedMicrophoneUIDs
-        let version = settings.microphoneSelectionMigrationVersion
-        let alerts = settings.showMicrophoneChangeAlerts
-        let pauseMedia = settings.pauseMediaDuringTranscription
         self.restore = {
-            settings.microphonePriority = priority
-            settings.preferredInputDeviceUID = preferred
-            settings.suppressedMicrophoneUIDs = suppressed
-            settings.microphoneSelectionMigrationVersion = version
-            settings.showMicrophoneChangeAlerts = alerts
-            settings.pauseMediaDuringTranscription = pauseMedia
+            let defaults = UserDefaults.standard
+            for key in Self.preferenceKeys {
+                if let value = original[key] { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
         }
-        settings.microphoneSelectionMigrationVersion = 4
+        settings.microphoneSelectionMigrationVersion = SettingsStore.microphonePriorityMigrationVersion
         settings.microphonePriority = [
             .init(uid: "recovery-test-external", name: "Test External"),
             .init(uid: "recovery-test-built-in", name: "Test Built-in"),
-        ] + liveInputs.map { .init(uid: $0.uid, name: $0.name) }
+        ]
         settings.preferredInputDeviceUID = "recovery-test-external"
         settings.suppressedMicrophoneUIDs = []
         settings.showMicrophoneChangeAlerts = false
@@ -1629,7 +1801,12 @@ private final class ASRRecoveryFixture {
         self.outputUID = settings.preferredOutputDeviceUID
         self.modelID = settings.selectedSpeechModel.rawValue
         self.providerID = settings.selectedProviderID
-        let service = ASRService()
+        let mediaTransport = RecoveryMediaTransport()
+        let media = MediaPlaybackService(transport: mediaTransport, settle: {})
+        self.mediaTransport = mediaTransport
+        self.media = media
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.useMediaPlaybackForTesting(media)
         self.service = service
         let hardware = ASRRecoveryHardware(
             queryDelay: queryDelay,
@@ -1639,6 +1816,9 @@ private final class ASRRecoveryFixture {
             builtInStartDelay: builtInStartDelay
         )
         self.hardware = hardware
+        service.microphonePreferenceCoordinatorForTesting = MicrophonePreferenceCoordinator(
+            devices: RecoveryDevicePolicy(input: hardware.builtIn)
+        )
         self.controller = DirectCoreAudioLifecycleController(
             packetHandler: service.recoveryPacketHandlerForTesting,
             inputFactory: { id, handler in hardware.makeInput(id, handler: handler) },
@@ -1705,14 +1885,24 @@ private final class ASRRecoveryFixture {
     }
 
     func restoreSettings() { self.restore() }
+
+    private struct RecoveryDevicePolicy: AudioDeviceManaging {
+        let input: AudioDevice.Device
+        var isClamshellClosed: Bool { false }
+        func listInputDevices() -> [AudioDevice.Device] { [self.input] }
+        func defaultInputDevice() -> AudioDevice.Device? { self.input }
+        func isInputDeviceUsable(_ device: AudioDevice.Device) -> Bool { device.isAlive }
+    }
 }
 
 private actor RecoveryMediaTransport: MediaPlaybackTransport {
     private var playing = true
     private(set) var commands: [MediaPlaybackCommand] = []
+    private(set) var queryCount = 0
 
     func query() async -> MediaPlaybackQueryResult {
-        .snapshot(MediaPlaybackSnapshot(bundleIdentifier: "test.player", processID: 1, title: "Test item", isPlaying: self.playing))
+        self.queryCount += 1
+        return .snapshot(MediaPlaybackSnapshot(bundleIdentifier: "test.player", processID: 1, title: "Test item", isPlaying: self.playing))
     }
 
     func send(_ command: MediaPlaybackCommand) async -> MediaPlaybackCommandResult {
@@ -1775,6 +1965,11 @@ private final nonisolated class ASRRecoveryHardware: @unchecked Sendable {
     }
     func startCount(deviceID: AudioObjectID) -> Int {
         self.lock.withLock { self.inputs.filter { $0.deviceID == deviceID }.reduce(0) { $0 + $1.count("start") } }
+    }
+
+    func emitLatest(deviceID: AudioObjectID, samples: [Float]) {
+        let input = self.lock.withLock { self.inputs.last { $0.deviceID == deviceID } }
+        input?.emit(samples: samples, hostTime: mach_absolute_time())
     }
 
     func makeInput(_ id: AudioObjectID, handler: @escaping DirectCoreAudioPacketHandler) -> RecoveryInput {

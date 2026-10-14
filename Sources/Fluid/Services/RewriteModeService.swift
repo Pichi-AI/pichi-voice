@@ -10,12 +10,22 @@ final class RewriteModeService: ObservableObject {
     @Published var rewrittenText: String = ""
     @Published var streamingThinkingText: String = "" // Real-time thinking tokens for UI
     @Published var isProcessing = false
+    @Published private(set) var isAcceptingRewrite = false
     @Published var conversationHistory: [Message] = []
     @Published var isWriteMode: Bool = false // true = no text selected (write/improve), false = text selected (rewrite)
     private var promptAppBundleID: String?
 
     private let textSelectionService = TextSelectionService.shared
     private let typingService = TypingService()
+    /// Direct typing rechecks validity from native queues outside a Swift Task.
+    /// Keep cancellation attached to this acceptance, including those callbacks.
+    private final nonisolated class AcceptanceCancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        var isCancelled: Bool { self.lock.withLock { self.cancelled } }
+        func cancel() { self.lock.withLock { self.cancelled = true } }
+    }
     private var thinkingBuffer: [String] = [] // Buffer thinking tokens
     private var forcePromptTraceToConsole: Bool {
         ProcessInfo.processInfo.environment["FLUID_PROMPT_TRACE"] == "1"
@@ -153,28 +163,59 @@ final class RewriteModeService: ObservableObject {
     }
 
     @MainActor
-    func acceptRewrite(_ text: String) async {
+    func acceptRewrite(
+        _ text: String,
+        targetContext: TypingService.RecordingTargetContext?,
+        isOutputValid: @escaping @MainActor () -> Bool = { true }
+    ) async -> TextDeliveryResult {
+        guard !Task.isCancelled, isOutputValid(), !self.isAcceptingRewrite else { return .cancelled }
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             MeetingSummaryActivityCoordinator.presentBusyError()
-            return
+            return .cancelled
         }
         defer { MeetingSummaryActivityCoordinator.shared.endProcessing(summaryActivity) }
 
         // The panel may clear its state before this queued action starts.
-        guard !text.isEmpty else { return }
-        NSApp.hide(nil)
-        // Hiding alone races the paste: the focused element can still be our
-        // panel when the editability check runs. Put focus back on the field
-        // the rewrite was recorded from, and fall back to a short settle.
-        var targetPID: pid_t?
-        if let context = NotchContentState.shared.recordingTargetContext {
-            let preparation = await TypingService.prepareTargetForDelivery(context)
-            targetPID = context.pid
-            self.appendDiagnosticLog("acceptRewrite focus=\(preparation.rawValue) pid=\(context.pid)")
-        } else {
-            try? await Task.sleep(nanoseconds: 80_000_000)
+        guard !text.isEmpty else { return .recoverableFailure(.emptyText) }
+
+        // Accept can suspend while restoring focus. Keep one owner so a second
+        // queued button action cannot dispatch the same rewrite concurrently.
+        self.isAcceptingRewrite = true
+        defer { self.isAcceptingRewrite = false }
+        let cancellation = AcceptanceCancellation()
+        let outputIsValid: @MainActor () -> Bool = { !cancellation.isCancelled && isOutputValid() }
+        return await withTaskCancellationHandler {
+            guard outputIsValid() else { return .cancelled }
+            NSApp.hide(nil)
+            // Hiding alone races the paste: the focused element can still be our
+            // panel when the editability check runs. Put focus back on the field
+            // captured by the accepting action, and fall back to a short settle.
+            var targetPID: pid_t?
+            var focusTarget: TypingService.CapturedFocusTarget?
+            if let context = targetContext {
+                guard let element = context.element else { return .recoverableFailure(.targetUnavailable) }
+                let preparation = await TypingService.prepareTargetForDelivery(context, isOutputValid: outputIsValid)
+                self.appendDiagnosticLog("acceptRewrite focus=\(preparation.rawValue) pid=\(context.pid)")
+                guard outputIsValid() else { return .cancelled }
+                guard preparation.isReady else {
+                    return .recoverableFailure(AXIsProcessTrusted() ? .targetRestoreFailed : .accessibilityNotTrusted)
+                }
+                targetPID = context.pid
+                focusTarget = .init(pid: context.pid, window: context.window, element: element)
+            } else {
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+            guard outputIsValid() else { return .cancelled }
+            return await self.typingService.typeTextInstantly(
+                text,
+                preferredTargetPID: targetPID,
+                textReadyAt: nil,
+                requiredFocusTarget: focusTarget,
+                isOutputValid: outputIsValid
+            )
+        } onCancel: {
+            cancellation.cancel()
         }
-        _ = await self.typingService.typeTextInstantly(text, preferredTargetPID: targetPID)
     }
 
     func clearState() {
@@ -339,7 +380,7 @@ final class RewriteModeService: ObservableObject {
 
         // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
         let isReasoningModel = settings.isReasoningModel(model)
-        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model)
+        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model, baseURL: baseURL)
 
         // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
         let reasoningConfig = settings.getReasoningConfig(forModel: model, provider: providerID)
@@ -430,9 +471,7 @@ final class RewriteModeService: ObservableObject {
 
     private func appendDiagnosticLog(_ message: String) {
         guard self.diagnosticsEnabled || self.forcePromptTraceToConsole else { return }
-        let line = "[RewriteModeService] \(message)"
-        FileLogger.shared.append(line: line)
-        DebugLogger.shared.debug(line, source: "RewriteModeService")
+        DebugLogger.shared.info(message, source: "RewriteModeService")
     }
 
     private func providerKey(for providerID: String) -> String {

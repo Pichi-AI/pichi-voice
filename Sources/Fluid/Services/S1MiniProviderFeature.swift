@@ -5,7 +5,7 @@ nonisolated struct S1MiniProviderFeature: PrivateAIProviderFeatureProviding {
     static let shared = Self()
     static let revision = "34add00a48a2e5d24e5a4ee5405a99620a3a240c"
     static let modelDescriptor = PrivateAIRegisteredModel(
-        displayName: "S1-mini by Superwhisper",
+        displayName: "S1 Mini",
         detail: "Clean up dictation locally on your Mac.",
         isEnabled: true,
         parameterCount: "0.6B",
@@ -27,7 +27,7 @@ nonisolated struct S1MiniProviderFeature: PrivateAIProviderFeatureProviding {
 
     let isAvailable = true
     let providerID = "s1-mini"
-    let providerName = "S1-mini by Superwhisper"
+    let providerName = "S1 Mini"
     let promptSelectionID = "__S1_MINI__"
     let defaultModelID = Self.modelDescriptor.id
     let selectedModelDefaultsKey = "S1MiniSelectedModelID"

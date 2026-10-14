@@ -17,14 +17,18 @@ struct FluidRecordInvitationStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let animate = self.visible && self.inviting && self.isEnabled && !self.reduceMotion && self.scenePhase == .active
         let highlighted = self.hovered && self.isEnabled
+        let ink = !self.isEnabled ? self.theme.palette.secondaryText
+            : (self.prominent ? self.theme.palette.foreground(on: self.recording ? .red : self.theme.palette.accent) : self.theme.palette.primaryText)
         configuration.label
             .font(self.theme.typography.bodyStrong)
-            .foregroundStyle(self.prominent ? (self.recording ? Color.white : self.theme.palette.accentForeground) : self.theme.palette.primaryText)
+            .foregroundStyle(ink)
             .padding(.horizontal, 22)
             .frame(minWidth: 144, maxWidth: self.fillsWidth ? .infinity : nil, minHeight: FluidButtonSize.large.controlHeight)
             .background {
                 Group {
-                    if self.prominent {
+                    if !self.isEnabled {
+                        Capsule().fill(self.theme.palette.elevatedCardBackground)
+                    } else if self.prominent {
                         FluidRecordInvitationSurface(
                             animate: animate,
                             recording: self.recording,
@@ -34,16 +38,14 @@ struct FluidRecordInvitationStyle: ButtonStyle {
                         Capsule().fill(self.theme.palette.contentBackground)
                     }
                 }
-                .brightness(highlighted ? 0.08 : 0)
                 .animation(self.reduceMotion ? nil : .easeOut(duration: 0.18), value: highlighted)
             }
             .overlay {
-                Capsule().strokeBorder((self.prominent ? Color.white : self.theme.palette.secondaryText).opacity(configuration.isPressed ? 0.6 : (highlighted ? 0.48 : 0.16)), lineWidth: 1)
+                Capsule().strokeBorder(ink.opacity(configuration.isPressed ? 0.6 : (highlighted ? 0.48 : 0.35)), lineWidth: 1)
                     .animation(self.reduceMotion ? nil : .easeOut(duration: 0.18), value: highlighted)
                     .allowsHitTesting(false)
             }
             .contentShape(Capsule())
-            .opacity(self.isEnabled ? 1 : 0.65)
             .fixedSize(horizontal: !self.fillsWidth, vertical: false)
             .onHover { self.hovered = $0 && self.isEnabled }
             .onChange(of: self.isEnabled) { _, enabled in
@@ -79,7 +81,7 @@ private struct FluidRecordInvitationSurface: View {
                         if !self.reduceTransparency {
                             let centre = CGPoint(x: size.width * (0.5 + 0.28 * sin(time / 24 * .pi * 2)), y: size.height * 0.35)
                             context.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(
-                                Gradient(colors: [.white.opacity(0.12), .clear]),
+                                Gradient(colors: [(AppTheme.Palette.contrastingInk(on: self.theme.palette.accent) == .white ? Color.black : Color.white).opacity(0.08), .clear]),
                                 center: centre,
                                 startRadius: 0,
                                 endRadius: size.width * 0.55
@@ -138,6 +140,7 @@ struct FluidGlassControlGroup<Content: View>: View {
 }
 
 private struct FluidGlassActionModifier: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.theme) private var theme
     let prominent: Bool
@@ -149,20 +152,88 @@ private struct FluidGlassActionModifier: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if self.quiet, !self.prominent {
             content.buttonStyle(FluidQuietActionStyle(circular: self.circular, tone: self.tone, spacious: self.spacious))
+        } else if !self.isEnabled {
+            // Native disabled glass discards its tint and can retain white ink on
+            // a white surface. Use paired neutral tokens without fading the label.
+            content.buttonStyle(FluidDisabledActionStyle(circular: self.circular, spacious: self.spacious))
         } else if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
             if self.prominent {
-                content.buttonStyle(.glassProminent).tint(self.tone ?? self.theme.palette.accent)
+                content.buttonStyle(FluidGlassProminentActionStyle(tone: self.tone))
+                    .tint(self.tone ?? self.theme.palette.accent)
                     .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             } else {
-                content.buttonStyle(.glass).controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
+                content.buttonStyle(FluidGlassSecondaryActionStyle(tone: self.tone))
+                    .controlSize(self.spacious ? .extraLarge : .large).buttonBorderShape(self.circular ? .circle : .capsule)
             }
         } else {
             if self.prominent {
                 content.buttonStyle(AccentButtonStyle(tone: self.tone))
             } else {
-                content.buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight))
+                content.buttonStyle(FluidOutlinedButtonStyle(height: FluidButtonSize.large.controlHeight, foreground: self.tone ?? self.theme.palette.primaryText))
             }
         }
+    }
+}
+
+/// Secondary glass uses neutral material, independently of the inherited accent
+/// tint. Keep its theme/semantic ink inside the native button's actual label.
+@available(macOS 26, iOS 26, *)
+struct FluidGlassSecondaryActionStyle: PrimitiveButtonStyle {
+    let tone: Color?
+    @Environment(\.theme) private var theme
+
+    func makeBody(configuration: Configuration) -> some View {
+        let foreground = self.theme.palette.readableText(self.tone ?? self.theme.palette.primaryText)
+        return FluidGlassProminentActionStyle.pairedLabelButton(role: configuration.role,
+                                                               foreground: foreground,
+                                                               action: configuration.trigger) { configuration.label }
+            .buttonStyle(.glass)
+            .tint(.clear)
+    }
+}
+
+/// Native glass replaces an inherited foreground on Button itself. Decorate the
+/// label inside the real button, then delegate activation and rendering to glass.
+@available(macOS 26, iOS 26, *)
+struct FluidGlassProminentActionStyle: PrimitiveButtonStyle {
+    let tone: Color?
+    @Environment(\.theme) private var theme
+
+    func makeBody(configuration: Configuration) -> some View {
+        Self.pairedLabelButton(role: configuration.role,
+                               foreground: self.theme.palette.foreground(on: self.tone ?? self.theme.palette.accent),
+                               action: configuration.trigger) { configuration.label }
+            .buttonStyle(.glassProminent)
+    }
+
+    /// One production construction point keeps the explicit label foreground
+    /// below a renderer's inherited defaults. Tests exercise this exact Button.
+    static func pairedLabelButton<Label: View>(role: ButtonRole?, foreground: Color,
+                                              action: @escaping @MainActor () -> Void,
+                                              @ViewBuilder label: () -> Label) -> some View {
+        Button(role: role, action: action) {
+            label().foregroundStyle(foreground)
+        }
+    }
+}
+
+/// Keeps disabled glass actions legible while retaining their native Button semantics.
+struct FluidDisabledActionStyle: ButtonStyle {
+    let circular: Bool
+    let spacious: Bool
+    @Environment(\.theme) private var theme
+
+    func makeBody(configuration: Configuration) -> some View {
+        let height = self.spacious ? FluidButtonSize.large.controlHeight : 36
+        let shape = Capsule()
+        return configuration.label
+            .font(self.theme.typography.bodyStrong)
+            .foregroundStyle(self.theme.palette.secondaryText)
+            .padding(.horizontal, self.circular ? 0 : 18)
+            .frame(minWidth: height, minHeight: height)
+            .background(self.theme.palette.elevatedCardBackground, in: shape)
+            .overlay { shape.strokeBorder(self.theme.palette.secondaryText.opacity(0.35), lineWidth: 1) }
+            .contentShape(shape)
     }
 }
 
@@ -181,11 +252,11 @@ private struct FluidQuietActionStyle: ButtonStyle {
         let height = self.spacious ? FluidButtonSize.large.controlHeight : FluidButtonSize.small.controlHeight
         configuration.label
             .font(self.theme.typography.bodySmall)
-            .foregroundStyle(self.tone ?? (highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText))
+            .foregroundStyle(self.isEnabled ? self.theme.palette.readableText(self.tone ?? (highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText)) : self.theme.palette.secondaryText)
             .padding(.horizontal, self.circular ? 0 : 8)
             .frame(minWidth: height, minHeight: height)
             .contentShape(Rectangle())
-            .opacity(self.isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
+            .scaleEffect(self.isEnabled && configuration.isPressed ? FluidInteractionVisuals.pressedScale : 1)
             .onHover { self.isHovered = $0 && self.isEnabled }
             .onChange(of: self.isEnabled) { _, enabled in
                 if !enabled { self.isHovered = false }

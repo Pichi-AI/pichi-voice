@@ -47,6 +47,9 @@ struct MeetingRecordingSettingsSheet: View {
     @Environment(\.locale) private var locale
 
     @State private var selectedSection: MeetingSettingsSection
+    /// What the sheet opened with, to tell whether leaving it would throw edits away.
+    @State private var openedDraft: MeetingTranscriptionSetupDraft
+    @State private var openedRetentionPolicy: MeetingAudioRetentionPolicy
 
     // Keeps the existing sheet's bindings and callbacks together at its presentation boundary.
     init(
@@ -79,12 +82,26 @@ struct MeetingRecordingSettingsSheet: View {
         self.onCancel = onCancel
         self.onSave = onSave
         self._selectedSection = State(initialValue: initialSection)
+        self._openedDraft = State(initialValue: draft.wrappedValue)
+        self._openedRetentionPolicy = State(initialValue: retentionPolicy.wrappedValue)
+    }
+
+    private var hasUnsavedChanges: Bool {
+        self.draft != self.openedDraft || self.retentionPolicy != self.openedRetentionPolicy
+    }
+
+    /// Nothing on Integrations waits for Save, so the button there only closes. With edits made
+    /// on another tab still unsaved it would discard them, and has to say so.
+    static func dismissTitle(isFirstSetup: Bool, section: MeetingSettingsSection, hasUnsavedChanges: Bool) -> String {
+        if isFirstSetup { return "Not now" }
+        return section == .integrations && !hasUnsavedChanges ? "Close" : "Cancel"
     }
 
     private var canSave: Bool {
         guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.draft.languageCode) else { return false }
         guard self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) else { return false }
         return self.draft.mode == .inRoom
+            || self.draft.applicationAudioScope == .systemAudio
             || self.draft.usesAutomaticApplication
             || self.applications.contains { $0.id == self.draft.selectedApplicationID }
     }
@@ -94,7 +111,7 @@ struct MeetingRecordingSettingsSheet: View {
         if !self.microphones.contains(where: { $0.id == self.draft.selectedMicrophoneID }) {
             return PichiLocalization.text("Choose an available microphone to save this setup.")
         }
-        if self.draft.mode == .onlineCall, !self.draft.usesAutomaticApplication,
+        if self.draft.mode == .onlineCall, self.draft.applicationAudioScope == .selectedApplication, !self.draft.usesAutomaticApplication,
            !self.applications.contains(where: { $0.id == self.draft.selectedApplicationID })
         {
             return PichiLocalization.text("Choose an available meeting application to save this setup.")
@@ -168,13 +185,19 @@ struct MeetingRecordingSettingsSheet: View {
                     .padding(.horizontal, self.theme.metrics.spacing.md)
                     .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
                     .padding(.vertical, self.theme.metrics.spacing.xs)
+                    // The selected tab uses the app's selected-row tint, so it reads as "you are here"
+                    // and not as one more hover outline.
                     .background(
-                        self.selectedSection == section ? self.theme.palette.cardBackground : Color.clear,
+                        self.selectedSection == section
+                            ? self.theme.palette.accent.opacity(self.theme.metrics.pickerControl.selectedRowOpacity)
+                            : Color.clear,
                         in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
                     )
                     .contentShape(RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
                 }
                 .buttonStyle(.plain)
+                // The keyboard focus ring otherwise sits on the first tab whichever tab is open.
+                .focusEffectDisabled()
                 .meetingHoverFeedback(cornerRadius: self.theme.metrics.corners.sm)
                 .accessibilityAddTraits(self.selectedSection == section ? .isSelected : [])
             }
@@ -224,9 +247,15 @@ struct MeetingRecordingSettingsSheet: View {
                         Divider()
                         MeetingAdaptiveSetupRow(
                             title: PichiLocalization.text("Meeting audio"),
-                            detail: PichiLocalization.text("Automatic follows the detected call.")
+                            detail: PichiLocalization.text("System audio includes apps opened during recording.")
                         ) {
                             Menu {
+                                Button { self.draft.chooseSystemAudio() } label: {
+                                    if self.draft.applicationAudioScope == .systemAudio {
+                                        Label("System audio · all apps", systemImage: "checkmark")
+                                    } else { Text("System audio · all apps") }
+                                }
+                                Divider()
                                 self.applicationMenuEntry(title: PichiLocalization.text("Automatic"), id: nil)
                                 ForEach(self.meetingApplications) { option in
                                     self.applicationMenuEntry(title: self.applicationDisplayName(option), id: option.id)
@@ -272,7 +301,7 @@ struct MeetingRecordingSettingsSheet: View {
                 Button(self.readiness.isCheckingSources ? PichiLocalization.text("Refreshing…") : PichiLocalization.text("Refresh"), systemImage: "arrow.clockwise", action: self.onRefreshSources)
                     .buttonStyle(.plain)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .disabled(self.readiness.isCheckingSources)
                     .help("Rescan meeting apps and microphones.")
                     .accessibilityLabel("Refresh audio sources")
@@ -319,9 +348,8 @@ struct MeetingRecordingSettingsSheet: View {
     private var applicationSelection: Binding<String?> {
         Binding(
             get: { self.draft.usesAutomaticApplication ? nil : self.draft.selectedApplicationID },
-            set: {
-                self.draft.usesAutomaticApplication = $0 == nil
-                self.draft.selectedApplicationID = $0
+            set: { id in
+                self.draft.chooseApplication(self.applications.first { $0.id == id }?.identity)
             }
         )
     }
@@ -330,7 +358,7 @@ struct MeetingRecordingSettingsSheet: View {
         Button {
             self.applicationSelection.wrappedValue = id
         } label: {
-            if self.applicationSelection.wrappedValue == id {
+            if self.draft.applicationAudioScope == .selectedApplication && self.applicationSelection.wrappedValue == id {
                 Label(title, systemImage: "checkmark")
             } else {
                 Text(title)
@@ -339,14 +367,15 @@ struct MeetingRecordingSettingsSheet: View {
     }
 
     private var meetingApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) != nil }
+        self.applications.pickerSections.usual
     }
 
     private var otherApplications: [MeetingApplicationOption] {
-        self.applications.filter { MeetingAppRegistry.tier(forBundleIdentifier: $0.identity.bundleIdentifier) == nil }
+        self.applications.pickerSections.others
     }
 
     private var selectedApplicationName: String {
+        if self.draft.applicationAudioScope == .systemAudio { return PichiLocalization.text("System audio") }
         guard !self.draft.usesAutomaticApplication else { return PichiLocalization.text("Automatic") }
         guard let selected = self.applications.first(where: { $0.id == self.draft.selectedApplicationID }) else {
             return PichiLocalization.text("Source unavailable")
@@ -459,49 +488,13 @@ struct MeetingRecordingSettingsSheet: View {
 
     private var integrationSettings: some View {
         VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
-            FluidManagementGroup(title: PichiLocalization.text("Claude & ChatGPT MCP links")) {
-                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
-                    self.integrationRow(name: "Claude", provider: PichiLocalization.text("by Anthropic"), assetName: "Provider_Anthropic")
-                    Divider()
-                    self.integrationRow(name: "ChatGPT", provider: PichiLocalization.text("by OpenAI"), assetName: "Provider_OpenAI")
-                }
-            }
+            MeetingAgentIntegrations()
 
-            Label("MCP connections are coming in a future update. No meeting notes are shared with Claude or ChatGPT.", systemImage: "lock.fill")
+            Label("A meeting an agent reads is sent to that agent.", systemImage: "lock.fill")
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func integrationRow(name: String, provider: String, assetName: String) -> some View {
-        HStack(spacing: self.theme.metrics.spacing.md) {
-            Image(assetName)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 26, height: 26)
-                .frame(width: 44, height: 44)
-                .background(Color(nsColor: .white), in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.md))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xs) {
-                Text(name)
-                    .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.primaryText)
-                Text(provider)
-                    .font(self.theme.typography.caption)
-                    .foregroundStyle(self.theme.palette.secondaryText)
-            }
-            Spacer(minLength: self.theme.metrics.spacing.md)
-            Text("Coming soon")
-                .font(self.theme.typography.badge)
-                .foregroundStyle(self.theme.palette.secondaryText)
-            Toggle("Enable \(name) MCP link — coming soon", isOn: .constant(false))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .disabled(true)
-                .help("\(name) MCP links are coming soon.")
-        }
-        .padding(.vertical, self.theme.metrics.spacing.sm)
     }
 
     private var footer: some View {
@@ -515,7 +508,11 @@ struct MeetingRecordingSettingsSheet: View {
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Spacer(minLength: self.theme.metrics.spacing.md)
                     Button(action: self.onCancel) {
-                        Text(self.isFirstSetup ? PichiLocalization.text("Not now") : PichiLocalization.text("Cancel")).frame(minWidth: 72)
+                        Text(PichiLocalization.text(Self.dismissTitle(
+                            isFirstSetup: self.isFirstSetup,
+                            section: self.selectedSection,
+                            hasUnsavedChanges: self.hasUnsavedChanges
+                        ))).frame(minWidth: 72)
                     }
                     .meetingGlassAction()
                     .keyboardShortcut(.cancelAction)

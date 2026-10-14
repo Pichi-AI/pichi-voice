@@ -31,18 +31,59 @@ struct AppTheme {
         var accentForegroundOverride: Color? = nil
         var accentForeground: Color {
             if let accentForegroundOverride { return accentForegroundOverride }
+            return Self.contrastingInk(on: self.accent)
+        }
+
+        /// A fill and text drawn on a neutral surface have different contrast needs.
+        /// Saved accents and legacy profiles may predate package contrast validation.
+        var accentText: Color {
+            self.readableText(self.accent)
+        }
+
+        func readableText(_ proposed: Color) -> Color {
+            let backgrounds = [windowBackground, contentBackground, sidebarBackground,
+                               cardBackground, elevatedCardBackground, toolbarBackground]
+            return backgrounds.allSatisfy { Self.contrast(proposed, $0) >= 3 }
+                ? proposed : self.primaryText
+        }
+
+        func foreground(on fill: Color) -> Color {
+            fill == self.accent ? self.accentForeground : Self.contrastingInk(on: fill)
+        }
+
+        static func contrastingInk(on fill: Color) -> Color {
+            Self.luminance(fill) > 0.179 ? .black : .white
+        }
+
+        private static func luminance(_ color: Color, over background: Color? = nil) -> Double {
             #if canImport(AppKit)
-            guard let rgb = NSColor(self.accent).usingColorSpace(.deviceRGB) else { return .white }
+            guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return 0 }
+            let surface = background.flatMap { NSColor($0).usingColorSpace(.sRGB) }
             let red = rgb.redComponent, green = rgb.greenComponent, blue = rgb.blueComponent
+            let surfaceRed = surface?.redComponent ?? 0
+            let surfaceGreen = surface?.greenComponent ?? 0
+            let surfaceBlue = surface?.blueComponent ?? 0
+            let alpha = surface == nil ? 1 : rgb.alphaComponent
             #else
-            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-            guard UIColor(self.accent).getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return .white }
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, colorAlpha: CGFloat = 0
+            guard UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &colorAlpha) else { return 0 }
+            var surfaceRed: CGFloat = 0, surfaceGreen: CGFloat = 0, surfaceBlue: CGFloat = 0, surfaceAlpha: CGFloat = 0
+            let hasSurface = background.map {
+                UIColor($0).getRed(&surfaceRed, green: &surfaceGreen, blue: &surfaceBlue, alpha: &surfaceAlpha)
+            } ?? false
+            let alpha: CGFloat = hasSurface ? colorAlpha : 1
             #endif
             func channel(_ value: CGFloat) -> Double {
                 value <= 0.04045 ? Double(value / 12.92) : pow(Double((value + 0.055) / 1.055), 2.4)
             }
-            let light = channel(red) * 0.2126 + channel(green) * 0.7152 + channel(blue) * 0.0722
-            return light > 0.179 ? .black : .white
+            return channel(red * alpha + surfaceRed * (1 - alpha)) * 0.2126
+                + channel(green * alpha + surfaceGreen * (1 - alpha)) * 0.7152
+                + channel(blue * alpha + surfaceBlue * (1 - alpha)) * 0.0722
+        }
+
+        private static func contrast(_ first: Color, _ second: Color) -> Double {
+            let a = Self.luminance(first, over: second), b = Self.luminance(second)
+            return (max(a, b) + 0.05) / (min(a, b) + 0.05)
         }
     }
 
@@ -71,6 +112,7 @@ struct AppTheme {
         var brandStyle: BrandStyle? = nil
         #if canImport(AppKit)
         var nativeBodyFont: NSFont { .fluidSystemFont(ofSize: 14, style: self.brandStyle) }
+        var nativeBodySmallFont: NSFont { .fluidSystemFont(ofSize: 13, style: self.brandStyle) }
         #endif
 
         static var standard: Typography { self.standard(style: AppBrand.package.style) }
@@ -357,7 +399,7 @@ struct AppTheme {
             separator: color("separator", self.palette.separator),
             primaryText: color("primaryText", self.palette.primaryText),
             secondaryText: color("secondaryText", self.palette.secondaryText),
-            tertiaryText: color("tertiaryText", self.palette.tertiaryText),
+            tertiaryText: color("tertiaryText", self.palette.secondaryText),
             accent: self.palette.accent,
             warning: color("warning", self.palette.warning),
             success: color("success", self.palette.success),

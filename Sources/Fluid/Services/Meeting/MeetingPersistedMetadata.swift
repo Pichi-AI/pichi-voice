@@ -1,7 +1,7 @@
 import Foundation
 
-/// Verified outcome of binding the AUHAL input unit to a specific CoreAudio device (plan §6).
-/// Persist the UInt32 scalar behind macOS AudioObjectID so the unchanged schema decodes on iOS.
+// Persisted metadata is shared by the application and read-only meeting helper.
+// These existing codecs perform no capture, inference, settings or filesystem work.
 nonisolated enum MeetingMicrophoneBindingOutcome: Equatable, Sendable {
     case boundVerified(UInt32)
     /// Bind failed but the default input already IS the requested device (Bluetooth/aggregate).
@@ -40,8 +40,6 @@ extension MeetingMicrophoneBindingOutcome: Codable {
     }
 }
 
-
-/// What the session actually got, not what it asked for; `Codable` for §7 provenance at rest.
 nonisolated struct MeetingMicrophoneSettledConfig: Codable, Equatable, Sendable {
     var requestedMicrophone: MeetingMicrophoneIdentity
     var bindingOutcome: MeetingMicrophoneBindingOutcome
@@ -56,3 +54,23 @@ nonisolated struct MeetingMicrophoneSettledConfig: Codable, Equatable, Sendable 
     var outputChannelDecision: String
 }
 
+nonisolated struct MeetingPostProcessingOutput: Codable, Equatable, Sendable {
+    let summary: String
+    let sourceSegmentIDs: [UUID]
+}
+
+nonisolated struct MeetingPostProcessingArtifact: Codable, Equatable, Sendable {
+    let attemptID: UUID
+    let transcriptHash: String
+    let providerID: String
+    let modelID: String
+    let output: MeetingPostProcessingOutput?
+    let error: String?
+}
+
+nonisolated struct MeetingResultSidecarReference: Codable, Equatable {
+    let formatVersion: Int
+    let fileName: String
+    let sha256: String
+    let byteCount: Int
+}

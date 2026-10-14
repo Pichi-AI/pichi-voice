@@ -10,7 +10,7 @@ trap 'rm -rf "$task_test_dir"' EXIT
 # the application, an inference server or the user's meeting/session stores.
 python3 - "$task_test_dir/SummaryEvidence.swift" <<'PY'
 import pathlib, sys
-source = pathlib.Path('Sources/Fluid/Services/Meeting/PichiMeetingSummary.swift').read_text()
+source = pathlib.Path('Sources/Fluid/Services/Meeting/PichiMeetingSummaryDocument.swift').read_text()
 types = source[:source.index('nonisolated enum PichiMeetingSummaryInput {')]
 methods = []
 for signature in ['static func normalized(', 'static func chunks(', 'static func evidenceChoices(']:
@@ -18,9 +18,8 @@ for signature in ['static func normalized(', 'static func chunks(', 'static func
     end = source.index('\n    }', start) + len('\n    }')
     methods.append(source[start:end])
 start = source.index('nonisolated enum PichiMeetingSummaryError:')
-end = source.index('\nnonisolated struct PichiMeetingSummaryGenerator:', start)
-view = pathlib.Path('Sources/Fluid/UI/PichiMeetingSummaryView.swift').read_text()
-exports = view[view.index('extension PichiMeetingSummaryDocument {'):]
+end = source.index('\nnonisolated struct PichiMeetingSummaryArtifact:', start)
+exports = source[source.index('extension PichiMeetingSummaryDocument {'):]
 pathlib.Path(sys.argv[1]).write_text(types + '\nnonisolated enum PichiMeetingSummaryInput {\n'
     + '\n'.join(methods) + '\n}\n' + source[start:end]
     + '\n' + exports)
@@ -29,3 +28,4 @@ sed '/^@MainActor/,$d' Sources/Fluid/Views/CommandMarkdownContent.swift > "$task
 xcrun swiftc -parse-as-library Sources/Fluid/Localization/PichiLocalization.swift \
     "$task_test_dir/SummaryEvidence.swift" "$task_test_dir/Markdown.swift" Tests/MeetingSummaryEvidenceTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"
+python3 -S Tests/meeting_summary_ui_parity.py

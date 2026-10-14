@@ -713,8 +713,17 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
 
     func testSavedLegacyBackendUsesProductionForFrenchWithoutChangingPreference() async {
         let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let speechModelKey = "SelectedSpeechModel"
+        let previousSpeechModel = defaults.object(forKey: speechModelKey)
         let previous = settings.meetingTranscriptionBackendID
-        defer { settings.meetingTranscriptionBackendID = previous }
+        defer {
+            settings.meetingTranscriptionBackendID = previous
+            if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
+            else { defaults.removeObject(forKey: speechModelKey) }
+        }
+        // Use an unregistered model to isolate the saved legacy backend policy.
+        settings.selectedSpeechModel = .whisperSmall
         settings.meetingTranscriptionBackendID = .legacyCompatibility
         let marker = CocoaError(.userCancelled)
         var productionPreparations = 0
@@ -739,8 +748,16 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
 
     func testExplicitLegacyAndUnknownSavedBackendsDoNotSilentlyFallBack() async {
         let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let speechModelKey = "SelectedSpeechModel"
+        let previousSpeechModel = defaults.object(forKey: speechModelKey)
         let previous = settings.meetingTranscriptionBackendID
-        defer { settings.meetingTranscriptionBackendID = previous }
+        defer {
+            settings.meetingTranscriptionBackendID = previous
+            if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
+            else { defaults.removeObject(forKey: speechModelKey) }
+        }
+        settings.selectedSpeechModel = .whisperSmall
         let unknown = MeetingBackendID(rawValue: "unknown-saved-backend")
         for pinned in [true, false] {
             settings.meetingTranscriptionBackendID = pinned ? .legacyCompatibility : unknown
@@ -764,6 +781,53 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
                         ? .unsupportedLanguage(backend: .legacyCompatibility, languageCode: "fr")
                         : .unknownBackend(unknown)
                 )
+            }
+        }
+    }
+
+    func testRegisteredModelRouteKeepsAmbientSavedFallbackWithoutChangingPreferences() {
+        let settings = SettingsStore.shared
+        let defaults = UserDefaults.standard
+        let speechModelKey = "SelectedSpeechModel"
+        let previousSpeechModel = defaults.object(forKey: speechModelKey)
+        let backendKey = "MeetingTranscriptionBackendID"
+        let previousBackend = defaults.object(forKey: backendKey)
+        defer {
+            if let previousBackend { defaults.set(previousBackend, forKey: backendKey) }
+            else { defaults.removeObject(forKey: backendKey) }
+            if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
+            else { defaults.removeObject(forKey: speechModelKey) }
+        }
+        let unknown = MeetingBackendID(rawValue: "unknown-saved-backend")
+        XCTAssertNotNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperTiny.rawValue))
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: SettingsStore.SpeechModel.whisperSmall.rawValue))
+        let selections: [(saved: MeetingBackendID, english: MeetingBackendID, nonEnglish: MeetingBackendID)] = [
+            (.legacyCompatibility, .legacyCompatibility, .productionDefault),
+            (.productionDefault, .productionDefault, .productionDefault),
+            (unknown, unknown, unknown),
+        ]
+        let models: [(model: SettingsStore.SpeechModel, registeredBackend: MeetingBackendID?)] = [
+            (.gigaam, .gigaam), (.whisperTiny, .whisperTiny), (.whisperSmall, nil),
+        ]
+        for (saved, english, nonEnglish) in selections {
+            settings.meetingTranscriptionBackendID = saved
+            for (languageCode, fallback) in [("en", english), ("fr", nonEnglish), ("ru", nonEnglish)] {
+                for (model, registeredBackend) in models {
+                    settings.selectedSpeechModel = model
+                    let expected = registeredBackend ?? fallback
+                    XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode), expected)
+                    XCTAssertEqual(
+                        PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode, selectedModelID: model.rawValue),
+                        expected
+                    )
+                    XCTAssertEqual(
+                        PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode,
+                            selectedModelID: model.rawValue, savedBackendID: saved),
+                        expected
+                    )
+                    XCTAssertEqual(settings.meetingTranscriptionBackendID, saved)
+                    XCTAssertEqual(settings.selectedSpeechModel, model)
+                }
             }
         }
     }
@@ -1518,6 +1582,34 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
             XCTAssertTrue(configuration.diarizationFingerprint.hasPrefix("unavailable:"))
             XCTAssertNoThrow(try MeetingProviderOptions.resolve(configuration))
         }
+    }
+
+    func testPreinstalledArtifactIdentityStaysPinnedAcrossDependencyPreparation() async throws {
+        let suite = "PinnedPCMArtifact.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        var source = self.session(backendID: .whisperTiny, language: "en")
+        let approvedIdentity = "approved-synthetic-tiny-identity"
+        source.recordingASRArtifactFingerprint = approvedIdentity
+        var frozenRequest: MeetingBackendRequest?
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Runtime marker precedes ASR residency"); return ASRService() },
+            managesModelResidency: false, settings: settings, backendRegistry: .makeDefault(),
+            meetingRuntimeFactory: { request in frozenRequest = request; throw RuntimeReached() },
+            prepareDiarizationDependencies: { _ in source.recordingASRArtifactFingerprint = "later-unapproved-identity" })
+        do {
+            try await pipeline.prepareMemoryAudio(session: source, sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"),
+                checkpoint: { _ in XCTFail("The runtime marker cannot publish a checkpoint") })
+            XCTFail("Expected the requested runtime marker")
+        } catch is RuntimeReached { }
+        let request = try XCTUnwrap(frozenRequest)
+        XCTAssertEqual(source.recordingASRArtifactFingerprint, "later-unapproved-identity")
+        XCTAssertEqual(request.session.recordingASRArtifactFingerprint, approvedIdentity)
+        XCTAssertEqual(request.configuration.asrArtifactFingerprint, approvedIdentity)
+        XCTAssertEqual(request.configuration.asrModel, PichiMeetingProviderFactory.whisperTinyModelID)
+        XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
     }
 
     func testAllProductionPCMRegistrationsDispatchThroughTheirRuntimeOperation() async {

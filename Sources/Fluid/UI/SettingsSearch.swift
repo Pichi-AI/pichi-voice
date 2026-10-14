@@ -30,6 +30,7 @@ enum SettingsSearchTarget: Hashable {
     case cancelRecordingShortcut
     case pasteLastTranscriptionShortcut
     case activationMode
+    case holdSpaceToMute
     case copyToClipboard
     case textInsertionMode
     case spokenSend
@@ -86,6 +87,7 @@ enum SettingsSearchTarget: Hashable {
              .analyticsPrivacy,
              .microphonePermission,
              .activationMode,
+             .holdSpaceToMute,
              .copyToClipboard,
              .textInsertionMode,
              .spokenSend,
@@ -287,6 +289,7 @@ enum SettingsSearchIndex {
             terms: ["reinsert recent text hotkey shortcut clipboard"]
         ),
         .init(target: .activationMode, title: "Activation Mode", terms: ["hold toggle hotkey behavior"]),
+        .init(target: .holdSpaceToMute, title: "Hold Space to Mute", terms: ["pause microphone spacebar resume silence"]),
         .init(
             target: .copyToClipboard,
             title: "Copy to Clipboard",
@@ -664,13 +667,15 @@ struct SidebarSearchField: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .accessibilityHidden(true)
             SidebarSearchInput(
                 text: self.$text,
                 placeholder: PichiLocalization.text(self.placeholder, locale: self.interfaceLocale),
                 isActive: self.isActive,
                 font: self.theme.typography.nativeBodyFont,
+                textColor: NSColor(self.theme.palette.primaryText),
+                placeholderColor: NSColor(self.theme.palette.secondaryText),
                 onCommand: self.onCommand,
                 isFocused: self.$isFocused
             )
@@ -679,7 +684,7 @@ struct SidebarSearchField: View {
                     self.text = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Clear search")
@@ -690,11 +695,11 @@ struct SidebarSearchField: View {
         .frame(height: 32)
         .background(
             RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                .fill(Color.primary.opacity(0.08))
+                .fill(self.theme.palette.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
-                .strokeBorder(self.isFocused ? self.theme.palette.accent : .clear, lineWidth: 2)
+                .strokeBorder(self.isFocused ? self.theme.palette.accentText : .clear, lineWidth: 2)
                 .allowsHitTesting(false)
         )
     }
@@ -725,6 +730,8 @@ private struct SidebarSearchInput: NSViewRepresentable {
     let placeholder: String
     let isActive: Bool
     let font: NSFont
+    let textColor: NSColor
+    let placeholderColor: NSColor
     var onCommand: (Selector) -> Bool = { _ in false }
 
     @Binding var isFocused: Bool
@@ -739,7 +746,7 @@ private struct SidebarSearchInput: NSViewRepresentable {
             coordinator?.parent.isFocused = true
         }
         searchField.delegate = context.coordinator
-        searchField.placeholderString = self.placeholder
+        self.applyAppearance(to: searchField)
         searchField.sendsSearchStringImmediately = true
         searchField.sendsWholeSearchString = false
         searchField.controlSize = .large
@@ -758,13 +765,25 @@ private struct SidebarSearchInput: NSViewRepresentable {
     func updateNSView(_ searchField: NSSearchField, context: Context) {
         context.coordinator.parent = self
         // The host resolved this known UI key using its selected locale. Keep it verbatim here.
-        searchField.placeholderString = self.placeholder
+        self.applyAppearance(to: searchField)
         searchField.setAccessibilityLabel(self.placeholder)
-        if searchField.font != self.font { searchField.font = self.font }
         if searchField.stringValue != self.text {
             searchField.stringValue = self.text
         }
         Self.resignFocusIfNeeded(from: searchField, isActive: self.isActive)
+    }
+
+    private func applyAppearance(to searchField: NSSearchField) {
+        if searchField.font != self.font { searchField.font = self.font }
+        if searchField.textColor != self.textColor { searchField.textColor = self.textColor }
+        searchField.placeholderAttributedString = NSAttributedString(
+            string: self.placeholder,
+            attributes: [.font: self.font, .foregroundColor: self.placeholderColor]
+        )
+        if let editor = searchField.currentEditor() as? NSTextView {
+            editor.textColor = self.textColor
+            editor.insertionPointColor = self.textColor
+        }
     }
 
     static func resignFocusIfNeeded(from searchField: NSSearchField, isActive: Bool) {

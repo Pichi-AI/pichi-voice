@@ -16,11 +16,24 @@ struct AudioWaveformBars: View {
     var glowIntensity: CGFloat = 0
     var glowRadius: CGFloat = 0
 
+    #if DEBUG
+    // Apple's accessibility environment is read-only. Exercise the real static rendering
+    // path without changing the user's system accessibility preference.
+    var reducedMotionOverrideForTesting: Bool?
+    #endif
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var simulation = WaveformSimulation()
 
+    private var isMotionReduced: Bool {
+        #if DEBUG
+        if let override = self.reducedMotionOverrideForTesting { return override }
+        #endif
+        return self.reduceMotion
+    }
+
     var body: some View {
-        if self.isAnimating && !self.reduceMotion {
+        if self.isAnimating && !self.isMotionReduced {
             TimelineView(.animation(minimumInterval: 1.0 / 50.0)) { timeline in
                 self.bars(heights: self.simulation.step(
                     at: timeline.date,
@@ -76,6 +89,12 @@ final class WaveformSimulation {
         if self.heights.count != barCount {
             self.heights = Array(repeating: minHeight, count: barCount)
             self.velocities = Array(repeating: 0, count: barCount)
+        } else {
+            // A host can resize without advancing the animation clock. Keep that frame
+            // within its new geometry rather than returning heights from the old layout.
+            for index in self.heights.indices {
+                self.heights[index] = min(maxHeight, max(minHeight, self.heights[index]))
+            }
         }
         let dt = CGFloat(min(max(date.timeIntervalSince(self.lastDate ?? date), 0), 1.0 / 30.0))
         self.lastDate = date

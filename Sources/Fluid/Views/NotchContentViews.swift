@@ -101,6 +101,7 @@ class NotchContentState: ObservableObject {
     @Published var mode: OverlayMode = .dictation
     @Published var promptPickerMode: SettingsStore.PromptMode = .dictate
     @Published var isProcessing: Bool = false // AI processing state
+    @Published var isDictationMuted = false
     @Published var isAIProcessingFailureVisible: Bool = false
     @Published private(set) var aiProcessingFailureMessage: String = "AI Enhancement failed"
     @Published private(set) var canRetryAIProcessingFailure: Bool = true
@@ -800,7 +801,6 @@ struct NotchExpandedView: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.45)
         .onHover { hovering in
             self.hoveredPromptMenuRowID = hovering && isEnabled ? rowID : nil
         }
@@ -1944,19 +1944,23 @@ struct CompactNotchWaveformView: View {
 
     var body: some View {
         ZStack {
-            self.barsView(using: { index in
-                self.displayHeight(for: index)
-            })
-            .foregroundStyle(self.color.opacity(self.contentState.isProcessing ? 0.16 : 1.0))
+            if self.contentState.isDictationMuted {
+                DictationMutedIndicator(compact: true)
+            } else {
+                self.barsView(using: { index in
+                    self.displayHeight(for: index)
+                })
+                .foregroundStyle(self.color.opacity(self.contentState.isProcessing ? 0.16 : 1.0))
 
-            if self.contentState.isProcessing {
-                CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
-                    .mask {
-                        self.barsView(using: { index in
-                            self.displayHeight(for: index)
-                        })
-                    }
-                    .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
+                if self.contentState.isProcessing {
+                    CompositorShimmerSweep(duration: 1.05, peakOpacity: 0.9)
+                        .mask {
+                            self.barsView(using: { index in
+                                self.displayHeight(for: index)
+                            })
+                        }
+                        .shadow(color: .white.opacity(0.28), radius: 2.5, x: 0, y: 0)
+                }
             }
         }
         .onChange(of: self.data.audioLevel) { _, level in

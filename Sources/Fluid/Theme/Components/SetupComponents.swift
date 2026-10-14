@@ -61,11 +61,11 @@ struct SetupStepView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(PichiLocalization.text(self.title, locale: self.locale))
                         .font(.fluidSystem(.body).weight(.medium))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(self.theme.palette.primaryText)
 
                     Text(PichiLocalization.text(self.description, locale: self.locale))
                         .font(.fluidSystem(.caption))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(2)
                 }
 
@@ -75,10 +75,10 @@ struct SetupStepView: View {
                 if self.status == .completed {
                     Label("Done", systemImage: "checkmark")
                         .font(.fluidSystem(.caption).weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(self.theme.palette.accentForeground)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color.fluidGreen, in: Capsule())
+                        .background(self.theme.palette.accent, in: Capsule())
                 } else if self.showActionButton {
                     HStack(spacing: 3) {
                         Text(PichiLocalization.text(self.actionButtonTitle, locale: self.locale))
@@ -86,7 +86,7 @@ struct SetupStepView: View {
                         Image(systemName: "arrow.right")
                             .font(.fluidSystem(.caption2).weight(.bold))
                     }
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.primaryText)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(self.theme.palette.accent.opacity(0.12), in: Capsule())
@@ -141,7 +141,7 @@ struct InstructionStep: View {
 
                 Text("\(self.number)")
                     .font(.fluidSystem(.caption).weight(.semibold))
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.primaryText)
             }
 
             VStack(alignment: .leading, spacing: 1) {
@@ -150,7 +150,7 @@ struct InstructionStep: View {
 
                 Text(PichiLocalization.text(self.description, locale: self.locale))
                     .font(.fluidSystem(.caption))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .lineLimit(2)
             }
         }

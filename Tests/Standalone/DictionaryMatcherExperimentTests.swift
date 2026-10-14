@@ -1,6 +1,25 @@
 #if DICTIONARY_EXPERIMENT_STANDALONE
 import Foundation
 
+// Keep experiment toggles and brand lookups inside this process, away from app preferences.
+final class UserDefaults {
+    static let standard = UserDefaults()
+    private var values: [String: Any] = [:]
+    func object(forKey key: String) -> Any? { self.values[key] }
+    func data(forKey key: String) -> Data? { self.values[key] as? Data }
+    func string(forKey key: String) -> String? { self.values[key] as? String }
+    func bool(forKey key: String) -> Bool { self.values[key] as? Bool ?? false }
+    func set(_ value: Any?, forKey key: String) { self.values[key] = value }
+    func removeObject(forKey key: String) { self.values.removeValue(forKey: key) }
+}
+
+// The real catalog is compiled for checkpoint keys; artifact IO is outside this matcher probe.
+nonisolated enum HuggingFaceModelDownloader {
+    static func artifactIsComplete(at url: URL, isDirectory: Bool) -> Bool {
+        fatalError("Unexpected model artifact inspection")
+    }
+}
+
 // Minimal surrounding types; the matcher, resolver and persistence implementations under test are production sources.
 struct ASRWordTiming: Sendable { let text: String; let start: Double; let end: Double }
 struct PronunciationEnrollmentCapture { let inspectionID: UUID?; let originalAudioID: UUID?; let values: [Float] }

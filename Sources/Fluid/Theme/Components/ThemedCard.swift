@@ -33,7 +33,8 @@ struct ThemedCard<Content: View>: View {
 
         self.content
             .padding(self.padding ?? self.theme.metrics.cardSurface.defaultPadding)
-            .background(configuration.material, in: shape)
+            // Imported ink is validated against this palette surface. A native
+            // material painted in front would replace its effective background.
             .background(
                 shape
                     .fill(configuration.background)
@@ -72,7 +73,6 @@ private extension ThemedCard {
         let borderOpacity: Double
         let hoverBorderOpacity: Double
         let borderWidth: CGFloat
-        let material: Material
         let cornerRadius: CGFloat
         let shadow: AppTheme.Metrics.Shadow
         let hoverShadowBoost: Double
@@ -86,21 +86,18 @@ private extension ThemedCard {
                 variant = cardSurface.standard
                 self.background = theme.palette.cardBackground
                 self.border = theme.palette.cardBorder
-                self.material = theme.materials.card
                 self.cornerRadius = theme.metrics.corners.lg
                 self.shadow = theme.metrics.cardShadow
             case .prominent:
                 variant = cardSurface.prominent
                 self.background = theme.palette.elevatedCardBackground
                 self.border = theme.palette.accent
-                self.material = theme.materials.elevatedCard
                 self.cornerRadius = theme.metrics.corners.lg
                 self.shadow = theme.metrics.elevatedCardShadow
             case .subtle:
                 variant = cardSurface.subtle
                 self.background = theme.palette.contentBackground
                 self.border = theme.palette.cardBorder
-                self.material = theme.materials.card
                 self.cornerRadius = theme.metrics.corners.md
                 self.shadow = theme.metrics.cardShadow
             }

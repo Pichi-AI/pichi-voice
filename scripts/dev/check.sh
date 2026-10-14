@@ -29,7 +29,7 @@ print('Repository configuration and script syntax passed.')
 PY
 for pichi_path in AGENTS.md .codex/config.toml .codex/hooks/session-start.py \
     .codex/environments/environment.toml docs/development/codex.md \
-    docs/development/upstream.md scripts/dev/check.sh; do
+    docs/development/upstream.md scripts/dev/check.sh scripts/dev/check-diarization-repeatability.py; do
     if git check-ignore --no-index -q "$pichi_path"; then
         printf 'Required shared file is ignored: %s\n' "$pichi_path" >&2
         exit 1
@@ -37,4 +37,14 @@ for pichi_path in AGENTS.md .codex/config.toml .codex/hooks/session-start.py \
 done
 python3 -S scripts/dev/check-localization.py
 python3 -S Tests/test_localization_catalog.py
+python3 -S Tests/test_build_identity.py
+python3 -S scripts/dev/check-xcode-build-settings.py
+python3 -S Tests/test_xcode_build_settings.py
+python3 -S Tests/test_macos_regression.py
+python3 -S Tests/test_signed_build_product_path.py
+python3 -S Tests/test_asr_baseline_inputs.py
+python3 -S Tests/test_standalone_regression.py
+python3 -S Tests/test_local_api_live_harness.py
+python3 -S Tests/run_diarization_repeatability_tests.py
+bash Tests/run_upstream_sync_tests.sh
 printf '%s\n' 'Portable checks passed. macOS build and audio checks are separate.'

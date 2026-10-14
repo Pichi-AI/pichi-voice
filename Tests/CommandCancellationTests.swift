@@ -8,6 +8,7 @@ final class UserDefaults {
     func data(forKey key: String) -> Data? { self.values[key] as? Data }
     func string(forKey key: String) -> String? { self.values[key] as? String }
     func set(_ value: Any?, forKey key: String) { self.values[key] = value; self.writes += 1 }
+    func removeObject(forKey key: String) { self.values.removeValue(forKey: key); self.writes += 1 }
 }
 
 @MainActor final class TerminalService {
@@ -24,6 +25,7 @@ final class UserDefaults {
     static var executed: [String] = []
     static var delay = false
     static var pending: CheckedContinuation<CommandResult, Never>?
+    static var output = "fake output"
     func execute(command: String, workingDirectory: String?) async -> CommandResult {
         Self.executed.append(command)
         if Self.delay {
@@ -33,7 +35,7 @@ final class UserDefaults {
     }
 
     static func result(_ command: String) -> CommandResult {
-        .init(success: true, command: command, output: "fake output", error: nil, exitCode: 0, executionTimeMs: 1)
+        .init(success: true, command: command, output: Self.output, error: nil, exitCode: 0, executionTimeMs: 1)
     }
 }
 
@@ -47,11 +49,22 @@ final class UserDefaults {
     let effectiveCommandModeProviderID = "fake"
     let effectiveCommandModeSelectedModel = "fake"
     let savedProviders = [Provider(id: "fake", baseURL: "https://fake.invalid")]
+    let providerConnectionOptions: [String: [String: String]] = [:]
     let enableAIStreaming = true
+    struct VerifiedChatModelConfiguration {
+        struct Option { let providerID: String; let modelID: String }
+        let option: Option
+        let baseURL: String
+        let apiKey: String
+        let connectionOptions: [String: String]
+    }
+    func verifiedChatModelConfiguration(providerID: String, modelID: String) -> VerifiedChatModelConfiguration? {
+        .init(option: .init(providerID: providerID, modelID: modelID), baseURL: "https://fake.invalid", apiKey: "", connectionOptions: [:])
+    }
     func analyticsAIModelDescriptor(for mode: Mode) -> String { "fake" }
     func getAPIKey(for provider: String) -> String? { nil }
     func isReasoningModel(_ model: String) -> Bool { false }
-    func isTemperatureUnsupported(_ model: String) -> Bool { false }
+    func isTemperatureUnsupported(_ model: String, baseURL: String) -> Bool { false }
     func getReasoningConfig(forModel: String, provider: String) -> ReasoningConfig? { nil }
 }
 
@@ -133,7 +146,14 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         let id: String
         let name = "execute_terminal_command"
         let command: String
-        func getString(_ key: String) -> String? { key == "command" ? self.command : nil }
+        var purpose: String? = nil
+        func getString(_ key: String) -> String? {
+            switch key {
+            case "command": self.command
+            case "purpose": self.purpose
+            default: nil
+            }
+        }
         func getOptionalString(_ key: String) -> String? { nil }
     }
 
@@ -146,6 +166,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
     }
 
     struct Config {
+        var providerOptions: [String: String] = [:]
         let messages: [[String: Any]]
         var maxRetries = 0
         var retryDelayMs = 0
@@ -237,6 +258,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         TerminalService.executed = []
         TerminalService.delay = false
         TerminalService.pending = nil
+        TerminalService.output = "fake output"
         DebugLogger.shared.errors = 0
         NotificationService.failures = 0
         NotchOverlayManager.shared.shows = 0
@@ -247,6 +269,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
     }
 
     static func main() async {
+        await self.generatedStepDescriptionsRespectLocale()
         await self.cancelDelayedLLM(response: .tool)
         await self.cancelDelayedLLM(response: .done)
         await self.cancelDelayedLLMError()
@@ -256,6 +279,10 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         await self.cancelRenderDelay()
         await self.validRecursiveToolRequestStillWorks()
         await self.validFollowUpAndConfirmationStillWork()
+        await self.explicitCancellationSurvivesSameChatRestart(afterCompletedTool: false, voice: false)
+        await self.explicitCancellationSurvivesSameChatRestart(afterCompletedTool: true, voice: false)
+        await self.explicitCancellationSurvivesSameChatRestart(afterCompletedTool: false, voice: true)
+        await self.explicitCancellationIsAnIdlePendingOperation()
         await self.cancelVoiceConfirmation(cancelThroughEscape: true)
         await self.cancelVoiceConfirmation(cancelThroughEscape: false)
         await self.cancelVoiceConfirmationAfterCompletedTool()
@@ -265,6 +292,64 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         await self.invalidRequestDoesNothing()
         self.check(MeetingSummaryActivityCoordinator.busyErrors == 0, "A canceled request left processing locked")
         print("Command cancellation: \(self.checks) checks passed (production agent loop, streaming callbacks, real in-memory chat store)")
+    }
+
+    static func generatedStepDescriptionsRespectLocale() async {
+        self.check(Bundle.main.localizations.contains("ru"), "Service fixture must load the actual compiled Russian catalog")
+        let original = UserDefaults.standard.string(forKey: PichiInterfaceLanguage.defaultsKey)
+        defer { UserDefaults.standard.set(original, forKey: PichiInterfaceLanguage.defaultsKey) }
+        for (language, expected) in [
+            ("en", ["Checking prerequisites...", "Executing command...", "Verifying the result..."]),
+            ("ru", ["Проверка необходимых условий...", "Выполнение команды...", "Проверка результата..."]),
+        ] {
+            UserDefaults.standard.set(language, forKey: PichiInterfaceLanguage.defaultsKey)
+            for (index, command, purpose) in [(0, "ls synthetic", Optional<String>.none),
+                                               (1, "printf 'Synthetic safe command'", Optional<String>.none),
+                                               (2, "printf 'Synthetic result'", Optional("result"))] {
+                let service = self.fixture()
+                LLMClient.shared.delay = false
+                LLMClient.shared.responses = [.init(content: "", thinking: nil,
+                                                     toolCalls: [.init(id: "localized-step", command: command, purpose: purpose)]), .done]
+                let user = "Executing command... Ё user text"
+                await service.processUserCommand(user)
+                self.check(service.conversationHistory.first { $0.toolCall?.id == "localized-step" }?.content == expected[index],
+                           "An app-generated empty-response fallback must use the selected interface language")
+                self.check(service.conversationHistory.first?.content == user, "Interface fallback localization must not translate user requests")
+                self.check(service.conversationHistory.last?.content == "Done", "Nonempty model output must remain verbatim")
+                self.check(service.conversationHistory.first { $0.toolCall != nil }?.toolCall?.purpose == purpose,
+                           "Provider-owned purpose must not change when a fallback is localized")
+                self.check(TerminalService.executed == [command], "Localization must not rewrite the tool command")
+                self.check(NotchContentState.shared.commandConversationHistory.contains {
+                    $0.role == .status && $0.content == (purpose ?? expected[index])
+                }, "Notch must localize only its generated fallback, preserving provider-owned purpose")
+            }
+
+            for purpose in ["executing", "Executing command..."] {
+                let service = self.fixture()
+                LLMClient.shared.delay = false
+                let modelText = "Executing command..."
+                let command = "printf 'Executing command... Ё'"
+                let output = "Executing command... Ё tool output"
+                TerminalService.output = output
+                LLMClient.shared.responses = [.init(content: modelText, thinking: nil,
+                                                     toolCalls: [.init(id: "literal-model-data", command: command, purpose: purpose)]), .done]
+                await service.processUserCommand("Synthetic literal model data")
+                let proposal = service.conversationHistory.first { $0.toolCall?.id == "literal-model-data" }
+                self.check(proposal?.content == modelText && proposal?.toolCall?.purpose == purpose,
+                           "A nonempty model response or purpose equal to a UI key must remain literal data")
+                let result = service.conversationHistory.first { $0.role == .tool }!
+                let json = try! JSONSerialization.jsonObject(with: Data(result.content.utf8)) as! [String: Any]
+                self.check(json["purpose"] as? String == purpose && json["command"] as? String == command && json["output"] as? String == output,
+                           "Actual enhanced terminal result fields must stay byte-identical to provider/tool data")
+                let parsed = CommandToolOutput.parse(result.content)
+                self.check(parsed.title == purpose && parsed.output == output,
+                           "Result presentation must not localize arbitrary tool metadata matching UI keys")
+                self.check(TerminalService.executed == [command], "Localized interface must dispatch the same exact command")
+                self.check(NotchContentState.shared.commandConversationHistory.contains {
+                    $0.role == .status && $0.content == purpose
+                }, "Notch must preserve provider metadata even when it matches a translated UI key")
+            }
+        }
     }
 
     static func cancelDelayedLLM(response: LLMClient.Response) async {
@@ -456,6 +541,92 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
 
     static var destructiveResponse: LLMClient.Response {
         .init(content: "Confirm removal", thinking: nil, toolCalls: [.init(id: "pending-voice", command: "rm -rf fake")])
+    }
+
+    static var harmlessPendingResponse: LLMClient.Response {
+        .init(content: "Proposed harmless printf", thinking: nil,
+              toolCalls: [.init(id: "cancel-probe", command: "printf 'E2E cancel' # rm -f classifier-only probe")])
+    }
+
+    static func explicitCancellationSurvivesSameChatRestart(afterCompletedTool: Bool, voice: Bool) async {
+        let service = self.fixture()
+        SettingsStore.shared.commandModeConfirmBeforeExecute = true
+        LLMClient.shared.delay = false
+        LLMClient.shared.responses = afterCompletedTool ? [.tool, self.harmlessPendingResponse] : [self.harmlessPendingResponse]
+        var valid = true
+        if voice {
+            await service.processUserCommand("Cancel this deferred harmless tool", isOutputValid: { valid })
+        } else {
+            await service.processUserCommand("Cancel this deferred harmless tool")
+        }
+        let chatID = service.currentChatID
+        self.check(service.pendingCommand?.id == "cancel-probe" && !service.isProcessing, "Fixture must reach the real pending approval boundary")
+        let executed = TerminalService.executed
+        service.cancelPendingCommand()
+        self.check(TerminalService.executed == executed, "Explicit cancellation must never dispatch the deferred command")
+
+        // Reconstruct directly from persisted defaults before any switch or new request.
+        let persisted = ChatHistoryStore(defaults: .standard)
+        self.check(persisted.currentChatID == chatID, "Cancellation must retain the exact active chat")
+        self.check(persisted.currentSession?.messages.last?.content == PichiLocalization.text("Command cancelled.") &&
+                   persisted.currentSession?.messages.last?.stepType == .failure,
+                   "Explicit cancellation must survive immediate restart without a chat switch or new request")
+
+        let expectedRoles: [CommandModeService.Message.Role] = afterCompletedTool ? [.user, .assistant, .tool, .assistant] : [.user, .assistant]
+        self.check(service.conversationHistory.map(\.role) == expectedRoles, "Only the undispatched tool proposal may be removed; user intent and completed evidence stay")
+        self.check(service.conversationHistory.allSatisfy { $0.toolCall?.id != "cancel-probe" }, "Explicit cancellation must not leave an orphan pending tool call")
+        self.check(service.pendingCommand == nil && service.currentStep == nil && !service.isProcessing, "Cancellation must release transient approval state")
+        valid = false
+        self.check(!service.cancelInvalidPendingCommand(), "A retired voice owner must not later discard the explicit cancellation")
+
+        ChatHistoryStore.shared.reloadFromPersistenceForTests()
+        let restored = CommandModeService()
+        self.check(restored.currentChatID == chatID && restored.conversationHistory.map(\.content) == service.conversationHistory.map(\.content),
+                   "A fresh service must restore cancellation in the same selected chat")
+        self.check(restored.conversationHistory.map(\.role) == expectedRoles && restored.pendingCommand == nil,
+                   "Relaunch must preserve completed tool pairing without reviving an executable approval")
+        let beforeRepeat = UserDefaults.standard.writes
+        let messages = restored.conversationHistory
+        restored.cancelPendingCommand()
+        restored.cancelPendingCommand()
+        self.check(restored.conversationHistory == messages && UserDefaults.standard.writes == beforeRepeat,
+                   "Nil or repeated cancellation must not create phantom failures or persistence writes")
+
+        LLMClient.shared.responses = [.done]
+        await restored.processUserCommand("Next harmless request after restart")
+        let wire = LLMClient.shared.configs.last!.messages
+        let calls = wire.filter { $0["tool_calls"] != nil }
+        let results = wire.filter { $0["role"] as? String == "tool" }
+        self.check(calls.count == (afterCompletedTool ? 1 : 0) && results.count == calls.count,
+                   "The next actual model request must have complete tool pairs and no cancelled tool call")
+        if afterCompletedTool {
+            let call = (calls[0]["tool_calls"] as? [[String: Any]])?.first
+            self.check(call?["id"] as? String == "tool" && results[0]["tool_call_id"] as? String == "tool",
+                       "The retained wire result must stay paired with the actually completed tool")
+        }
+        self.check(TerminalService.executed == executed, "Restart or a later request must not execute the cancelled command")
+    }
+
+    static func explicitCancellationIsAnIdlePendingOperation() async {
+        let service = self.fixture()
+        let idleMessages = service.conversationHistory
+        let idleWrites = UserDefaults.standard.writes
+        service.cancelPendingCommand()
+        self.check(service.conversationHistory == idleMessages && UserDefaults.standard.writes == idleWrites,
+                   "Cancellation without pending approval must be a no-op")
+        SettingsStore.shared.commandModeConfirmBeforeExecute = true
+        LLMClient.shared.delay = false
+        LLMClient.shared.responses = [self.harmlessPendingResponse]
+        await service.processUserCommand("Harmless approval fixture")
+        let messages = service.conversationHistory
+        let writes = UserDefaults.standard.writes
+        service.isProcessing = true
+        service.cancelPendingCommand()
+        self.check(service.pendingCommand?.id == "cancel-probe" && service.conversationHistory == messages && UserDefaults.standard.writes == writes,
+                   "Cancellation must not mutate a processing owner")
+        service.isProcessing = false
+        service.cancelPendingCommand()
+        self.check(service.pendingCommand == nil && TerminalService.executed.isEmpty, "Idle pending cancellation must remain retryable after processing")
     }
 
     static func cancelVoiceConfirmation(cancelThroughEscape: Bool) async {

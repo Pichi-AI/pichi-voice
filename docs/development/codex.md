@@ -72,6 +72,81 @@ Each cloud task receives its own isolated filesystem. A linked worktree inside t
 
 A green portable check does not replace macOS validation. The initial setup does not compile or launch the unchanged upstream app. Before installing a Pichi-branded build, separate its bundle identity, settings, Keychain entries, and updater from the installed FluidVoice app.
 
+## Reproducible macOS regression
+
+Run `bash scripts/dev/standalone-regression.sh` for the registered standalone probes. The registry covers all 54 current runners, including the read-only grounded meeting helper, native export, file-error localization, relative dates, contrast, command localization, Settings owned copy, Local API harness self-tests, diarization artifact comparison self-tests, owned hotkey initialization, nonblocking credential startup, meeting audio source admission and pinned upstream sync. It invokes shell and Python scripts with their declared interpreters, verifies registry coverage before execution, and continues through failures to retain a complete result. A changed script interpreter or unregistered runner requires a registry update.
+
+Full runs require an isolated worktree, macOS and full Xcode. The runner prevents simultaneous standalone runs in one worktree. `--list` lists the names without starting native probes and is portable. Narrow a repeat run with repeated `--only NAME` options:
+
+```bash
+bash scripts/dev/standalone-regression.sh --list
+bash scripts/dev/standalone-regression.sh --only file_export --only file_transcript_relative_date --only ui_contrast
+```
+
+Each probe owns a separate process session. INT and TERM trigger bounded TERM/KILL cleanup, wait for runnable descendants to stop and reap the direct process before releasing the worktree lock. Reports retain the runner's 130/143 status separately from the direct child's actual exit code. If cleanup cannot finish, its ownership marker blocks another suite from using those build directories. Signal delivery during process creation is deferred until its owner and marker are stored, without changing the child's inherited signal mask.
+
+The update prompt probe can activate test UI. It is recorded as `SKIP` by default and runs only with the explicit `--include-ui` flag. Selecting it with `--only update_prompt` does not implicitly enable UI. Skipped probes are never counted as passes, and an all-skipped run returns failure.
+
+Every started suite keeps `summary.json`, `summary.txt` and one combined stdout/stderr log per selected probe under a unique ignored `.build/standalone-regression/` directory. Reports include the exact revision, dirty/clean state, interpreter, argv, exit code, duration and PASS/FAIL/SKIP accounting. Any failed probe, missing script, launch error or interrupted run returns nonzero. These counts describe standalone probes, not the assertions reported inside each probe or full application XCTest coverage. Setup errors stop before starting the suite. Verify runner behavior portably with `python3 -S Tests/test_standalone_regression.py`.
+
+The registered `diarization_repeatability` probe runs standard-library comparator tests against invented metadata only. It does not run speech models, inspect app history or change preferences. The optional [check-diarization-repeatability.py](../../scripts/dev/check-diarization-repeatability.py) command compares two caller-supplied raw diarizer JSON artifacts:
+
+```bash
+python3 -S scripts/dev/check-diarization-repeatability.py \
+  .build/diarization/raw-run-a.json .build/diarization/raw-run-b.json \
+  --tolerance-seconds 0.1
+```
+
+Each artifact must contain `segments`, with string `speakerID` and numeric `start`/`end` seconds. Arbitrary speaker IDs are normalized by chronological first appearance; a bounded global ID bijection handles allowed jitter that changes simultaneous first-appearance order. Metadata such as embeddings or text does not enter the comparison or report. Inputs must resolve to regular files, including through symlinks; nonblocking open plus descriptor validation rejects FIFOs, devices and directories before reading. Inputs are limited to 8 MiB, 10,000 segments, 256 distinct speakers, 256-character printable IDs and timestamps from 0 through 86,400 seconds. Positive duration is required. Cross-speaker overlap is supported; same-speaker overlapping slices are outside this raw-turn diagnostic contract and return `ERROR`. Boundary tolerance must be finite and from 0 through 60 seconds; zero requires exact boundaries. Boolean/nonnumeric times, nonfinite JSON numbers, duplicate keys and malformed artifacts return `ERROR` with exit 2. A changed speaker partition, segment count or boundary beyond tolerance returns `FAIL` with exit 1; equivalent partitions return `PASS` with exit 0. Reports contain counts and stable reason codes, without transcript content, raw speaker names or input paths.
+
+This diagnostic compares repeatability, not speaker-identity accuracy. Even two empty artifacts compare equal; they do not prove usable transcription. On the observed synthetic `d346e915` run, repeated exact-two-speaker inference changed meaningful partitions after ID normalization. The pinned engine's public API does not promise deterministic partitions or expose its internal clustering seed. That observed limitation remains unresolved. Passing comparator self-tests does not fix engine quality, establish an audited two-voice reference, or replace a real-model regression with verified speaker provenance. Keep supplied audio, model weights, raw inference artifacts and history outside Git.
+
+The registered `local_api_live_harness` probe runs portable harness self-tests with fake sockets and synthetic metadata. It performs no live HTTP or application inference. The separate [local-api-live.py](../../scripts/dev/local-api-live.py) command defaults to `DRY_RUN`; only `--run-live` permits requests against a caller-selected, already running frozen app:
+
+```bash
+python3 -S scripts/dev/local-api-live.py --run-live \
+  --endpoint http://127.0.0.1:47733 \
+  --app-pid "$pichi_frozen_pid" --app-bundle "$pichi_frozen_bundle" \
+  --bundle-id "$pichi_frozen_bundle_id" \
+  --synthetic-audio "$pichi_synthetic_wav" --timeout 120 \
+  --expect-provider "$pichi_expected_provider" \
+  --expect-text-contains "$pichi_synthetic_phrase"
+```
+
+Supply absolute paths. `--synthetic-audio` is an explicit attestation that the regular PCM WAV contains only synthetic speech, never a personal recording. The file must be 1-2 channels, 8-48 kHz, at most 30 seconds and 16 MiB. The optional provider and phrase expectations compare in memory without rewriting model output; omit them for provider-neutral shape checks. The harness does not launch the app, enable its API, change preferences, select/download models or grant permissions. Enable and validate the API through the authorized frozen-app UI workflow first.
+
+Before every request and after its response, the harness verifies the supplied PID's native executable path and exclusive ownership of the TCP listener; bundle metadata must match the explicit bundle identifier, and health must match its version. Only literal loopback addresses are accepted, without DNS, proxies, credentials or redirects. The ten cases cover socket health, unknown route, method error, malformed HTTP/JSON, invalid Content-Length, missing/invalid audio and one path-based transcription. Successful transcription requires nonempty text/provider, finite confidence, and a sample count matching the caller's fixture. No history, meeting, dictionary or postprocess route is accessed. There is no public HTTP cancellation route; existing lease/connection tests cover that internal contract separately.
+
+Non-inference requests have a total deadline of at most 5 seconds; transcription defaults to 120 seconds and cannot exceed 180. Headers are limited to 8 KiB and response bodies to 64 KiB. The first failure stops later requests. Empty, incomplete, failed or skipped runs cannot report live success. A private directory under ignored `.build/local-api-live-*/` retains a compact `summary.json` with case/status/counts and fixed failure codes. It excludes request/response bodies, transcripts, expected phrases, fixture/bundle paths, error descriptions and credentials. A safe default run and a passing harness self-test do not prove live API E2E.
+
+The separate `FluidASRBaseline` scheme has an explicit fixture staging contract and keeps Xcode user script sandboxing enabled. Its default declarations copy only the tracked public placeholder. To bundle an authorized local fixture directory, prepare private input/output filelists and a manifest under the current worktree's ignored `.build/asr-baseline-inputs/`:
+
+```bash
+pichi_baseline_config="$(python3 -S scripts/dev/asr-baseline-inputs.py prepare /absolute/approved/fixtures)"
+xcodebuild -project Fluid.xcodeproj -target FluidASRBaselineHost -configuration Debug \
+  -clonedSourcePackagesDirPath "$PWD/.build/SourcePackages" \
+  OBJROOT="$PWD/.build/Xcode/Build/Intermediates.noindex" \
+  SYMROOT="$PWD/.build/Xcode/Build/Products" clean
+xcodebuild -project Fluid.xcodeproj -scheme FluidASRBaseline \
+  -xcconfig "$pichi_baseline_config" -destination 'platform=macOS,arch=arm64' \
+  -derivedDataPath "$PWD/.build/Xcode" \
+  -clonedSourcePackagesDirPath "$PWD/.build/SourcePackages" test
+```
+
+Preparation deterministically enumerates regular files with bounded counts and sizes, rejects symlinks and unsafe paths, and pins the selected input directory. Staging copies only those declared files with bounded memory. A changed directory or file set requires cleaning the baseline products, so resources from a previous private fixture set cannot survive a successful build. Changed file sizes require preparing the declarations again. Keep fixture data and generated declarations local; they are not application resources or a distributable build. The scheme's benchmark remains opt-in through its existing `FLUID_ASR_RUN_BENCHMARK` test environment flag.
+
+Run `bash scripts/dev/macos.sh regression` in the current task worktree. This uses the existing isolated build and package paths, builds Debug test products, recursively configures every test target, then runs `test-without-building`. It retains the upstream Whisper tiny exclusion. The existing test-host guard receives `FLUIDVOICE_MIC_PHASE1=disabled`, so the normal application UI/audio startup and the Phase 1 microphone probe are disabled. Other hardware, UI and real-model probes remain opt-in through their existing test gates. This command does not establish interactive E2E coverage.
+
+`PICHI_INTERFACE_LANGUAGE` defaults to `en` for upstream assertions, independently of the user's stored language. An explicit caller value is retained. Caller environment variables with prefixes `PICHI_`, `FLUIDVOICE_`, `FLUIDAUDIO_`, `FV_`, and `TEST_`, plus `CI` and `GITHUB_ACTIONS`, are copied to the test host. This preserves existing real-model fixture opt-ins, such as `PICHI_GIGAAM_APP_TEST_MODEL_DIR` and `PICHI_GIGAAM_APP_TEST_AUDIO`. Phase 1 microphone capture remains disabled even if the caller supplies its flag. Fixture paths and test products stay in ignored local storage; never commit private fixtures or the generated plist.
+
+Optional `-only-testing:target/class/test` and `-skip-testing:target/class/test` selectors narrow a repeat run. For example:
+
+```bash
+bash scripts/dev/macos.sh regression -only-testing:FluidDictationIntegrationTests/PichiGigaAMIntegrationTests
+```
+
+Each run prints its artifact directory under `.build/regression/`. It keeps the revision and working-tree state, build/test logs, both `.xcresult` bundles, and the test report's JSON and concise summary. Counts come from `xcresulttool`, including skipped and expected-failure tests. Build failures, test failures, empty/all-skipped runs, and absent or malformed reports return failure. The configured `.xctestrun` stays beside its build products because Xcode resolves `__TESTROOT__` relative to that file. Python 3 and Xcode with `xcresulttool get test-results summary` are required. Do not run concurrent builds in one worktree.
+
 ## Initial verification on October 9, 2026
 
 - Unsigned macOS build passed on Apple Silicon with Xcode 27.0.

@@ -19,7 +19,7 @@ struct MeetingRecordingCanvas: View {
                         systemImage: self.isStopping ? "stop.circle.fill" : "record.circle.fill"
                     )
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.isStopping ? self.theme.palette.warning : Color(nsColor: .systemRed))
+                    .foregroundStyle(self.isStopping ? self.theme.palette.warning : self.theme.palette.readableText(Color(nsColor: .systemRed)))
                     Spacer(minLength: 0)
                     Text(Self.durationText(context.date.timeIntervalSince(self.session.startedAt)))
                         .font(self.theme.typography.codeCaption)
@@ -101,7 +101,7 @@ struct MeetingRecordingCanvas: View {
     @ViewBuilder
     private var sourceHealth: some View {
         if self.session.mode == .onlineCall {
-            MeetingTrackHealthRow(title: PichiLocalization.text("Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
+            MeetingTrackHealthRow(title: PichiLocalization.text(self.session.effectiveApplicationAudioScope == .systemAudio ? "System audio" : "Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
         }
         MeetingTrackHealthRow(title: PichiLocalization.text("Microphone"), systemImage: "mic", health: self.trackHealth[.microphone] ?? .waiting)
     }
@@ -109,7 +109,7 @@ struct MeetingRecordingCanvas: View {
     private var sourceSummary: String {
         let microphoneName = self.session.selectedMicrophone.displayName
         guard self.session.mode == .onlineCall else { return microphoneName }
-        let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text("Meeting audio")
+        let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
         return "\(applicationName) · \(microphoneName)"
     }
 
@@ -357,8 +357,10 @@ struct MeetingResultCanvas: View {
     let onRenameSession: (String) -> Void
     let onAssignSpeakers: ([SessionSpeakerID: String]) async -> String?
     let onClose: (() -> Void)?
-
     var summaryASRService: ASRService? = nil
+
+    /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
+    var onOpenIntegrations: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.locale) private var locale
@@ -435,7 +437,7 @@ struct MeetingResultCanvas: View {
         let activeSpeakers = self.session.activeSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
         let rows = self.rows(for: visibleSegments)
         // One scroller preserves a readable document at short window heights.
-        ScrollView {
+        let document = ScrollView {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
@@ -514,7 +516,8 @@ struct MeetingResultCanvas: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
-        .id(self.session.id)
+        // Separate the document and modifier chains to bound SwiftUI type checking.
+        let lifecycle = document.id(self.session.id)
         .sheet(item: self.$pendingEditedSegment) { segment in
             MeetingTranscriptTextEditor(
                 text: segment.text,
@@ -543,7 +546,7 @@ struct MeetingResultCanvas: View {
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
             self.copied = false
         }
-        .alert(
+        let speakerRenaming = lifecycle.alert(
             "Rename Speaker",
             isPresented: Binding(
                 get: { self.pendingRenameSpeaker != nil },
@@ -561,7 +564,7 @@ struct MeetingResultCanvas: View {
         } message: {
             Text("Enter a new name for this speaker.")
         }
-        .alert(
+        speakerRenaming.alert(
             "Name Unknown Speaker",
             isPresented: Binding(
                 get: { self.pendingNameUnknownSegmentID != nil },
@@ -715,6 +718,10 @@ struct MeetingResultCanvas: View {
                 Divider()
                 Toggle("Show probable echo", isOn: self.$showsProbableEchoes)
             }
+            if let onOpenIntegrations {
+                Divider()
+                Button("Integrations…", systemImage: "link", action: onOpenIntegrations)
+            }
             if let onClose {
                 Divider()
                 Button("Close transcript", systemImage: "xmark", action: onClose)
@@ -802,7 +809,7 @@ struct MeetingResultCanvas: View {
     }
 
     private var sourceName: String {
-        self.session.capturedApplication?.displayName ?? PichiLocalization.text("In-room meeting")
+        self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
     }
 
     private var emptyTranscriptDescription: String {
@@ -1078,7 +1085,7 @@ private struct MeetingSpeakerChip: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(self.tint)
+            .foregroundStyle(self.theme.palette.readableText(self.tint))
         }
         .buttonStyle(.borderless)
         .meetingHoverFeedback()
@@ -1141,7 +1148,7 @@ private struct MeetingTranscriptSegmentRow: View {
                     .simultaneousGesture(TapGesture(count: 2).onEnded { if self.isQuiescent { self.onEditText() } })
                     .accessibilityAction(named: Text("Edit text")) { if self.isQuiescent { self.onEditText() } }
                 if self.segment.isEcho {
-                    Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 if self.isAudioExpanded {
                     MeetingSegmentAudioPlayer(playback: self.playback, isLoading: self.isLoadingAudio)
@@ -1150,7 +1157,6 @@ private struct MeetingTranscriptSegmentRow: View {
                 }
             }
         }
-        .opacity(self.segment.isEcho ? 0.6 : 1)
         .contextMenu {
             Menu("Reassign to") {
                 ForEach(self.reassignTargets) { target in
@@ -1181,8 +1187,7 @@ private struct MeetingTranscriptSegmentRow: View {
                         // Always shown, not hover-only, so the affordance survives an unfocused window.
                         Image(systemName: "chevron.right")
                             .font(.fluidSystem(size: 10, weight: .semibold))
-                            .foregroundColor(self.nameColor)
-                            .opacity(0.65)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                     }
                 }
                 .buttonStyle(.plain)
@@ -1198,8 +1203,8 @@ private struct MeetingTranscriptSegmentRow: View {
     }
 
     private var nameColor: Color {
-        if self.isLocalUser { return self.theme.palette.accent }
-        return self.speakerTint ?? self.theme.palette.tertiaryText
+        if self.isLocalUser { return self.theme.palette.accentText }
+        return self.speakerTint.map(self.theme.palette.readableText) ?? self.theme.palette.tertiaryText
     }
 }
 

@@ -21,14 +21,10 @@ struct FluidDropdownSurface: ViewModifier {
             .background {
                 if self.appearance == .inline {
                     RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                        .fill(self.theme.palette.primaryText.opacity(highlighted ? 0.055 : 0))
+                        .fill(Color.clear)
                 } else {
                     RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
                         .fill(self.theme.palette.elevatedCardBackground)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                                .fill(self.theme.palette.accent.opacity(highlighted ? 0.08 : 0))
-                        }
                 }
             }
             .overlay {
@@ -121,6 +117,7 @@ struct FluidDropdown<Content: View>: View {
 /// Native menu pickers ignore custom button hit geometry. Keep the native
 /// selection/checkmark behavior inside a Menu whose entire label is clickable.
 struct FluidDropdownPicker<Selection: Hashable, Options: View>: View {
+    /// Owned interface key; selectedTitle and option values remain display data.
     let title: String
     let selectedTitle: String
     @Binding var selection: Selection
@@ -135,7 +132,7 @@ struct FluidDropdownPicker<Selection: Hashable, Options: View>: View {
 
     var body: some View {
         Menu {
-            Picker(self.title, selection: self.$selection, content: self.options)
+            Picker(PichiLocalization.text(self.title), selection: self.$selection, content: self.options)
                 .pickerStyle(.inline)
         } label: {
             Text(self.selectedTitle)

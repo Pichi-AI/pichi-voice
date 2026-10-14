@@ -45,34 +45,62 @@ Folder import is an optional provider capability because the original download-o
 
 Appearance and localization use independent resource boundaries: a portable brand package and Apple's String Catalogs. Imported branding and user content remain data. Runtime appearance imports cannot change signed installation identity, credential namespaces, telemetry destinations or updater trust. See [branding](branding.md), [localization](localization.md) and the mandatory [architecture requirements](../../AGENTS.md#architecture-requirements-for-every-agent).
 
+`DictationProviderRoute` is an operational snapshot, including its request credential. Both route resolvers use authoritative loaded keys; retained UI credential cache is presentation data only. Stop-time AI eligibility is checked against that same route and remains frozen while ASR finishes. Direct processing and local warming check the same existing fingerprint or private capability gate before transport.
+
 Branding includes more than the visible name and icon. Before distributing or launching a branded app, separate its bundle identifier, settings and model-cache namespace, Keychain service identifiers, updater repository/feed, and analytics policy. Otherwise a rebranded build may share user state with FluidVoice or update itself back to an upstream build. Do not change every model-feed trust key merely for display branding; separate app updates from explicitly selected third-party model sources.
 
 Store personal dictionaries, private audio, and proprietary weights outside Git from the start. Use ignored `private_assets/`, `models/`, or an authorized artifact store. Deleting a file in a later commit does not remove it from the history that would become public. Share public model metadata and synthetic fixtures only after checking their licenses and contents.
 
 ## Upstream updates
 
-Use one integration branch for each update batch:
+Use one integration branch for each update batch. For a published release, pass its exact upstream tag:
 
 ```bash
-bash scripts/dev/prepare-upstream-sync.sh
-# If an update exists, the script prints the new worktree path.
-# Resolve conflicts there and review inherited workflow changes.
+bash scripts/dev/prepare-upstream-sync.sh v1.6.11
+# Change into the absolute "Sync worktree" path printed by the helper.
+git status --short
+git diff --name-only --diff-filter=U
+# Resolve conflicts there, stage the reviewed files and inspect the combined diff.
 bash scripts/dev/check.sh
+bash scripts/dev/macos.sh build
 bash scripts/dev/macos.sh test
 # Commit the pending merge, push the task branch to origin, and open a PR.
 ```
 
-The helper fetches both `origin/main` and `upstream/main`. If there are new upstream commits, it creates a task worktree from our latest main and starts `git merge --no-ff --no-commit upstream/main`. It never modifies our main automatically and leaves conflicts in the new worktree for review.
+GitHub CLI may retain FluidVoice as its default repository. Pass `--repo Pichi-AI/pichi-voice` explicitly for PR creation, inspection, updates and merging. Use `repos/Pichi-AI/pichi-voice/...` for repository-specific `gh api` calls. Check both `origin` and the GitHub repository target before publication; the upstream Git push guard does not control GitHub API writes.
+
+If the primary checkout is inside a macOS protected folder and the test host cannot open its source-relative fixtures, choose a Codex-managed worktree or set `PICHI_VOICE_WORKTREE_ROOT="$HOME/.codex/worktrees/pichi-voice"` for the sync command. Build and runtime fixtures must both be accessible. Do not bypass signing or edit the permission database to make tests run.
+
+The helper fetches `origin/main`, `upstream/main` and upstream tags, then resolves the chosen target to an immutable commit SHA. It rejects a target outside the fetched upstream main history. Before creating a worktree, it prints the downstream baseline, upstream target, fetched upstream main and common ancestor SHAs. If our main already contains that target, it exits without creating a worktree.
+
+An update uses a unique task worktree at the reported downstream SHA and starts `git merge --no-ff --no-commit <upstream-SHA>`. Later changes to tracking refs cannot change either side of that attempt. The existing `new-worktree.sh` accepts an optional base ref for this purpose; its default still fetches and starts from the latest `origin/main`. The sync helper leaves every conflict unresolved and prints its path with the worktree location. It never commits, pushes or changes either repository's main branch.
+
+Omitting the argument preserves the original `upstream/main` workflow. This intentionally includes the fetched main revision, which may contain commits after the latest release. To repeat the exact upstream selection later, use the recorded target SHA as the argument. The helper will use the then-current downstream main. To reproduce both sides of an earlier attempt, create a new worktree with `bash scripts/dev/new-worktree.sh upstream-replay <recorded-downstream-SHA>` and merge the recorded upstream SHA there. Retain the full SHAs rather than relying on a tag or branch name that might move.
 
 | Method | Role |
 | --- | --- |
-| Merge upstream main | Default; preserves ancestry and imports the upstream changes in the selected batch |
+| Merge a pinned upstream release or main revision | Preserves ancestry and imports the selected batch; the helper defaults to main |
 | Rebase | Only for unpublished task branches; do not rewrite the shared main branch |
 | Cherry-pick | An urgent individual fix when a full update is unsuitable; record its upstream commit |
 
-No branching strategy guarantees zero conflicts. Separate files and small integration points reduce their frequency and make conflict resolution reviewable. Recheck our Codex files, private-data ignores, workflow guards, and app/model update configuration after every upstream merge.
+No branching strategy guarantees zero conflicts. Separate files and small integration points reduce their frequency and make conflict resolution reviewable. A clean Git merge also needs semantic review: upstream can change a contract without touching a downstream adapter's file.
 
-A manual sync check is sufficient initially. A future scheduled update workflow should create a review branch or PR and run checks, without auto-merging or shipping. No recurring update automation is enabled by this setup.
+For each batch, save a reviewable update report in `docs/development/` with:
+
+1. The upstream release/ref, all baseline SHAs, integrated revision and release scope.
+2. Every conflicted path, the reason both sides changed it, and the behavior preserved by the resolution. Review individual hunks rather than choosing an entire side automatically.
+3. Concrete extension-boundary decisions. Check provider and meeting registries, model/artifact snapshots, cancellation, resource ownership, shared service operations, branding and localization. Refactor only when the conflict or contract change identifies a specific limitation; follow [AGENTS.md](../../AGENTS.md#architecture-requirements-for-every-agent).
+4. Checks actually run against the combined result, with downstream and inherited upstream regressions listed separately. Recheck Codex files, private-data ignores, workflow guards and app/model update configuration. Reject duplicate Xcode build settings and verify the emitted Debug/Release bundle identities after version bumps; the [1.6.11 rehearsal](upstream-sync-1.6.11.md) found a silent identity override in an otherwise successful build.
+5. Independent automated review of the integrated revision, corrected findings and remaining limitations. Portable checks include offline synthetic Git regressions for the sync helper; they do not compile the app or verify model inference.
+6. Interactive evidence from the exact frozen signed revision when permissions, capture, typing, UI or model behavior is tested. Follow the signing and screenshot rules in [AGENTS.md](../../AGENTS.md#verification). An earlier revision's permission or capture result cannot establish the new revision's result.
+
+Portable checks and standalone projections establish only their reported scope, not compilation of the actual native app. Reuse actual pure declarations in test harnesses wherever possible and match the production immutable configuration contracts. After shared service or input changes, compare app and helper use of the same canonical formatter, fingerprint and prompt version across languages, time zones, fractional seconds and current, stale, absent and future values. Extend the existing input source boundary rather than duplicating an implementation. Complete the required actual native app and affected target builds available on the verification host before E2E, then freeze and verify the exact bundle and signature under the rules above. Record an unavailable build as an unresolved gate.
+
+LLM semantic regression requires the captured default profile, a pinned model artifact and literal checks of state, tasks, owners, dates and supporting evidence, including negative controls for unsupported or contradicted claims. Independently audit the raw inputs and outputs. A runner's zero exit status, nonempty output, valid schema or citation membership cannot establish semantic correctness. A passing alternative or larger model does not erase a failed default profile case or authorize a silent preference change. Keep experiments bounded and retain failed raw outputs with their profile, artifact, prompt and source provenance in ignored local storage; committed reports must exclude private content.
+
+Changes to model, verification proof or cache formats require compatibility with earlier data and checks that stored versions are current, as well as resource ownership, joined cancellation and chronology regressions. Cover stale or missing proof and reordered or future timestamps where those states enter the contract. Reuse the existing service and input source operations so app, helper and tests agree on the immutable attempt and its evidence.
+
+A local Codex thread automation now checks stable releases daily at 09:00 in the user's local time and prepares a separate review branch/draft PR when needed. It requires the local execution host and repository access. It does not auto-merge or ship. The repository helper also supports manual checks independently of that app-local schedule.
 
 ## Embedded dictation cleanup
 
@@ -84,7 +112,7 @@ The artifact is the smallest author-published GGUF, `superwhisper/s1-mini-GGUF/s
 
 The adapter follows the [author's exact prompt format](https://huggingface.co/superwhisper/s1-mini-GGUF#input-format), including the styling controls, non-thinking assistant prefix and greedy decoding. It accepts transcripts in any language without a language filter. Language quality must be evaluated using actual model outputs; the multilingual base alone does not establish cleanup quality after fine-tuning. Empty output is valid for filler-only input. Input or output limit errors must not publish partial cleanup.
 
-The shipped Russian speech route selects GigaAM for a fresh installation. Existing saved engine choices retain their migration behavior. GigaAM's existing provider prepares the compact public INT8 model and vocabulary from the pinned community Hugging Face export through the same ASRService operation used by Settings and onboarding. Its native inference contract is unchanged. Imported optimized exports keep priority, and the public export reports no EOU capability. A synthetic Russian WAV can be tested through FileTranscriptionService followed by DictationPostProcessingService, using opt-in local paths and actual GigaAM and S1-mini weights.
+The shipped Russian speech route selects GigaAM for a fresh installation. Existing saved engine choices retain their migration behavior. GigaAM's existing provider prepares the compact public INT8 model and vocabulary from the pinned community Hugging Face export through the same ASRService operation used by Settings and onboarding. Its native inference contract is unchanged. The public HF export is the default source even when old imported weights exist. A verified folder import explicitly selects that export, and the shared model-source operation restores the public default without deleting imported files. The public export reports no EOU capability. A synthetic Russian WAV can be tested through FileTranscriptionService followed by DictationPostProcessingService, using opt-in local paths and actual GigaAM and S1-mini weights.
 
 The native runtime release and checksum are pinned in the vendor package. S1-mini's full license and attribution notice, plus llama.cpp's MIT license, are included in the app's `Notices` resources. Preserve these when distributing a build.
 

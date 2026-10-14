@@ -180,12 +180,12 @@ private struct ChangelogReleaseCard: View {
                             if self.isLatest {
                                 Text("Latest")
                                     .font(self.theme.typography.badge)
-                                    .foregroundStyle(self.theme.palette.accent)
+                                    .foregroundStyle(self.theme.palette.accentText)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 3)
                                     .background(
                                         Capsule()
-                                            .fill(self.theme.palette.accent.opacity(0.12))
+                                            .fill(self.theme.palette.elevatedCardBackground)
                                     )
                             }
 
@@ -197,7 +197,7 @@ private struct ChangelogReleaseCard: View {
                                     .padding(.vertical, 3)
                                     .background(
                                         Capsule()
-                                            .fill(self.theme.palette.warning.opacity(0.12))
+                                            .fill(self.theme.palette.elevatedCardBackground)
                                     )
                             }
                         }

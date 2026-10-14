@@ -45,9 +45,9 @@ nonisolated enum MeetingCaptureError: LocalizedError {
         case .wrongActiveSession:
             return "A different meeting recording is active."
         case .applicationNotSelected:
-            return "Choose the application that contains the online meeting."
+            return PichiLocalization.text("Choose the application that contains the online meeting.")
         case let .applicationUnavailable(name):
-            return "\(name) is no longer available to record."
+            return PichiLocalization.format("%@ is no longer available to record.", name)
         case .noCaptureDisplay:
             return "No display is available for meeting-audio capture."
         case .microphoneUnavailable:

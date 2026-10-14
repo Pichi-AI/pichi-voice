@@ -206,7 +206,7 @@ extension SettingsStore {
         }
     }
 
-    /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
+    /// Opt-in browser-tab detection does not inspect URLs until enabled.
     var meetingAutoDetectBrowserEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
         set {

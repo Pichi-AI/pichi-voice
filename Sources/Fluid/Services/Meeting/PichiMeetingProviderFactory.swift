@@ -185,11 +185,16 @@ enum PichiMeetingProviderFactory {
 
     static func validateRecordingConfiguration(
         _ configuration: MeetingFinalProcessingConfiguration,
-        isAppleSilicon: Bool
+        isAppleSilicon: Bool,
+        requiresInstalledArtifact: Bool = false
     ) throws {
         let options = try MeetingProviderOptions.resolve(configuration)
         guard isAppleSilicon || !options.model.requiresAppleSilicon else {
             throw MeetingProviderOptionsError.unsupportedArchitecture
+        }
+        if requiresInstalledArtifact,
+           configuration.asrArtifactFingerprint?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            throw MeetingProcessingError.modelUnavailable
         }
     }
 
@@ -215,14 +220,10 @@ enum PichiMeetingProviderFactory {
 
     static func selectedBackendID(languageCode: String, selectedModelID: String? = nil,
                                   savedBackendID: MeetingBackendID? = nil) -> MeetingBackendID {
-        let saved = savedBackendID ?? SettingsStore.shared.meetingTranscriptionBackendID
-        // Explicit rollback/unknown choices retain their historical meaning. The packaged
-        // default lets a registered model choose its own backend; activation stores its ID.
-        if saved != .productionDefault {
-            return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
-        }
         let modelID = selectedModelID ?? SettingsStore.shared.selectedSpeechModel.rawValue
-        return self.registrations[modelID]?.descriptor.id ?? saved
+        if let registration = self.registrations[modelID] { return registration.descriptor.id }
+        let saved = savedBackendID ?? SettingsStore.shared.meetingTranscriptionBackendID
+        return saved == .legacyCompatibility && languageCode != "en" ? .productionDefault : saved
     }
 
     /// A registered provider's frozen configuration binds ASR and artifact identity. The

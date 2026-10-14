@@ -1878,7 +1878,6 @@ private struct BottomOverlayPromptMenuView: View {
         }
         .buttonStyle(.plain)
         .disabled(!isAvailable)
-        .opacity(isAvailable ? 1 : 0.45)
         .help(PichiLocalization.text(isAvailable ? "Use your default provider" : "Add an API key to a provider to enable this prompt"))
         .onHover { hovering in
             self.hoveredRowID = hovering && isAvailable ? "default" : nil
@@ -1916,7 +1915,6 @@ private struct BottomOverlayPromptMenuView: View {
         }
         .buttonStyle(.plain)
         .disabled(!isAvailable)
-        .opacity(isAvailable ? 1 : 0.45)
         .help(PichiLocalization.format(isAvailable ? "Use %@" : "Select %@ to enable this prompt", PrivateAIProviderFeature.displayName))
         .onHover { hovering in
             self.hoveredRowID = hovering && isAvailable ? PrivateAIProviderFeature.shared.providerID : nil

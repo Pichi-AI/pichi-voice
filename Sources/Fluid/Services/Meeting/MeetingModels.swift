@@ -17,6 +17,17 @@ nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case inRoom
 }
 
+/// Capture intent is independent of the process that triggered meeting detection.
+nonisolated enum MeetingApplicationAudioScope: String, Codable, Sendable {
+    case selectedApplication
+    case systemAudio
+}
+
+nonisolated enum MeetingApplicationAudioSource: Sendable {
+    case application(MeetingApplicationIdentity)
+    case systemAudio
+}
+
 nonisolated enum MeetingAudioStorageMode: String, Codable, Sendable {
     case retainedFiles
     case memoryOnly
@@ -148,6 +159,7 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
     var mode: MeetingCaptureMode
     var applicationBundleIdentifier: String?
     var applicationDisplayName: String? = nil
+    var applicationAudioScope: MeetingApplicationAudioScope? = nil
     var microphoneCaptureDeviceID: String?
     var microphoneCoreAudioUID: String?
     var microphoneRole: MeetingMicrophoneRole
@@ -161,6 +173,17 @@ nonisolated struct MeetingRecordingDefaults: Codable, Equatable, Sendable {
         microphoneCoreAudioUID: nil,
         microphoneRole: .unknown
     )
+
+    /// Preferences without a scope adopt system audio. Historical session/configuration
+    /// manifests have a separate legacy interpretation and retain their narrow source.
+    var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
+        self.applicationAudioScope ?? .systemAudio
+    }
+
+    /// A saved bundle is an explicit source; nil means follow the detected call.
+    var usesAutomaticApplication: Bool {
+        !self.isConfigured || self.applicationBundleIdentifier == nil
+    }
 
     func savedApplication(in identities: [MeetingApplicationIdentity]) -> MeetingApplicationIdentity? {
         guard self.isConfigured, let applicationBundleIdentifier else { return nil }
@@ -280,6 +303,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var languageCode: String
     var platform: MeetingPlatformProfile?
     var application: MeetingApplicationIdentity?
+    var applicationAudioScope: MeetingApplicationAudioScope? = nil
     var microphone: MeetingMicrophoneIdentity
     var chunkDuration: TimeInterval
     var timestampDefaultTitle: Bool? = nil
@@ -287,6 +311,9 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var audioStorageMode: MeetingAudioStorageMode? = nil
     var speakerLabelsEnabled: Bool? = nil
     var piiRedactionEnabled: Bool? = nil
+    /// An explicit request override, separate from ambient saved-backend preferences.
+    /// Nil keeps the selected speech model's registered route.
+    var transcriptionBackendID: String? = nil
 
     init(
         mode: MeetingCaptureMode,
@@ -294,41 +321,38 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         languageCode: String = "en",
         platform: MeetingPlatformProfile? = nil,
         application: MeetingApplicationIdentity? = nil,
+        applicationAudioScope: MeetingApplicationAudioScope? = nil,
         microphone: MeetingMicrophoneIdentity,
         chunkDuration: TimeInterval = Self.defaultChunkDuration,
         timestampDefaultTitle: Bool = false,
         audioStorageMode: MeetingAudioStorageMode = .retainedFiles,
         speakerLabelsEnabled: Bool = true,
-        piiRedactionEnabled: Bool = false
+        piiRedactionEnabled: Bool = false,
+        transcriptionBackendID: String? = nil
     ) {
         self.mode = mode
         self.title = title
         self.languageCode = languageCode
         self.platform = platform
         self.application = application
+        self.applicationAudioScope = applicationAudioScope
         self.microphone = microphone
         self.chunkDuration = max(60, chunkDuration)
         self.timestampDefaultTitle = timestampDefaultTitle
         self.audioStorageMode = audioStorageMode
         self.speakerLabelsEnabled = speakerLabelsEnabled
         self.piiRedactionEnabled = piiRedactionEnabled
+        self.transcriptionBackendID = transcriptionBackendID
     }
 
-    func validate() throws {
-        guard MeetingLanguageCode.isValid(self.languageCode) else {
-            throw MeetingModelValidationError.unsupportedLanguage
-        }
-        guard !self.microphone.captureDeviceID.isEmpty else {
-            throw MeetingModelValidationError.missingMicrophone
-        }
-        switch (self.mode, self.application) {
-        case (.onlineCall, .none):
-            throw MeetingModelValidationError.missingOnlineApplication
-        case (.inRoom, .some):
-            throw MeetingModelValidationError.unexpectedInRoomApplication
-        case (.onlineCall, .some), (.inRoom, .none):
-            break
-        }
+    var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
+        self.applicationAudioScope ?? .selectedApplication
+    }
+
+    var applicationAudioSource: MeetingApplicationAudioSource? {
+        guard self.mode == .onlineCall else { return nil }
+        if self.effectiveApplicationAudioScope == .systemAudio { return .systemAudio }
+        return self.application.map(MeetingApplicationAudioSource.application)
     }
 }
 
@@ -859,6 +883,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     var mode: MeetingCaptureMode
     var platform: MeetingPlatformProfile?
     var capturedApplication: MeetingApplicationIdentity?
+    var applicationAudioScope: MeetingApplicationAudioScope? = nil
     var selectedMicrophone: MeetingMicrophoneIdentity
     var startedAt: Date
     var endedAt: Date?
@@ -916,7 +941,8 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.speakerLabelsEnabled = configuration.speakerLabelsEnabled
         self.piiRedactionEnabled = configuration.piiRedactionEnabled
         self.platform = configuration.platform
-        self.capturedApplication = configuration.application
+        self.capturedApplication = configuration.effectiveApplicationAudioScope == .systemAudio ? nil : configuration.application
+        self.applicationAudioScope = configuration.applicationAudioScope
         self.selectedMicrophone = configuration.microphone
         self.startedAt = startedAt
         self.timebase = timebase
@@ -935,6 +961,17 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         )
         self.processingAttempts = []
         self.updatedAt = startedAt
+    }
+
+    var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
+        self.applicationAudioScope ?? .selectedApplication
+    }
+
+    /// Unlocalized resource key, or the imported app name for narrow legacy sessions.
+    var audioSourceDisplayName: String {
+        if self.mode == .inRoom { return "In-room meeting" }
+        if self.effectiveApplicationAudioScope == .systemAudio { return "System audio" }
+        return self.capturedApplication?.displayName ?? "Meeting audio"
     }
 
     var duration: TimeInterval {
@@ -1036,133 +1073,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = Date()
     }
 
-    func validateForPersistence() throws {
-        guard self.schemaVersion > 0,
-              self.schemaVersion <= Self.currentSchemaVersion
-        else {
-            throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
-        }
-        guard MeetingLanguageCode.isValid(self.languageCode) else {
-            throw MeetingModelValidationError.unsupportedLanguage
-        }
-        guard !self.selectedMicrophone.captureDeviceID.isEmpty else {
-            throw MeetingModelValidationError.missingMicrophone
-        }
-        if let endedAt = self.endedAt, endedAt < self.startedAt {
-            throw MeetingModelValidationError.invalidTimeRange
-        }
-        guard self.timebase.machTimebaseDenominator > 0 else {
-            throw MeetingModelValidationError.invalidTimebase
-        }
-        switch (self.mode, self.capturedApplication) {
-        case (.onlineCall, .none):
-            throw MeetingModelValidationError.missingOnlineApplication
-        case (.inRoom, .some):
-            throw MeetingModelValidationError.unexpectedInRoomApplication
-        case (.onlineCall, .some), (.inRoom, .none):
-            break
-        }
 
-        let trackIDs = Set(self.audioTracks.map(\.id))
-        guard trackIDs.count == self.audioTracks.count else {
-            throw MeetingModelValidationError.duplicateTrackID
-        }
-        let trackKinds = self.audioTracks.map(\.kind)
-        guard Set(trackKinds).count == trackKinds.count else {
-            throw MeetingModelValidationError.duplicateTrackKind
-        }
-        if [.recording, .recordingDegraded, .stopping, .processing, .completed, .interrupted]
-            .contains(self.state)
-        {
-            let expectedKinds: Set<MeetingAudioTrackKind> = self.mode == .onlineCall
-                ? [.applicationAudio, .microphone]
-                : [.microphone]
-            guard Set(trackKinds) == expectedKinds else {
-                throw MeetingModelValidationError.invalidTrackSet
-            }
-        }
-
-        var chunkIDs = Set<MeetingAudioChunkID>()
-        for track in self.audioTracks {
-            let sequences = track.chunks.map(\.sequence)
-            guard sequences == Array(0..<sequences.count) else {
-                throw MeetingModelValidationError.invalidChunkSequence
-            }
-            if let format = track.format,
-               format.sampleRate <= 0 || format.channelCount <= 0
-            {
-                throw MeetingModelValidationError.invalidAudioFormat
-            }
-            if let firstPresentationTime = track.timebase.firstPresentationTime {
-                try Self.validateMediaTime(firstPresentationTime)
-            }
-            if let lastPresentationTime = track.health.lastPresentationTime {
-                try Self.validateMediaTime(lastPresentationTime)
-            }
-            for chunk in track.chunks {
-                guard chunkIDs.insert(chunk.id).inserted else {
-                    throw MeetingModelValidationError.duplicateChunkID
-                }
-                try Self.validateMediaTime(chunk.presentationStart)
-                try Self.validateMediaTime(chunk.presentationEnd)
-                guard chunk.presentationEnd >= chunk.presentationStart else {
-                    throw MeetingModelValidationError.invalidTimeRange
-                }
-                let pathComponents = URL(fileURLWithPath: chunk.relativeFilePath).pathComponents
-                guard !chunk.relativeFilePath.hasPrefix("/"), !pathComponents.contains("..") else {
-                    throw MeetingModelValidationError.invalidRelativePath
-                }
-                for discontinuity in chunk.discontinuities {
-                    if let presentationTime = discontinuity.presentationTime {
-                        try Self.validateMediaTime(presentationTime)
-                    }
-                }
-                if chunk.finalizationState == .finalized {
-                    guard !chunk.sha256.isEmpty, chunk.byteCount > 0 else {
-                        throw MeetingModelValidationError.incompleteFinalizedChunk
-                    }
-                }
-            }
-        }
-        if let firstPresentationTime = self.timebase.firstPresentationTime {
-            try Self.validateMediaTime(firstPresentationTime)
-        }
-
-        let speakerIDs = Set(self.speakers.map(\.id))
-        guard speakerIDs.count == self.speakers.count else {
-            throw MeetingModelValidationError.duplicateSpeakerID
-        }
-        let segmentIDs = Set(self.transcriptSegments.map(\.id))
-        guard segmentIDs.count == self.transcriptSegments.count else {
-            throw MeetingModelValidationError.duplicateSegmentID
-        }
-        for segment in self.transcriptSegments {
-            try Self.validateMediaTime(segment.start)
-            try Self.validateMediaTime(segment.end)
-            guard segment.end >= segment.start else {
-                throw MeetingModelValidationError.invalidTimeRange
-            }
-            guard trackIDs.contains(segment.sourceTrackID) else {
-                throw MeetingModelValidationError.missingSegmentTrack
-            }
-            if let speakerID = segment.speakerID, !speakerIDs.contains(speakerID) {
-                throw MeetingModelValidationError.missingSegmentSpeaker
-            }
-        }
-        for attempt in self.processingAttempts {
-            if let languageCode = attempt.languageCode,
-               languageCode != self.languageCode
-            {
-                throw MeetingModelValidationError.unsupportedLanguage
-            }
-        }
-    }
-
-    private static func validateMediaTime(_ time: MeetingMediaTime) throws {
-        guard time.timescale > 0 else {
-            throw MeetingModelValidationError.invalidMediaTimescale
-        }
-    }
 }
 
 extension MeetingSession {
@@ -1224,6 +1135,7 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
     case missingMicrophone
     case missingOnlineApplication
     case unexpectedInRoomApplication
+    case unexpectedSystemAudioApplication
     case duplicateTrackID
     case duplicateTrackKind
     case invalidTrackSet
@@ -1250,6 +1162,8 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
             return "A microphone must be selected."
         case .missingOnlineApplication:
             return "An online meeting application must be selected."
+        case .unexpectedSystemAudioApplication:
+            return PichiLocalization.text("System audio cannot be restricted to an application.")
         case .unexpectedInRoomApplication:
             return "In-room meetings cannot include an application-audio source."
         case .duplicateTrackID, .duplicateTrackKind, .invalidTrackSet:
@@ -1308,6 +1222,7 @@ nonisolated enum MeetingCaptureEvent: Sendable {
 /// The scope ScreenCaptureKit was filtering to for this capture. `nil` when the runtime has no
 /// ScreenCaptureKit stream at all (in-room microphone-only capture).
 nonisolated enum MeetingCaptureScope: Sendable {
+    case systemAudio
     case display
     case window
 }
@@ -1409,5 +1324,46 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
             && self.diarizationFingerprint == diarizationFingerprint
             && self.completedTrackID == completedTrackID
             && self.trackFingerprints == expectedFingerprints
+    }
+}
+
+nonisolated extension MeetingSession {
+    /// Pure source admission shared by persistence and the grounded read-only helper.
+    /// It does not resolve speech languages, models, credentials or audio resources.
+    func validateTranscriptStructure() throws {
+        guard self.schemaVersion > 0, self.schemaVersion <= Self.currentSchemaVersion else {
+            throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
+        }
+        guard self.startedAt.timeIntervalSinceReferenceDate.isFinite,
+              self.endedAt?.timeIntervalSinceReferenceDate.isFinite != false else { throw MeetingModelValidationError.invalidTimeRange }
+        if let endedAt, endedAt < self.startedAt { throw MeetingModelValidationError.invalidTimeRange }
+        let trackIDs = Set(self.audioTracks.map(\.id))
+        guard trackIDs.count == self.audioTracks.count else { throw MeetingModelValidationError.duplicateTrackID }
+        let speakerIDs = Set(self.speakers.map(\.id))
+        guard speakerIDs.count == self.speakers.count else {
+            throw MeetingModelValidationError.duplicateSpeakerID
+        }
+        let segmentIDs = Set(self.transcriptSegments.map(\.id))
+        guard segmentIDs.count == self.transcriptSegments.count else {
+            throw MeetingModelValidationError.duplicateSegmentID
+        }
+        for segment in self.transcriptSegments {
+            try Self.validateTranscriptMediaTime(segment.start)
+            try Self.validateTranscriptMediaTime(segment.end)
+            guard segment.end >= segment.start else {
+                throw MeetingModelValidationError.invalidTimeRange
+            }
+            guard trackIDs.contains(segment.sourceTrackID) else {
+                throw MeetingModelValidationError.missingSegmentTrack
+            }
+            if let speakerID = segment.speakerID, !speakerIDs.contains(speakerID) {
+                throw MeetingModelValidationError.missingSegmentSpeaker
+            }
+        }
+    }
+
+    private static func validateTranscriptMediaTime(_ time: MeetingMediaTime) throws {
+        guard time.timescale > 0 else { throw MeetingModelValidationError.invalidMediaTimescale }
+        guard time.seconds.isFinite, abs(time.seconds) < Double(Int.max) / 2 else { throw MeetingModelValidationError.invalidTimeRange }
     }
 }

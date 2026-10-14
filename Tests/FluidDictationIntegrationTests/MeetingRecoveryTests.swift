@@ -12,6 +12,85 @@ import XCTest
 // Existing recovery suite shares setup across crash and corruption scenarios.
 // swiftlint:disable:next type_body_length
 final class MeetingRecoveryTests: XCTestCase {
+    private var englishBackendFixture: EnglishBackendFixture?
+
+    override func setUp() {
+        super.setUp()
+        // Recovery fixtures use English and mocked capture/ASR. A fresh installation's
+        // Russian-only model must not reject them before their injected controllers run.
+        self.englishBackendFixture = EnglishBackendFixture(defaults: .standard)
+    }
+
+    override func tearDown() {
+        self.englishBackendFixture?.restore()
+        self.englishBackendFixture = nil
+        super.tearDown()
+    }
+
+    private struct EnglishBackendFixture {
+        private let defaults: UserDefaults
+        private let originalValues: [Any?]
+        private static let keys = ["SelectedSpeechModel", "MeetingTranscriptionBackendID"]
+
+        init(defaults: UserDefaults) {
+            self.defaults = defaults
+            self.originalValues = Self.keys.map { defaults.object(forKey: $0) }
+            defaults.set(SettingsStore.SpeechModel.parakeetTDTv2.rawValue, forKey: Self.keys[0])
+            defaults.set(MeetingBackendID.productionDefault.rawValue, forKey: Self.keys[1])
+        }
+
+        func restore() {
+            for (key, value) in zip(Self.keys, self.originalValues) {
+                if let value { self.defaults.set(value, forKey: key) }
+                else { self.defaults.removeObject(forKey: key) }
+            }
+        }
+    }
+
+    func testEnglishBackendFixtureRestoresAbsentAndGigaAMSelections() throws {
+        let suite = "MeetingRecoveryFixtureTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let originals: [(String?, String?)] = [
+            (nil, nil),
+            (SettingsStore.SpeechModel.gigaam.rawValue, MeetingBackendID.gigaam.rawValue),
+            ("future-model", "future-backend"),
+        ]
+        for (model, backend) in originals {
+            defaults.set(model, forKey: "SelectedSpeechModel")
+            defaults.set(backend, forKey: "MeetingTranscriptionBackendID")
+            let fixture = EnglishBackendFixture(defaults: defaults)
+            XCTAssertEqual(defaults.string(forKey: "SelectedSpeechModel"), SettingsStore.SpeechModel.parakeetTDTv2.rawValue)
+            XCTAssertEqual(defaults.string(forKey: "MeetingTranscriptionBackendID"), MeetingBackendID.productionDefault.rawValue)
+            fixture.restore()
+            XCTAssertEqual(defaults.string(forKey: "SelectedSpeechModel"), model, "Restore the stored choice and absence exactly")
+            XCTAssertEqual(defaults.string(forKey: "MeetingTranscriptionBackendID"), backend)
+        }
+    }
+
+    func testEnglishRecoveryFixtureReachesMockCaptureWithCompatibleModel() async throws {
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "SelectedSpeechModel"), SettingsStore.SpeechModel.parakeetTDTv2.rawValue)
+        XCTAssertEqual(SettingsStore.shared.meetingTranscriptionBackendID, .productionDefault)
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        capture.startResult = MeetingCaptureStartResult(tracks: [self.makeMicrophoneTrack(chunks: [])], firstPresentationTime: nil)
+        let arbiter = StubArbiter()
+        let coordinator = MeetingSessionCoordinator(
+            store: store, capture: capture, processing: StubProcessingController(), audioArbiter: arbiter
+        )
+        self.addTeardownBlock { @MainActor in await coordinator.shutdownForTermination() }
+        let session = try await coordinator.startRecording(configuration: self.makeConfiguration())
+        XCTAssertEqual(session.languageCode, "en")
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.productionDefault.rawValue)
+        XCTAssertEqual(session.state, .recording)
+        XCTAssertEqual(capture.startCount, 1)
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        await coordinator.shutdownForTermination()
+        XCTAssertEqual(arbiter.releaseCount, 1)
+    }
+
     func testStrictBackendInputRefusedBeforeDownloadPermissionLeaseOrPersistence() async throws {
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel
@@ -35,7 +114,8 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.mode = .inRoom
         configuration.languageCode = "en"
         for backendID in [MeetingBackendID.legacyCompatibility, .init(rawValue: "synthetic-unknown")] {
-            settings.meetingTranscriptionBackendID = backendID
+            settings.meetingTranscriptionBackendID = .productionDefault
+            configuration.transcriptionBackendID = backendID.rawValue
             do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unsupported strict selection must fail before admission") }
             catch {
                 let expected: MeetingBackendError = backendID == .legacyCompatibility
@@ -53,7 +133,129 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(coordinator.isQuiescent)
     }
 
-    func testStrictBackendChangedDuringPromptIsRevalidatedBeforeSessionAllocation() async throws {
+    func testExplicitRetainedBackendRefusedBeforePreparationOrPermission() async throws {
+        let suite = "ExplicitRetainedBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        var preparations = 0
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Refused request cannot load ASR"); return ASRService() },
+            managesModelResidency: false, settings: settings)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+            audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 },
+            prepareRecordingDependencies: { _ in XCTFail("Refused request cannot prepare speaker models") })
+        let unknown = MeetingBackendID(rawValue: "explicit-unknown")
+        for (backend, language, expected) in [
+            (unknown, "en", MeetingBackendError.unknownBackend(unknown)),
+            (.legacyCompatibility, "ru", .unsupportedLanguage(backend: .legacyCompatibility, languageCode: "ru")),
+        ] {
+            var configuration = self.makeConfiguration()
+            configuration.mode = .inRoom
+            configuration.languageCode = language
+            configuration.transcriptionBackendID = backend.rawValue
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Explicit invalid request must be rejected") }
+            catch { XCTAssertEqual(error as? MeetingBackendError, expected) }
+        }
+        XCTAssertEqual(preparations, 0)
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testUnavailableExplicitTinyArtifactRejectsBeforeAnyPreparationOrCapture() async throws {
+        for language in ["en", "auto"] {
+            let suite = "UnavailableExplicitTiny.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = SettingsStore(defaults: defaults)
+            settings.selectedSpeechModel = .gigaam
+            let ambient = MeetingBackendID(rawValue: "ambient-future-backend")
+            settings.meetingTranscriptionBackendID = ambient
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = MeetingSessionStore(rootDirectory: dir)
+            let capture = StubCaptureController()
+            let arbiter = StubArbiter()
+            var preparations = 0
+            var dependencies = 0
+            let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Unavailable artifact cannot reach ASR residency"); return ASRService() },
+                managesModelResidency: false, settings: settings,
+                meetingRuntimeFactory: { _ in XCTFail("Unavailable artifact cannot construct a runtime"); throw CancellationError() })
+            let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+                audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 },
+                prepareRecordingDependencies: { _ in dependencies += 1 },
+                validateFrozenRecordingConfiguration: { _ in
+                    // Keep a controlled unavailable-resource outcome even if the developer
+                    // cache is populated. The existing validation boundary fails closed too.
+                    throw MeetingProcessingError.modelUnavailable
+                })
+            var configuration = self.makeConfiguration()
+            configuration.mode = .inRoom
+            configuration.languageCode = language
+            configuration.audioStorageMode = .memoryOnly
+            configuration.transcriptionBackendID = MeetingBackendID.whisperTiny.rawValue
+            // The requested Tiny language/input contract is valid even while GigaAM is selected.
+            XCTAssertNoThrow(try pipeline.validateRecordingInput(configuration: configuration, backendID: .whisperTiny))
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Unavailable explicit artifact must be rejected") }
+            catch {
+                if case .modelUnavailable? = error as? MeetingProcessingError { }
+                else { XCTFail("Expected modelUnavailable, got \(error)") }
+            }
+            XCTAssertEqual(preparations, 0)
+            XCTAssertEqual(dependencies, 0)
+            XCTAssertEqual(capture.preflightCount, 0)
+            XCTAssertEqual(capture.startCount, 0)
+            XCTAssertEqual(arbiter.acquireCount, 0)
+            XCTAssertEqual(arbiter.releaseCount, 0)
+            XCTAssertEqual(settings.selectedSpeechModel, .gigaam)
+            XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
+            let sessions = try await store.loadAll()
+            XCTAssertTrue(sessions.isEmpty)
+            XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+            XCTAssertTrue(coordinator.isQuiescent)
+        }
+    }
+
+    func testExplicitArtifactValidationRequiresNonemptyFrozenIdentity() throws {
+        for language in ["en", "auto"] {
+            for fingerprint in [nil, "", " \n"] as [String?] {
+                let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.whisperTinyModelID,
+                    asrArtifactFingerprint: fingerprint, languageCode: language, speakerLabelsEnabled: false)
+                XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration, isAppleSilicon: true))
+                XCTAssertThrowsError(try PichiMeetingProviderFactory.validateRecordingConfiguration(configuration,
+                    isAppleSilicon: true, requiresInstalledArtifact: true)) {
+                    if case .modelUnavailable? = $0 as? MeetingProcessingError { }
+                    else { XCTFail("Expected modelUnavailable, got \($0)") }
+                }
+            }
+            let pinned = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.whisperTinyModelID,
+                asrArtifactFingerprint: "approved-synthetic-tiny-identity", languageCode: language, speakerLabelsEnabled: false)
+            XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(pinned,
+                isAppleSilicon: true, requiresInstalledArtifact: true))
+        }
+    }
+
+    func testExplicitBackendRequestRoundTripsWithoutChangingLegacyDefault() throws {
+        var configuration = self.makeConfiguration()
+        let legacy = try JSONDecoder().decode(MeetingCaptureConfiguration.self,
+            from: JSONEncoder().encode(configuration))
+        XCTAssertNil(legacy.transcriptionBackendID)
+        configuration.transcriptionBackendID = "explicit-request"
+        let pinned = try JSONDecoder().decode(MeetingCaptureConfiguration.self,
+            from: JSONEncoder().encode(configuration))
+        XCTAssertEqual(pinned.transcriptionBackendID, "explicit-request")
+    }
+
+    func testBackendChangeDuringPromptCancelsFrozenAdmission() async throws {
         let settings = SettingsStore.shared
         let originalModel = settings.selectedSpeechModel
         let originalBackend = settings.meetingTranscriptionBackendID
@@ -77,12 +279,12 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.languageCode = "en"
         configuration.speakerLabelsEnabled = false
         do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Changed backend must be revalidated") }
-        catch { XCTAssertEqual(error as? MeetingBackendError, .unsupportedInput(backend: .legacyCompatibility, input: .boundedMicrophonePCM)) }
+        catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(modelChecks, 1)
         XCTAssertEqual(capture.preflightCount, 1)
         XCTAssertEqual(capture.startCount, 0)
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
         let sessions = try await store.loadAll()
         XCTAssertTrue(sessions.isEmpty)
         XCTAssertTrue(coordinator.isQuiescent)
@@ -100,7 +302,7 @@ final class MeetingRecoveryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
         settings.selectedSpeechModel = .gigaam
-        settings.meetingTranscriptionBackendID = .productionDefault
+        settings.meetingTranscriptionBackendID = .legacyCompatibility
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
@@ -132,10 +334,58 @@ final class MeetingRecoveryTests: XCTestCase {
         let persisted = try await store.load(id: session.id)
         XCTAssertEqual(persisted?.recordingBackendID, session.recordingBackendID)
         XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
-        XCTAssertEqual(settings.meetingTranscriptionBackendID, .productionDefault)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, .legacyCompatibility)
     }
 
-    func testOwnedBackendChangedDuringPromptIsRevalidatedAgainstThatOwner() async throws {
+    func testOrdinaryCaptureRemainsUsableAfterUnavailableExplicitArtifact() async throws {
+        let suite = "ExplicitCapturedBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let ambient = MeetingBackendID(rawValue: "ambient-future-backend")
+        settings.meetingTranscriptionBackendID = ambient
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        let processing = MemoryCheckpointProcessingController()
+        var preparations = 0
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { configuration in
+                if configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID { throw MeetingProcessingError.modelUnavailable }
+            })
+        var configuration = self.makeConfiguration()
+        configuration.mode = .inRoom
+        configuration.languageCode = "ru"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.speakerLabelsEnabled = false
+        configuration.transcriptionBackendID = MeetingBackendID.gigaam.rawValue
+        do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Expected unavailable explicit artifact") }
+        catch {
+                if case .modelUnavailable? = error as? MeetingProcessingError { }
+                else { XCTFail("Expected modelUnavailable, got \(error)") }
+            }
+        XCTAssertTrue(processing.validatedBackendIDs.allSatisfy { $0 == .gigaam })
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
+        XCTAssertTrue(coordinator.isQuiescent)
+        XCTAssertEqual(preparations, 0)
+        // A subsequent ordinary request still uses the selected model and its normal owner.
+        configuration.transcriptionBackendID = nil
+        configuration.languageCode = "auto"
+        let normal = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(normal.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
+        XCTAssertEqual(preparations, 1)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        _ = try await coordinator.stopAndTranscribe()
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testOwnedBackendChangeDuringPromptCancelsThatOwnersAdmission() async throws {
         let shared = SettingsStore.shared
         let previousBackend = shared.meetingTranscriptionBackendID
         defer { shared.meetingTranscriptionBackendID = previousBackend }
@@ -162,11 +412,11 @@ final class MeetingRecoveryTests: XCTestCase {
         configuration.audioStorageMode = .memoryOnly
         configuration.speakerLabelsEnabled = false
         do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Owned backend change must be revalidated") }
-        catch { XCTAssertEqual(error as? MeetingBackendError, .unsupportedInput(backend: .legacyCompatibility, input: .boundedMicrophonePCM)) }
+        catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertEqual(capture.preflightCount, 1)
         XCTAssertEqual(capture.startCount, 0)
-        XCTAssertEqual(arbiter.acquireCount, 1)
-        XCTAssertEqual(arbiter.releaseCount, 1)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        XCTAssertEqual(arbiter.releaseCount, 0)
         let sessions = try await store.loadAll()
         XCTAssertTrue(sessions.isEmpty)
         XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
@@ -780,6 +1030,19 @@ final class MeetingRecoveryTests: XCTestCase {
         legacy.removeValue(forKey: "searchRevision")
         let decoded = try JSONDecoder().decode(FileTranscriptionEntry.self, from: JSONSerialization.data(withJSONObject: legacy))
         XCTAssertEqual(decoded.displayTitle, "original.wav")
+    }
+
+    func testSettingsSheetOnlySaysCloseWhenLeavingDiscardsNothing() {
+        typealias Sheet = MeetingRecordingSettingsSheet
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: false, section: .integrations, hasUnsavedChanges: false), "Close")
+        XCTAssertEqual(
+            Sheet.dismissTitle(isFirstSetup: false, section: .integrations, hasUnsavedChanges: true),
+            "Cancel",
+            "edits made on another tab would be thrown away"
+        )
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: false, section: .recording, hasUnsavedChanges: false), "Cancel")
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: false, section: .automation, hasUnsavedChanges: true), "Cancel")
+        XCTAssertEqual(Sheet.dismissTitle(isFirstSetup: true, section: .integrations, hasUnsavedChanges: false), "Not now")
     }
 
     func testNotesSetupDraftDoesNotPersistDetectionChanges() {
