@@ -49,7 +49,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             let applicationSupport = fileManager.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
-            ).first ?? fileManager.homeDirectoryForCurrentUser
+            ).first ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
             self.rootDirectory = applicationSupport
                 .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
@@ -520,10 +520,21 @@ actor MeetingSessionStore: MeetingSessionStoring {
             [.posixPermissions: NSNumber(value: Int16(0o700))],
             ofItemAtPath: url.path
         )
+        #if os(iOS)
+        try self.fileSystem.manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
+        var protectedURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try protectedURL.setResourceValues(values)
+        #endif
     }
 
     private func atomicPrivateWrite(_ data: Data, to destination: URL) throws {
+        #if os(iOS)
+        try data.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        #else
         try data.write(to: destination, options: .atomic)
+        #endif
         try self.fileSystem.manager.setAttributes(
             [.posixPermissions: NSNumber(value: Int16(0o600))],
             ofItemAtPath: destination.path

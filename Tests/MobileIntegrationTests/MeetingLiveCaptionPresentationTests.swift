@@ -1,0 +1,404 @@
+import XCTest
+import Combine
+import SwiftUI
+import UIKit
+@testable import PichiVoiceMobile
+
+final class MeetingLiveCaptionPresentationTests: XCTestCase {
+    private func row(_ text: String, speaker: MeetingLiveSpeaker = .you, id: UUID = UUID(),
+                     partial: Bool = false, label: Bool = false) -> MeetingLiveBubbleComposer.Row {
+        .init(id: id, speaker: speaker, text: text, isPartial: partial, showsLabel: label)
+    }
+
+    func testWordTimingRowsFlowWithoutChangingCanonicalMembers() {
+        let rows = [row("Здравствуйте", label: true), row(","), row("давайте"), row("обсудим"), row("инструкцию.")]
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs[0].text(), "Здравствуйте, давайте обсудим инструкцию.")
+        XCTAssertEqual(paragraphs.flatMap(\.rows), rows, "Presentation must retain every original row and its ID")
+        XCTAssertEqual(paragraphs[0].id, rows[0].id)
+        XCTAssertTrue(paragraphs[0].showsLabel)
+    }
+
+    func testSourceChangeAndExplicitBreakRemainVisible() {
+        let rows = [row("Первая строка\nВторая строка", label: true), row("Продолжение"),
+                    row("English response", speaker: .them, label: true), row("follows", speaker: .them)]
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertEqual(paragraphs.map { $0.text() }, ["Первая строка\nВторая строка", "Продолжение", "English response follows"])
+        XCTAssertEqual(paragraphs.map(\.speaker), [.you, .you, .them])
+        XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
+    }
+
+    func testPartialGrowthCorrectionAndSolidificationKeepParagraphIdentity() {
+        let committed = row("Начало", label: true)
+        let partialID = UUID()
+        let short = [committed, row("жду", id: partialID, partial: true)]
+        let correction = [committed, row("иду", id: partialID, partial: true)]
+        let long = [committed, row(String(repeating: "слово ", count: 150), id: partialID, partial: true)]
+        let finalized = [committed, row(long[1].text, id: partialID)]
+        XCTAssertNotEqual(short, correction, "Equal-length hypotheses must still invalidate content observers")
+        for rows in [short, correction, long, finalized] {
+            let paragraph = MeetingLiveCaptionParagraphs.compose(rows)
+            XCTAssertEqual(paragraph.count, 1)
+            XCTAssertEqual(paragraph[0].id, committed.id)
+            XCTAssertEqual(paragraph[0].rows[1].id, partialID)
+        }
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(short)[0].text(includingPartials: false), "Начало")
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(correction)[0].text(), "Начало иду")
+    }
+
+    func testLongWordStreamHasBoundedParagraphsWithoutDroppingWords() {
+        let rows = (0..<600).map { row("слово\($0)", label: $0 == 0) }
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertGreaterThan(paragraphs.count, 5)
+        XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
+        XCTAssertTrue(paragraphs.allSatisfy { $0.text().count <= 530 })
+        XCTAssertEqual(Set(paragraphs.map(\.id)).count, paragraphs.count)
+        XCTAssertTrue(MeetingLiveCaptionParagraphs.compose([]).isEmpty)
+    }
+
+    func testChronologicalReorderingRetainsCanonicalMembersAndSourceBoundaries() {
+        let first = row("Начало", label: true)
+        let remote = row("Response", speaker: .them, label: true)
+        let turnID = UUID()
+        let partial = row("продолжение", id: turnID, partial: true, label: true)
+        let liveRows = [first, remote, partial]
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(liveRows).flatMap(\.rows), liveRows)
+        let finalRows = [first, row("продолжение", id: turnID), remote]
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(finalRows)
+        XCTAssertEqual(paragraphs.map { $0.text() }, ["Начало продолжение", "Response"])
+        XCTAssertEqual(paragraphs.flatMap(\.rows), finalRows)
+        XCTAssertEqual(paragraphs[0].rows[1].id, turnID,
+                       "Chronological reflow can regroup a turn but must retain its canonical identity")
+    }
+
+    func testSensitivePlaceholdersAndExistingWhitespaceAreNotRewritten() {
+        let rows = [row("Позвоните "), row("[PERSON]"), row(" по адресу [ADDRESS]."), row("\n"), row("[PHONE]")]
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).map { $0.text() }.joined(separator: "\n"),
+                       "Позвоните [PERSON] по адресу [ADDRESS].\n\n[PHONE]")
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).flatMap(\.rows), rows)
+    }
+
+    func testGrowthIsLayoutChangeRatherThanScrollIntent() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let before = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 600, contentOffset: 300)
+        let grown = Geometry(contentBottom: 900, viewportHeight: 300, contentHeight: 1200, contentOffset: 300)
+        XCTAssertEqual(before.isPinnedToBottom, true)
+        XCTAssertEqual(grown.isPinnedToBottom, false, "Proximity changes, but the follow preference must not")
+        XCTAssertTrue(grown.layoutChanged(from: before))
+        XCTAssertFalse(grown.offsetChanged(from: before))
+        XCTAssertTrue(grown.followPreference(after: before, currentlyFollowing: true, userIsScrolling: true))
+        let bottomBeforeShrink = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 900, contentOffset: 600)
+        let shrink = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 600, contentOffset: 300)
+        XCTAssertTrue(shrink.fallbackFollowPreference(after: bottomBeforeShrink,
+            currentlyFollowing: true, upwardDrag: false), "iOS 17 layout shrink must not look like an upward drag")
+        var heightPublishedBeforeClamp = shrink
+        heightPublishedBeforeClamp.contentOffset = bottomBeforeShrink.contentOffset
+        XCTAssertTrue(shrink.fallbackFollowPreference(after: heightPublishedBeforeClamp,
+            currentlyFollowing: true, upwardDrag: false), "A later offset-only clamp belongs to the previous layout change")
+        let userScrolled = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 600, contentOffset: 150)
+        XCTAssertFalse(userScrolled.layoutChanged(from: before))
+        XCTAssertTrue(userScrolled.offsetChanged(from: before))
+        XCTAssertEqual(userScrolled.isPinnedToBottom, false)
+        XCTAssertFalse(userScrolled.followPreference(after: before, currentlyFollowing: true, userIsScrolling: true))
+        let reflow = Geometry(contentBottom: 850, viewportHeight: 300, contentHeight: 1200, contentOffset: 350)
+        XCTAssertTrue(reflow.followPreference(after: before, currentlyFollowing: true, userIsScrolling: true),
+                      "A reflow that also adjusts the offset must retain the follow preference")
+    }
+
+    func testUpwardDragPausesOnlyScrollableTextAndLatestMotionKeepsFollowing() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let short = Geometry(contentBottom: 100, viewportHeight: 300, contentHeight: 100, contentOffset: 0)
+        let bounce = Geometry(contentBottom: 120, viewportHeight: 300, contentHeight: 100, contentOffset: -20)
+        XCTAssertTrue(bounce.followPreference(after: short, currentlyFollowing: true, userIsScrolling: true, upwardDrag: true))
+        let bottom = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 900, contentOffset: 600)
+        let up = Geometry(contentBottom: 320, viewportHeight: 300, contentHeight: 900, contentOffset: 580)
+        XCTAssertFalse(up.followPreference(after: bottom, currentlyFollowing: true, userIsScrolling: true, upwardDrag: true))
+        let growingWhileUp = Geometry(contentBottom: 360, viewportHeight: 300, contentHeight: 940, contentOffset: 580)
+        XCTAssertFalse(growingWhileUp.followPreference(after: bottom, currentlyFollowing: true, userIsScrolling: true),
+                       "New captions must not override simultaneous reading of older text")
+        XCTAssertFalse(growingWhileUp.followPreference(after: bottom, currentlyFollowing: true, userIsScrolling: true, upwardDrag: true))
+        XCTAssertFalse(growingWhileUp.fallbackFollowPreference(after: bottom,
+            currentlyFollowing: true, upwardDrag: true), "iOS 17 must respect an upward drag during content growth")
+        XCTAssertTrue(growingWhileUp.followPreference(after: bottom, currentlyFollowing: true, userIsScrolling: false),
+                      "Layout growth without a user gesture must keep following")
+        let momentumUp = Geometry(contentBottom: 330, viewportHeight: 300, contentHeight: 900, contentOffset: 570)
+        XCTAssertFalse(momentumUp.followPreference(after: up, currentlyFollowing: false, userIsScrolling: true),
+                       "A small deliberate upward drag must remain paused during deceleration")
+        let older = Geometry(contentBottom: 700, viewportHeight: 300, contentHeight: 900, contentOffset: 200)
+        let movingDown = Geometry(contentBottom: 600, viewportHeight: 300, contentHeight: 900, contentOffset: 300)
+        XCTAssertTrue(movingDown.followPreference(after: older, currentlyFollowing: true, userIsScrolling: true),
+                      "An explicit latest action must remain active during its animation")
+        XCTAssertFalse(movingDown.followPreference(after: older, currentlyFollowing: false, userIsScrolling: true),
+                       "A reader moving down through older text has not reached the bottom yet")
+        XCTAssertTrue(bottom.followPreference(after: movingDown, currentlyFollowing: false, userIsScrolling: true))
+    }
+}
+
+/// Hosted native rendering tests. Input rows are synthetic; the caption view, SwiftUI
+/// layout and backing UIScrollView are real. This fixture never composes audio services.
+@MainActor
+final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testNativeWordRowsPartialCorrectionsAndReflowFollowLatestInBothThemes() async throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let partialID = UUID()
+            let initialPartial = row(String(repeating: "i", count: 120), id: partialID, partial: true)
+            let initialRows = wordRows(count: 260) + [initialPartial]
+            let host = try CaptionNativeHost(rows: initialRows, scheme: scheme)
+            defer { host.close() }
+            let scroll = try await captionScroll(in: host)
+            try await settle(host, "Initial long document must follow the bottom") { self.nearBottom(scroll) }
+            XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height + 200)
+            capture(host, step: "01-word-rows-bottom", scheme: scheme)
+
+            let beforeAppend = scroll.contentSize.height
+            host.model.rows = Array(initialRows.dropLast()) + wordRows(count: 80) + [initialPartial]
+            try await settle(host, "New committed word rows must stay visible") {
+                scroll.contentSize.height > beforeAppend + 20 && self.nearBottom(scroll)
+            }
+            let beforeCorrectionImage = capture(host, step: "02-committed-words-appended", scheme: scheme)
+
+            let beforeCorrection = scroll.contentSize.height
+            let previousPartial = try XCTUnwrap(host.model.rows.last)
+            var corrected = previousPartial
+            corrected.text = String(repeating: "Ш", count: previousPartial.text.count)
+            XCTAssertEqual(corrected.text.count, previousPartial.text.count)
+            XCTAssertEqual(corrected.id, partialID)
+            host.model.rows[host.model.rows.count - 1] = corrected
+            try await settle(host, "An equal-length same-ID correction must retain the latest position") {
+                scroll.contentSize.height >= beforeCorrection - 2 && self.nearBottom(scroll)
+            }
+            let correctedImage = capture(host, step: "03-equal-length-partial-correction", scheme: scheme)
+            // Proportional fonts also reflow here. A supported monospaced brand can retain
+            // identical geometry, so inspect actual native pixels rather than assuming glyph widths.
+            let beforeBitmap = try XCTUnwrap(beforeCorrectionImage.cgImage)
+            let correctedBitmap = try XCTUnwrap(correctedImage.cgImage)
+            XCTAssertEqual(beforeBitmap.width, correctedBitmap.width)
+            XCTAssertEqual(beforeBitmap.height, correctedBitmap.height)
+            XCTAssertEqual(beforeBitmap.bitsPerPixel, correctedBitmap.bitsPerPixel)
+            XCTAssertEqual(beforeBitmap.bytesPerRow, correctedBitmap.bytesPerRow)
+            let beforePixels = try XCTUnwrap(beforeBitmap.dataProvider?.data) as Data
+            let correctedPixels = try XCTUnwrap(correctedBitmap.dataProvider?.data) as Data
+            XCTAssertNotEqual(beforePixels, correctedPixels, "Equal-length partial correction must change the rendered text")
+
+            let beforeGrowth = scroll.contentSize.height
+            host.model.rows[host.model.rows.count - 1].text += String(repeating: " продолжение", count: 55)
+            try await settle(host, "A growing partial with unchanged row count and ID must follow") {
+                scroll.contentSize.height > beforeGrowth + 80 && self.nearBottom(scroll)
+            }
+            capture(host, step: "04-same-id-partial-growth", scheme: scheme)
+
+            let beforeNarrowing = scroll.contentSize.height
+            let originalWidth = host.model.width
+            host.model.width = originalWidth * 0.65
+            try await settle(host, "Width reflow must retain the latest position") {
+                abs(scroll.bounds.width - host.model.width) < 2
+                    && scroll.contentSize.height > beforeNarrowing + 20 && self.nearBottom(scroll)
+            }
+            capture(host, step: "05-narrower-viewport-following", scheme: scheme)
+
+            let beforeShrink = scroll.contentSize.height
+            host.model.rows = wordRows(count: 100) + [row("Встреча продолжается. English version remains visible.", partial: true)]
+            try await settle(host, "Content shrink must retain the latest position") {
+                scroll.contentSize.height < beforeShrink - 100 && self.nearBottom(scroll)
+            }
+            capture(host, step: "06-content-shrink-following", scheme: scheme)
+            let shrunkHeight = scroll.contentSize.height
+            host.model.rows = Array(host.model.rows.dropLast()) + wordRows(count: 100)
+                + [row("Новый текст после изменения размера.", partial: true)]
+            try await settle(host, "Following must remain active after the previous content shrink") {
+                scroll.contentSize.height > shrunkHeight + 100 && self.nearBottom(scroll)
+            }
+            capture(host, step: "07-append-after-shrink", scheme: scheme)
+        }
+    }
+
+    func testIOS17NonTouchScrollToOlderTextStaysPausedWhenNewRowsArrive() async throws {
+        guard #unavailable(iOS 18) else {
+            throw XCTSkip("This exercises the iOS 17 offset-based fallback. Programmatic UIKit scrolling does not simulate a user scroll phase on iOS 18+.")
+        }
+        for scheme in [ColorScheme.light, .dark] {
+            let host = try CaptionNativeHost(rows: wordRows(count: 360), scheme: scheme)
+            defer { host.close() }
+            let scroll = try await captionScroll(in: host)
+            try await settle(host, "Initial captions must be bottom-pinned") { self.nearBottom(scroll) }
+            capture(host, step: "01-before-non-touch-scroll", scheme: scheme)
+
+            let olderOffset = max(-scroll.adjustedContentInset.top, self.bottomOffset(scroll) - 250)
+            scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: olderOffset), animated: false)
+            try await settle(host, "UIKit non-touch movement must reach older text") {
+                abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+            }
+            capture(host, step: "02-non-touch-older-text", scheme: scheme)
+
+            let oldContentHeight = scroll.contentSize.height
+            host.model.rows += wordRows(count: 120)
+            try await settle(host, "New captions must not pull an older-text reader back to the bottom") {
+                scroll.contentSize.height > oldContentHeight + 40
+                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+            }
+            capture(host, step: "03-appended-while-paused", scheme: scheme)
+        }
+    }
+
+    private func row(_ text: String, id: UUID = UUID(), partial: Bool = false,
+                     label: Bool = false) -> MeetingLiveBubbleComposer.Row {
+        .init(id: id, speaker: .you, text: text, isPartial: partial, showsLabel: label)
+    }
+
+    private func wordRows(count: Int) -> [MeetingLiveBubbleComposer.Row] {
+        let words = ["Сегодня", "мы", "обсудим", "инструкцию.", "Please", "review", "the", "English", "version.",
+                     "Препарат", "и", "дозировка", "указаны", "в", "документе."]
+        return (0..<count).map { row(words[$0 % words.count], label: $0 == 0) }
+    }
+
+    private func captionScroll(in host: CaptionNativeHost) async throws -> UIScrollView {
+        try await settle(host, "The real caption UIScrollView must be attached and scrollable") {
+            self.scrollViews(in: host.controller.view).contains {
+                $0.window === host.window && $0.bounds.height > 0 && $0.contentSize.height > $0.bounds.height + 200
+            }
+        }
+        let candidates = scrollViews(in: host.controller.view).filter {
+            $0.window === host.window && $0.bounds.height > 0 && $0.contentSize.height > $0.bounds.height + 200
+        }
+        XCTAssertEqual(candidates.count, 1, "The fixture must inspect the component's only scroll view")
+        let scroll = try XCTUnwrap(candidates.first)
+        // Fixture-only chrome control: a fading OS indicator must not masquerade as an
+        // equal-length text correction in the native-pixel assertion. No app preference changes.
+        scroll.showsVerticalScrollIndicator = false
+        scroll.showsHorizontalScrollIndicator = false
+        return scroll
+    }
+
+    private func scrollViews(in view: UIView) -> [UIScrollView] {
+        ((view as? UIScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
+    }
+
+    private func bottomOffset(_ scroll: UIScrollView) -> CGFloat {
+        max(-scroll.adjustedContentInset.top,
+            scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+    }
+
+    private func nearBottom(_ scroll: UIScrollView) -> Bool {
+        abs(bottomOffset(scroll) - scroll.contentOffset.y) < 4
+    }
+
+    private func settle(_ host: CaptionNativeHost, _ reason: String,
+                        predicate: () -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        var previous: [NativeScrollGeometry]?
+        var stableSince: TimeInterval?
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            host.window.layoutIfNeeded()
+            let now = ProcessInfo.processInfo.systemUptime
+            let geometry = scrollViews(in: host.controller.view).map {
+                NativeScrollGeometry(identity: ObjectIdentifier($0), window: $0.window.map { ObjectIdentifier($0) },
+                    bounds: $0.bounds, contentSize: $0.contentSize, contentOffset: $0.contentOffset,
+                    inset: $0.adjustedContentInset)
+            }
+            if predicate(), geometry == previous {
+                if let stableSince, now - stableSince >= 0.3 { return }
+                if stableSince == nil { stableSince = now }
+            } else { stableSince = nil }
+            previous = geometry
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        print("[NATIVE_CAPTION] timeout=\(reason) geometry=\(String(describing: previous))")
+        capture(host, step: "timeout", scheme: host.controller.overrideUserInterfaceStyle == .dark ? .dark : .light)
+        XCTFail(reason)
+        throw CaptionNativeHost.LayoutTimeout()
+    }
+
+    private struct NativeScrollGeometry: Equatable {
+        let identity: ObjectIdentifier
+        let window: ObjectIdentifier?
+        let bounds: CGRect
+        let contentSize: CGSize
+        let contentOffset: CGPoint
+        let inset: UIEdgeInsets
+    }
+
+    @discardableResult
+    private func capture(_ host: CaptionNativeHost, step: String, scheme: ColorScheme) -> UIImage {
+        host.window.layoutIfNeeded()
+        let caption = scrollViews(in: host.controller.view).first
+        let captureBounds = caption.map { $0.convert($0.bounds, to: host.window) } ?? host.window.bounds
+        var drewHierarchy = false
+        // Crop only the owned caption viewport, preserving native scale and pixels. This
+        // bounds evidence memory on older iPads and never draws another window or user data.
+        let image = UIGraphicsImageRenderer(size: captureBounds.size).image { context in
+            context.cgContext.translateBy(x: -captureBounds.minX, y: -captureBounds.minY)
+            drewHierarchy = host.window.drawHierarchy(in: host.window.bounds, afterScreenUpdates: true)
+        }
+        XCTAssertTrue(drewHierarchy, "Capture only the test-owned native window after its layout settled")
+        let revision = ProcessInfo.processInfo.environment["PICHI_TEST_REVISION"] ?? "working-tree"
+        let appearance = scheme == .dark ? "dark" : "light"
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "\(name)-\(step)-\(appearance)-\(revision)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        return image
+    }
+}
+
+@MainActor
+private final class CaptionNativeRows: ObservableObject {
+    @Published var rows: [MeetingLiveBubbleComposer.Row]
+    @Published var width: CGFloat
+    let height: CGFloat
+
+    init(rows: [MeetingLiveBubbleComposer.Row], width: CGFloat, height: CGFloat) {
+        self.rows = rows; self.width = width; self.height = height
+    }
+}
+
+private struct CaptionNativeDocument: View {
+    @ObservedObject var model: CaptionNativeRows
+    let scheme: ColorScheme
+
+    var body: some View {
+        let theme = AppTheme.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme)
+        ZStack {
+            theme.palette.windowBackground
+            MeetingLiveBubbleScrollList(rows: model.rows, documentStyle: true)
+                .frame(width: model.width, height: model.height)
+                .background(theme.palette.contentBackground)
+        }
+        .appTheme(theme)
+        .environment(\.colorScheme, scheme)
+        .environment(\.locale, Locale(identifier: "ru"))
+    }
+}
+
+@MainActor
+private final class CaptionNativeHost {
+    struct LayoutTimeout: Error {}
+    let model: CaptionNativeRows
+    let window: UIWindow
+    let controller: UIHostingController<CaptionNativeDocument>
+    private weak var previousKeyWindow: UIWindow?
+
+    init(rows: [MeetingLiveBubbleComposer.Row], scheme: ColorScheme) throws {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: {
+            $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
+        }) else { throw XCTSkip("Requires the hosted iOS test app's foreground UIWindowScene") }
+        self.previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+        self.window = UIWindow(windowScene: scene)
+        self.window.frame = scene.coordinateSpace.bounds
+        self.model = CaptionNativeRows(rows: rows, width: min(520, scene.coordinateSpace.bounds.width - 48),
+                                       height: max(160, min(320, scene.coordinateSpace.bounds.height - 96)))
+        self.controller = UIHostingController(rootView: CaptionNativeDocument(model: model, scheme: scheme))
+        self.controller.overrideUserInterfaceStyle = scheme == .dark ? .dark : .light
+        self.window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
+        self.window.rootViewController = controller
+        self.window.makeKeyAndVisible()
+        self.window.layoutIfNeeded()
+    }
+
+    func close() {
+        window.isHidden = true
+        window.rootViewController = nil
+        window.windowScene = nil
+        previousKeyWindow?.makeKey()
+    }
+}

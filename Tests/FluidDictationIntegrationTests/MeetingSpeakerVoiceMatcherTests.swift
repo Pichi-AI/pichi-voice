@@ -4,6 +4,30 @@ import Foundation
 import XCTest
 
 final class MeetingSpeakerVoiceMatcherTests: XCTestCase {
+    func testNaturalPausesStillProduceTwoDisjointSingleSpeakerExcerpts() {
+        let samples = (0..<320_000).map { index -> Float in
+            let value = Float(index + 16_000) / 1_000_000
+            return index < 150_000 ? value : -value
+        }
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let segments: [MeetingNemotronSpeakerSegment] = [
+            .init(slotIndex: 0, start: 0, end: 3.28),
+            .init(slotIndex: 0, start: 3.44, end: 5.92),
+            .init(slotIndex: 0, start: 6.16, end: 9.28),
+            .init(slotIndex: 1, start: 9.5, end: 12.8),
+            .init(slotIndex: 1, start: 13, end: 15.8),
+            .init(slotIndex: 1, start: 16, end: 19.3),
+        ]
+        let profiles = MeetingSpeakerVoiceSamples.collect(epoch: epoch, samples: samples, segments: segments)
+        XCTAssertEqual(profiles.count, 2)
+        for profile in profiles {
+            XCTAssertEqual(profile.clips.count, 2)
+            XCTAssertTrue(profile.clips.allSatisfy { $0.count == 48_000 })
+            XCTAssertTrue(Set(profile.clips[0]).isDisjoint(with: Set(profile.clips[1])))
+            XCTAssertTrue(profile.clips.flatMap { $0 }.allSatisfy { profile.token.label == "slot-0" ? $0 > 0 : $0 < 0 })
+        }
+    }
+
     @MainActor
     func testLocalVoiceEncoderOnOptInAudio() async throws {
         guard let path = ProcessInfo.processInfo.environment["FLUIDVOICE_VOICE_MATCH_AUDIO"] else {

@@ -5,11 +5,37 @@ import Foundation
 
 @MainActor
 protocol MeetingProcessingControlling: AnyObject {
+    func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor?
+    func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws
+    func cancelMemoryAudio(sessionID: MeetingSessionID) async
     func process(
         session: MeetingSession,
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult
+}
+
+extension MeetingProcessingControlling {
+    func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
+        configuration.audioStorageMode == .memoryOnly
+            ? try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID) : nil
+    }
+    func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
+        throw MeetingBackendError.unsupportedInput(backend: backendID, input: .boundedMicrophonePCM)
+    }
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL, checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void) async throws {
+        throw MeetingProcessingError.noRecoverableAudio
+    }
+    func cancelMemoryAudio(sessionID: MeetingSessionID) async {}
+    func prepareMemoryAudio(session: MeetingSession, sessionDirectory: URL,
+                            checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
+                            preview: @escaping @MainActor @Sendable (MeetingLivePartial?) async throws -> Void) async throws {
+        try await self.prepareMemoryAudio(session: session, sessionDirectory: sessionDirectory, checkpoint: checkpoint)
+    }
 }
 
 actor MeetingProcessingSerializationGate {
@@ -1322,14 +1348,19 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let sessionDirectory: URL
         let provider: any TranscriptionProvider
         let languageCode: String
-        let asrService: ASRService
+        let asrService: any MeetingASRServicing
         let languagePin: MeetingProviderLanguagePin
     }
 
+    var memoryAttempts: [MeetingSessionID: MeetingMemoryProcessingAttempt] = [:]
+    let privacyRedactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
+    /// Deployment/PII admission is separate from ASR identity and is frozen per strict attempt.
+    let pcmAdmissionContextProvider: @MainActor (Bool) -> MeetingPCMAdmissionContext
     private let managesModelResidency: Bool
-    private let asrServiceProvider: @MainActor () -> ASRService
+    private let settings: SettingsStore
+    let asrServiceProvider: @MainActor () -> any MeetingASRServicing
     private let serializationGate: MeetingProcessingSerializationGate
-    private let backendRegistry: MeetingTranscriptionBackendRegistry
+    let backendRegistry: MeetingTranscriptionBackendRegistry
     private let backendIDProvider: @MainActor (String) -> MeetingBackendID
     private let usesRecordingBackendPin: Bool
     /// Canonical path only: observes chunk files for the analysis manifest. `nil` uses the real
@@ -1341,18 +1372,22 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private let echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)?
     /// Canonical path only: builds the composite backend's runtime for the frozen request. Tests
     /// inject a fake here; production wires ASRService and the Nemotron model locator.
-    private let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
+    let meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory
     /// Parakeet+Nemotron path only: makes the diarization model available before planning, which
     /// requires it installed. Production downloads it here when the background download has not
     /// finished; tests inject nothing and supply the model themselves.
-    private let prepareDiarizationModel: @MainActor () async throws -> Void
+    private let diarizationSupported: @MainActor () -> Bool
+    let prepareDiarizationDependencies: @MainActor (Set<MeetingDiarizationDependency>) async throws -> Void
     /// Test seam: runs after the canonical sidecar is written and read-back verified, before the
     /// final cancellation check, so "cancelled after sidecar" is deterministically exercisable.
     private let canonicalSidecarVerifiedProbe: (MeetingResultSidecarReference) -> Void
 
     init(
-        asrServiceProvider: @escaping @MainActor () -> ASRService,
+        asrServiceProvider: @escaping @MainActor () -> any MeetingASRServicing,
         managesModelResidency: Bool = true,
+        settings: SettingsStore? = nil,
+        privacyRedactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
+        pcmAdmissionContextProvider: @escaping @MainActor (Bool) -> MeetingPCMAdmissionContext = { .current(piiRedactionEnabled: $0) },
         serializationGate: MeetingProcessingSerializationGate = .shared,
         backendRegistry: MeetingTranscriptionBackendRegistry? = nil,
         backendID: MeetingBackendID? = nil,
@@ -1361,9 +1396,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         echoVerdictProvider: (any MeetingUnitEchoVerdictProviding)? = nil,
         meetingRuntimeFactory: MeetingParakeetNemotronRuntimeFactory? = nil,
         prepareDiarizationModel: @escaping @MainActor () async throws -> Void = {},
+        prepareDiarizationDependencies: (@MainActor (Set<MeetingDiarizationDependency>) async throws -> Void)? = nil,
+        diarizationSupported: @escaping @MainActor () -> Bool = { CPUArchitecture.isAppleSilicon },
         canonicalSidecarVerifiedProbe: ((MeetingResultSidecarReference) -> Void)? = nil
     ) {
+        let settings = settings ?? SettingsStore.shared
+        self.settings = settings
         self.asrServiceProvider = asrServiceProvider
+        self.privacyRedactorProvider = privacyRedactorProvider
+        self.pcmAdmissionContextProvider = pcmAdmissionContextProvider
         self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
@@ -1375,7 +1416,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 modelLocator: MeetingNemotronModelLocator()
             )
         }
-        self.prepareDiarizationModel = prepareDiarizationModel
+        self.diarizationSupported = diarizationSupported
+        self.prepareDiarizationDependencies = prepareDiarizationDependencies ?? { dependencies in
+            if !dependencies.isEmpty { try await prepareDiarizationModel() }
+        }
         self.canonicalSidecarVerifiedProbe = canonicalSidecarVerifiedProbe ?? { _ in }
         let resolvedRegistry = backendRegistry ?? MeetingTranscriptionBackendRegistry.makeDefault()
         self.backendRegistry = resolvedRegistry
@@ -1392,9 +1436,38 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             self.backendIDProvider = { _ in registryDefault }
         } else {
             self.backendIDProvider = { languageCode in
-                PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode)
+                PichiMeetingProviderFactory.selectedBackendID(languageCode: languageCode,
+                    selectedModelID: settings.selectedSpeechModel.rawValue,
+                    savedBackendID: settings.meetingTranscriptionBackendID)
             }
         }
+    }
+
+    /// Admit both retained and strict input through the existing registry before preparation.
+    /// Optional metadata on injected factories keeps their established runtime validation.
+    func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
+        if configuration.audioStorageMode == .memoryOnly {
+            return try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID)
+        }
+        guard self.backendRegistry.contains(backendID) else { throw MeetingBackendError.unknownBackend(backendID) }
+        guard let descriptor = self.backendRegistry.descriptor(for: backendID) else { return nil }
+        guard descriptor.supportedLanguageCodes.contains(configuration.languageCode) else {
+            throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: configuration.languageCode)
+        }
+        guard descriptor.supportedInputs.contains(.recordedChunks) else {
+            throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
+        }
+        return descriptor
+    }
+
+    func prepareSpeakerDependencies(for descriptor: MeetingBackendDescriptor, session: MeetingSession) async throws {
+        guard session.speakerLabelsEnabled != false else { return }
+        // Retained audio can keep the provider's original transcript-only hardware fallback.
+        // Strict PCM requests must still reject unavailable requested speaker processing.
+        if !self.diarizationSupported(), descriptor.allowsTranscriptOnlyOnUnsupportedHardware,
+           session.audioStorageMode != .memoryOnly { return }
+        try await self.prepareDiarizationDependencies(descriptor.diarizationDependencies)
+        try Task.checkCancellation()
     }
 
     func process(
@@ -1402,6 +1475,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
+        if session.audioStorageMode == .memoryOnly { return try await self.finishMemoryAudio(session: session, progress: progress) }
+        let attemptRedactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
+        if session.piiRedactionEnabled == true, attemptRedactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         if let languages = self.backendRegistry.supportedLanguageCodes, !languages.contains(session.languageCode) {
             throw MeetingProcessingError.unsupportedLanguage
         }
@@ -1429,6 +1505,14 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             source: "MeetingProcessingPipeline"
         )
 
+        let declaredDescriptor = self.backendRegistry.descriptor(for: backendID)
+        if let descriptor = declaredDescriptor, !descriptor.supportedInputs.contains(.recordedChunks) {
+            throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
+        }
+        if session.speakerLabelsEnabled != false, let descriptor = declaredDescriptor {
+            try await self.prepareSpeakerDependencies(for: descriptor, session: session)
+        }
+
         // Resolving and planning the backend happens before the serialization lease and before any
         // model readiness work, so an unknown selection or an incompatible session fails without
         // loading anything.
@@ -1442,7 +1526,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             configuration: PichiMeetingProviderFactory.configuration(
                 backendID: backendID,
                 languageCode: session.languageCode,
-                artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil
+                artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
+                diarizationEnabled: session.speakerLabelsEnabled ?? true
             )
         )
         let backend = try self.backendRegistry.makeBackend(
@@ -1477,8 +1562,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
         }
-        if backendID == .parakeetNemotron {
-            try await self.prepareDiarizationModel()
+        guard backend.descriptor.supportedInputs.contains(.recordedChunks) else {
+            throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
+        }
+        // Bare custom factories have no declared preflight metadata. Their descriptor is
+        // available only after construction, still before planning and any runtime/model call.
+        if declaredDescriptor == nil, session.speakerLabelsEnabled != false {
+            try await self.prepareSpeakerDependencies(for: backend.descriptor, session: session)
         }
         let plan = try backend.plan(request)
         if let defect = plan.agreementDefect(with: request, descriptor: backend.descriptor) {
@@ -1496,6 +1586,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 var processed: MeetingProcessingResult
                 switch plan.resultContract {
                 case .legacyResult:
+                    if session.piiRedactionEnabled == true { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
                     let legacyWork: () async throws -> MeetingProcessingResult = {
                         let outcome = try await backend.execute(plan: plan, manifest: nil, progress: progress)
                         try Task.checkCancellation()
@@ -1508,7 +1599,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         let service = self.asrServiceProvider()
                         do {
                             processed = try await MeetingModelResidencyCoordinator.shared.withLegacySpeechModel(
-                                modelID: SettingsStore.shared.selectedSpeechModel.id, work: legacyWork
+                                modelID: self.settings.selectedSpeechModel.id, work: legacyWork
                             )
                         } catch {
                             await Task { try? await service.meetingResidencyParticipant().suspend() }.value
@@ -1519,7 +1610,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                         processed = try await legacyWork()
                     }
                 case .canonicalEvidence:
-                    processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, progress: progress)
+                    processed = try await self.processCanonicalAttempt(plan: plan, backend: backend, redactor: attemptRedactor, progress: progress)
                 }
                 if self.managesModelResidency, summaryProvider != nil {
                     processed.postProcessing = await MeetingPostProcessingRegistry.shared.process(
@@ -1556,6 +1647,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     private func processCanonicalAttempt(
         plan: MeetingBackendPlan,
         backend: any MeetingTranscriptionBackend,
+        redactor: (any TranscriptTextRedacting)?,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
         let request = plan.request
@@ -1588,6 +1680,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             )
         }
 
+        let publishedEvidence: MeetingFinalTranscriptEvidence
+        if request.session.piiRedactionEnabled == true {
+            guard let redactor else { throw MeetingPrivacyPublicationError.redactorUnavailable }
+            publishedEvidence = try await MeetingTranscriptPrivacyPolicy.redactedEvidence(bundle.evidence, using: redactor)
+        } else { publishedEvidence = bundle.evidence }
+
         let echoProvider: any MeetingUnitEchoVerdictProviding = self.echoVerdictProvider
             ?? backend.echoVerdictProvider
             ?? MeetingFailClosedEchoVerdictProvider()
@@ -1602,7 +1700,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let assemblyInput = MeetingAssemblyInput(
             plan: plan,
             manifest: manifest,
-            evidence: bundle.evidence,
+            evidence: publishedEvidence,
             coverageReceipts: bundle.coverageReceipts,
             echoVerdicts: echoVerdicts
         )
@@ -1819,11 +1917,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let asrService = self.asrServiceProvider()
         guard !asrService.isRunning else { throw MeetingProcessingError.dictationActive }
 
-        let selectedModel = SettingsStore.shared.selectedSpeechModel
+        let selectedModel = self.settings.selectedSpeechModel
         guard let languagePin = MeetingProviderLanguagePin(
             languageCode: session.languageCode,
             model: selectedModel,
-            settings: .shared
+            settings: self.settings
         ) else {
             throw MeetingProcessingError.providerDoesNotSupportLanguage(session.languageCode)
         }
@@ -2997,7 +3095,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         fileURL: URL,
         provider: any TranscriptionProvider,
         languageCode: String,
-        asrService: ASRService,
+        asrService: any MeetingASRServicing,
         languagePin: MeetingProviderLanguagePin
     ) async throws -> String {
         var samples = try await Task.detached(priority: .userInitiated) {
@@ -3025,7 +3123,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         _ fileURL: URL,
         provider: any TranscriptionProvider,
         languageCode: String,
-        asrService: ASRService,
+        asrService: any MeetingASRServicing,
         languagePin: MeetingProviderLanguagePin
     ) async throws -> String? {
         let result: ASRTranscriptionResult
@@ -3053,7 +3151,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         _ samples: [Float],
         provider: any TranscriptionProvider,
         languageCode: String,
-        asrService: ASRService,
+        asrService: any MeetingASRServicing,
         languagePin: MeetingProviderLanguagePin
     ) async throws -> ASRTranscriptionResult {
         languagePin.apply()

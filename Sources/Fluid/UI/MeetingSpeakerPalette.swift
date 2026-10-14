@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// Stable per-speaker tints for the transcript. Colour is decoration on top of the name, never
@@ -23,7 +27,8 @@ nonisolated enum MeetingSpeakerPalette {
     }
 
     static func tint(forSpeakerIndex index: Int) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
+        #if canImport(AppKit)
+        return Color(nsColor: NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let value = Self.rgb(forSpeakerIndex: index, isDark: isDark)
             return NSColor(
@@ -33,6 +38,13 @@ nonisolated enum MeetingSpeakerPalette {
                 alpha: 1
             )
         })
+        #else
+        return Color(uiColor: UIColor { traits in
+            let value = Self.rgb(forSpeakerIndex: index, isDark: traits.userInterfaceStyle == .dark)
+            return UIColor(red: CGFloat(value.red) / 255, green: CGFloat(value.green) / 255,
+                blue: CGFloat(value.blue) / 255, alpha: 1)
+        })
+        #endif
     }
 
     /// The unnamed catch-all bucket for mic audio that isn't confidently the local user.

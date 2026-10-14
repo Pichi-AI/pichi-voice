@@ -38,6 +38,7 @@ let package = Package(
                 "DynamicNotchKit",
                 .product(name: "FluidAEC3Bridge", package: "WebRTCAudioProcessing"),
                 .product(name: "PichiGigaAM", package: "PichiGigaAM"),
+                .product(name: "PichiTextPrivacy", package: "PichiGigaAM"),
                 .product(name: "TranscribeCpp", package: "transcribe-cpp-swift"),
                 .product(name: "ZeppelinEmbed", package: "zeppelin-embed"),
             ],

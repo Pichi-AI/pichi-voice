@@ -6,6 +6,12 @@ typealias MeetingAudioChunkID = UUID
 typealias SessionSpeakerID = UUID
 typealias MeetingTranscriptSegmentID = UUID
 
+nonisolated enum MeetingLanguageCode {
+    static func isValid(_ value: String) -> Bool {
+        value == "auto" || (value.utf8.count <= 35 && value.range(of: "^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$", options: .regularExpression) != nil)
+    }
+}
+
 nonisolated enum MeetingCaptureMode: String, Codable, CaseIterable, Sendable {
     case onlineCall
     case inRoom
@@ -20,6 +26,11 @@ nonisolated enum MeetingApplicationAudioScope: String, Codable, Sendable {
 nonisolated enum MeetingApplicationAudioSource: Sendable {
     case application(MeetingApplicationIdentity)
     case systemAudio
+}
+
+nonisolated enum MeetingAudioStorageMode: String, Codable, Sendable {
+    case retainedFiles
+    case memoryOnly
 }
 
 nonisolated enum MeetingSessionState: String, Codable, Sendable {
@@ -296,6 +307,13 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     var microphone: MeetingMicrophoneIdentity
     var chunkDuration: TimeInterval
     var timestampDefaultTitle: Bool? = nil
+    /// Optional for existing encoded configuration records. Absence keeps retained audio.
+    var audioStorageMode: MeetingAudioStorageMode? = nil
+    var speakerLabelsEnabled: Bool? = nil
+    var piiRedactionEnabled: Bool? = nil
+    /// An explicit request override, separate from ambient saved-backend preferences.
+    /// Nil keeps the selected speech model's registered route.
+    var transcriptionBackendID: String? = nil
 
     init(
         mode: MeetingCaptureMode,
@@ -306,7 +324,11 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         applicationAudioScope: MeetingApplicationAudioScope? = nil,
         microphone: MeetingMicrophoneIdentity,
         chunkDuration: TimeInterval = Self.defaultChunkDuration,
-        timestampDefaultTitle: Bool = false
+        timestampDefaultTitle: Bool = false,
+        audioStorageMode: MeetingAudioStorageMode = .retainedFiles,
+        speakerLabelsEnabled: Bool = true,
+        piiRedactionEnabled: Bool = false,
+        transcriptionBackendID: String? = nil
     ) {
         self.mode = mode
         self.title = title
@@ -317,6 +339,10 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.microphone = microphone
         self.chunkDuration = max(60, chunkDuration)
         self.timestampDefaultTitle = timestampDefaultTitle
+        self.audioStorageMode = audioStorageMode
+        self.speakerLabelsEnabled = speakerLabelsEnabled
+        self.piiRedactionEnabled = piiRedactionEnabled
+        self.transcriptionBackendID = transcriptionBackendID
     }
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
@@ -489,6 +515,7 @@ nonisolated struct MeetingTrackHealth: Codable, Equatable, Sendable {
 nonisolated enum MeetingAudioTrackCaptureMethod: String, Codable, Sendable {
     case screenCaptureKit
     case avCaptureSession
+    case audioEngine
     case voiceProcessing
 }
 
@@ -844,45 +871,6 @@ nonisolated struct MeetingRetentionState: Codable, Equatable, Sendable {
     var retainAudioUntil: Date?
 }
 
-/// Applied retroactively from the CURRENT global setting — deliberate: there is no per-session
-/// retention snapshot, so changing the setting re-evaluates every session's deadline immediately.
-nonisolated enum MeetingAudioRetentionPolicy: String, Codable, CaseIterable, Sendable {
-    case afterTranscription
-    case days7
-    case days30
-    case never
-
-    var displayName: String {
-        switch self {
-        case .afterTranscription: return "After transcription"
-        case .days7: return "7 days"
-        case .days30: return "30 days"
-        case .never: return "Forever"
-        }
-    }
-
-    var retentionDays: Int? {
-        switch self {
-        case .days7: return 7
-        case .days30: return 30
-        case .afterTranscription, .never: return nil
-        }
-    }
-
-    func deadline(endedAt: Date?, startedAt: Date) -> Date? {
-        let completedAt = endedAt ?? startedAt
-        if self == .afterTranscription { return completedAt }
-        guard let retentionDays else { return nil }
-        return Calendar.current.date(byAdding: .day, value: retentionDays, to: completedAt)
-    }
-
-    /// Informational display value only; sweep deadlines always come from `deadline(endedAt:startedAt:)`.
-    func retainUntil(startedAt: Date) -> Date? {
-        guard let retentionDays else { return nil }
-        return Calendar.current.date(byAdding: .day, value: retentionDays, to: startedAt)
-    }
-}
-
 nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     static let currentSchemaVersion = 1
 
@@ -921,6 +909,10 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Backend selected at capture start, used by the first processing attempt. Older sessions have no pin.
     var recordingBackendID: String? = nil
     var recordingASRArtifactFingerprint: String? = nil
+    /// Immutable privacy/attribution policy captured when the meeting begins.
+    var audioStorageMode: MeetingAudioStorageMode? = nil
+    var speakerLabelsEnabled: Bool? = nil
+    var piiRedactionEnabled: Bool? = nil
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
     var transcriptTimeDomain: MeetingTranscriptTimeDomain? = nil
@@ -945,6 +937,9 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         } ?? configuration.title
         self.languageCode = configuration.languageCode
         self.mode = configuration.mode
+        self.audioStorageMode = configuration.audioStorageMode
+        self.speakerLabelsEnabled = configuration.speakerLabelsEnabled
+        self.piiRedactionEnabled = configuration.piiRedactionEnabled
         self.platform = configuration.platform
         self.capturedApplication = configuration.effectiveApplicationAudioScope == .systemAudio ? nil : configuration.application
         self.applicationAudioScope = configuration.applicationAudioScope
@@ -1082,14 +1077,16 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 }
 
 extension MeetingSession {
-    var hasFinalizedAudio: Bool {
+    nonisolated var savesAudio: Bool { self.audioStorageMode != .memoryOnly }
+
+    nonisolated var hasFinalizedAudio: Bool {
         self.audioTracks.contains { track in
             track.chunks.contains { $0.finalizationState == .finalized && $0.byteCount > 0 }
         }
     }
 
     /// Shared retry/recovery predicate: ended, with at least one finalized non-empty chunk.
-    var hasRetryableAudio: Bool {
+    nonisolated var hasRetryableAudio: Bool {
         self.retention.audioDeletedAt == nil && self.endedAt != nil && self.hasFinalizedAudio
     }
 }

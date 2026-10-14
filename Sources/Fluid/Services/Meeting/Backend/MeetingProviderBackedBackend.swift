@@ -32,6 +32,20 @@ final class MeetingProviderBackedBackend: MeetingTranscriptionBackend {
         self.materializer = materializer
     }
 
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        try self.descriptor.validatePCMInput(configuration: configuration, mode: mode)
+        guard configuration.asrModel == self.providerModelID else {
+            throw MeetingProviderOptionsError.unsupportedASRModel(configuration.asrModel)
+        }
+        _ = try MeetingProviderOptions.resolve(configuration)
+    }
+
+    func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning {
+        try self.descriptor.validatePCMInput(request)
+        try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode)
+        return try self.runtimeFactory(request)
+    }
+
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
         guard request.configuration.asrModel == self.providerModelID else {
             throw MeetingProviderOptionsError.unsupportedASRModel(request.configuration.asrModel)

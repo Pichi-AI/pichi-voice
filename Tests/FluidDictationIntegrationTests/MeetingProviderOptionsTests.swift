@@ -26,9 +26,10 @@ final class MeetingProviderOptionsTests: XCTestCase {
         let unsupportedModels = [
             "parakeet-tdt-v3",
             "parakeet-tdt-v99",
-            "whisper-tiny",
+            "whisper-base",
             "fluid-parakeet-mini",
             "fluid-parakeet-pico",
+            "cohere-transcribe-6bit",
             "",
         ]
         for asrModel in unsupportedModels {
@@ -39,6 +40,20 @@ final class MeetingProviderOptionsTests: XCTestCase {
                     .unsupportedASRModel(asrModel)
                 )
             }
+        }
+    }
+
+    @MainActor
+    func testExternalCoreMLModelCannotBypassRegisteredMeetingFactory() {
+        let model = SettingsStore.SpeechModel.cohereTranscribeSixBit
+        XCTAssertTrue(model.requiresIOS18)
+        for registered in [SettingsStore.SpeechModel.gigaam, .whisperTiny, .parakeetTDT] {
+            XCTAssertFalse(registered.requiresIOS18)
+            XCTAssertNotNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: registered.rawValue))
+        }
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+        XCTAssertThrowsError(try PichiMeetingProviderFactory.make(MeetingFinalProcessingConfiguration(asrModel: model.rawValue))) { error in
+            XCTAssertEqual(error as? MeetingProviderOptionsError, .unsupportedASRModel(model.rawValue))
         }
     }
 
@@ -83,6 +98,92 @@ final class MeetingProviderOptionsTests: XCTestCase {
         XCTAssertEqual(provider.modelOverride, .parakeetTDT)
         #endif
         XCTAssertNotEqual(configuration.identityFingerprint, MeetingFinalProcessingConfiguration().identityFingerprint)
+    }
+
+    @MainActor
+    func testMultilingualRegisteredMeetingProvidersPinAutomaticLanguageAndDiarizationPolicy() throws {
+        for model: SettingsStore.SpeechModel in [.whisperTiny, .parakeetTDT] {
+            let configuration = PichiMeetingProviderFactory.configuration(asrModel: model.rawValue, languageCode: "auto",
+                                                                         diarizationEnabled: false)
+            XCTAssertEqual(try MeetingProviderOptions.resolve(configuration).model, model)
+            XCTAssertEqual(PichiMeetingProviderFactory.defaultLanguageCode(for: model.rawValue), "auto")
+            XCTAssertTrue(PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(configuration.diarizationFingerprint))
+            let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+            XCTAssertTrue(descriptor.supportedLanguageCodes.isSuperset(of: ["ru", "en", "auto"]))
+            XCTAssertNotEqual(descriptor.id, .legacyCompatibility)
+            XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "auto", selectedModelID: model.rawValue,
+                savedBackendID: .productionDefault), descriptor.id)
+            let provider = try PichiMeetingProviderFactory.make(configuration)
+            if model.isWhisperModel {
+                let whisper = try XCTUnwrap(provider as? WhisperProvider)
+                XCTAssertEqual(whisper.modelOverride, .whisperTiny)
+                XCTAssertNil(whisper.resolvedLanguageCode())
+            } else {
+                XCTAssertTrue(provider is FluidAudioProvider)
+            }
+        }
+        XCTAssertThrowsError(try MeetingProviderOptions.resolve(
+            MeetingFinalProcessingConfiguration(asrModel: SettingsStore.SpeechModel.gigaam.rawValue, languageCode: "auto")
+        ))
+    }
+
+    @MainActor
+    func testOwnedModelSelectionAndSavedFallbackDoNotUseSharedSettings() {
+        let shared = SettingsStore.shared
+        let keys = ["SelectedSpeechModel", "MeetingTranscriptionBackendID"]
+        let originals = keys.map { shared.defaults.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, originals) {
+                if let value { shared.defaults.set(value, forKey: key) }
+                else { shared.defaults.removeObject(forKey: key) }
+            }
+        }
+        shared.selectedSpeechModel = .whisperTiny
+        shared.meetingTranscriptionBackendID = .whisperTiny
+        let unknown = MeetingBackendID(rawValue: "synthetic-unknown-owner")
+        let ownedModelID = PichiMeetingProviderFactory.gigaamModelID
+        // The owner's registered speech choice is authoritative. Ambient saved values
+        // are fallback preferences, not the explicit per-request capture override.
+        for saved in [MeetingBackendID.productionDefault, .gigaam, .whisperTiny, .legacyCompatibility, unknown] {
+            for language in ["en", "ru"] {
+                XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+                    selectedModelID: ownedModelID, savedBackendID: saved), .gigaam)
+            }
+        }
+        // An unregistered model still consumes only the supplied owner's saved fallback.
+        let unregisteredModelID = SettingsStore.SpeechModel.whisperSmall.rawValue
+        XCTAssertNil(PichiMeetingProviderFactory.registeredBackendDescriptor(for: unregisteredModelID))
+        for (saved, english, nonEnglish) in [
+            (MeetingBackendID.productionDefault, MeetingBackendID.productionDefault, MeetingBackendID.productionDefault),
+            (.whisperTiny, .whisperTiny, .whisperTiny),
+            (.legacyCompatibility, .legacyCompatibility, .productionDefault),
+            (unknown, unknown, unknown),
+        ] {
+            for (language, expected) in [("en", english), ("fr", nonEnglish), ("ru", nonEnglish)] {
+                XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+                    selectedModelID: unregisteredModelID, savedBackendID: saved), expected)
+            }
+        }
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru", selectedModelID: ownedModelID), .gigaam)
+        XCTAssertEqual(PichiMeetingProviderFactory.selectedBackendID(languageCode: "ru"), .whisperTiny)
+        XCTAssertEqual(shared.selectedSpeechModel, .whisperTiny)
+        XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
+    }
+
+    @MainActor
+    func testLiveModelBindsRegisteredConfigurationAndPreservesUnboundRollbackChoice() {
+        let override = PichiMeetingProviderFactory.configuration(backendID: .whisperTiny, languageCode: "ru",
+            artifactFingerprintOverride: "synthetic-whisper", diarizationEnabled: false)
+        XCTAssertEqual(PichiMeetingProviderFactory.liveModelID(backendID: .whisperTiny, configuration: override,
+            selectedModelID: PichiMeetingProviderFactory.gigaamModelID), PichiMeetingProviderFactory.whisperTinyModelID)
+        XCTAssertEqual(override.asrArtifactFingerprint, "synthetic-whisper")
+        let legacy = PichiMeetingProviderFactory.configuration(backendID: .legacyCompatibility,
+            languageCode: "en", diarizationEnabled: false)
+        XCTAssertEqual(PichiMeetingProviderFactory.liveModelID(backendID: .legacyCompatibility, configuration: legacy,
+            selectedModelID: PichiMeetingProviderFactory.whisperTinyModelID), PichiMeetingProviderFactory.whisperTinyModelID)
+        XCTAssertNil(legacy.asrArtifactFingerprint)
+        XCTAssertEqual(PichiMeetingProviderFactory.liveModelID(backendID: .init(rawValue: "synthetic-unknown"),
+            configuration: override, selectedModelID: PichiMeetingProviderFactory.gigaamModelID), PichiMeetingProviderFactory.gigaamModelID)
     }
 
     @MainActor

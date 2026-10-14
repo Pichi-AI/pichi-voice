@@ -1,0 +1,261 @@
+import Foundation
+
+/// Stable identifiers and placeholders, carried over from Pichi Transcribe.
+/// General dates, organizations, locations, drug names and ordinary numbers are
+/// deliberately excluded from this privacy policy.
+public enum PIIKind: String, CaseIterable, Sendable, Codable {
+    case person = "PER", phone = "PHONE", email = "EMAIL", card = "CARD"
+    case passport = "PASSPORT", snils = "SNILS", inn = "INN", birthDate = "DOB"
+    case address = "ADDRESS", account = "ACCOUNT", identifier = "NUMBER"
+    case login = "LOGIN", secret = "SECRET"
+    public var placeholder: String {
+        switch self {
+        case .person: "[ИМЯ]"
+        case .phone: "[ТЕЛЕФОН]"
+        case .email: "[EMAIL]"
+        case .card: "[КАРТА]"
+        case .passport: "[ПАСПОРТ]"
+        case .snils: "[СНИЛС]"
+        case .inn: "[ИНН]"
+        case .birthDate: "[ДАТА_РОЖДЕНИЯ]"
+        case .address: "[АДРЕС]"
+        case .account: "[СЧЁТ]"
+        case .identifier: "[НОМЕР]"
+        case .login: "[ЛОГИН]"
+        case .secret: "[СЕКРЕТ]"
+        }
+    }
+    var priority: Int {
+        switch self {
+        case .email, .secret: 9
+        case .card, .account: 8
+        case .phone: 7
+        case .address, .passport, .snils: 6
+        case .inn, .birthDate, .login: 5
+        case .person: 4
+        case .identifier: 1
+        }
+    }
+}
+
+public struct PIIRedactionResult: Sendable, Equatable {
+    public let text: String
+    public let counts: [PIIKind: Int]
+    public let spans: [PIIRedactedSpan]
+    // Raw strings and canonical identifiers intentionally do not escape the
+    // detector. A checkpoint/export cannot accidentally serialize a recovery map.
+}
+
+public struct PIIRedactedSpan: Sendable, Equatable {
+    public let range: NSRange
+    public let replacement: String
+    /// Full source match of a validated contextual field. This is evidence for
+    /// its cue only, not permission to publish unmasked words within the context.
+    public let resolvedContextRange: NSRange?
+    init(range: NSRange, replacement: String, resolvedContextRange: NSRange? = nil) {
+        self.range = range; self.replacement = replacement; self.resolvedContextRange = resolvedContextRange
+    }
+}
+
+struct PIIDetection: Sendable {
+    var range: NSRange
+    let kind: PIIKind
+    let contextual: Bool
+    var resolvedContextRange: NSRange? = nil
+    var priority: Int { kind.priority + (contextual && [.passport, .snils].contains(kind) ? 2 : 0) }
+}
+
+public enum PIIRedactor {
+    private static let boundary = #"(?<![\p{L}\p{N}])"#
+    private static let end = #"(?![\p{L}\p{N}])"#
+    // These are precision guards also present in the Transcribe detector. They
+    // are not a name dictionary or a substitute for real token classification.
+    private static let nonNames = Set("аспирин инсулин витамин пенициллин анальгин метформин оземпик лизиноприл метотрексат дофамин серотонин адреналин мелатонин кофеин никотин протеин проверь проведи изучите сделай готов хорошо спасибо здравствуйте русский английский".split(separator: " ").map(String.init))
+
+    public static func redact(_ text: String, ner: [PIINERSpan]) throws -> PIIRedactionResult {
+        guard text.utf16.count <= PIIWordPieceTokenizer.maximumInputUTF16 else { throw TextPrivacyError.inputTooLong }
+        var entities = try structured(text) + PIIRussianNameHeuristics.detect(text)
+        let utf16 = Array(text.utf16)
+        for span in ner {
+            guard span.range.location >= 0, span.range.length > 0,
+                  span.range.location <= utf16.count, span.range.length <= utf16.count - span.range.location,
+                  validBoundary(span.range.location, utf16), validBoundary(NSMaxRange(span.range), utf16),
+                  let range = Range(span.range, in: text), span.score.isFinite, (0...1).contains(span.score) else { throw TextPrivacyError.invalidSpan }
+            // News NER supplies persons only. Its LOC/ORG labels must not become
+            // an address or drug-removal toggle via translated/UI label matching.
+            guard span.label == "PER", span.score >= 0.5 else { continue }
+            let value = String(text[range])
+            let letters = value.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+            guard letters.count >= 3 else { continue }
+            let words = value.split(whereSeparator: { $0.isWhitespace }).map { $0.lowercased() }
+            guard !words.contains(where: { nonNames.contains($0) }) else { continue }
+            if words.count == 1, letters.count < 4, span.score < 0.9 { continue }
+            // Mixed alphabets inside one word are common ASR transliteration
+            // debris. Separate RU/EN words are still valid mixed-language text.
+            if words.contains(where: { word in
+                word.range(of: "[A-Za-z]", options: .regularExpression) != nil && word.range(of: "[А-Яа-яЁё]", options: .regularExpression) != nil
+            }) { continue }
+            entities.append(.init(range: span.range, kind: .person, contextual: false))
+        }
+        let merged = merge(entities)
+        var output = ""
+        var position = 0
+        var counts: [PIIKind: Int] = [:]
+        let source = text as NSString
+        for entity in merged {
+            output += source.substring(with: NSRange(location: position, length: entity.range.location - position))
+            output += entity.kind.placeholder
+            counts[entity.kind, default: 0] += 1
+            position = NSMaxRange(entity.range)
+        }
+        output += source.substring(from: position)
+        return .init(text: output, counts: counts, spans: merged.map {
+            .init(range: $0.range, replacement: $0.kind.placeholder, resolvedContextRange: $0.resolvedContextRange)
+        })
+    }
+
+    private static func structured(_ text: String) throws -> [PIIDetection] {
+        var entities: [PIIDetection] = []
+        func matches(_ pattern: String, _ kind: PIIKind, capture: Int = 0, contextual: Bool = false,
+                     validate: ((String) -> Bool)? = nil) throws {
+            let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            let source = text as NSString
+            for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+                let range = match.range(at: capture)
+                guard range.location != NSNotFound, range.length > 0, Range(range, in: text) != nil else { continue }
+                if let validate, !validate(source.substring(with: range)) { continue }
+                entities.append(.init(range: range, kind: kind, contextual: contextual,
+                                      resolvedContextRange: capture > 0 ? match.range : nil))
+            }
+        }
+        try matches(#"[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}"#, .email)
+        try matches(boundary + #"[\p{L}\p{N}_-]+(?:(?:\.|\s+(?:точка|dot|дефис|нижнее подч[её]ркивание)\s+)[\p{L}\p{N}_-]+|\s+\d+)*[\s.,;]*(?:собака|собачка|sobaka|sobachka|at)[\s.,;]*[\p{L}\p{N}-]+(?:(?:\.|\s+(?:точка|dot)\s+)[\p{L}\p{N}-]+)*(?:\.|\s+(?:точка|dot)\s+)(?:com|net|org|info|biz|dev|app|io|me|su|ru|рф|ком|ру)"# + end, .email)
+        try matches(#"(?:\+\s?7|(?<!\d)[78])(?:[\s()-]*\d){10}(?!\d)"#, .phone)
+        try matches(#"\+\d{1,3}(?:[\s()-]*\d){8,12}(?!\d)"#, .phone)
+        try matches(boundary + #"9(?:[\s()-]*\d){9}(?!\d)"#, .phone)
+        try matches(#"(?:телефон[а-яё]*|тел\.?|позвон[а-яё]*|мобильн[а-яё]*|phone|call)\D{0,25}?((?<!\d)\d(?:[ -]?\d){4,6}(?![ -]?\d))"#, .phone, capture: 1, contextual: true)
+        try matches(boundary + #"\d{3}-\d{3}-\d{3}[ -]?\d{2}"# + end, .snils, validate: { snilsValid(digits($0)) })
+        try matches(#"снилс[^\d]{0,25}?((?<!\d)\d(?:[ -]?\d){8,10}(?![ -]?\d))"#, .snils, capture: 1, contextual: true)
+        try matches(#"(?:паспорт[а-яё]*|сери[яи]|passport)[^.]{0,30}?((?<!\d)\d(?:\s?\d){5,9}(?!\s?\d))"#, .passport, capture: 1, contextual: true)
+        try matches(boundary + #"инн[^\d]{0,15}(\d{12}|\d{10})"# + end, .inn, capture: 1, contextual: true)
+        try matches(boundary + #"(?:\d{12}|\d{10})"# + end, .inn, validate: { innValid(digits($0)) })
+        try matches(#"(?:родил[а-яё]*|дата рождения|день рождения|года рождения|г\.р\.|date of birth|born)[^.]{0,25}?(\d{1,2}[. /-]\d{1,2}[. /-]\d{2,4}|\d{1,2}\s+[а-яё]+\s+\d{4}|\d{4})(?!\d)"#, .birthDate, capture: 1, contextual: true)
+        entities += try paymentCards(in: text)
+        try matches(boundary + #"[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}"# + end, .account)
+        try matches(#"(?:лицевой сч[её]т|номер сч[её]та|account number|р/с)\D{0,15}?((?<!\d)\d(?:[ -]?\d){9,24}(?![ -]?\d))"#, .account, capture: 1, contextual: true)
+        // Context is required: blindly masking every 6-digit number destroys
+        // dosages, study counts and product codes in this pharma scenario.
+        try matches(#"(?:номер договора|номер полиса|номер документа|идентификатор|policy number|document id)\D{0,15}?([A-Z0-9][A-Z0-9 -]{5,30})"#, .identifier, capture: 1, contextual: true)
+        try matches(#"(?:пароль|секретный ключ|password|api key)\s*[:=]?\s*([^\s,;.!?]{4,128})"#, .secret, capture: 1, contextual: true)
+        try matches(#"(?:логин|username|login)\s*[:=]?\s*([\p{L}\p{N}_.@-]{3,128})"#, .login, capture: 1, contextual: true)
+        // ASR word units have no reliable sentence boundary. A free-form tail
+        // after an address cue would absorb the next drug/dose phrase. Match
+        // explicitly marked address fields and stop at the last numbered field.
+        // Unmarked/free-form and English addresses require separate detection.
+        let addressCue = #"(?:адрес проживания|домашний адрес|жив[уёе]т? по адресу)\s*[:=]?\s*"#
+        let addressWord = #"[\p{L}\p{N}][\p{L}\p{N}.'-]*"#
+        let city = #"(?:(?:город|г\.)\s+"# + addressWord + #"(?:\s+"# + addressWord + #"){0,2}?\s*,?\s+)?"#
+        let street = #"(?:улица|ул\.?|проспект|пр-кт|переулок|пер\.?|проезд|шоссе|бульвар|б-р|набережная|наб\.?|площадь|пл\.?)\s+"#
+        let number = #"\d{1,4}(?:[а-яa-z])?(?:[/\-]\d{1,4}[а-яa-z]?)?(?:[кс]\d{1,4}[а-яa-z]?)?(?![\p{L}\p{N}])"#
+        let house = #"\s*,?\s*(?:дом|д\.?)\s*№?\s*"# + number
+        let building = #"(?:\s*,?\s*(?:корпус|корп\.?|к\.|строение|стр\.?)\s*№?\s*"# + number + #"){0,2}"#
+        let unit = #"(?:\s*,?\s*(?:квартира|кв\.?|офис|оф\.?)\s*№?\s*"# + number + #")?"#
+        try matches(addressCue + "(" + city + street + addressWord + #"(?:\s+"# + addressWord + #"){0,5}?"# + house + building + unit + ")",
+                    .address, capture: 1, contextual: true)
+        return entities
+    }
+
+    /// Candidate ends must be actual numeric-group boundaries. A greedy run may
+    /// contain a valid 16-digit PAN followed by a separate three-digit amount;
+    /// rejecting that 19-digit run must not discard the complete earlier PAN.
+    private static func paymentCards(in text: String) throws -> [PIIDetection] {
+        let runs = try NSRegularExpression(pattern: boundary + #"\d{1,19}(?:[\s-]+\d{1,19})*"# + end)
+        let groups = try NSRegularExpression(pattern: #"\d+"#)
+        let amountUnit = try NSRegularExpression(pattern: #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#, options: [.caseInsensitive])
+        let source = text as NSString
+        var result: [PIIDetection] = []
+        for run in runs.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            let parts = groups.matches(in: text, range: run.range).map(\.range)
+            guard let last = parts.last else { continue }
+            let suffix = source.substring(from: NSMaxRange(last))
+            let hasAmountUnit = amountUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count)) != nil
+            var amountSuffixStart = parts.count
+            if hasAmountUnit {
+                amountSuffixStart = parts.count - 1
+                if last.length == 3 {
+                    while amountSuffixStart > 0, parts[amountSuffixStart - 1].length == 3 { amountSuffixStart -= 1 }
+                    if amountSuffixStart > 0, (1...2).contains(parts[amountSuffixStart - 1].length) { amountSuffixStart -= 1 }
+                }
+            }
+            var start = 0
+            while start < parts.count {
+                var candidateDigits: [Int] = []
+                var validEnds: [Int] = []
+                for finish in start..<parts.count {
+                    candidateDigits += digits(source.substring(with: parts[finish]))
+                    if candidateDigits.count > 19 { break }
+                    if luhnValid(candidateDigits) { validEnds.append(finish) }
+                }
+                var bestEnd = validEnds.last
+                if hasAmountUnit {
+                    // A trailing explicit amount unit distinguishes a quantity
+                    // from a PAN group, even if PAN + quantity also passes Luhn.
+                    // Ungrouped quantities have no three-digit size limit. Grouped
+                    // amounts use a short leading group and three-digit groups.
+                    // Unmarked ambiguous runs keep the
+                    // longest valid boundary candidate instead of guessing.
+                    for finish in validEnds where finish + 1 < parts.count && finish + 1 >= amountSuffixStart {
+                        bestEnd = finish; break
+                    }
+                }
+                if let finish = bestEnd {
+                    result.append(.init(range: NSUnionRange(parts[start], parts[finish]), kind: .card, contextual: false))
+                    start = finish + 1
+                } else { start += 1 }
+            }
+        }
+        return result
+    }
+
+    static func merge(_ candidates: [PIIDetection]) -> [PIIDetection] {
+        let ordered = candidates.sorted { $0.range.location < $1.range.location || ($0.range.location == $1.range.location && $0.priority > $1.priority) }
+        var result: [PIIDetection] = []
+        for entity in ordered {
+            if let last = result.last, NSIntersectionRange(last.range, entity.range).length > 0 {
+                // Keep the whole union, unlike dropping the lower-priority match:
+                // overlapping detection must not expose the unmatched tail.
+                let winner = entity.priority > last.priority ? entity : last
+                result[result.count - 1] = .init(range: NSUnionRange(last.range, entity.range), kind: winner.kind,
+                    contextual: winner.contextual, resolvedContextRange: winner.resolvedContextRange)
+            } else { result.append(entity) }
+        }
+        return result
+    }
+
+    private static func digits(_ text: String) -> [Int] { text.compactMap { $0.wholeNumberValue } }
+    private static func validBoundary(_ offset: Int, _ utf16: [UInt16]) -> Bool {
+        // Range(NSRange,in:) can represent UTF-16 positions inside a surrogate
+        // pair. Those are not valid source character offsets for replacement.
+        offset == 0 || offset == utf16.count || !(0xDC00...0xDFFF).contains(utf16[offset])
+    }
+    static func luhnValid(_ digits: [Int]) -> Bool {
+        guard (13...19).contains(digits.count), Set(digits).count > 1 else { return false }
+        let sum = digits.reversed().enumerated().reduce(0) { total, item in
+            let value = item.offset % 2 == 1 ? item.element * 2 : item.element
+            return total + (value > 9 ? value - 9 : value)
+        }
+        return sum % 10 == 0
+    }
+    static func innValid(_ d: [Int]) -> Bool {
+        guard Set(d).count > 1 else { return false }
+        func check(_ weights: [Int]) -> Int { zip(d, weights).reduce(0) { $0 + $1.0 * $1.1 } % 11 % 10 }
+        if d.count == 10 { return check([2,4,10,3,5,9,4,6,8]) == d[9] }
+        if d.count == 12 { return check([7,2,4,10,3,5,9,4,6,8]) == d[10] && check([3,7,2,4,10,3,5,9,4,6,8]) == d[11] }
+        return false
+    }
+    static func snilsValid(_ d: [Int]) -> Bool {
+        guard d.count == 11, Set(d).count > 1 else { return false }
+        let raw = zip(d.prefix(9), (1...9).reversed()).reduce(0) { $0 + $1.0 * $1.1 } % 101
+        return (raw == 100 ? 0 : raw) == d[9] * 10 + d[10]
+    }
+}

@@ -1,6 +1,7 @@
 // Event replay matrices share private helpers in this regression suite.
 // swiftlint:disable file_length
 import AppKit
+import Carbon
 import Combine
 import CoreAudio
 @testable import FluidVoice_Debug
@@ -10,6 +11,54 @@ import XCTest
 
 // swiftlint:disable:next type_body_length
 final class HotkeyShortcutTests: XCTestCase {
+    func testFunctionKeyDisplayNames() {
+        let keys: [(Int, String)] = [
+            (kVK_F1, "F1"), (kVK_F2, "F2"), (kVK_F3, "F3"), (kVK_F4, "F4"),
+            (kVK_F5, "F5"), (kVK_F6, "F6"), (kVK_F7, "F7"), (kVK_F8, "F8"),
+            (kVK_F9, "F9"), (kVK_F10, "F10"), (kVK_F11, "F11"), (kVK_F12, "F12"),
+            (kVK_F13, "F13"), (kVK_F14, "F14"), (kVK_F15, "F15"), (kVK_F16, "F16"),
+            (kVK_F17, "F17"), (kVK_F18, "F18"), (kVK_F19, "F19"), (kVK_F20, "F20"),
+        ]
+        for (keyCode, name) in keys {
+            XCTAssertEqual(HotkeyShortcut.keyCodeToString(UInt16(keyCode)), name)
+            XCTAssertEqual(HotkeyShortcut(keyCode: UInt16(keyCode), modifierFlags: []).displayString, name)
+        }
+    }
+
+    func testModifiedFunctionKeyDisplayPreservesMatchingAndCoding() throws {
+        let keyCode = UInt16(kVK_F18)
+        for includeFunction in [false, true] {
+            var flags: NSEvent.ModifierFlags = [.control, .shift]
+            if includeFunction { flags.insert(.function) }
+            let shortcut = HotkeyShortcut(keyCode: keyCode, modifierFlags: flags)
+            XCTAssertEqual(shortcut.displayString, includeFunction ? "🌐 + ⌃ + ⇧ + F18" : "⌃ + ⇧ + F18")
+            XCTAssertEqual(shortcut.keyCode, keyCode)
+            XCTAssertEqual(shortcut.modifierFlags, flags)
+            XCTAssertFalse(shortcut.isModifierOnlyShortcut)
+            XCTAssertTrue(shortcut.matchesRecordingShortcut(keyCode: keyCode, modifiers: flags))
+            XCTAssertFalse(shortcut.matches(keyCode: UInt16(kVK_F19), modifiers: flags))
+            XCTAssertFalse(shortcut.matches(keyCode: keyCode, modifiers: flags.symmetricDifference(.function)))
+            XCTAssertFalse(shortcut.matches(keyCode: keyCode, modifiers: flags.subtracting(.shift)))
+
+            let data = try JSONEncoder().encode(shortcut)
+            let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(Set(payload.keys), ["kind", "keyCode", "modifierFlagsRawValue"])
+            XCTAssertEqual(payload["kind"] as? String, "keyboard")
+            XCTAssertEqual(payload["keyCode"] as? UInt16, keyCode)
+            XCTAssertEqual(payload["modifierFlagsRawValue"] as? UInt, flags.rawValue)
+            let restored = try JSONDecoder().decode(HotkeyShortcut.self, from: data)
+            XCTAssertEqual(restored, shortcut)
+            XCTAssertEqual(restored.displayString, shortcut.displayString)
+        }
+    }
+
+    func testFunctionKeyNamesPreserveLetterLayoutAndModifierNames() {
+        let letter = UInt16(kVK_ANSI_A)
+        XCTAssertEqual(HotkeyShortcut.keyCodeToString(letter), HotkeyShortcut.characterForKeyCode(letter) ?? "A")
+        XCTAssertEqual(HotkeyShortcut.keyCodeToString(UInt16(kVK_Function)), "fn")
+        XCTAssertEqual(HotkeyShortcut(keyCode: UInt16(kVK_RightOption), modifierFlags: []).displayString, "Right ⌥")
+    }
+
     @MainActor
     func testOverlayAppearanceRejectsNonfiniteTransparency() {
         let defaults = UserDefaults.standard
