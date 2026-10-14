@@ -135,7 +135,9 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
             throw error
         }
 
-        let tracks = try session.audioTracks.map { try Self.measure($0, in: directory) }
+        // The legacy browser probe includes startup/ready/drain time outside its 5...30-second
+        // stimulus wait. Preserve its original 60-second decode cap rather than using that wait.
+        let tracks = try session.audioTracks.map { try Self.measure($0, in: directory, maximumCaptureDuration: 60) }
         let eventSummary = events.summary()
         var failures: [String] = []
         let terminalInterruptions: [MeetingInterruptionKind] = [
@@ -219,7 +221,11 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
         }
     }
 
-    fileprivate nonisolated static func measure(_ track: MeetingAudioTrack, in directory: URL) throws -> BrowserCaptureTrackMetrics {
+    fileprivate nonisolated static func measure(
+        _ track: MeetingAudioTrack, in directory: URL, maximumCaptureDuration: Double
+    ) throws -> BrowserCaptureTrackMetrics {
+        try Self.require(maximumCaptureDuration.isFinite && (5...180).contains(maximumCaptureDuration),
+                         "Capture decoding duration must be in the supported 5...180-second probe range.")
         var result = BrowserCaptureTrackMetrics(
             kind: track.kind.rawValue, sourceIdentifier: track.sourceIdentifier,
             captureMethod: track.captureMethod?.rawValue, health: track.health.status.rawValue,
@@ -237,11 +243,30 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
             result.persistedBytes += byteCount
             let file = try AVAudioFile(forReading: fileURL, commonFormat: .pcmFormatFloat32, interleaved: false)
             let format = file.processingFormat
-            try Self.require(
-                format.sampleRate.isFinite && format.sampleRate > 0 && format.sampleRate <= 192_000
-                    && file.length <= Int64(format.sampleRate * 60),
-                "CAF exceeds its decoding bound."
-            )
+            try Self.require(format.sampleRate.isFinite && format.sampleRate > 0 && format.sampleRate <= 192_000,
+                             "CAF has an invalid or unsupported decoding sample rate.")
+            let startSeconds = chunk.presentationStart.seconds
+            let endSeconds = chunk.presentationEnd.seconds
+            let declaredDuration = endSeconds - startSeconds
+            let declaredFrames = declaredDuration * format.sampleRate
+            let frameLimit = maximumCaptureDuration * format.sampleRate
+            try Self.require(chunk.presentationStart.timescale > 0 && chunk.presentationEnd.timescale > 0
+                             && startSeconds.isFinite && endSeconds.isFinite && startSeconds >= 0 && declaredDuration > 0
+                             && declaredFrames.isFinite && declaredFrames <= frameLimit + 1
+                             && file.length > 0 && Double(file.length) <= frameLimit + 1,
+                             "CAF exceeds its configured capture decoding bound or has an invalid declared time range.")
+            // The writer rotates BEFORE an incoming packet, then appends that packet whole.
+            // Sixty seconds is a rotation target, not a hard CAF frame cap. For contiguous chunks,
+            // trust the declared canonical interval only when its frame count agrees with disk.
+            // The one-frame allowance accounts for timestamp quantization, not packet overshoot.
+            let hasTimelineBoundary = chunk.discontinuities.contains {
+                $0.kind == .clockDiscontinuity || ($0.gapSeconds ?? 0) > 0
+            }
+            if !hasTimelineBoundary {
+                let roundingAllowance = 1 + max(abs(declaredFrames), Double(file.length)).ulp * 8
+                try Self.require(abs(Double(file.length) - declaredFrames) <= roundingAllowance,
+                                 "CAF frame count disagrees with its contiguous canonical chunk duration.")
+            }
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192))
             while file.framePosition < file.length {
                 try file.read(into: buffer, frameCount: 8192)
@@ -266,6 +291,7 @@ final class MeetingBrowserAudioHardwareTests: XCTestCase {
             }
         }
         result.rms = result.decodedSamples > 0 ? sqrt(squaredSum / Double(result.decodedSamples)) : 0
+        try Self.require(result.nonFiniteSamples == 0, "CAF contains \(result.nonFiniteSamples) non-finite PCM samples.")
         return result
     }
 
@@ -551,12 +577,13 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
             return Self.report(
                 session: failure.session, directory: directory, runID: options.runID,
                 captureScope: start?.captureScope, protocolState: protocolState,
-                events: events, failures: failure.failures
+                events: events, failures: failure.failures, maximumCaptureDuration: options.durationSeconds
             )
         }
         var report = Self.report(
             session: session, directory: directory, runID: options.runID,
-            captureScope: start?.captureScope, protocolState: protocolState, events: events, failures: []
+            captureScope: start?.captureScope, protocolState: protocolState, events: events, failures: [],
+            maximumCaptureDuration: options.durationSeconds
         )
         do {
             if report.applicationAudioScope != "systemAudio" || report.capturedApplication != nil || report.captureScope != "systemAudio" {
@@ -686,7 +713,7 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
 
     fileprivate static func report(
         session: MeetingSession, directory: URL, runID: UUID, captureScope: MeetingCaptureScope?,
-        protocolState: SystemContinuityProtocol, events: BrowserCaptureEvents, failures: [String]
+        protocolState: SystemContinuityProtocol, events: BrowserCaptureEvents, failures: [String], maximumCaptureDuration: Double
     ) -> SystemContinuityReport {
         var report = SystemContinuityReport(runID: runID, status: "failed", failures: failures)
         report.sessionDirectory = directory.path
@@ -702,7 +729,7 @@ final class MeetingSystemAudioContinuityHardwareTests: XCTestCase {
         report.phaseWindows = protocolState.phases
         report.events = events.summary()
         for track in session.audioTracks {
-            do { report.tracks.append(try MeetingBrowserAudioHardwareTests.measure(track, in: directory)) }
+            do { report.tracks.append(try MeetingBrowserAudioHardwareTests.measure(track, in: directory, maximumCaptureDuration: maximumCaptureDuration)) }
             catch { report.failures.append("\(track.kind.rawValue) saved PCM measurement failed: \(error.localizedDescription)") }
         }
         return report
@@ -1064,7 +1091,7 @@ final class MeetingSystemAudioContinuityFailureEvidenceTests: XCTestCase {
         )
         let report = MeetingSystemAudioContinuityHardwareTests.report(
             session: failure.session, directory: fixture.directory, runID: protocolState.runID,
-            captureScope: .systemAudio, protocolState: protocolState, events: events, failures: failure.failures
+            captureScope: .systemAudio, protocolState: protocolState, events: events, failures: failure.failures, maximumCaptureDuration: 100
         )
         XCTAssertEqual(report.status, "failed")
         XCTAssertFalse(report.protocolComplete)
@@ -1258,6 +1285,126 @@ private actor ContinuityEvidenceCaptureController: MeetingCaptureControlling {
     }
     func shutdownForTermination() async { self.invocationOrder.append("shutdown") }
     func calls() -> [String] { self.invocationOrder }
+}
+
+/// Decoder bounds follow persisted chunk timing and the configured probe bound, not the
+/// writer's rotation target. All fixtures are synthetic files, with no device/model access.
+final class MeetingBrowserAudioMeasurementTests: XCTestCase {
+    func testPacketCrossingSixtySecondTargetAcceptsThirtyTwoExtraFramesWhenManifestAgrees() throws {
+        let frames: Int64 = 60 * 48_000 + 32
+        let fixture = try self.fixture(frames: frames, sampleRate: 48_000)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let duration = fixture.track.chunks[0].presentationEnd.seconds - fixture.track.chunks[0].presentationStart.seconds
+        XCTAssertGreaterThan((duration - 60) * 48_000, 31)
+        let metrics = try MeetingBrowserAudioHardwareTests.measure(fixture.track, in: fixture.directory, maximumCaptureDuration: 100)
+        XCTAssertEqual(metrics.decodedFrames, frames)
+        XCTAssertEqual(metrics.finalizedChunkCount, 1)
+        XCTAssertEqual(metrics.nonFiniteSamples, 0)
+        XCTAssertEqual(metrics.rms, 0.25, accuracy: 0.0001)
+    }
+
+    func testFileAndDeclaredDurationMustRemainWithinConfiguredHardBound() throws {
+        let fixture = try self.fixture(frames: 6 * 16_000, sampleRate: 16_000)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(fixture.track, in: fixture.directory, maximumCaptureDuration: 5))
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(fixture.track, in: fixture.directory, maximumCaptureDuration: .infinity))
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(fixture.track, in: fixture.directory, maximumCaptureDuration: 181))
+        var tooLongManifest = fixture.track
+        tooLongManifest.chunks[0].presentationEnd = MeetingMediaTime(value: 200 * 16_000, timescale: 16_000)
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(tooLongManifest, in: fixture.directory, maximumCaptureDuration: 100))
+    }
+
+    func testOneFrameTimestampQuantizationDoesNotAdmitTwoFrameMetadataMismatch() throws {
+        let fixture = try self.fixture(frames: 1600, sampleRate: 16_000)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var track = fixture.track
+        track.chunks[0].presentationEnd.value += 1
+        XCTAssertNoThrow(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
+        track.chunks[0].presentationEnd.value += 1
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
+        track.chunks[0].presentationEnd = track.chunks[0].presentationStart
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
+    }
+
+    func testGapMetadataAvoidsFalseContiguousComparisonButKeepsHardBound() throws {
+        let fixture = try self.fixture(frames: 1600, sampleRate: 16_000)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var track = fixture.track
+        track.chunks[0].presentationEnd.value += 16_000
+        track.chunks[0].discontinuities = [MeetingAudioDiscontinuity(kind: .sourceLost, presentationTime: nil, gapSeconds: 1, detail: nil)]
+        XCTAssertNoThrow(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
+        track.chunks[0].presentationEnd = MeetingMediaTime(value: 250 * 16_000, timescale: 16_000)
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(track, in: fixture.directory, maximumCaptureDuration: 100))
+    }
+
+    func testNonFinitePcmAndInvalidDeclaredTimeRemainFailures() throws {
+        let fixture = try self.fixture(frames: 1600, sampleRate: 16_000, nonFinite: true)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(fixture.track, in: fixture.directory, maximumCaptureDuration: 100)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("non-finite PCM"))
+        }
+        var invalidTime = fixture.track
+        invalidTime.chunks[0].presentationEnd = MeetingMediaTime(value: 1600, timescale: 0)
+        XCTAssertThrowsError(try MeetingBrowserAudioHardwareTests.measure(invalidTime, in: fixture.directory, maximumCaptureDuration: 100))
+    }
+
+    @MainActor
+    func testReportNamesRejectedTrackAndRetainsProtocolMetadata() throws {
+        let fixture = try self.fixture(frames: 1600, sampleRate: 16_000)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        var track = fixture.track
+        track.chunks[0].presentationEnd.value += 32
+        let timebase = track.timebase
+        var session = MeetingSession(configuration: MeetingCaptureConfiguration(
+            mode: .onlineCall, title: "Synthetic rejected metadata", languageCode: "ru", application: nil,
+            applicationAudioScope: .systemAudio,
+            microphone: MeetingMicrophoneIdentity(captureDeviceID: "synthetic-microphone", displayName: "Synthetic microphone")
+        ), timebase: timebase)
+        session.audioTracks = [track]
+        session.state = .failed
+        let protocolState = SystemContinuityProtocol(runID: UUID())
+        let report = MeetingSystemAudioContinuityHardwareTests.report(
+            session: session, directory: fixture.directory, runID: protocolState.runID,
+            captureScope: .systemAudio, protocolState: protocolState, events: BrowserCaptureEvents(),
+            failures: ["external phase protocol incomplete"], maximumCaptureDuration: 100
+        )
+        XCTAssertEqual(report.failures.first, "external phase protocol incomplete")
+        XCTAssertTrue(report.failures.last?.contains("microphone saved PCM measurement failed") == true)
+        XCTAssertFalse(report.protocolComplete)
+        XCTAssertEqual(report.applicationAudioScope, "systemAudio")
+        XCTAssertEqual(report.sessionDirectory, fixture.directory.path)
+    }
+
+    private func fixture(frames: Int64, sampleRate: Int32, nonFinite: Bool = false) throws -> (track: MeetingAudioTrack, directory: URL) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("BrowserMeasurement-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let fileURL = directory.appendingPathComponent("chunk_0.caf")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: Double(sampleRate), channels: 1))
+        do {
+            let file = try AVAudioFile(forWriting: fileURL, settings: format.settings)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8192))
+            let samples = try XCTUnwrap(buffer.floatChannelData)[0]
+            for frame in 0..<8192 { samples[frame] = frame % 2 == 0 ? 0.25 : -0.25 }
+            if nonFinite { samples[0] = .nan }
+            var remaining = frames
+            while remaining > 0 {
+                buffer.frameLength = UInt32(min(remaining, 8192))
+                try file.write(from: buffer)
+                remaining -= Int64(buffer.frameLength)
+            }
+        }
+        let bytes = try XCTUnwrap((try FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value)
+        let chunk = MeetingAudioChunk(id: UUID(), sequence: 0, relativeFilePath: "chunk_0.caf",
+                                     presentationStart: MeetingMediaTime(value: 100 * Int64(sampleRate), timescale: sampleRate),
+                                     presentationEnd: MeetingMediaTime(value: 100 * Int64(sampleRate) + frames, timescale: sampleRate),
+                                     discontinuities: [], sha256: "synthetic-measurement", byteCount: bytes, finalizationState: .finalized)
+        let timebase = MeetingTimebaseMetadata(startedHostTime: 0, machTimebaseNumerator: 1,
+                                               machTimebaseDenominator: 1, firstPresentationTime: nil)
+        let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic-microphone",
+                                     sourceDisplayName: "Synthetic microphone", format: nil, timebase: timebase,
+                                     health: .waiting, chunks: [chunk])
+        return (track, directory)
+    }
 }
 
 #endif
