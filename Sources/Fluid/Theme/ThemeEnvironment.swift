@@ -29,6 +29,9 @@ extension View {
 struct AdaptiveAppTheme<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var settings = SettingsStore.shared
+    #if os(macOS)
+    @ObservedObject private var applicationAppearance = BrandAppearanceController.ApplicationAppearance.shared
+    #endif
 
     let accent: Color
     let content: Content
@@ -40,7 +43,11 @@ struct AdaptiveAppTheme<Content: View>: View {
 
     var body: some View {
         let preferredScheme = self.settings.themePreference.preferredColorScheme
+        #if os(macOS)
+        let activeScheme = preferredScheme ?? self.applicationAppearance.colorScheme
+        #else
         let activeScheme = preferredScheme ?? self.colorScheme
+        #endif
         let activeAccent = self.settings.accentColorOption == .brand
             ? (Color(hex: activeScheme == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? self.accent)
             : self.accent
@@ -51,14 +58,17 @@ struct AdaptiveAppTheme<Content: View>: View {
             .environment(\.locale, PichiLocalization.locale)
             .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
             .tint(activeAccent)
-            .preferredColorScheme(preferredScheme)
             #if os(macOS)
+            // The presentation owns full native window chrome. Its physical
+            // scheme is separate from the selected portable palette variant.
+            .preferredColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme))
             // Native toolbar ink follows its color scheme only while the bar
             // background is visible. Paint the same branded surface it pairs with.
             .toolbarBackground(theme.palette.toolbarBackground, for: .windowToolbar)
             .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
             .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .windowToolbar)
             #else
+            .preferredColorScheme(preferredScheme)
             .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .navigationBar)
             #endif
     }

@@ -26,6 +26,10 @@ for source, marker, name in [
     assert text.count(marker) == 1, source
     (out / name).write_text(text.split(marker)[0])
 (out / 'SettingsFixture.swift').write_text(Path('Tests/UIContrastTests.swift').read_text().split('@main')[0])
+theme = Path('Sources/Fluid/Theme/ThemeEnvironment.swift').read_text()
+start = theme.index('struct AdaptiveAppTheme<Content: View>: View {')
+end = theme.index('// MARK: - Color Hex Initializer')
+(out / 'ThemeEnvironment.swift').write_text(theme[:start] + theme[end:])
 bundle = out / 'StatsCatalog.bundle'
 (bundle / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'local.voice.stats-catalog.fixture', 'CFBundleDevelopmentRegion': 'en'}))
 empty = out / 'EmptyCatalog.bundle'
@@ -43,7 +47,7 @@ xcrun swiftc -O -parse-as-library -module-cache-path "$task_test_dir/ModuleCache
     Sources/Fluid/Branding/AppBrand.swift "$task_test_dir/BrandPackageTypes.swift" \
     Tests/Support/StandaloneBrandPackageStore.swift Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/Theme/FluidTypography.swift Sources/Fluid/Theme/AppTheme.swift \
-    Sources/Fluid/Theme/ThemeEnvironment.swift Sources/Fluid/Theme/NativeButtonStyles.swift \
+    "$task_test_dir/ThemeEnvironment.swift" Sources/Fluid/Theme/NativeButtonStyles.swift \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift Sources/Fluid/Theme/Components/FluidDropdown.swift \
     "$task_test_dir/SettingsFixture.swift" "$task_test_dir/HistoryValue.swift" "$task_test_dir/AudioValue.swift" \
     Tests/StatsSnapshotStoreFixtures.swift Sources/Fluid/UI/StatsSnapshot.swift \
