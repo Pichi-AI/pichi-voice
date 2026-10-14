@@ -195,3 +195,85 @@ unrelated PID or infer playback completion from a fixed sleep. Do not continue a
 gate using a semicolon-separated command sequence in a shell without `set -e`. Ack failures,
 protocol deadlines and actual process exit failures are test failures, not reasons to expand the
 native limits or claim a capture pass.
+
+## Owned process driver with two CUA Play actions
+
+For a new reviewed hardware trial, [meeting_continuity_driver.py](../../tools/meeting_continuity_driver.py)
+owns the test Chrome launch, fault, restart and the gated second-source player. This is a scoped
+test CLI, not a process-control HTTP API. The parent still owns native XCTest startup, capture
+teardown, the UI/audio lease, both actual Play clicks and native screenshots/inspection. The
+driver never touches the primary Chrome, native capture, microphone, permission settings, model
+selection, credentials, browser autoplay settings or other sessions. Use this driver instead of
+the manual eight-command operator sequence above; do not run two command producers together.
+
+First validate the offline protocol and ownership refusals, without a server or application:
+
+```bash
+python3 -B -S tools/test_meeting_continuity_fixture.py
+python3 -B -S tools/test_meeting_continuity_driver.py
+```
+
+Prepare a private canonical fixture workspace with mode `0700`, containing a **full unmodified
+vendor copy** named `Google Chrome.app`. Use a path without whitespace for the workspace. The
+driver verifies the bundle identifier, the executable's equality with installed vendor Chrome,
+and the copied bundle's strict recursive signature before launch. It creates a fresh `profile`
+directory there; a reused profile or executable outside that copy is rejected. Keep all three
+distinct approved synthetic WAVs in the explicit stimulus directory. The native protocol root is
+a separate fresh `0700` directory in the compiled worktree's ignored `private_assets`.
+
+Review this concrete invocation with `--dry-run` first. Dry run prints the phase plan and performs
+no filesystem writes, process launches, server startup or capture. Removing `--dry-run` is allowed
+only after the new coordinated UI/audio lease begins:
+
+```bash
+python3 -B -S tools/meeting_continuity_driver.py --dry-run \
+  --root "$pichi_capture_root" --run-id "$pichi_capture_run_id" \
+  --token "$pichi_fixture_token" --port "$pichi_fixture_port" \
+  --workspace "$pichi_owned_fixture_workspace" \
+  --chrome-app "$pichi_owned_fixture_workspace/Google Chrome.app" \
+  --stimulus-dir "$pichi_stimulus_dir" \
+  --before-wav browser-before.wav --after-wav browser-after.wav \
+  --second-wave "$pichi_stimulus_dir/second-source.wav"
+```
+
+The driver starts its allowlist-only localhost server and launches only the copied Chrome with
+its unique profile and explicit fixture URL. `autoPrepare=1` decodes the WAV and negotiates local
+WebRTC on load. It neither resumes the AudioContext nor calls audio playback before CUA Play.
+The actual click invokes `AudioContext.resume()` and `audio.play()` within the browser user gesture,
+then requires native phase authorization before releasing the deterministic speech source. No
+global flags or user-gesture bypass are used. The same preparation runs on the restarted browser.
+
+Use these three state receipts in private `driver-state.json`:
+
+1. `prepared-before-capture`: first browser transport is ready, speech has not started. Save and
+   inspect a native screenshot of the owned copied Chrome before starting native XCTest. Complete
+   all preparation here, outside the native 100-second trial interval.
+2. `await-first-cua-play`, `nativeSequence=1`: the driver observed matching native ready evidence,
+   wrote command 1 with its actual verified Chrome identity and received native ack 1. Perform the
+   first CUA Play click and save its native screenshot immediately in the same interaction. Inspect
+   that saved image; let the driver execute the middle sequence without per-step model calls.
+3. `await-final-cua-play`, `nativeSequence=7`: the driver already faulted and joined its original
+   Chrome group, acknowledged actual exit, played the distinct owned afplay process to exit code 0,
+   ended that phase, kept Chrome actually absent for at least eight seconds after native exit ack,
+   and restarted the same private profile with a new PID. The new transport is prepared and native
+   ack 7 is present. Target the copied Chrome's new process through CUA, perform the second Play
+   click, and save/inspect its native screenshot immediately. There are no other Play/preparation
+   clicks, manual phase markers, fixed playback sleeps, or screenshot round trips in the middle.
+
+The driver uses Darwin `POSIX_SPAWN_START_SUSPENDED` for `/usr/bin/afplay`, so playback cannot race
+ahead of command/ack 4. It verifies the exact owned PID, executable, separate group and current
+Chrome profile argument before signaling. Every live group member must belong to that unique
+Chrome copy, or be the exact owned afplay child. Foreign PIDs, profile mismatches and mixed groups
+are refused before any signal. Chrome launch, exit, restart, afplay identity/exit and native acks
+have private UTC receipts in `driver-events.jsonl`; these receipts do not replace native PCM clocks.
+
+Native phase limits remain 60 seconds, and the driver requires the existing 100-second trial.
+The middle should fit within roughly 20 seconds with a short synthetic second phrase and a ready
+local Chrome installation; an actual slower startup or failed gate must fail honestly. Do not
+expand these limits to compensate for model latency. `protocol-complete` means all eight markers
+were acknowledged, not that the audio assertions passed. Join the driver's owned groups/server
+and the native harness. The final `fixture-server-joined` receipt must have `ownedProcessesJoined=true`,
+`liveOwnedChildren=0`, `serverRunning=false`, and no `failure`. Then inspect the native outcome and all three independently cropped PCM
+phases before claiming a pass. On cancellation, missed ack, nonzero afplay exit or failed native
+outcome, the driver stops progression and joins only its verified owned children. Keep any cleanup
+failure explicit and do not send arbitrary process signals to hide it.

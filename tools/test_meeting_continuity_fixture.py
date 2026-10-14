@@ -196,6 +196,21 @@ class FixtureTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             Fixture(fresh, self.run, self.token, self.stimulus, ["speech.wav"])
 
+    def test_transport_prepared_receipt_before_capture_and_after_native_restart(self):
+        (self.root / "capture-ready.json").unlink()
+        self.assertEqual(self.fixture.prepared(self.payload(event="prepared"))["status"], "transport-prepared")
+        self.assertEqual(read_json(self.root / "browser-prepared.json")["speechStarted"], False)
+        with self.assertRaises(ProtocolError):
+            self.fixture.prepared(self.payload(event="prepared"))
+        atomic_json(self.root / "capture-ready.json", self.ready)
+        with self.assertRaises(ProtocolError):
+            self.fixture.prepared(self.payload("browserAfter", "prepared"))
+        self.fixture.completed = {"browserBefore", "secondSource"}
+        atomic_json(self.root / "phase-command.json", dict(runID=self.run, sequence=6, action="browserRestarted"))
+        atomic_json(self.root / "phase-ack.json", dict(runID=self.run, sequence=6, machAbsoluteHostSeconds=115))
+        self.assertEqual(self.fixture.prepared(self.payload("browserAfter", "prepared"))["status"], "transport-prepared")
+        self.assertEqual(self.fixture.prepared_phase, "browserAfter")
+
     def test_http_only_serves_allowlist_and_bounded_authenticated_events(self):
         server = HTTPServer(("127.0.0.1", 0), handler_for(self.fixture))
         worker = threading.Thread(target=server.serve_forever)
@@ -237,12 +252,12 @@ const assert = require('node:assert/strict');
 const source = fs.readFileSync(process.argv[1], 'utf8').split('<script>')[1].split('</script>')[0];
 function fixture(query, rejectStart = false) {
   const events = [], sources = [];
-  let starts = 0;
+  let starts = 0, resumes = 0, plays = 0;
   const elements = Object.fromEntries(['output', 'status', 'direct', 'rtc', 'prepare'].map(id =>
     [id, { disabled: false, hidden: id === 'prepare', textContent: '',
-      play: async () => {}, pause() {}, removeAttribute() {} }]));
+      play: async () => { plays++; }, pause() {}, removeAttribute() {} }]));
   class AudioContext {
-    async resume() {} async close() {}
+    async resume() { resumes++; } async close() {}
     async decodeAudioData() { return {}; }
     createBufferSource() {
       const buffer = { connect() {}, start() { starts++; } };
@@ -271,7 +286,8 @@ function fixture(query, rejectStart = false) {
       return { ok, json: async () => ok ? { sequence: 2 } : { error: 'Missing native begin ack' } };
     } });
   vm.runInContext(source, context);
-  return { elements, events, sources, starts: () => starts };
+  return { elements, events, sources, starts: () => starts,
+    resumes: () => resumes, plays: () => plays };
 }
 (async () => {
   const query = '?runID=00000000-0000-4000-8000-000000000000&token=' + 'a'.repeat(43) +
@@ -307,6 +323,19 @@ function fixture(query, rejectStart = false) {
   await manual.sources[0].onended();
   assert.equal(manual.elements.status.textContent, 'Received WebRTC speech complete.');
   assert.equal(manual.events.length, 0);
+  const automatic = fixture(query + '&autoPrepare=1');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(automatic.elements.status.textContent, /^Prepared/);
+  assert.equal(automatic.starts(), 0);
+  assert.equal(automatic.resumes(), 0);
+  assert.equal(automatic.plays(), 0);
+  assert.deepEqual(automatic.events.map(event => event.event), ['prepared']);
+  await automatic.elements.rtc.onclick();
+  assert.equal(automatic.starts(), 1);
+  assert.equal(automatic.resumes(), 1);
+  assert.equal(automatic.plays(), 1);
+  await automatic.sources[0].onended();
+  assert.deepEqual(automatic.events.map(event => event.event), ['prepared', 'starting', 'ended']);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 '''
         subprocess.run([shutil.which("node"), "-e", script,

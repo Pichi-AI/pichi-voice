@@ -24,12 +24,13 @@
   const parameters = new URLSearchParams(location.search);
   const instrumented = ['runID', 'token', 'phase', 'stimulus'].some(key => parameters.has(key));
   const phase = parameters.get('phase');
+  const autoPrepare = instrumented && parameters.get('autoPrepare') === '1';
   const stimulus = instrumented ? parameters.get('stimulus') : 'speech.wav';
   let preparedStart = null;
   let playbackActive = false;
-  async function phaseEvent(event) {
+  async function phaseEvent(event, endpoint = '/phase-event') {
     if (!instrumented) return;
-    const response = await fetch('/phase-event', {
+    const response = await fetch(endpoint, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ runID: parameters.get('runID'), token: parameters.get('token'), phase, event })
     });
@@ -53,7 +54,7 @@
       buttons.forEach(button => button.disabled = true);
       const start = preparedStart;
       preparedStart = null;
-      try { await phaseEvent('starting'); playbackActive = true; start(); } catch (error) { fail(error); }
+      try { await start(); } catch (error) { fail(error); }
       return;
     }
     await cleanup();
@@ -78,7 +79,7 @@
       }
       const context = new AudioContext();
       resources.push(context);
-      await context.resume();
+      if (!autoPrepare) await context.resume();
       const buffer = await context.decodeAudioData(await (await fetch(stimulus)).arrayBuffer());
       const source = context.createBufferSource();
       source.buffer = buffer;
@@ -101,7 +102,10 @@
       const playing = new Promise((resolve, reject) => {
         receiver.ontrack = async event => {
           output.srcObject = event.streams[0];
-          try { await output.play(); resolve(); } catch (error) { reject(error); }
+          try {
+            if (!autoPrepare) await output.play();
+            resolve();
+          } catch (error) { reject(error); }
         };
       });
       destination.stream.getTracks().forEach(track => sender.addTrack(track, destination.stream));
@@ -131,15 +135,22 @@
         clearTimeout(timeout);
       }
       source.onended = () => completed('Received WebRTC speech complete.');
-      const start = () => {
+      const start = async () => {
+        if (instrumented) {
+          // Invoke these during the actual CUA click, before awaiting the native barrier.
+          await Promise.all([context.resume(), output.play()]);
+          await phaseEvent('starting');
+          playbackActive = true;
+        }
         source.start();
         status.textContent = 'Playing received WebRTC browser speech.';
       };
       if (prepareOnly) {
         preparedStart = start;
+        if (autoPrepare) await phaseEvent('prepared', '/browser-prepared');
         status.textContent = 'Prepared. Await native begin acknowledgement before Play.';
         document.querySelector('#rtc').disabled = false;
-      } else start();
+      } else await start();
     } catch (error) { fail(error); }
   }
   function fail(error) {
@@ -159,8 +170,9 @@
       ['browserBefore', 'browserAfter'].includes(phase) &&
       /^[A-Za-z0-9][A-Za-z0-9_-]*\.wav$/.test(stimulus || '');
     output.controls = false;
-    document.querySelector('#prepare').hidden = false;
+    document.querySelector('#prepare').hidden = autoPrepare;
     document.querySelector('#prepare').disabled = !valid;
     status.textContent = valid ? 'Prepare WebRTC before starting native capture.' : 'Invalid opt-in fixture parameters.';
+    if (valid && autoPrepare) play(true, true);
   }
 </script>

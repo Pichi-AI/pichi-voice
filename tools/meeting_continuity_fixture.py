@@ -113,7 +113,8 @@ class Fixture:
         if stat.S_IMODE(self.root.stat().st_mode) != 0o700:
             raise ProtocolError("Protocol root must have mode 0700.")
         if any((self.root / name).exists() or (self.root / name).is_symlink() for name in
-               ("capture-ready.json", "phase-command.json", "phase-ack.json", "outcome.json", "fixture-events.jsonl")):
+               ("capture-ready.json", "phase-command.json", "phase-ack.json", "outcome.json", "fixture-events.jsonl",
+                "browser-prepared.json")):
             raise ProtocolError("Use a fresh protocol root, before native capture starts.")
         self.run_id = str(uuid.UUID(run_id)).upper()
         if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
@@ -132,6 +133,40 @@ class Fixture:
         self.failed = False
         self.ack_timeout = ack_timeout
         self.lock = threading.Lock()
+        self.prepared_phase = None
+
+    def prepared(self, payload):
+        """Transport-only receipt. It cannot launch, stop or play any process."""
+        with self.lock:
+            token, phase = payload.get("token"), payload.get("phase")
+            if self.root.resolve(strict=True) != self.root:
+                raise ProtocolError("Protocol root changed to a symlink.")
+            if (not self.same_run(payload.get("runID")) or not isinstance(token, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token)
+                    or not hmac.compare_digest(token, self.token)
+                    or phase not in ("browserBefore", "browserAfter") or payload.get("event") != "prepared"
+                    or self.failed or (self.root / "outcome.json").exists()):
+                raise ProtocolError("Unexpected transport preparation receipt.")
+            if phase == "browserBefore":
+                if self.completed or (self.root / "capture-ready.json").exists():
+                    raise ProtocolError("Prepare the first browser before native capture.")
+            else:
+                self.authorize(payload)
+                if self.completed != {"browserBefore", "secondSource"}:
+                    raise ProtocolError("Restart preparation skipped a phase.")
+                # The owned launch and page load may race the native 25ms acknowledgement.
+                wait_ack(self.root, self.run_id, 6)
+                command = read_json(self.root / "phase-command.json")
+                ack = read_json(self.root / "phase-ack.json")
+                if (not self.same_run(command.get("runID")) or command.get("sequence") != 6
+                        or command.get("action") != "browserRestarted" or not self.same_run(ack.get("runID"))
+                        or ack.get("sequence") != 6):
+                    raise ProtocolError("Wait for native restart acknowledgement before preparation.")
+            if self.prepared_phase == phase:
+                raise ProtocolError("Repeated transport preparation receipt.")
+            self.prepared_phase = phase
+            atomic_json(self.root / "browser-prepared.json", dict(runID=self.run_id, phase=phase, speechStarted=False))
+            return {"status": "transport-prepared"}
 
     def authorize(self, payload, final_ack=False):
         token = payload.get("token")
@@ -287,7 +322,7 @@ def handler_for(fixture):
                 self.reply(404, {"error": "Fixture file unavailable."})
 
         def do_POST(self):
-            if self.path != "/phase-event":
+            if self.path not in ("/phase-event", "/browser-prepared"):
                 self.reply(404, {"error": "Unknown endpoint."})
                 return
             try:
@@ -306,7 +341,8 @@ def handler_for(fixture):
                 payload = json.loads(data)
                 if not isinstance(payload, dict):
                     raise ProtocolError("Expected an event object.")
-                self.reply(200, fixture.event(payload))
+                action = fixture.prepared if self.path == "/browser-prepared" else fixture.event
+                self.reply(200, action(payload))
             except (OSError, ValueError, ProtocolError) as error:
                 self.reply(409, {"error": str(error)})
     return Handler
