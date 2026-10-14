@@ -59,9 +59,12 @@ struct AdaptiveAppTheme<Content: View>: View {
             .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
             .tint(activeAccent)
             #if os(macOS)
-            // The presentation owns full native window chrome. Its physical
-            // scheme is separate from the selected portable palette variant.
-            .preferredColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme))
+            // Inherit the application's live appearance when it already matches
+            // the palette. Pinning the same scheme here creates a second owner
+            // during hot changes: application first, then the old window override.
+            // Imported inverted palettes still need an owned window override.
+            .preferredColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme) == self.applicationAppearance.colorScheme
+                ? nil : theme.palette.nativeColorScheme(fallback: activeScheme))
             // Native toolbar ink follows its color scheme only while the bar
             // background is visible. Paint the same branded surface it pairs with.
             .toolbarBackground(theme.palette.toolbarBackground, for: .windowToolbar)

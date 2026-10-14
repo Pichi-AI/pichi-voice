@@ -107,9 +107,12 @@ import SwiftUI
                         observer.colorScheme == application && self.seenThemes.last?.variant == logical
                             && self.seenSchemes.last == physical && window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == nativeName
                             && self.logoVariants.last == logical
+                            && (physical != application || window.appearance == nil)
                     }
                     if physical != application {
                         precondition(window.appearance?.bestMatch(from: [.aqua, .darkAqua]) == nativeName)
+                    } else {
+                        precondition(window.appearance == nil, "Matching palettes inherit application appearance without a second window override")
                     }
                     precondition(NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == (application == .dark ? .darkAqua : .aqua), "Window appearance must not change the logical application source")
                     precondition(self.seenThemes.last.map { self.samePalette($0.palette, expected.palette) } == true)
