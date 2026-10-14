@@ -419,6 +419,33 @@ with Path(sys.argv[1]).open('a') as output:
             ' private func inspectDate(_ x: CGFloat, proxy: ChartProxy, pin: Bool) {}\n'
             ' var body: some View {\n' + code + '\n }\n}\n')
 
+# Extract the complete production participant editor, not a parallel test field.
+participant_path = 'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift'
+participant_revision = os.environ.get('PICHI_PARTICIPANT_INPUT_LEGACY_REVISION')
+participant_source = subprocess.check_output(['git', 'show', f'{participant_revision}:{participant_path}'], text=True) if participant_revision else Path(participant_path).read_text()
+participant_start = '            TextField(\n                speaker.displayName,'
+assert participant_source.count(participant_start) == 1
+participant_first = participant_source.index(participant_start)
+participant_last_marker = '            .disabled(self.isSaving)'
+participant_last = participant_source.index(participant_last_marker, participant_first) + len(participant_last_marker)
+participant_field = participant_source[participant_first:participant_last]
+with Path(sys.argv[1]).open('a') as output:
+    output.write('struct ProductionParticipantInputFixture: View {\n'
+        ' struct Speaker { let id: String; let displayName: String }\n'
+        ' @Environment(\\.theme) private var theme\n'
+        ' @Binding var drafts: [String: String]\n'
+        ' let isSaving: Bool\n'
+        ' @FocusState private var focusedField: String?\n'
+        ' let speaker = Speaker(id: "synthetic", displayName: "Участник Ёё")\n'
+        ' var body: some View {\n' + participant_field + '\n }\n}\n')
+Path(sys.argv[1]).with_name('ParticipantInputProductionSource.json').write_text(json.dumps({
+    'source': participant_path, 'sourceSHA256': hashlib.sha256(participant_source.encode()).hexdigest(),
+    'fieldSHA256': hashlib.sha256(participant_field.encode()).hexdigest(),
+    'legacySourceRevision': participant_revision,
+    'adapters': ['invented participant ID/name', 'externally observed draft/saving state'],
+    'visibleWindowOrPhysicalKeyboard': 'SKIP',
+}, indent=2) + '\n')
+
 Path(sys.argv[1]).with_name('NativeInkProductionSource.json').write_text(json.dumps({
     'sourceSHA256': ink_sources,
     'sharedControlSHA256': hashlib.sha256(Path('Sources/Fluid/Theme/Components/FluidEditControls.swift').read_bytes()).hexdigest(),
@@ -583,6 +610,8 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/Theme/Components/FluidIconTile.swift \
     Sources/Fluid/Theme/Components/FluidEditControls.swift \
+    Sources/Fluid/Theme/Components/FluidManagementSheet.swift \
+    Sources/Fluid/UI/AISettings/ProviderConnectionFields.swift \
     Sources/Fluid/Theme/Components/FluidSegmentedPicker.swift \
     Sources/Fluid/Theme/Components/FluidDropdown.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
@@ -592,12 +621,12 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
     Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
-    Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift \
+    Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
     "$task_test_dir/ToolbarPageLayout.swift" -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in
-    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|"  ")
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*|"  ")
         xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
             --output-directory "$task_test_dir/OverlayCaptionFixture.app/Contents/Resources" --language en --language ru
         cp "$task_test_dir/tests" "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests"
@@ -605,7 +634,7 @@ case " $* " in
         ;;
 esac
 case " $* " in
-    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*)
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*)
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
         ;;
     "  ")
