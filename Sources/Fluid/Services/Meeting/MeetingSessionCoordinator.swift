@@ -110,6 +110,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     @Published private(set) var latestCompletedSession: MeetingSession?
     @Published private(set) var trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth] = [:]
     @Published private(set) var liveTranscript: MeetingLiveTranscriptSnapshot = .empty
+    @Published private(set) var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     /// When live captions last heard words in the current recording. Nil without live captions.
     private(set) var lastLiveSpeechAt: Date?
 
@@ -144,7 +145,16 @@ final class MeetingSessionCoordinator: ObservableObject {
     private let livePrivacyPublication = MeetingLivePrivacyPublication()
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
-    private var captureGeneration: UUID?
+    private var pendingSpeechCapture: MeetingPendingSpeechCapture?
+    private var captureGeneration: UUID? {
+        didSet {
+            if self.captureGeneration != oldValue {
+                self.pendingSpeechCapture?.stop()
+                self.pendingSpeechCapture = nil
+                self.pendingSpeech = .empty
+            }
+        }
+    }
     /// Capture events may be invalidated before a joined stop; its durable text drain still owns
     /// this token until recognition/privacy finalization and terminal persistence have completed.
     private var memoryCheckpointGeneration: UUID?
@@ -557,7 +567,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         var captureStarted = false
         var captureStartAttempted = false
 
-        let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator { [weak self] snapshot in
+        let captureOrigin = MeetingLiveOriginBox()
+        let liveTranscriptionCoordinator = MeetingLiveTranscriptionCoordinator(originBox: captureOrigin) { [weak self] snapshot in
             // Common-modes trampoline, not the main dispatch queue: the queue is starved while the
             // user drags a window (event-tracking mode), which froze live captions mid-drag.
             CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
@@ -571,6 +582,16 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             CFRunLoopWakeUp(CFRunLoopGetMain())
         }
+        let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin) { [weak self] snapshot in
+            MainActor.assumeIsolated {
+                guard let self, self.captureGeneration == generation,
+                      self.pendingSpeechCapture != nil,
+                      snapshot.revision > self.pendingSpeech.revision else { return }
+                self.pendingSpeech = snapshot
+            }
+        }
+        self.pendingSpeechCapture = pendingSpeechCapture
+        self.pendingSpeech = MeetingPendingSpeechSnapshot(isCapturing: true)
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
         self.lastLiveSpeechAt = nil
@@ -604,6 +625,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                     self.liveTranscript = self.liveTranscript.settingPartial(partial, for: .you)
                     self.liveTranscript.revision += 1
                     self.liveTranscript.availability = .available
+                    self.reconcilePendingSpeech()
                 })
             }
             captureStartAttempted = true
@@ -617,8 +639,13 @@ final class MeetingSessionCoordinator: ObservableObject {
                         self?.handleCaptureEvent(event, generation: generation)
                     }
                 },
-                liveAudioHandler: { [weak liveTranscriptionCoordinator] kind, sampleBuffer in
-                    liveTranscriptionCoordinator?.offer(kind: kind, sampleBuffer: sampleBuffer)
+                liveAudioHandler: { [weak liveTranscriptionCoordinator, pendingSpeechCapture] kind, sampleBuffer in
+                    pendingSpeechCapture.offer(kind: kind, sampleBuffer: sampleBuffer)
+                    // The strict consumer already owns inference. Its tee supplies only scalar
+                    // presentation activity, never another live recognizer or PCM queue.
+                    if configuration.audioStorageMode != .memoryOnly {
+                        liveTranscriptionCoordinator?.offer(kind: kind, sampleBuffer: sampleBuffer)
+                    }
                 }
             )
             captureStarted = true
@@ -1755,6 +1782,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         guard let redactor else {
             if snapshot.hasNewWords(since: self.liveTranscript) { self.lastLiveSpeechAt = Date() }
             self.liveTranscript = snapshot
+            self.reconcilePendingSpeech()
             return
         }
         self.livePrivacyPublication.submit(snapshot, generation: generation, using: redactor,
@@ -1763,6 +1791,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                       self.liveTranscript.accepts(safe, generation: generation, activeGeneration: self.captureGeneration) else { return }
                 if safe.hasNewWords(since: self.liveTranscript) { self.lastLiveSpeechAt = Date() }
                 self.liveTranscript = safe
+                self.reconcilePendingSpeech()
             }, failed: { [weak self] generation in
                 guard let self, self.captureGeneration == generation else { return }
                 self.handleCaptureEvent(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil,
@@ -1802,6 +1831,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         snapshot = snapshot.settingPartial(batch.livePreview, for: .you)
         snapshot.availability = .available
         self.liveTranscript = snapshot
+        self.reconcilePendingSpeech()
+    }
+
+    private func reconcilePendingSpeech() {
+        guard let capture = self.pendingSpeechCapture else { return }
+        self.pendingSpeech = capture.reconcile(visible: self.liveTranscript)
     }
 
     private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
@@ -2279,6 +2314,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         // start new privacy work while the canceled worker is being joined.
         let coordinator = self.liveTranscriptionCoordinator
         self.liveTranscriptionCoordinator = nil
+        self.pendingSpeechCapture?.stop()
+        self.pendingSpeechCapture = nil
+        self.pendingSpeech = .empty
         let publication = self.livePrivacyPublication
         let cleanup = Task { @MainActor in
             await publication.stop()

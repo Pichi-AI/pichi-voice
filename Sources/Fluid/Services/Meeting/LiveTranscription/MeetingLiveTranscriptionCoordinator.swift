@@ -37,7 +37,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var offerCounts: [MeetingAudioTrackKind: Int] = [:]
     /// nil (fail-safe) keeps the echo filter ON; guarded by `stateLock` on both sides.
     private var microphoneCaptureMethod: MeetingAudioTrackCaptureMethod?
-    private let originBox = MeetingLiveOriginBox()
+    private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
 
     private var bufferedMicrophoneEngine: PichiMeetingBufferedTrackEngine?
@@ -52,7 +52,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var applicationEngine: MeetingLiveTrackEngine?
     #endif
 
-    init(onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
+    init(originBox: MeetingLiveOriginBox = MeetingLiveOriginBox(), onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
+        self.originBox = originBox
         self.onUpdate = onUpdate
     }
 

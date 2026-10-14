@@ -510,9 +510,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                       kind: .writerBackpressure)
             return
         }
-        // Strict checkpoints supply canonical text to the existing coordinator. A second live
-        // recognizer would duplicate inference/residency while this consumer owns the same PCM.
-        if self.memoryConsumer == nil { self.liveAudioHandler?(.microphone, sample) }
+        // Tee only after the selected sink accepted this PCM. The coordinator uses this for
+        // scalar capture progress in strict mode, without starting a second recognizer.
+        self.liveAudioHandler?(.microphone, sample)
         let now = Date()
         let snapshot: MeetingTrackHealth? = self.lock.withLock {
             self.health.status = .healthy

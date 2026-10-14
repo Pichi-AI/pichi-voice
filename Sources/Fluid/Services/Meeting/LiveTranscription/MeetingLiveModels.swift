@@ -291,3 +291,275 @@ nonisolated enum MeetingLiveSampleCopy {
         return mono
     }
 }
+
+
+// MARK: - Pending capture presentation
+
+/// Visual capture progress only. These estimates are neither recognized words nor speaker
+/// evidence and never enter a MeetingSession, privacy payload, Copy or Export.
+nonisolated struct MeetingPendingSpeechToken: Identifiable, Sendable, Equatable {
+    var id: UInt64
+    var source: MeetingLiveSpeaker
+    var start: TimeInterval
+    var end: TimeInterval
+    /// Relative word-shaped width, independent of any transcript contents.
+    var widthHint: Double
+    var level: Float
+}
+
+nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
+    var tokens: [MeetingPendingSpeechToken] = []
+    var isCapturing = false
+    /// Separate from live-transcript revisions: capture progress cannot invalidate an async
+    /// privacy-filtered recognition update.
+    var revision: UInt64 = 0
+    static let empty = MeetingPendingSpeechSnapshot()
+}
+
+/// A small signal heuristic for capture animation, not a calibrated VAD. The existing Silero
+/// detector is an offline model with its own residency; this path must not load a second model.
+/// Silence, steady background and impulses do not create progress. Modulated non-speech can
+/// still resemble speech, so the UI must describe audio capture, never recognized words.
+nonisolated struct MeetingPendingSpeechProjection {
+    static let maximumTokens = 64
+    private struct Track {
+        var energies: [Float] = []
+        var consecutiveActivity = 0
+        var pendingDuration: Double = 0
+        var lastEnd: Double?
+    }
+    private var tracks: [MeetingLiveSpeaker: Track] = [:]
+    private var partialWordCounts: [UUID: Int] = [:]
+    private var partialIDs: [UUID] = []
+    private var nextID: UInt64 = 0
+    private var visibleRevision: UInt64 = 0
+    private(set) var snapshot = MeetingPendingSpeechSnapshot(isCapturing: true)
+
+    /// Exactly one short scalar frame from admitted PCM, using its capture PTS timeline.
+    mutating func observe(source: MeetingLiveSpeaker, start: Double, end: Double,
+                          rms: Float, peak: Float, zeroCrossingRate: Float) {
+        guard self.snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0,
+              end > start, end - start <= 0.05, rms.isFinite, peak.isFinite,
+              zeroCrossingRate.isFinite, rms >= 0, peak >= rms,
+              (0...1).contains(zeroCrossingRate) else { return }
+        var track = self.tracks[source] ?? Track()
+        if let lastEnd = track.lastEnd {
+            // Duplicate and late frames never mint another visual word. A capture gap resets
+            // only activity hysteresis; it does not erase audio already awaiting recognition.
+            guard start >= lastEnd - 0.000_001 else { return }
+            if start - lastEnd > 0.06 {
+                track.energies.removeAll(keepingCapacity: true)
+                track.consecutiveActivity = 0
+                track.pendingDuration = 0
+            }
+        }
+        track.lastEnd = end
+        track.energies.append(rms)
+        if track.energies.count > 12 { track.energies.removeFirst() }
+        let mean = track.energies.reduce(Float(0), +) / Float(track.energies.count)
+        let variance = track.energies.reduce(Float(0)) { $0 + ($1 - mean) * ($1 - mean) } / Float(track.energies.count)
+        let modulation = mean > 0 ? sqrt(variance) / mean : 0
+        // 60ms onset rejects isolated taps; modulation rejects a constant fan/tone; high ZCR
+        // rejects broadband hiss. These thresholds classify an animation candidate only.
+        let candidate = rms >= 0.0015 && modulation >= 0.12 && zeroCrossingRate < 0.34 && peak <= max(0.02, rms * 9)
+        track.consecutiveActivity = candidate ? min(3, track.consecutiveActivity + 1) : 0
+        if track.consecutiveActivity >= 3 {
+            track.pendingDuration += end - start
+            // Baseline presentation cadence: 150 words/minute, not a claim about actual words.
+            if track.pendingDuration >= 0.4 - 0.000_001 {
+                track.pendingDuration -= 0.4
+                if self.snapshot.tokens.count < Self.maximumTokens {
+                    let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
+                    self.nextID &+= 1
+                    self.snapshot.tokens.append(MeetingPendingSpeechToken(
+                        id: self.nextID, source: source, start: max(0, end - 0.4), end: end,
+                        widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))],
+                        level: min(1, max(0.08, sqrt(rms / 0.08)))))
+                    self.snapshot.revision &+= 1
+                }
+            }
+        }
+        self.tracks[source] = track
+    }
+
+    /// Only caller-approved, actually visible captions retire blocks. PII-held words and
+    /// unavailable/empty hypotheses cannot clear captured progress. Timed closed turns remove
+    /// their own coverage; untimed partials conservatively retire only newly visible word count.
+    mutating func reconcile(visible: MeetingLiveTranscriptSnapshot) {
+        guard visible.revision > self.visibleRevision else { return }
+        self.visibleRevision = visible.revision
+        let before = self.snapshot.tokens
+        for utterance in visible.utterances where !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard utterance.start.isFinite, utterance.end.isFinite, utterance.end > utterance.start else { continue }
+            self.snapshot.tokens.removeAll {
+                $0.source == utterance.speaker && $0.end <= utterance.end + 0.000_001 && $0.end > utterance.start
+            }
+            // Closed turns no longer need untimed word-count credit. Keeping all closed IDs
+            // in this small cache would evict the active partial after a long meeting.
+            if self.partialWordCounts.removeValue(forKey: utterance.id) != nil {
+                self.partialIDs.removeAll { $0 == utterance.id }
+            }
+        }
+        for (source, partial) in visible.partials {
+            guard partial.start.isFinite, partial.start >= 0,
+                  !visible.finalizedTurnIDs.contains(partial.id),
+                  !visible.utterances.contains(where: { $0.id == partial.id }) else { continue }
+            let count = Self.wordCount(partial.text)
+            var remaining = max(0, count - (self.partialWordCounts[partial.id] ?? 0))
+            self.snapshot.tokens.removeAll {
+                guard remaining > 0, $0.source == source, $0.end > partial.start else { return false }
+                remaining -= 1
+                return true
+            }
+            self.remember(partial.id, words: count)
+        }
+        if self.snapshot.tokens != before { self.snapshot.revision &+= 1 }
+    }
+
+    mutating func stop() {
+        self.tracks.removeAll()
+        self.partialWordCounts.removeAll()
+        self.partialIDs.removeAll()
+        self.snapshot.tokens.removeAll()
+        self.snapshot.isCapturing = false
+        self.snapshot.revision &+= 1
+    }
+
+    private mutating func remember(_ id: UUID, words: Int) {
+        if self.partialWordCounts[id] == nil { self.partialIDs.append(id) }
+        self.partialWordCounts[id] = max(words, self.partialWordCounts[id] ?? 0)
+        while self.partialIDs.count > 128 {
+            self.partialWordCounts.removeValue(forKey: self.partialIDs.removeFirst())
+        }
+    }
+
+    private static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: { $0.isWhitespace }).count
+    }
+}
+
+/// Synchronous metadata tee. Reads the caller-owned PCM once without retaining or copying
+/// an audio buffer, retains fixed-size scalar statistics, and coalesces main-runloop delivery.
+final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
+    private struct Meter {
+        var count = 0
+        var squares: Double = 0
+        var peak: Float = 0
+        var crossings = 0
+        var previous: Float = 0
+        var start: Double = 0
+        var lastEnd: Double?
+    }
+    private let lock = NSLock()
+    private let originBox: MeetingLiveOriginBox
+    private let onUpdate: @Sendable (MeetingPendingSpeechSnapshot) -> Void
+    private var projection = MeetingPendingSpeechProjection()
+    private var meters: [MeetingLiveSpeaker: Meter] = [:]
+    private var publicationScheduled = false
+    private var lastPublishedRevision: UInt64 = 0
+
+    init(originBox: MeetingLiveOriginBox, onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
+        self.originBox = originBox
+        self.onUpdate = onUpdate
+    }
+
+    func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
+        guard CMSampleBufferIsValid(sampleBuffer), CMSampleBufferDataIsReady(sampleBuffer),
+              let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
+              let _ = try? MeetingPCMFormatContract(formatDescription: description),
+              asbd.mFormatID == kAudioFormatLinearPCM,
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0, asbd.mBitsPerChannel == 32,
+              asbd.mSampleRate.isFinite, (8_000...192_000).contains(asbd.mSampleRate),
+              (1...8).contains(asbd.mChannelsPerFrame) else { return }
+        let count = CMSampleBufferGetNumSamples(sampleBuffer)
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard count > 0, count <= 65_536, pts.isNumeric else { return }
+        let origin = self.originBox.establish(pts)
+        let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: origin)
+        var needed = 0
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
+            bufferListSizeNeededOut: &needed, bufferListOut: nil, bufferListSize: 0,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil) == noErr,
+            needed > 0, needed <= 1024 else { return }
+        let allocation = UnsafeMutableRawPointer.allocate(byteCount: needed, alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { allocation.deallocate() }
+        let list = allocation.bindMemory(to: AudioBufferList.self, capacity: 1)
+        var retained: CMBlockBuffer?
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
+            bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: needed,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: &retained) == noErr else { return }
+        let buffers = UnsafeMutableAudioBufferListPointer(list)
+        let channels = Int(asbd.mChannelsPerFrame)
+        let interleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0
+        guard buffers.count == (interleaved ? 1 : channels),
+              buffers.allSatisfy({ $0.mData != nil && Int($0.mDataByteSize) >= count * MemoryLayout<Float>.stride * (interleaved ? channels : 1) }) else { return }
+        let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
+        let schedule = self.lock.withLock { () -> Bool in
+            guard self.projection.snapshot.isCapturing else { return false }
+            var meter = self.meters[source] ?? Meter()
+            if let lastEnd = meter.lastEnd {
+                guard start >= lastEnd - 0.000_01 else { return false }
+                if start - lastEnd > 0.01 { meter = Meter() }
+            }
+            let stride = max(1, Int(asbd.mSampleRate / 8_000))
+            let bufferEnd = start + Double(count) / asbd.mSampleRate
+            for frame in Swift.stride(from: 0, to: count, by: stride) {
+                var value: Float = 0
+                for channel in 0..<channels {
+                    let data = buffers[interleaved ? 0 : channel].mData!.assumingMemoryBound(to: Float.self)
+                    value += data[interleaved ? frame * channels + channel : frame] / Float(channels)
+                }
+                guard value.isFinite else { self.meters[source] = Meter(); return false }
+                if meter.count == 0 { meter.start = start + Double(frame) / asbd.mSampleRate }
+                if meter.count > 0, (value < 0) != (meter.previous < 0) { meter.crossings += 1 }
+                meter.previous = value
+                meter.count += 1; meter.squares += Double(value) * Double(value)
+                meter.peak = max(meter.peak, abs(value))
+                let measuredEnd = min(bufferEnd, start + Double(frame + stride) / asbd.mSampleRate)
+                if measuredEnd - meter.start >= 0.02 - 0.000_001 {
+                    self.projection.observe(source: source, start: meter.start,
+                        end: measuredEnd,
+                        rms: Float(sqrt(meter.squares / Double(meter.count))), peak: meter.peak,
+                        zeroCrossingRate: Float(meter.crossings) / Float(meter.count))
+                    meter.count = 0; meter.squares = 0; meter.peak = 0; meter.crossings = 0
+                }
+            }
+            meter.lastEnd = start + Double(count) / asbd.mSampleRate
+            self.meters[source] = meter
+            return self.reservePublication()
+        }
+        if schedule { self.schedulePublication() }
+    }
+
+    func reconcile(visible: MeetingLiveTranscriptSnapshot) -> MeetingPendingSpeechSnapshot {
+        self.lock.withLock {
+            self.projection.reconcile(visible: visible)
+            return self.projection.snapshot
+        }
+    }
+
+    func stop() {
+        self.lock.withLock { self.projection.stop(); self.meters.removeAll() }
+    }
+
+    private func reservePublication() -> Bool {
+        guard !self.publicationScheduled, self.projection.snapshot.revision > self.lastPublishedRevision else { return false }
+        self.publicationScheduled = true
+        return true
+    }
+
+    private func schedulePublication() {
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self else { return }
+            let snapshot = self.lock.withLock {
+                self.publicationScheduled = false
+                let snapshot = self.projection.snapshot
+                self.lastPublishedRevision = snapshot.revision
+                return snapshot
+            }
+            self.onUpdate(snapshot)
+        }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+}
