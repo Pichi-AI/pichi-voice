@@ -5,6 +5,38 @@ import SwiftUI
 /// Refresh owned shell surfaces. Native commands and user document labels remain data.
 @MainActor
 enum BrandAppearanceController {
+    /// Logical System appearance comes from the application, independently of
+    /// an owned window's physical appearance. Otherwise an inverted palette's
+    /// window override can select the other palette on the next SwiftUI update.
+    @MainActor final class ApplicationAppearance: ObservableObject {
+        static let shared = ApplicationAppearance(application: .shared)
+        @Published private(set) var colorScheme: ColorScheme
+        private weak var application: NSApplication?
+        private var observation: NSKeyValueObservation?
+
+        init(application: NSApplication) {
+            self.application = application
+            self.colorScheme = Self.scheme(application.effectiveAppearance)
+            self.observation = application.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated { self?.refresh() }
+                } else {
+                    Task { @MainActor [weak self] in self?.refresh() }
+                }
+            }
+        }
+
+        private static func scheme(_ appearance: NSAppearance) -> ColorScheme {
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+        }
+
+        private func refresh() {
+            guard let application else { return }
+            let scheme = Self.scheme(application.effectiveAppearance)
+            if scheme != self.colorScheme { self.colorScheme = scheme }
+        }
+    }
+
     static func apply() {
         self.refreshApplicationMenu(NSApplication.shared.mainMenu, appName: AppBrand.appName, language: PichiLocalization.language)
         // SwiftUI owns its WindowGroup title; MenuBarManager refreshes its own hosted window

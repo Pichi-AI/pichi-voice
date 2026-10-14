@@ -242,7 +242,7 @@ SHELL_PROBES = (
     "dictionary_matcher_experiment", "factory_brand_vocabulary", "file_error_localization", "file_export",
     "file_transcript_relative_date", "file_transcript_rename", "file_transcript_view",
     "fluid_serve", "fluid_typography", "history_decode_recovery", "history_persistence", "hotkey_initialization",
-    "local_text_model_catalog", "meeting_capture_pcm", "meeting_microphone_capture_contracts",
+    "local_text_model_catalog", "meeting_capture_pcm", "meeting_microphone_capture_contracts", "native_window_appearance",
     "meeting_summary_evidence", "onboarding",
     "page_presentation", "paste_key_cache", "private_ai_idle_unloader",
     "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
