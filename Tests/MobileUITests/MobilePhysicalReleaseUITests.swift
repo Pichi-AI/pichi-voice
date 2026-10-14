@@ -82,11 +82,14 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         let originalMode = audioSession.mode
         let originalOptions = audioSession.categoryOptions
         var ownsRecording = false
+        var changedPlaybackCategory = false
         var ownsPlaybackSession = false
         defer {
             player.stop()
             if ownsPlaybackSession {
                 try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+            }
+            if changedPlaybackCategory {
                 try? audioSession.setCategory(originalCategory, mode: originalMode, options: originalOptions)
             }
         }
@@ -97,6 +100,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             runner.activate()
             try require(runner.state == .runningForeground, "The runner must own foreground playback initiation")
             try audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
+            changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
             try require(player.play(), "The runner must start synthetic speech")
