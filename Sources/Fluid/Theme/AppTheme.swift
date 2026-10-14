@@ -45,7 +45,11 @@ struct AppTheme {
              cardBackground, elevatedCardBackground, toolbarBackground]
         }
 
-        func readableText(_ proposed: Color, minimumContrast: Double = 3) -> Color {
+        func readableText(_ proposed: Color) -> Color {
+            self.readableText(proposed, minimumContrast: 3)
+        }
+
+        func readableText(_ proposed: Color, minimumContrast: Double) -> Color {
             return self.backgrounds.allSatisfy { Self.contrast(proposed, $0) >= minimumContrast }
                 ? proposed : self.primaryText
         }
