@@ -198,11 +198,15 @@ struct FluidGlassSecondaryActionStyle: PrimitiveButtonStyle {
 struct FluidGlassProminentActionStyle: PrimitiveButtonStyle {
     let tone: Color?
     @Environment(\.theme) private var theme
+    @Environment(\.appearsActive) private var appearsActive
 
     func makeBody(configuration: Configuration) -> some View {
-        Self.pairedLabelButton(role: configuration.role,
-                               foreground: self.theme.palette.foreground(on: self.tone ?? self.theme.palette.accent),
-                               action: configuration.trigger) { configuration.label }
+        // Inactive native glass removes its accent fill. Its neutral material
+        // needs system ink, including when a brand palette inverts the app surfaces.
+        let foreground = self.appearsActive ? self.theme.palette.foreground(on: self.tone ?? self.theme.palette.accent) : Color.primary
+        return Self.pairedLabelButton(role: configuration.role,
+                                      foreground: foreground,
+                                      action: configuration.trigger) { configuration.label }
             .buttonStyle(.glassProminent)
     }
 

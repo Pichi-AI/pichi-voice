@@ -59,6 +59,13 @@ assert 'Button(role: role, action: action)' in glass, 'Native Button must retain
 foreground_lines = [line.strip() for line in secondary.splitlines() if line.strip().startswith('let foreground = ')]
 assert len(foreground_lines) == 1
 secondary_foreground = foreground_lines[0].replace('configuration.role', 'self.role')
+prominent = glass[glass.index('struct FluidGlassProminentActionStyle:'):glass.index('/// Keeps disabled glass actions')]
+assert '@Environment(\\.appearsActive) private var appearsActive' in prominent
+assert '.buttonStyle(.glassProminent)' in prominent
+assert 'foreground: foreground' in prominent and 'action: configuration.trigger' in prominent
+prominent_foreground_lines = [line.strip() for line in prominent.splitlines() if line.strip().startswith('let foreground = ')]
+assert len(prominent_foreground_lines) == 1, 'Expected one production prominent foreground decision'
+prominent_foreground = prominent_foreground_lines[0]
 command_file = 'Sources/Fluid/Views/CommandModeView.swift'
 command_glyph = snippet(command_file,
     '                        Image(systemName: self.ownsASRRecording ? "stop.fill" : "arrow.up")',
@@ -133,6 +140,14 @@ with Path(sys.argv[1]).open('a') as output:
     ]:
         output.write('struct ' + name + ': View {\n    ' + dependencies + '\n'
             '    var body: some View {\n' + control + '\n    }\n}\n')
+    output.write('struct ProminentGlassLabelFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n'
+        '    @Environment(\\.appearsActive) private var appearsActive\n'
+        '    let tone: Color?\n'
+        '    var body: some View {\n        ' + prominent_foreground + '\n'
+        '        return FluidGlassProminentActionStyle.pairedLabelButton(role: nil, foreground: foreground, action: {}) {\n'
+        '            Label("Prominent appearance", systemImage: "arrow.up.right")\n'
+        '        }\n    }\n}\n')
     output.write('struct SecondaryGlassLabelFixture: View {\n'
         '    @Environment(\\.theme) private var theme\n'
         '    let role: ButtonRole?\n    let tone: Color?\n'
