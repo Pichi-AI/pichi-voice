@@ -42,7 +42,7 @@ struct ReleaseHighlightsView: View {
                     .foregroundStyle(self.theme.palette.primaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Always here in Help → What’s new.")
+            Text(PichiLocalization.text("Always here in Help → What’s new."))
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.tertiaryText)
                 .frame(maxWidth: .infinity)

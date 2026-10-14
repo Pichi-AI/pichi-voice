@@ -162,6 +162,62 @@ private final class SettingsPersistentScroller: NSScroller {
     }
 }
 
+// NSHostingView's unconstrained ideal width can underestimate the height of
+// multiline settings. Give SwiftUI the clip's actual width so its intrinsic
+// document height includes wrapped rows, rather than centering overflow above it.
+private final class SettingsDocumentHostingView: NSHostingView<AnyView> {
+    var content: AnyView {
+        didSet {
+            self.contentNeedsUpdate = true
+            self.scheduleRootUpdate()
+        }
+    }
+
+    private var appliedWidth: CGFloat?
+    private var contentNeedsUpdate = true
+    private var updateScheduled = false
+
+    required init(rootView: AnyView) {
+        self.content = rootView
+        super.init(rootView: AnyView(rootView.frame(width: nil).fixedSize(horizontal: false, vertical: true)))
+        // The scroll view owns horizontal constraints; only the measured document
+        // height should flow back from SwiftUI into AppKit.
+        self.sizingOptions = .intrinsicContentSize
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { nil }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        self.scheduleRootUpdate()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = self.frame.width != newSize.width
+        super.setFrameSize(newSize)
+        if widthChanged { self.scheduleRootUpdate() }
+    }
+
+    private func scheduleRootUpdate() {
+        guard !self.updateScheduled else { return }
+        self.updateScheduled = true
+        // Updating a SwiftUI root during an AppKit constraint/layout pass can
+        // re-enter that pass. Coalesce changes and read the latest clip width.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.updateScheduled = false
+            guard let clipView = self.superview as? NSClipView else { return }
+            let width = clipView.bounds.width
+            guard width.isFinite, width > 0,
+                  self.contentNeedsUpdate || width != self.appliedWidth else { return }
+            self.appliedWidth = width
+            self.contentNeedsUpdate = false
+            self.rootView = AnyView(self.content.frame(width: width).fixedSize(horizontal: false, vertical: true))
+        }
+    }
+}
+
 struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     private let theme: AppTheme
     private let colorScheme: ColorScheme
@@ -211,7 +267,7 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
         scrollView.verticalScrollElasticity = .allowed
         scrollView.horizontalScrollElasticity = .none
 
-        let hostingView = NSHostingView(rootView: self.hostedContent)
+        let hostingView = SettingsDocumentHostingView(rootView: self.hostedContent)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         hostingView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         hostingView.setContentHuggingPriority(.required, for: .vertical)
@@ -229,7 +285,7 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context _: Context) {
-        (scrollView.documentView as? NSHostingView<AnyView>)?.rootView = self.hostedContent
+        (scrollView.documentView as? SettingsDocumentHostingView)?.content = self.hostedContent
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = false

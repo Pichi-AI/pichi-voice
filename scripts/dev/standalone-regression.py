@@ -213,7 +213,7 @@ SHELL_PROBES = (
     "local_text_model_catalog", "meeting_capture_pcm", "meeting_microphone_capture_contracts",
     "meeting_summary_evidence", "onboarding",
     "page_presentation", "paste_key_cache", "private_ai_idle_unloader",
-    "release_highlights", "settings_owned_copy", "speech_model_provider_presentation", "ui_contrast",
+    "release_highlights", "settings_owned_copy", "settings_viewport", "speech_model_provider_presentation", "ui_contrast",
     "stats_snapshot", "voice_edit_cancellation",
 )
 PYTHON_PROBES = (
