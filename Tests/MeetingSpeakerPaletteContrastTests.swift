@@ -25,7 +25,7 @@ enum MeetingSpeakerPaletteContrastTests {
         let speakers = (0..<6).map { index in
             MeetingSessionSpeaker(id: UUID(), displayName: "Synthetic \(index) Ёё", isLocalUser: false)
         }
-        var contrasts = 0, immutableChecks = 0, legacyFailures = 0
+        var contrasts = 0, immutableChecks = 0, legacyFailures = 0, liveChecks = 0
         for (brand, package) in packages {
             for logical: ColorScheme in [.light, .dark] {
                 let theme = AppTheme.adaptive(
@@ -41,13 +41,32 @@ enum MeetingSpeakerPaletteContrastTests {
                         let guardAppearance = NSAppearance(named: guardScheme == .dark ? .darkAqua : .aqua)!
                         var tints: [SessionSpeakerID: Color] = [:]
                         var checked: [SessionSpeakerID: Color] = [:]
+                        var liveFills: [Color] = []
                         guardAppearance.performAsCurrentDrawingAppearance {
                             tints = ProductionSpeakerPaletteProducer(session: .init(activeSpeakers: speakers),
                                 theme: theme, colorScheme: ambient).currentTints()
                             for speaker in speakers { checked[speaker.id] = theme.palette.readableText(tints[speaker.id]!) }
+                            for microphone in [false, true] {
+                                for partial in [false, true] {
+                                    liveFills.append(ProductionLiveSpeakerPaletteProducer(
+                                        row: .init(speaker: microphone ? .you : .remote, isPartial: partial),
+                                        theme: theme, colorScheme: ambient).currentFill())
+                                }
+                            }
                         }
                         for drawScheme: ColorScheme in [.light, .dark] {
                             NSAppearance(named: drawScheme == .dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
+                                for (index, fill) in liveFills.enumerated() {
+                                    let microphone = index >= 2
+                                    let partial = index % 2 == 1
+                                    let base = microphone ? theme.palette.accent
+                                        : MeetingSpeakerPalette.tint(forSpeakerIndex: 0, isDark: physical == .dark)
+                                    precondition(self.equal(UIContrastTests.components(fill), UIContrastTests.components(base)),
+                                        "Actual live fill must retain microphone accent or physical remote tint across guard/draw appearances")
+                                    precondition(abs(NSColor(fill).usingColorSpace(.sRGB)!.alphaComponent - (partial ? 0.05 : 0.10)) < 0.00001,
+                                        "Live partial/final fill opacity must remain unchanged")
+                                    liveChecks += 1
+                                }
                                 for (index, speaker) in speakers.enumerated() {
                                     let rgb = MeetingSpeakerPalette.rgb(forSpeakerIndex: index, isDark: physical == .dark)
                                     let expected = [Double(rgb.red), Double(rgb.green), Double(rgb.blue)].map { $0 / 255 }
@@ -108,7 +127,7 @@ enum MeetingSpeakerPaletteContrastTests {
                 "Renaming the unknown bucket cannot recolor other stable speaker IDs")
             precondition(colors[unknown.id] != nil && colors[local.id] == nil)
         }
-        print("Speaker palette: \(immutableChecks) immutable RGB checks; \(contrasts) six-surface contrast checks; \(legacyFailures) legacy dynamic negative controls; local/unknown/renamed index contracts preserved")
+        print("Speaker palette: \(immutableChecks) immutable RGB checks; \(contrasts) six-surface contrast checks; \(liveChecks) source-bound live microphone/remote partial/final fill checks; \(legacyFailures) legacy dynamic negative controls; local/unknown/renamed index contracts preserved")
         print("SKIP: actual native meeting header/row pixels, hot/cold UI replay, pointer and keyboard interactions")
     }
 }

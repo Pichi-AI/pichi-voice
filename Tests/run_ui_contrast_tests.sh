@@ -426,7 +426,23 @@ speaker_canvas = Path('Sources/Fluid/UI/MeetingSessionCanvases.swift').read_text
 speaker_producer = snippet('Sources/Fluid/UI/MeetingSessionCanvases.swift',
     '    private var speakerTints: [SessionSpeakerID: Color] {',
     '    private var hasEchoSegments: Bool {')
-assert speaker_canvas.count('MeetingSpeakerPalette.tints(') == 1
+# Inventory every production call, not only the completed transcript producer.
+# A newly added consumer must be included in this compile projection explicitly.
+import re
+speaker_calls = {}
+for caller in Path('Sources').rglob('*.swift'):
+    calls = re.findall(r'\bMeetingSpeakerPalette\s*\.\s*(tints?)\s*\(', caller.read_text())
+    if calls:
+        speaker_calls[str(caller)] = calls
+assert speaker_calls == {
+    'Sources/Fluid/UI/MeetingSessionCanvases.swift': ['tints'],
+    'Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift': ['tint'],
+}, f'Uncovered production speaker palette caller: {speaker_calls}'
+live_source = Path('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift').read_text()
+live_fill = snippet('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift',
+    '    private var fill: Color {', '    var body: some View {')
+live_microphone = snippet('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift',
+    '    private var isMicrophone: Bool {', '    private var sourceLabel: String {')
 assert '.foregroundStyle(self.theme.palette.readableText(self.tint))' in speaker_canvas
 assert 'self.speakerTint.map(self.theme.palette.readableText)' in speaker_canvas
 with Path(sys.argv[1]).open('a') as output:
@@ -437,10 +453,18 @@ with Path(sys.argv[1]).open('a') as output:
         ' struct Session { let activeSpeakers: [MeetingSessionSpeaker] }\n'
         ' let session: Session; let theme: AppTheme; let colorScheme: ColorScheme\n'
         + speaker_producer + '\n func currentTints() -> [SessionSpeakerID: Color] { self.speakerTints }\n}\n')
+    output.write('struct ProductionLiveSpeakerPaletteProducer {\n'
+        ' enum Speaker { case you, remote }; struct Row { let speaker: Speaker; let isPartial: Bool }\n'
+        ' let row: Row; let theme: AppTheme; let colorScheme: ColorScheme\n'
+        + live_microphone + live_fill + '\n func currentFill() -> Color { self.fill }\n}\n')
 Path(sys.argv[1]).with_name('SpeakerPaletteProductionSource.json').write_text(json.dumps({
     'paletteSHA256': hashlib.sha256(speaker_source.encode()).hexdigest(),
     'producerSHA256': hashlib.sha256(speaker_producer.encode()).hexdigest(),
-    'adapters': ['inert speaker ID/name/local metadata and active-speaker list'],
+    'liveSourceSHA256': hashlib.sha256(live_source.encode()).hexdigest(),
+    'liveFillSHA256': hashlib.sha256(live_fill.encode()).hexdigest(),
+    'liveMicrophoneSHA256': hashlib.sha256(live_microphone.encode()).hexdigest(),
+    'productionCallerInventory': speaker_calls,
+    'adapters': ['inert speaker ID/name/local metadata and active-speaker list', 'inert live row speaker and partial metadata'],
     'nativeMeetingPixelReplay': 'SKIP',
 }, indent=2) + '\n')
 
