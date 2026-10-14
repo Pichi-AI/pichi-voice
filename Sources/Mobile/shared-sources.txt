@@ -59,6 +59,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingProviderBackedBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingResultSidecar.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingResultSidecarStore.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingWeSpeakerCPUEmbeddingBatch.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceModelArtifacts.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptAssembler.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift
