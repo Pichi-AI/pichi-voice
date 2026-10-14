@@ -26,6 +26,7 @@ final class MeetingSegmentPlayback: ObservableObject {
     private var failureObserver: NSObjectProtocol?
     private var statusObserver: NSKeyValueObservation?
     private var requestID = UUID()
+    private var activeSegmentIDs: [MeetingTranscriptSegmentID] = []
 
     func toggle(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID) {
         self.toggle(sessionID: sessionID, segmentIDs: [segmentID])
@@ -35,13 +36,14 @@ final class MeetingSegmentPlayback: ObservableObject {
     /// member remains the playback identity; the verified mapping covers the paragraph's range.
     func toggle(sessionID: MeetingSessionID, segmentIDs: [MeetingTranscriptSegmentID]) {
         guard let segmentID = segmentIDs.first else { return }
-        let wasActive = self.activeSegmentID == segmentID
+        let wasActive = self.activeSegmentID == segmentID && self.activeSegmentIDs == segmentIDs
         if wasActive {
             self.togglePause()
             return
         }
         self.stop()
         self.activeSegmentID = segmentID
+        self.activeSegmentIDs = segmentIDs
         self.isLoading = true
         let requestID = self.requestID
         self.loadTask = Task { [weak self] in
@@ -167,6 +169,7 @@ final class MeetingSegmentPlayback: ObservableObject {
         self.player?.replaceCurrentItem(with: nil)
         self.player = nil
         self.activeSegmentID = nil
+        self.activeSegmentIDs = []
         self.isLoading = false
     }
 
