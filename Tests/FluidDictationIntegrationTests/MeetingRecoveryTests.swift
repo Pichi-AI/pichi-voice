@@ -138,7 +138,7 @@ final class MeetingRecoveryTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
-        settings.selectedSpeechModel = .whisperTiny
+        settings.selectedSpeechModel = .gigaam
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
@@ -169,6 +169,49 @@ final class MeetingRecoveryTests: XCTestCase {
         let sessions = try await store.loadAll()
         XCTAssertTrue(sessions.isEmpty)
         XCTAssertTrue(coordinator.isQuiescent)
+    }
+
+    func testExplicitTinyLanguageReachesRequestedRuntimeWithoutAmbientPreparation() async throws {
+        for language in ["en", "auto"] {
+            let suite = "ExplicitTinyRuntime.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = SettingsStore(defaults: defaults)
+            settings.selectedSpeechModel = .gigaam
+            let dir = self.makeTempDirectory()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let store = MeetingSessionStore(rootDirectory: dir)
+            let capture = StubCaptureController()
+            let arbiter = StubArbiter()
+            var preparations = 0
+            var runtimeRequest: MeetingBackendRequest?
+            let marker = CocoaError(.userCancelled)
+            let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Runtime marker precedes ASR residency"); return ASRService() },
+                managesModelResidency: false, settings: settings,
+                meetingRuntimeFactory: { request in runtimeRequest = request; throw marker })
+            let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+                audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 })
+            var configuration = self.makeConfiguration()
+            configuration.mode = .inRoom
+            configuration.languageCode = language
+            configuration.audioStorageMode = .memoryOnly
+            configuration.speakerLabelsEnabled = false
+            configuration.transcriptionBackendID = MeetingBackendID.whisperTiny.rawValue
+            do { _ = try await coordinator.startRecording(configuration: configuration); XCTFail("Expected the requested-runtime marker") }
+            catch { XCTAssertEqual(error as? CocoaError, marker) }
+            let request = try XCTUnwrap(runtimeRequest)
+            XCTAssertEqual(request.session.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
+            XCTAssertEqual(request.configuration.asrModel, PichiMeetingProviderFactory.whisperTinyModelID)
+            XCTAssertEqual(request.configuration.languageCode, language)
+            XCTAssertEqual(preparations, 0)
+            XCTAssertEqual(capture.preflightCount, 1)
+            XCTAssertEqual(capture.startCount, 0)
+            XCTAssertEqual(arbiter.acquireCount, 1)
+            XCTAssertEqual(arbiter.releaseCount, 1)
+            XCTAssertEqual(settings.selectedSpeechModel, .gigaam)
+            XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+            XCTAssertTrue(coordinator.isQuiescent)
+        }
     }
 
     func testExplicitBackendRequestRoundTripsWithoutChangingLegacyDefault() throws {
@@ -280,9 +323,10 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
         capture.stopResult = .init(tracks: [track], stoppedAt: Date())
         let processing = MemoryCheckpointProcessingController()
+        var preparations = 0
         var frozen: MeetingFinalProcessingConfiguration?
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
-            audioArbiter: StubArbiter(), settings: settings, validateFrozenRecordingConfiguration: { frozen = $0 })
+            audioArbiter: StubArbiter(), settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { frozen = $0 })
         var configuration = self.makeConfiguration()
         configuration.mode = .inRoom
         configuration.languageCode = "ru"
@@ -297,6 +341,16 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(completed.recordingBackendID, session.recordingBackendID)
         XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
         XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
+        XCTAssertTrue(coordinator.isQuiescent)
+        XCTAssertEqual(preparations, 0)
+        // A subsequent ordinary request still uses the selected model and its normal owner.
+        configuration.transcriptionBackendID = nil
+        configuration.languageCode = "auto"
+        let normal = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(normal.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
+        XCTAssertEqual(preparations, 1)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        _ = try await coordinator.stopAndTranscribe()
         XCTAssertTrue(coordinator.isQuiescent)
     }
 

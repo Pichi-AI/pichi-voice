@@ -416,7 +416,8 @@ final class MeetingSessionCoordinator: ObservableObject {
         let requestedBackendID = configuration.transcriptionBackendID.map(MeetingBackendID.init(rawValue:))
             ?? PichiMeetingProviderFactory.selectedBackendID(languageCode: configuration.languageCode,
                 selectedModelID: selectedModelID, savedBackendID: savedBackendID)
-        if PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
+        if configuration.transcriptionBackendID == nil,
+           PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
             _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
                 asrModel: selectedModelID,
                 languageCode: configuration.languageCode
@@ -440,7 +441,9 @@ final class MeetingSessionCoordinator: ObservableObject {
             configuration: configuration, backendID: requestedBackendID)
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
-        try await self.validateRecordingModels()
+        // This callback belongs to the ambient selected-ASR lifecycle. Explicit requests
+        // are prepared by the existing requested-backend pipeline/runtime owners below.
+        if configuration.transcriptionBackendID == nil { try await self.validateRecordingModels() }
         try Task.checkCancellation()
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
               self.settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
