@@ -168,6 +168,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
     struct Config {
         var providerOptions: [String: String] = [:]
         let messages: [[String: Any]]
+        let tools: [[String: Any]]
         var maxRetries = 0
         var retryDelayMs = 0
         var onThinkingChunk: (@Sendable (String) -> Void)?
@@ -184,6 +185,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
             extraParameters: [String: Any]
         ) {
             self.messages = messages
+            self.tools = tools
         }
     }
 
@@ -269,6 +271,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
     }
 
     static func main() async {
+        await self.directOutputPreservesRequestAndResponse()
         await self.generatedStepDescriptionsRespectLocale()
         await self.cancelDelayedLLM(response: .tool)
         await self.cancelDelayedLLM(response: .done)
@@ -292,6 +295,53 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
         await self.invalidRequestDoesNothing()
         self.check(MeetingSummaryActivityCoordinator.busyErrors == 0, "A canceled request left processing locked")
         print("Command cancellation: \(self.checks) checks passed (production agent loop, streaming callbacks, real in-memory chat store)")
+    }
+
+    /// The production loop must forward the generic scope policy and exact user data,
+    /// then preserve direct output through persistence. Model accuracy is evaluated
+    /// separately with opt-in, pinned-profile inference; these responses are doubles.
+    static func directOutputPreservesRequestAndResponse() async {
+        var directPrompt: String?
+        for (user, answer) in [
+            ("Не используй инструменты. Верни ровно: Ёжик, café, 東京 ✅", "Ёжик, café, 東京 ✅"),
+            ("Do not run anything. Return only this command as text: printf 'hello\\n'", "printf 'hello\\n'"),
+        ] {
+            let service = self.fixture()
+            LLMClient.shared.delay = false
+            LLMClient.shared.responses = [.init(content: answer, thinking: nil, toolCalls: [])]
+            await service.processUserCommand(user)
+            self.check(LLMClient.shared.configs.count == 1, "A direct output must use the existing single model request")
+            let config = LLMClient.shared.configs[0]
+            let prompt = config.messages.first?["content"] as? String ?? ""
+            self.check(prompt.contains("For informational questions or requests to produce text")
+                && prompt.contains("answer directly without tools or terminal pre-flight checks")
+                && prompt.contains("Honor explicit instructions not to use tools")
+                && prompt.contains("return only the requested content")
+                && prompt.contains("take precedence over the workflow and summary conventions"),
+                "The actual request must distinguish direct output from Mac operations and preserve explicit output constraints")
+            self.check(prompt.range(of: "## REQUEST SCOPE:")!.lowerBound < prompt.range(of: "## AGENTIC WORKFLOW")!.lowerBound,
+                "The direct-output policy must be available before the terminal workflow")
+            if let directPrompt { self.check(prompt == directPrompt, "Prompt policy must not branch on user language or literal content") }
+            directPrompt = prompt
+            self.check(config.messages.count == 2 && config.messages.last?["content"] as? String == user,
+                "The exact user request must follow the system policy without history contamination or rewriting")
+            self.check(NSDictionary(dictionary: config.tools[0]).isEqual(to: TerminalService.toolDefinition),
+                "Direct-output guidance must not remove or replace the shared tool contract")
+            self.check(TerminalService.executed.isEmpty && service.pendingCommand == nil,
+                "A text-only model response must not trigger a terminal action or confirmation")
+            self.check(service.conversationHistory.map(\.content) == [user, answer]
+                && ChatHistoryStore.shared.currentSession?.messages.map(\.content) == [user, answer],
+                "Exact Unicode and command-as-text output must persist without a preamble or summary prefix")
+        }
+
+        let service = self.fixture()
+        LLMClient.shared.delay = false
+        LLMClient.shared.responses = [.tool, .done]
+        await service.processUserCommand("Perform the synthetic terminal action")
+        self.check(LLMClient.shared.configs.first?.messages.first?["content"] as? String == directPrompt,
+            "Mac actions must share the same generic policy rather than a duplicated prompt or pipeline")
+        self.check(TerminalService.executed == ["fake command"] && service.conversationHistory.last?.content == "Done",
+            "The scoped direct-output policy must retain the existing tool loop")
     }
 
     static func generatedStepDescriptionsRespectLocale() async {
