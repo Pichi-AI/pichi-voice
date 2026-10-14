@@ -208,6 +208,10 @@ struct UIContrastTests {
             try await DashboardShortcutSurfaceTests.run(directory: directory)
             return
         }
+        if CommandLine.arguments.contains("--overlay-captions-only") {
+            try await OverlaySliderCaptionTests.run(directory: directory)
+            return
+        }
         let packages = [
             ("pichi", "Sources/Fluid/Branding/brand-package.json"),
             ("sber", "Configuration/BrandExamples/sber-demo.json"),

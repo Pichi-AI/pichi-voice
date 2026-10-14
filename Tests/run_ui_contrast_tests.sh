@@ -310,6 +310,79 @@ Path(sys.argv[1]).with_name('DashboardProductionSource.json').write_text(json.du
     'adapters': ['inert dependencies', 'construction renderer only'],
     'nativeGlassRasterization': 'SKIP', 'physicalInputAndAccessibilityActivation': 'SKIP',
 }, indent=2) + '\n')
+
+# The four actual slider captions keep their complete production localization,
+# shared caption font and layout chain. Global brand font defaults stay intact.
+import re, subprocess, plistlib, os
+settings_path = 'Sources/Fluid/UI/SettingsView.swift'
+settings_source = Path(settings_path).read_text()
+# Historical negative controls are opt-in. A normal shallow checkout only needs
+# its actual current source, never an older Git object to run the regression.
+old_revision = os.environ.get('PICHI_OVERLAY_CAPTION_LEGACY_REVISION')
+old_source = subprocess.check_output(['git', 'show', f'{old_revision}:{settings_path}'], text=True) if old_revision else None
+first = '                            .settingsSearchTarget(.overlaySensitivity)\n'
+last = '                            .settingsSearchTarget(.transcriptionPreviewLength)\n'
+def caption_block(text):
+    assert text.count(first) == text.count(last) == 1
+    return text[text.index(first) + len(first):text.index(last)]
+pattern = re.compile(r'Text\((PichiLocalization\.text\("scale.more", defaultValue: "More"\)|"Less")\)\n(?:\s+\.[^\n]+\n)+')
+current_block = caption_block(settings_source)
+legacy_block = caption_block(old_source) if old_source else None
+current_caps = list(pattern.finditer(current_block))
+legacy_caps = list(pattern.finditer(legacy_block)) if legacy_block else []
+assert len(current_caps) == 4, 'Expected four actual Overlay slider boundary captions'
+if old_source:
+    assert len(legacy_caps) == 4, 'Expected four actual historical caption expressions'
+    assert pattern.sub('CAPTION\n', current_block) == pattern.sub('CAPTION\n', legacy_block), 'Slider bindings/ranges/numeric monospaced readout must remain unchanged'
+expected_keys = ['scale.more', 'Less', 'Less', 'scale.more']
+for current in current_caps:
+    assert current.group().count('.font(.fluidSystem(.caption))') == 1
+    assert current.group().count('.foregroundStyle(self.settingsSecondaryText)') == 1
+    assert current.group().count('.lineLimit(1)') == 1
+    assert current.group().count('.fixedSize(horizontal: true, vertical: false)') == 1
+    assert current.group().count('.frame(minWidth: 36, alignment:') == 1
+for current, legacy in zip(current_caps, legacy_caps):
+    assert current.group(1) == legacy.group(1)
+    assert legacy.group().count('.font(.fluidSystem(.caption))') == 1
+    assert legacy.group().count('.foregroundStyle(self.settingsSecondaryText)') == 1
+    assert legacy.group().count('.frame(width: 36, alignment:') == 1
+helper = snippet(settings_path, '    var settingsSecondaryText: Color {', '    var settingsTertiaryText: Color {')
+catalog_path = Path('Sources/Fluid/Localization/Localizable.xcstrings')
+catalog = json.loads(catalog_path.read_text())
+expected = {language: [catalog['strings'][key]['localizations'][language]['stringUnit']['value'] for key in expected_keys] for language in ['en', 'ru']}
+expected_swift = '[' + ', '.join(json.dumps(language) + ': [' + ', '.join(json.dumps(value, ensure_ascii=False) for value in values) + ']' for language, values in expected.items()) + ']'
+with Path(sys.argv[1]).open('a') as output:
+    output.write('struct ProductionOverlayCaptionFixture: View {\n'
+        '    @Environment(\\.theme) private var theme\n'
+        '    let index: Int\n    let legacy: Bool\n'
+        '    @ViewBuilder var body: some View {\n        if self.legacy {\n            switch self.index {\n')
+    for legacy, matches in [(True, legacy_caps), (False, current_caps)]:
+        if not legacy: output.write('        } else {\n            switch self.index {\n')
+        for index, match in enumerate(matches):
+            output.write(f'            case {index}:\n' + match.group())
+        output.write('            default: EmptyView()\n            }\n')
+    output.write('        }\n    }\n' + helper + '}\n')
+    output.write('enum ProductionOverlayCaptionMetadata {\n'
+        '    static let legacyAvailable = ' + str(bool(old_source)).lower() + '\n'
+        '    static let expected: [String: [String]] = ' + expected_swift + '\n}\n')
+Path(sys.argv[1]).with_name('OverlayCaptionProductionSource.json').write_text(json.dumps({
+    'source': settings_path, 'sha256': hashlib.sha256(settings_source.encode()).hexdigest(),
+    'captionSHA256': [hashlib.sha256(match.group().encode()).hexdigest() for match in current_caps],
+    'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', old_revision], text=True).strip() if old_revision else None,
+    'legacyCaptionSHA256': [hashlib.sha256(match.group().encode()).hexdigest() for match in legacy_caps],
+    'catalogSHA256': hashlib.sha256(catalog_path.read_bytes()).hexdigest(),
+    'sliderContractSHA256': hashlib.sha256(pattern.sub('CAPTION\n', current_block).encode()).hexdigest(),
+    'adapters': [], 'fontDesignCoverage': 'Actual global caption font only; other global brand fonts require native retest',
+    'native800PointViewport': 'SKIP',
+}, indent=2) + '\n')
+bundle = Path(sys.argv[1]).parent / 'OverlayCaptionFixture.app/Contents'
+(bundle / 'MacOS').mkdir(parents=True, exist_ok=True)
+(bundle / 'Resources').mkdir(exist_ok=True)
+(bundle / 'Info.plist').write_bytes(plistlib.dumps({
+    'CFBundleIdentifier': 'ai.pichi.overlay-caption.fixture', 'CFBundleExecutable': 'tests',
+    'CFBundlePackageType': 'APPL', 'CFBundleDevelopmentRegion': 'en',
+    'CFBundleLocalizations': ['en', 'ru'], 'LSUIElement': True,
+}))
 PY
 
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
@@ -333,4 +406,23 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ProductionLabels.swift" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
     Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift -o "$task_test_dir/tests"
-"$task_test_dir/tests" "$task_test_dir" "$@"
+# Keep the existing full-suite executable and its bundle context unchanged.
+# The focused caption pass uses the same binary with real compiled resources.
+case " $* " in
+    *" --overlay-captions-only "*|"  ")
+        xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
+            --output-directory "$task_test_dir/OverlayCaptionFixture.app/Contents/Resources" --language en --language ru
+        cp "$task_test_dir/tests" "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests"
+        cp Sources/Fluid/Branding/brand-package.json "$task_test_dir/OverlayCaptionFixture.app/Contents/Resources/brand-package.json"
+        ;;
+esac
+case " $* " in
+    *" --overlay-captions-only "*)
+        "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
+        ;;
+    "  ")
+        "$task_test_dir/tests" "$task_test_dir"
+        "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --overlay-captions-only
+        ;;
+    *) "$task_test_dir/tests" "$task_test_dir" "$@" ;;
+esac
