@@ -139,6 +139,8 @@ struct MeetingAssignSpeakersSheet: View {
         .frame(minWidth: 480, idealWidth: 560, maxWidth: 560)
         .frame(minHeight: 420, idealHeight: 560)
         .background(self.theme.palette.windowBackground)
+        .appTheme(self.theme)
+        .tint(self.theme.palette.accent)
     }
 
     private var header: some View {
@@ -213,7 +215,6 @@ struct MeetingAssignSpeakersSheet: View {
             .textFieldStyle(.plain)
             .font(self.theme.typography.body)
             .foregroundStyle(self.theme.palette.primaryText)
-            .tint(self.theme.palette.primaryText)
             .overlay(alignment: .leading) {
                 if (self.drafts[speaker.id] ?? speaker.displayName).isEmpty {
                     Text(verbatim: speaker.displayName)

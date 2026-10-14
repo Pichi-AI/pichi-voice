@@ -14,6 +14,24 @@ struct CloudTextProvider {
     let fields: [Field]
 }
 
+// Shape-only meeting metadata for compiling the complete production sheet.
+// No persistence, session services, recordings or personal names are available.
+typealias SessionSpeakerID = UUID
+struct MeetingSessionSpeaker: Identifiable {
+    let id: SessionSpeakerID
+    let displayName: String
+    let isLocalUser: Bool
+}
+struct MeetingTranscriptSegment {
+    enum Status { case final, partial }
+    struct Time { let seconds: Double }
+    let speakerID: SessionSpeakerID?
+    let isEcho: Bool
+    let status: Status
+    let start: Time
+    let text: String
+}
+
 enum ParticipantInputContrastTests {
     @MainActor final class State: ObservableObject {
         @Published var theme: AppTheme
@@ -29,7 +47,94 @@ enum ParticipantInputContrastTests {
                 .frame(width: 400)
                 .padding(4)
                 .appTheme(self.state.theme)
+                .tint(self.state.theme.palette.accent)
                 .background(self.state.theme.palette.windowBackground)
+        }
+    }
+
+    @MainActor private final class SheetObservations {
+        var saveCalls = [[SessionSpeakerID: String]]()
+        var cancelCalls = 0
+    }
+    private struct SheetHost: View {
+        @ObservedObject var state: State
+        let observations: SheetObservations
+        let inheritedTintIsOpposed: Bool
+        static let speakerID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        var body: some View {
+            MeetingAssignSpeakersSheet(
+                speakers: [.init(id: Self.speakerID, displayName: "Ёжик ёлка", isLocalUser: false)],
+                quotesBySpeaker: [:], tints: [:], accentColor: self.state.theme.palette.accent,
+                onSave: { self.observations.saveCalls.append($0); return nil },
+                onCancel: { self.observations.cancelCalls += 1 })
+                // The presentation adapter passes custom theme and caller tint.
+                // Root font/foreground/native colorScheme must come FROM SHEET.
+                .environment(\.theme, self.state.theme)
+                .tint(self.inheritedTintIsOpposed ? .cyan : self.state.theme.palette.accent)
+        }
+    }
+
+    @MainActor private static func selectionContrast(_ editor: NSTextView) -> Double {
+        var result = 0.0
+        editor.effectiveAppearance.performAsCurrentDrawingAppearance {
+            let attributes = editor.selectedTextAttributes
+            let ink = ((attributes[.foregroundColor] as? NSColor) ?? editor.textColor ?? .textColor).usingColorSpace(.sRGB)!
+            let fill = ((attributes[.backgroundColor] as? NSColor) ?? .selectedTextBackgroundColor).usingColorSpace(.sRGB)!
+            result = UIContrastTests.contrast([Double(ink.redComponent), Double(ink.greenComponent), Double(ink.blueComponent)],
+                [Double(fill.redComponent), Double(fill.greenComponent), Double(fill.blueComponent)])
+        }
+        return result
+    }
+
+    @MainActor private static func verifyWholeSheet(state: State, name: String, theme: (ColorScheme) -> AppTheme, inheritedTintIsOpposed: Bool, directory: URL) async throws {
+        let observations = SheetObservations()
+        let host = NSHostingView(rootView: SheetHost(state: state, observations: observations, inheritedTintIsOpposed: inheritedTintIsOpposed))
+        host.frame = NSRect(x: 0, y: 0, width: 560, height: 560)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        var originalField: NSTextField?
+        var expectedDraft = "Ёжик ёлка"
+        let tintCase = inheritedTintIsOpposed ? "opposed-inherited-tint" : "brand-inherited-tint"
+        for (step, scheme) in [ColorScheme.dark, .light, .dark].enumerated() {
+            let opposite: ColorScheme = scheme == .dark ? .light : .dark
+            NSApp.appearance = NSAppearance(named: opposite == .dark ? .darkAqua : .aqua)
+            window.appearance = NSApp.appearance
+            state.theme = theme(scheme)
+            await self.settle(host)
+            let field = self.fields(host).first { $0.isEditable }!
+            if let originalField { precondition(originalField === field, "Whole sheet theme changes retain the existing field") }
+            originalField = field
+            precondition(field.stringValue == expectedDraft, "Whole sheet theme changes preserve the actual draft")
+            let physical = state.theme.palette.nativeColorScheme(fallback: scheme)
+            precondition(field.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == (physical == .dark ? .darkAqua : .aqua), "Actual sheet itself must establish its portable native appearance")
+            precondition(window.makeFirstResponder(field))
+            let editor = window.fieldEditor(false, for: field) as! NSTextView
+            editor.setSelectedRange(NSRange(location: 0, length: 4))
+            await self.settle(host)
+            let contrast = self.selectionContrast(editor)
+            fputs("Whole hidden non-key sheet \(name)-\(tintCase)-\(step)-\(scheme): selected contrast=\(contrast), editor=\(editor.effectiveAppearance.name)\n", stderr)
+            // Inactive native selection has the original >=3 legibility gate.
+            // A strict >=4.5 experiment failed Sber Dark at 4.06 and is retained
+            // separately. This never establishes active physical selection PASS.
+            precondition(contrast >= 3, "Whole-sheet inactive native selection must remain legible")
+            var caret = NSColor.clear
+            editor.effectiveAppearance.performAsCurrentDrawingAppearance { caret = editor.insertionPointColor.usingColorSpace(.sRGB)! }
+            precondition(UIContrastTests.contrast([Double(caret.redComponent), Double(caret.greenComponent), Double(caret.blueComponent)], UIContrastTests.components(state.theme.palette.elevatedCardBackground)) >= 3)
+            let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent("whole-participant-sheet-\(name)-\(tintCase)-\(step)-\(scheme).png"))
+            let draft = step == 0 ? "Нативный Ёжик" : "Нативный Ёжик ёлка"
+            editor.string = draft
+            field.stringValue = draft
+            field.delegate?.controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: field))
+            _ = window.makeFirstResponder(nil)
+            await self.settle(host)
+            precondition(field.stringValue == draft)
+            expectedDraft = draft
+            precondition(observations.saveCalls.isEmpty && observations.cancelCalls == 0, "Theme, focus and native edits cannot invoke save/cancel")
+            precondition(!window.isVisible && !window.isKeyWindow && !window.isMainWindow)
         }
     }
 
@@ -189,9 +294,12 @@ enum ParticipantInputContrastTests {
                 // selection treatment is tested at the same minimum as disabled
                 // controls, rather than claiming active selection rasterization.
                 precondition(selectionContrast >= 3, "Inactive native selection ink and fill remain readable")
-                let ink = NSColor(state.theme.palette.primaryText).usingColorSpace(.sRGB)!
-                let caret = editor.insertionPointColor.usingColorSpace(.sRGB)!
-                precondition(abs(ink.redComponent - caret.redComponent) < 0.05 && abs(ink.greenComponent - caret.greenComponent) < 0.05 && abs(ink.blueComponent - caret.blueComponent) < 0.05, "Native caret follows paired ink")
+                let surface = UIContrastTests.components(state.theme.palette.elevatedCardBackground)
+                var caret = NSColor.clear
+                editor.effectiveAppearance.performAsCurrentDrawingAppearance { caret = editor.insertionPointColor.usingColorSpace(.sRGB)! }
+                let caretContrast = UIContrastTests.contrast([Double(caret.redComponent), Double(caret.greenComponent), Double(caret.blueComponent)], surface)
+                fputs("Field caret \(name)-\(scheme): \(caret) contrast=\(caretContrast)\n", stderr)
+                precondition(caretContrast >= 3, "Native caret remains readable on the paired surface")
                 let opposite: ColorScheme = scheme == .dark ? .light : .dark
                 state.theme = theme(opposite)
                 await self.settle(host)
@@ -207,10 +315,14 @@ enum ParticipantInputContrastTests {
                 _ = window.makeFirstResponder(nil)
                 precondition(!window.isVisible && !window.isKeyWindow && !window.isMainWindow)
             }
+            for inheritedTintIsOpposed in [false, true] {
+                try await self.verifyWholeSheet(state: state, name: name, theme: theme, inheritedTintIsOpposed: inheritedTintIsOpposed, directory: directory)
+            }
             try await self.verifyProviderComparison(state: state, name: name, directory: directory)
         }
+        print("Whole production sheet: 24 hidden non-key appearance/selection cases, outside custom theme + brand/opposed tint; inactive selection >=3, caret >=3, draft/editor retention; active physical selection >=4.5 remains SKIP")
         print("Provider comparison: actual rounded-border fields in FluidManagementSheet follow the portable native scheme under both opposing window appearances; no offscreen provider mismatch reproduced")
-        print("Participant input: \(checks) source-bound typed/empty, enabled/disabled, hot dark/light/dark checks across three brands and a validated inverted palette; native editor, caret and selection retained")
+        print("Participant input: \(checks) source-bound typed/empty, enabled/disabled, hot dark/light/dark checks across three brands and a validated inverted palette; native editor, caret and inactive selection retained")
         print("SKIP: exact frozen application sheet, physical focus/selection and native screenshots remain parent-owned acceptance gates")
     }
 }
