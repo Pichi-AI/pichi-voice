@@ -2141,6 +2141,94 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertTrue((requests[0].messages.first?["content"] as? String ?? "").contains("that candidate's laterSourceIndexes"))
     }
 
+    func testLedgerCitationIndexesRejectBooleanStringAndFractionTokensInBothRoles() async throws {
+        let fixture = self.ledgerIndexTypeFixture()
+        // false->0 and true->1 would be valid witnesses if Foundation bridge
+        // coercion bypassed the existing JSONDecoder integer boundary.
+        for (original, later) in [("false", "1"), ("0", "true"), ("false", "true"),
+                                  ("\"0\"", "1"), ("0", "\"1\""), ("0.25", "1"), ("0", "1.25")] {
+            for repair in [false, true] {
+                let transport = CitationScalarTransport(document: try self.json(fixture.document), original: original, later: later, repair: repair)
+                let generator = PichiMeetingSummaryGenerator(complete: { try await transport.complete($0) }, prepare: { configuration in
+                    .init(configuration: configuration, release: { await transport.release() })
+                })
+                do {
+                    let result = try await generator.generate(session: fixture.session, configuration: self.configuration(endpoint: "http://127.0.0.1:1234/v1"))
+                    XCTAssertTrue(repair, "Non-integer references must never hydrate a witness: \(original), \(later)")
+                    XCTAssertEqual(result.openQuestions.first?.resolved, true)
+                    XCTAssertEqual(result.openQuestions.first?.evidence, fixture.document.openQuestions[0].evidence + fixture.document.answers![0].evidence)
+                } catch PichiMeetingSummaryValidationIssue.unknownSource {
+                    XCTAssertFalse(repair, "The repaired integer receipt must succeed")
+                }
+                let requests = await transport.ledgerRequests
+                XCTAssertEqual(requests.count, 2, "Exactly one regeneration, with no accepted prefix or third attempt")
+                if requests.count == 2 {
+                    XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String)
+                }
+                XCTAssertNil(requests.first?.extraParameters["response_format"], "An API ignoring structured output still obeys the same integer codec")
+                let releases = await transport.releases
+                XCTAssertEqual(releases, 1, "Repair success and final rejection both join the attempt's sole release")
+            }
+        }
+    }
+
+    func testLedgerCitationIndexesAcceptJSONSchemaIntegralNumbersInBothRoles() async throws {
+        let fixture = self.ledgerIndexTypeFixture()
+        for (original, later) in [("0", "1"), ("0.0", "1e0"), ("0e0", "1.0")] {
+            let transport = CitationScalarTransport(document: try self.json(fixture.document), original: original, later: later, repair: false)
+            let result = try await PichiMeetingSummaryGenerator { try await transport.complete($0) }
+                .generate(session: fixture.session, configuration: self.configuration())
+            XCTAssertEqual(result.openQuestions.first?.resolved, true, "JSON Schema integer includes mathematically integral JSON numbers")
+            XCTAssertEqual(result.openQuestions.first?.evidence, fixture.document.openQuestions[0].evidence + fixture.document.answers![0].evidence)
+            let requests = await transport.ledgerRequests
+            XCTAssertEqual(requests.count, 1, "Valid integral tokens must not require regeneration")
+        }
+    }
+
+    private func ledgerIndexTypeFixture() -> (session: MeetingSession, document: PichiMeetingSummaryDocument) {
+        var session = self.session()
+        session.transcriptSegments[0].text = "Когда будет готов отчёт?"
+        var answer = session.transcriptSegments[0]
+        answer.id = UUID()
+        answer.start = .init(value: 60_000, timescale: 1000)
+        answer.text = "Отчёт будет готов в пятницу."
+        session.transcriptSegments.append(answer)
+        let original = PichiMeetingSummaryEvidence(segmentID: session.transcriptSegments[0].id, quote: session.transcriptSegments[0].text)
+        let later = PichiMeetingSummaryEvidence(segmentID: answer.id, quote: answer.text)
+        return (session, .init(summary: [.init(text: "Обсудили срок отчёта.", evidence: [original])], decisions: [], actions: [],
+            openQuestions: [.init(text: "Когда будет готов отчёт?", evidence: [original])],
+            answers: [.init(text: "Отчёт будет готов в пятницу.", evidence: [later])]))
+    }
+
+    private actor CitationScalarTransport {
+        let document: String
+        let original: String
+        let later: String
+        let repair: Bool
+        var ledgerRequests: [LLMClient.Config] = []
+        var releases = 0
+        init(document: String, original: String, later: String, repair: Bool) {
+            self.document = document; self.original = original; self.later = later; self.repair = repair
+        }
+        func complete(_ config: LLMClient.Config) throws -> String {
+            if let review = try PichiMeetingSummaryTests.identityReview(config) { return review }
+            guard (config.messages.first?["content"] as? String ?? "").hasPrefix("Reconcile meeting") else { return self.document }
+            self.ledgerRequests.append(config)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(XCTUnwrap(config.messages.last?["content"] as? String).utf8)) as? [String: Any])
+            let sources = try ModelSource.catalog(from: fields)
+            XCTAssertEqual(sources.map(\.sourceIndex), [0, 1], "Both boolean bridge targets must actually be valid source indexes")
+            let candidate = try XCTUnwrap((fields["candidates"] as? [[String: Any]])?.first)
+            XCTAssertEqual(candidate["originalSourceIndexes"] as? [Int], [0])
+            XCTAssertEqual(candidate["laterSourceIndexes"] as? [Int], [1])
+            let original = self.repair && self.ledgerRequests.count == 2 ? "0" : self.original
+            let later = self.repair && self.ledgerRequests.count == 2 ? "1" : self.later
+            // Raw JSON tokens survive intact inside the nested role arrays; no
+            // scripted legacy adapter or NSNumber-to-Int fixture conversion.
+            return "{\"resolutions\":[{\"changeIndex\":0,\"matches\":[{\"index\":0,\"originalEvidence\":[{\"sourceIndex\":\(original)}],\"laterEvidence\":[{\"sourceIndex\":\(later)}]}]}]}"
+        }
+        func release() { self.releases += 1 }
+    }
+
     func testResolutionReceiptsRejectIncompleteDuplicateAndWrongRoleEvidenceWithoutPublishingPrefix() async throws {
         let fixture = self.ledgerRepairFixture()
         for mutation in ["missing", "duplicate-change", "unknown-change", "duplicate-candidate", "unknown-candidate",
