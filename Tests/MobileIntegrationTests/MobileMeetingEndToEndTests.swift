@@ -100,6 +100,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent(fixture))
         player.numberOfLoops = -1
         var firstTextSecond: Int?
+        var firstPendingSecond: Int?
+        var largestPendingCount = 0
         var updates = 0
         var protectedUpdateSeconds: [Double] = []
         var lastUpdateSecond = 0
@@ -135,6 +137,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     throw MeetingMemoryAudioError.overload
                 }
                 let snapshot = coordinator.liveTranscript
+                let pending = coordinator.pendingSpeech
+                largestPendingCount = max(largestPendingCount, pending.tokens.count)
+                if !pending.tokens.isEmpty { firstPendingSecond = firstPendingSecond ?? second }
+                XCTAssertLessThanOrEqual(pending.tokens.count, 64)
                 let isBackground = UIApplication.shared.applicationState == .background
                 let observationInterval = now - previousObservationTime
                 let adjacentBackgroundObservation = isBackground && wasBackground && observationInterval <= 2
@@ -161,7 +167,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 previousPartial = partial
                 wasBackground = isBackground
                 previousObservationTime = now
-                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) background=\(isBackground)")
+                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) pendingAudio=\(pending.tokens.count) background=\(isBackground)")
                 if now - previousResourceTime >= 15 {
                     let cpu = DiagnosticProcessCPUTime.capture()
                     let cpuMS = previousCPU.flatMap { earlier in cpu?.milliseconds(since: earlier) } ?? -1
@@ -174,6 +180,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let capturedSeconds = ProcessInfo.processInfo.systemUptime - captureStart
             player.stop()
             XCTAssertGreaterThanOrEqual(capturedSeconds, Double(duration))
+            XCTAssertNotNil(firstPendingSecond, "Real accepted microphone audio must show capture progress before recognition completes")
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
             XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
@@ -189,6 +196,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 if requiresBackground { XCTAssertGreaterThanOrEqual(lastBackgroundUpdateSecond, 280) }
             }
             let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertTrue(coordinator.pendingSpeech.tokens.isEmpty, "Terminal teardown clears visual audio estimates")
             XCTAssertEqual(completed.state, .completed)
             XCTAssertFalse(completed.transcriptSegments.isEmpty)
             if twoVoiceFixture {
@@ -208,6 +216,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let timingData = try JSONSerialization.data(withJSONObject: [
                 "model": model.rawValue, "durationSeconds": capturedSeconds,
                 "firstTextSecond": firstTextSecond ?? -1,
+                "firstPendingSecond": firstPendingSecond ?? -1, "largestPendingCount": largestPendingCount,
                 "protectedUpdateSeconds": protectedUpdateSeconds,
                 "backgroundSeconds": backgroundSeconds
             ], options: [.prettyPrinted, .sortedKeys])
