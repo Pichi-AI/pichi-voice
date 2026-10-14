@@ -93,13 +93,13 @@ enum StatsShareStat: String, CaseIterable, Identifiable {
 
 /// Fixed-size artwork rendered to an image; sized for a 1200×675 social preview at 2×.
 struct StatsShareCard: View {
+    @Environment(\.theme) private var theme
     @Environment(\.locale) private var interfaceLocale
     static let size = CGSize(width: 600, height: 337.5)
 
     let content: StatsShareContent
     let stats: [StatsShareStat]
     let showsActivity: Bool
-    let accent: Color
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -113,7 +113,7 @@ struct StatsShareCard: View {
                 Spacer()
                 Text(Date.now.formatted(.dateTime.month(.wide).year().locale(self.interfaceLocale)))
                     .font(.fluidSystem(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             Spacer(minLength: 0)
@@ -121,16 +121,14 @@ struct StatsShareCard: View {
             Text(self.content.totalWords.formatted())
                 .font(.fluidSystem(size: 76, weight: .bold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(
-                    LinearGradient(colors: [.white, self.accent.opacity(0.85)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                )
+                .foregroundStyle(self.theme.palette.primaryText)
             Text("words dictated")
                 .font(.fluidSystem(size: 17, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(self.theme.palette.primaryText)
                 .padding(.top, -6)
             Text(self.content.headline)
                 .font(.fluidSystem(size: 13, weight: .medium))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .padding(.top, 6)
 
             Spacer(minLength: 0)
@@ -143,16 +141,10 @@ struct StatsShareCard: View {
                 self.statsRow(activityDays: 0)
             }
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(self.theme.palette.primaryText)
         .padding(28)
         .frame(width: Self.size.width, height: Self.size.height)
-        .background {
-            ZStack {
-                Color(red: 0.045, green: 0.055, blue: 0.085)
-                RadialGradient(colors: [self.accent.opacity(0.55), .clear], center: .init(x: 0.95, y: 0.0), startRadius: 0, endRadius: 380)
-                RadialGradient(colors: [Color.purple.opacity(0.28), .clear], center: .init(x: 0.0, y: 1.0), startRadius: 0, endRadius: 320)
-            }
-        }
+        .background(self.theme.palette.windowBackground)
     }
 
     private func statsRow(activityDays: Int) -> some View {
@@ -181,7 +173,7 @@ struct StatsShareCard: View {
             }
             Text(stat == .streak ? PichiLocalization.formattedStreakUnit(days: self.content.currentStreak) : PichiLocalization.text(stat.label))
                 .font(.fluidSystem(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
         .fixedSize()
     }
@@ -189,9 +181,9 @@ struct StatsShareCard: View {
     /// The flame grows and heats up at a week, a month and a hundred days.
     private var streakFlame: (size: CGFloat, color: Color)? {
         switch self.content.currentStreak {
-        case 100...: return (20, Color(red: 1.0, green: 0.35, blue: 0.3))
-        case 30...: return (17, .orange)
-        case 7...: return (14, .yellow)
+        case 100...: return (20, self.theme.palette.warning)
+        case 30...: return (17, self.theme.palette.warning)
+        case 7...: return (14, self.theme.palette.warning)
         default: return nil
         }
     }
@@ -202,7 +194,7 @@ struct StatsShareCard: View {
         return HStack(alignment: .bottom, spacing: 3) {
             ForEach(Array(activity.enumerated()), id: \.offset) { _, words in
                 Capsule()
-                    .fill(.white.opacity(words == 0 ? 0.14 : 0.85))
+                    .fill(words == 0 ? self.theme.palette.tertiaryText : self.theme.palette.accentText)
                     .frame(width: 4, height: max(4, 46 * CGFloat(words) / CGFloat(peak)))
             }
         }
@@ -216,6 +208,7 @@ struct StatsShareSheet: View {
     let content: StatsShareContent
     let close: () -> Void
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("StatsShareSelectedStats") private var storedSelection = ""
     @AppStorage("StatsShareShowsActivity") private var showsActivity = true
     @State private var copied = false
@@ -228,11 +221,14 @@ struct StatsShareSheet: View {
     }
 
     private var card: StatsShareCard {
-        StatsShareCard(content: self.content, stats: self.selection, showsActivity: self.showsActivity, accent: self.theme.palette.accent)
+        StatsShareCard(content: self.content, stats: self.selection, showsActivity: self.showsActivity)
     }
 
     private var image: NSImage? {
-        let renderer = ImageRenderer(content: self.card.environment(\.locale, PichiLocalization.locale))
+        let renderer = ImageRenderer(content: self.card
+            .appTheme(self.theme)
+            .environment(\.colorScheme, self.colorScheme)
+            .environment(\.locale, PichiLocalization.locale))
         renderer.scale = 2
         return renderer.nsImage
     }
@@ -243,7 +239,7 @@ struct StatsShareSheet: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(AppBrand.text("Flex your FluidVoice stats")).font(self.theme.typography.sectionTitle)
                     Text("Post it, send it to a friend, start a streak war.")
-                        .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 Spacer()
                 Button("Done", action: self.close).fluidGlassAction()
@@ -255,7 +251,7 @@ struct StatsShareSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Show on card · up to \(StatsShareStat.maxSelected)")
-                    .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 FlowChips(spacing: 6) {
                     ForEach(StatsShareStat.allCases.filter { $0.isAvailable(in: self.content) }) { stat in
                         let isOn = self.selection.contains(stat)
@@ -288,6 +284,8 @@ struct StatsShareSheet: View {
         }
         .padding(20)
         .frame(width: StatsShareCard.size.width + 40)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.contentBackground)
         .onChange(of: self.storedSelection) { _, _ in self.copied = false }
         .onChange(of: self.showsActivity) { _, _ in self.copied = false }
     }
@@ -301,9 +299,9 @@ struct StatsShareSheet: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .foregroundStyle(isOn ? self.theme.palette.accent : .secondary)
+            .foregroundStyle(isOn ? self.theme.palette.accentText : self.theme.palette.secondaryText)
             .background(
-                isOn ? self.theme.palette.accent.opacity(0.14) : self.theme.palette.cardBackground,
+                isOn ? self.theme.palette.elevatedCardBackground : self.theme.palette.cardBackground,
                 in: Capsule()
             )
             .overlay(Capsule().strokeBorder(isOn ? self.theme.palette.accent.opacity(0.4) : self.theme.palette.cardBorder, lineWidth: 1))
@@ -311,7 +309,6 @@ struct StatsShareSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.4)
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 

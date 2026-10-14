@@ -10,15 +10,15 @@ struct VoiceEngineSettingsView: View {
     let theme: AppTheme
 
     var voiceEngineTitleText: Color {
-        Color(nsColor: .labelColor)
+        self.theme.palette.primaryText
     }
 
     var voiceEngineSecondaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.90) : self.theme.palette.primaryText.opacity(0.82)
+        self.theme.palette.primaryText
     }
 
     var voiceEngineTertiaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.85) : self.theme.palette.secondaryText
+        self.theme.palette.secondaryText
     }
 
     var body: some View {

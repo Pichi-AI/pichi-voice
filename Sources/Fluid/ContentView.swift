@@ -6156,7 +6156,7 @@ private struct AccessibilitySettingsFloatingGuideView: View {
             HStack(spacing: 12) {
                 Image(systemName: "arrow.up")
                     .font(.fluidSystem(size: 30, weight: .bold))
-                    .foregroundStyle(FluidOnboardingLandingColors.blue)
+                    .foregroundStyle(.white)
                     .offset(y: self.reduceMotion ? 0 : (self.isArrowRaised ? -8 : 4))
                     .animation(
                         self.reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),

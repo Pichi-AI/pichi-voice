@@ -15,10 +15,10 @@ struct HistoryInlineAudioView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Recording").font(self.theme.typography.bodyStrong).foregroundStyle(.secondary)
+            Text("Recording").font(self.theme.typography.bodyStrong).foregroundStyle(self.theme.palette.secondaryText)
             if let errorMessage {
                 Label(PichiLocalization.text(errorMessage), systemImage: "exclamationmark.triangle")
-                    .font(.fluidSystem(.callout)).foregroundStyle(.secondary)
+                    .font(.fluidSystem(.callout)).foregroundStyle(self.theme.palette.secondaryText)
             } else if let player {
                 HStack(spacing: 12) {
                     Button {
@@ -50,7 +50,7 @@ struct HistoryInlineAudioView: View {
                     Text(Self.timeLabel(self.duration)).monospacedDigit().frame(width: 42)
                 }
                 .font(self.theme.typography.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .frame(minHeight: 40)
             } else {
                 ProgressView("Loading recording…").controlSize(.small)

@@ -110,7 +110,6 @@ private struct FluidControlSurfaceModifier: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
         let fillOpacity = self.isSelected ? 0.96 : (self.isHovered ? 0.42 : 0)
-        let shineOpacity = self.isSelected ? 0.14 : (self.isHovered ? 0.07 : 0)
         let strokeColor = self.isSelected
             ? self.tone.opacity(0.24)
             : (self.isHovered ? self.theme.palette.cardBorder.opacity(0.28) : .clear)
@@ -119,14 +118,6 @@ private struct FluidControlSurfaceModifier: ViewModifier {
             .background(
                 shape
                     .fill(self.theme.palette.cardBackground.opacity(fillOpacity))
-                    .overlay(
-                        LinearGradient(
-                            colors: [.white.opacity(shineOpacity), .clear],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                        .clipShape(shape)
-                    )
                     .overlay(shape.stroke(strokeColor, lineWidth: 1))
                     .shadow(
                         color: .black.opacity(self.isSelected ? 0.16 : (self.isHovered ? 0.08 : 0)),
@@ -167,7 +158,6 @@ struct GlassButtonStyle: ButtonStyle {
                 .frame(height: self.height ?? 36)
                 .contentShape(self.shape)
                 .foregroundStyle(self.theme.palette.primaryText)
-                .background(self.theme.materials.card, in: self.shape)
                 .background(
                     self.shape
                         .fill(self.theme.palette.cardBackground)
@@ -246,7 +236,7 @@ struct PremiumButtonStyle: ButtonStyle {
                 .frame(maxWidth: .infinity)
                 .frame(height: self.height)
                 .contentShape(self.shape)
-                .foregroundStyle(self.isRecording ? Color.white : self.theme.palette.accentForeground)
+                .foregroundStyle(self.isRecording ? self.theme.palette.foreground(on: Color(nsColor: .systemRed)) : self.theme.palette.accentForeground)
                 .background(
                     self.shape
                         .fill(self.baseGradient)
@@ -314,6 +304,7 @@ struct AccentButtonStyle: ButtonStyle {
 
     private struct AccentButton: View {
         @Environment(\.theme) private var theme
+        @Environment(\.isEnabled) private var isEnabled
         @State private var isHovered = false
         let configuration: ButtonStyle.Configuration
         let compact: Bool
@@ -324,14 +315,14 @@ struct AccentButtonStyle: ButtonStyle {
         }
 
         var body: some View {
-            let tone = self.tone ?? self.theme.palette.accent
+            let tone = self.isEnabled ? (self.tone ?? self.theme.palette.accent) : self.theme.palette.elevatedCardBackground
             self.configuration.label
                 .fontWeight(.semibold)
                 .padding(.horizontal, self.compact ? 12 : self.theme.metrics.spacing.lg)
                 .padding(.vertical, self.compact ? 8 : self.theme.metrics.spacing.md)
                 .frame(minHeight: self.compact ? 32 : 36)
                 .contentShape(self.shape)
-                .foregroundStyle(self.tone == nil ? self.theme.palette.accentForeground : Color.white)
+                .foregroundStyle(self.isEnabled ? self.theme.palette.foreground(on: tone) : self.theme.palette.secondaryText)
                 .background(
                     self.shape
                         .fill(
@@ -347,10 +338,10 @@ struct AccentButtonStyle: ButtonStyle {
                 )
                 .overlay(
                     self.shape
-                        .stroke(Color.white.opacity(self.isHovered ? 0.3 : 0.15), lineWidth: 1)
+                        .stroke(self.isEnabled ? self.theme.palette.foreground(on: tone).opacity(self.isHovered ? 0.3 : 0.15) : self.theme.palette.secondaryText.opacity(0.35), lineWidth: 1)
                 )
                 .shadow(
-                    color: tone.opacity(self.isHovered ? 0.5 : 0.3),
+                    color: tone.opacity(self.isEnabled ? (self.isHovered ? 0.5 : 0.3) : 0),
                     radius: self.isHovered ? 6 : 4,
                     x: 0,
                     y: self.isHovered ? 3 : 2
@@ -358,7 +349,7 @@ struct AccentButtonStyle: ButtonStyle {
                 .scaleEffect(FluidInteractionVisuals.scale(isPressed: self.configuration.isPressed, isHovered: self.isHovered))
                 .animation(FluidInteractionVisuals.hoverAnimation, value: self.isHovered)
                 .animation(FluidInteractionVisuals.pressedAnimation, value: self.configuration.isPressed)
-                .onHover { self.isHovered = $0 }
+                .onHover { self.isHovered = $0 && self.isEnabled }
         }
     }
 }
@@ -389,7 +380,7 @@ struct InlineButtonStyle: ButtonStyle {
                 .foregroundStyle(self.theme.palette.accentForeground)
                 .background(
                     self.shape
-                        .fill(self.theme.palette.accent.opacity(self.isHovered ? 0.9 : 0.8))
+                        .fill(self.theme.palette.accent)
                 )
                 .shadow(
                     color: self.theme.palette.accent.opacity(self.isHovered ? 0.45 : 0.25),
@@ -523,9 +514,16 @@ private struct SearchablePickerSelectedRowBackground: ViewModifier {
     func body(content: Content) -> some View {
         content.background(
             self.isSelected
-                ? self.theme.palette.accent.opacity(self.theme.metrics.pickerControl.selectedRowOpacity)
+                ? self.theme.palette.elevatedCardBackground
                 : Color.clear
         )
+        .overlay(alignment: .leading) {
+            if self.isSelected {
+                Rectangle().fill(self.theme.palette.accentText).frame(width: 2)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 }
 
@@ -565,7 +563,6 @@ struct SquareIconButtonStyle: ButtonStyle {
                 .frame(minWidth: 24, minHeight: 24)
                 .contentShape(self.shape)
                 .foregroundStyle(foregroundColor)
-                .background(self.theme.materials.card, in: self.shape)
                 .background(
                     self.shape
                         .fill(self.theme.palette.cardBackground)

@@ -68,10 +68,10 @@ struct LiquidBar: View {
             HStack(spacing: 4) {
                 Image(systemName: self.icon)
                     .font(self.theme.typography.tiny)
-                    .foregroundStyle(self.color)
+                    .foregroundStyle(self.theme.palette.readableText(self.color))
                 Text(PichiLocalization.text(self.label))
                     .font(self.theme.typography.tinyStrong)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
             }
 
             // Liquid Container (Capsule Glass)

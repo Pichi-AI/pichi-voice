@@ -49,19 +49,17 @@ struct FluidOutlinedButtonStyle: ButtonStyle {
             self.configuration.label
                 .font(self.theme.typography.bodySmall)
                 .fontWeight(.medium)
-                .foregroundStyle(self.foreground ?? (destructive ? tone : self.theme.palette.primaryText))
+                .foregroundStyle(self.isEnabled ? self.theme.palette.readableText(self.foreground ?? (destructive ? tone : self.theme.palette.primaryText)) : self.theme.palette.secondaryText)
                 .padding(.horizontal, 12)
                 .frame(maxWidth: self.fillsWidth ? .infinity : nil)
                 .frame(minHeight: self.controlHeight)
                 .background {
                     shape.fill(self.theme.palette.elevatedCardBackground)
-                        .overlay { shape.fill(tone.opacity(pressed ? 0.15 : (highlighted ? 0.08 : 0))) }
                 }
                 .overlay {
                     shape.strokeBorder(highlighted || pressed ? tone.opacity(0.45) : (self.borderColor ?? self.theme.palette.cardBorder), lineWidth: 1)
                 }
                 .contentShape(shape)
-                .opacity(self.isEnabled ? 1 : 0.45)
                 .onHover { self.isHovered = $0 }
                 .animation(self.reduceMotion ? nil : .easeOut(duration: 0.14), value: highlighted)
                 .animation(self.reduceMotion ? nil : .easeOut(duration: 0.1), value: pressed)

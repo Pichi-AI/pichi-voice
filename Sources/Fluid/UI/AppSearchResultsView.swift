@@ -26,26 +26,26 @@ struct AppSearchResultsView: View {
                 if self.service.isSearching {
                     Text("Searching…")
                         .font(self.theme.typography.sidebarItem)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .padding(.horizontal, self.theme.metrics.spacing.md)
                 } else if let error = self.service.searchError {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                         Text(error)
                             .font(self.theme.typography.sidebarItem)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
                         Button("Retry") { self.service.retry() }
                             .buttonStyle(.plain)
                             .font(self.theme.typography.sidebarItem)
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundStyle(self.theme.palette.accentText)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, self.theme.metrics.spacing.md)
                 } else if self.service.groups.isEmpty {
                     Text("No results")
                         .font(self.theme.typography.sidebarItem)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .padding(.horizontal, self.theme.metrics.spacing.md)
                 }
                 ForEach(self.service.groups) { group in
@@ -67,7 +67,7 @@ struct AppSearchResultsView: View {
                             }
                             .buttonStyle(.plain)
                             .font(self.theme.typography.sidebarItem)
-                            .foregroundStyle(self.theme.palette.accent)
+                            .foregroundStyle(self.theme.palette.accentText)
                             .sidebarOptionHover(isSelected: false, reduceMotion: self.reduceMotion)
                             .accessibilityLabel(PichiLocalization.format(self.expanded.contains(group.kind) ? "Show fewer %@ results" : "Show all %@ results", PichiLocalization.text(group.kind.title)))
                         }
@@ -96,7 +96,7 @@ struct AppSearchResultsView: View {
                     Spacer(minLength: 0)
                 }
                 .font(self.theme.typography.sidebarSection)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .padding(.vertical, self.theme.metrics.spacing.xs / 2)
                 .contentShape(Rectangle())
             }
@@ -108,7 +108,7 @@ struct AppSearchResultsView: View {
         } else {
             Text(PichiLocalization.text(group.kind.title))
                 .font(self.theme.typography.sidebarSection)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
         }
     }
 
@@ -131,11 +131,11 @@ struct AppSearchResultsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(hit.title)
                     .font(self.theme.typography.sidebarItem)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
                     .lineLimit(1)
                 Text(hit.snippet)
                     .font(.fluidSystem(.caption))
-                    .foregroundStyle(isSelected ? Color.white.opacity(0.85) : Color.secondary)
+                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.secondaryText)
                     .lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

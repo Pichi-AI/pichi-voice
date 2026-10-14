@@ -256,6 +256,7 @@ struct CommandMarkdownContent: View {
         }
         .font(self.theme.typography.body)
         .foregroundStyle(self.theme.palette.primaryText)
+        .tint(self.theme.palette.accentText)
         .lineSpacing(5)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -355,6 +356,7 @@ struct CommandCodeBlock: View {
             }
             .frame(height: min(320, CGFloat(self.code.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }) * 19 + 24))
         }
+        .foregroundStyle(self.theme.palette.primaryText)
         .background(self.theme.palette.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).stroke(self.theme.palette.cardBorder.opacity(0.6), lineWidth: 1) }

@@ -801,7 +801,6 @@ struct NotchExpandedView: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.45)
         .onHover { hovering in
             self.hoveredPromptMenuRowID = hovering && isEnabled ? rowID : nil
         }

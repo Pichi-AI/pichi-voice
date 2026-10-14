@@ -51,7 +51,7 @@ struct StatsHeatmapView: View {
                 ForEach(0..<7) { row in
                     Text(row.isMultiple(of: 2) ? self.weekdayLabels[row] : "")
                         .font(self.theme.typography.captionSmall)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                         .frame(width: 30, height: 16)
                 }
             }
@@ -63,7 +63,7 @@ struct StatsHeatmapView: View {
                         VStack(spacing: 4) {
                             Text(period.monthLabel(for: column))
                                 .font(self.theme.typography.captionSmall)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .fixedSize()
                                 .frame(width: width, height: 16, alignment: .leading)
                             ForEach(0..<7) { row in
@@ -100,7 +100,7 @@ struct StatsHeatmapView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(self.labels[day.date]?.shortDate ?? "")
                                 .font(self.theme.typography.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(self.theme.palette.secondaryText)
                             Text(self.labels[day.date]?.words ?? "")
                                 .font(self.theme.typography.bodySmallStrong)
                         }

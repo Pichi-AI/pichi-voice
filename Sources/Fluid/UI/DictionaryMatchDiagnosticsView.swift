@@ -49,7 +49,7 @@ struct DictionaryMatchDiagnosticsView: View {
                             Text(sample.score.map { String(format: "%.3f", $0) } ?? "—")
                                 .monospacedDigit()
                                 .font(self.theme.typography.bodyStrong)
-                                .foregroundStyle((sample.score ?? -.infinity) >= Float(self.threshold) ? self.theme.palette.accent : self.theme.palette.primaryText)
+                                .foregroundStyle((sample.score ?? -.infinity) >= Float(self.threshold) ? self.theme.palette.accentText : self.theme.palette.primaryText)
                         }
                     }
                 }
@@ -82,7 +82,7 @@ struct DictionaryMatchDiagnosticsView: View {
                 .font(self.theme.typography.caption)
                 .foregroundStyle(self.theme.palette.secondaryText)
             if let error = self.error {
-                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(.red)
+                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red))
             }
             if let report = self.report, report.inspection != nil {
                 Divider()

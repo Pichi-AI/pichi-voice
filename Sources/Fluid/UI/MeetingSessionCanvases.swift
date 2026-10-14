@@ -19,7 +19,7 @@ struct MeetingRecordingCanvas: View {
                         systemImage: self.isStopping ? "stop.circle.fill" : "record.circle.fill"
                     )
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.isStopping ? self.theme.palette.warning : Color(nsColor: .systemRed))
+                    .foregroundStyle(self.isStopping ? self.theme.palette.warning : self.theme.palette.readableText(Color(nsColor: .systemRed)))
                     Spacer(minLength: 0)
                     Text(Self.durationText(context.date.timeIntervalSince(self.session.startedAt)))
                         .font(self.theme.typography.codeCaption)
@@ -1094,7 +1094,7 @@ private struct MeetingSpeakerChip: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(self.tint)
+            .foregroundStyle(self.theme.palette.readableText(self.tint))
         }
         .buttonStyle(.borderless)
         .meetingHoverFeedback()
@@ -1157,7 +1157,7 @@ private struct MeetingTranscriptSegmentRow: View {
                     .simultaneousGesture(TapGesture(count: 2).onEnded { if self.isQuiescent { self.onEditText() } })
                     .accessibilityAction(named: Text("Edit text")) { if self.isQuiescent { self.onEditText() } }
                 if self.segment.isEcho {
-                    Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 if self.isAudioExpanded {
                     MeetingSegmentAudioPlayer(playback: self.playback, isLoading: self.isLoadingAudio)
@@ -1166,7 +1166,6 @@ private struct MeetingTranscriptSegmentRow: View {
                 }
             }
         }
-        .opacity(self.segment.isEcho ? 0.6 : 1)
         .contextMenu {
             Menu("Reassign to") {
                 ForEach(self.reassignTargets) { target in
@@ -1197,8 +1196,7 @@ private struct MeetingTranscriptSegmentRow: View {
                         // Always shown, not hover-only, so the affordance survives an unfocused window.
                         Image(systemName: "chevron.right")
                             .font(.fluidSystem(size: 10, weight: .semibold))
-                            .foregroundColor(self.nameColor)
-                            .opacity(0.65)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                     }
                 }
                 .buttonStyle(.plain)
@@ -1214,8 +1212,8 @@ private struct MeetingTranscriptSegmentRow: View {
     }
 
     private var nameColor: Color {
-        if self.isLocalUser { return self.theme.palette.accent }
-        return self.speakerTint ?? self.theme.palette.tertiaryText
+        if self.isLocalUser { return self.theme.palette.accentText }
+        return self.speakerTint.map(self.theme.palette.readableText) ?? self.theme.palette.tertiaryText
     }
 }
 

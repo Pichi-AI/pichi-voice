@@ -65,7 +65,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                 Text(self.eyebrow)
                     .font(.fluidSystem(size: 14, weight: .bold))
                     .tracking(4.2)
-                    .foregroundStyle(FluidOnboardingLandingColors.blue.opacity(0.72))
+                    .foregroundStyle(self.theme.palette.accentText)
                     .textCase(.uppercase)
                     .padding(.bottom, 16)
             }
@@ -80,7 +80,7 @@ struct FluidOnboardingLandingHero<Actions: View>: View {
                 Text(PichiLocalization.text(self.accentTitle, locale: self.locale))
                     .font(.fluidSystem(size: 50, weight: .semibold, role: .title))
                     .italic()
-                    .foregroundStyle(FluidOnboardingLandingColors.blue)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.76)
             }
@@ -115,40 +115,17 @@ struct FluidOnboardingLandingBackdrop: View {
     }
 
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-
-            self.theme.palette.windowBackground
-                .opacity(0.88)
-
-            RadialGradient(
-                colors: [
-                    FluidOnboardingLandingColors.blue.opacity(0.18),
-                    self.theme.palette.cardBackground.opacity(0.30),
-                    .clear,
-                ],
-                center: self.glowCenter,
-                startRadius: 0,
-                endRadius: 620
-            )
-
-            RadialGradient(
-                colors: [
-                    Color.white.opacity(0.026),
-                    .clear,
-                ],
-                center: .center,
-                startRadius: 0,
-                endRadius: 520
-            )
-        }
+        self.theme.palette.windowBackground
         // A crisp card edge: the old feathered mask let the window's rectangle show through
         // the fade, which read as a second, uglier boundary on light desktops.
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                .strokeBorder(
+                    RadialGradient(colors: [self.theme.palette.accentText.opacity(0.45), self.theme.palette.cardBorder],
+                                   center: self.glowCenter, startRadius: 0, endRadius: 620),
+                    lineWidth: 1
+                )
         }
         .ignoresSafeArea()
     }
@@ -456,7 +433,7 @@ private final class LandingPrimaryNSButton: NSButton {
             string: title,
             attributes: [
                 .font: NSFont.fluidSystemFont(ofSize: 18, weight: .semibold),
-                .foregroundColor: NSColor(FluidOnboardingLandingColors.foreground),
+                .foregroundColor: NSColor(AppTheme.Palette.contrastingInk(on: Color(nsColor: self.backgroundColor(isHighlighted: isHighlighted)))),
             ]
         )
         self.alignment = .center

@@ -14,7 +14,7 @@ struct HistoryTextComparisonView: View {
             if self.entry.wasAIProcessed {
                 HStack {
                     if self.showChanges, let message = self.comparisonMessage {
-                        Text(PichiLocalization.text(message)).foregroundStyle(.secondary)
+                        Text(PichiLocalization.text(message)).foregroundStyle(self.theme.palette.secondaryText)
                             .lineLimit(1).help(PichiLocalization.text(message))
                     }
                     Spacer()
@@ -52,13 +52,14 @@ struct HistoryTextComparisonView: View {
                 Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong)
                 if !isOriginal, self.entry.wasAIProcessed {
                     Text("AI enhanced").font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(self.theme.palette.accent.opacity(0.1), in: Capsule())
+                        .background(self.theme.palette.elevatedCardBackground, in: Capsule())
+                        .overlay(Capsule().stroke(self.theme.palette.accent.opacity(0.1), lineWidth: 1))
                 }
                 Spacer()
                 Button { self.copy(content) } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .buttonStyle(.plain).foregroundStyle(self.theme.palette.secondaryText)
                     .help(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
                     .accessibilityLabel(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
             }
@@ -79,8 +80,8 @@ struct HistoryTextComparisonView: View {
         for run in runs {
             var part = AttributedString(run.text)
             if run.changed {
-                part.foregroundColor = isOriginal ? .red : .green
-                part.backgroundColor = (isOriginal ? Color.red : Color.green).opacity(0.1)
+                part.foregroundColor = self.theme.palette.readableText(isOriginal ? .red : .green)
+                part.backgroundColor = self.theme.palette.cardBackground
                 if isOriginal {
                     part.strikethroughStyle = .single
                 } else {

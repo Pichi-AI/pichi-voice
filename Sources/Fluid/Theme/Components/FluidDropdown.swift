@@ -21,14 +21,10 @@ struct FluidDropdownSurface: ViewModifier {
             .background {
                 if self.appearance == .inline {
                     RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                        .fill(self.theme.palette.primaryText.opacity(highlighted ? 0.055 : 0))
+                        .fill(Color.clear)
                 } else {
                     RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
                         .fill(self.theme.palette.elevatedCardBackground)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                                .fill(self.theme.palette.accent.opacity(highlighted ? 0.08 : 0))
-                        }
                 }
             }
             .overlay {

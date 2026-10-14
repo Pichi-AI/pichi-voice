@@ -75,7 +75,7 @@ struct SearchableModelPicker: View {
                         .font(.fluidSystem(size: 12, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .foregroundStyle(self.selectedModel.isEmpty ? .secondary : self.theme.palette.primaryText)
+                        .foregroundStyle(self.selectedModel.isEmpty ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
                     Spacer(minLength: 6)
                     FluidDropdownChevron()
                 }
@@ -86,13 +86,12 @@ struct SearchableModelPicker: View {
             }
             .buttonStyle(.plain)
             .disabled(!self.selectionEnabled)
-            .opacity(self.selectionEnabled ? 1 : 0.55)
             .popover(isPresented: self.$isShowingPopover, arrowEdge: .bottom) {
                 VStack(spacing: 0) {
                     // Search field
                     HStack {
                         Image(systemName: "magnifyingglass")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                         TextField("Search models...", text: self.$searchText)
                             .textFieldStyle(.plain)
                     }
@@ -105,13 +104,13 @@ struct SearchableModelPicker: View {
                             VStack(spacing: 8) {
                                 Image(systemName: "tray")
                                     .font(.fluidSystem(.title2))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(self.theme.palette.secondaryText)
                                 Text("No models")
                                     .font(.fluidSystem(.caption))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(self.theme.palette.secondaryText)
                                 Text("Click refresh to fetch from API")
                                     .font(.fluidSystem(.caption2))
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(self.theme.palette.tertiaryText)
                             }
                             .frame(height: 100)
                             .frame(maxWidth: .infinity)
@@ -121,7 +120,7 @@ struct SearchableModelPicker: View {
                                     if self.filteredModels.isEmpty {
                                         Text("No models match '\(self.searchText)'")
                                             .font(.fluidSystem(.caption))
-                                            .foregroundStyle(.secondary)
+                                            .foregroundStyle(self.theme.palette.secondaryText)
                                             .padding()
                                             .frame(maxWidth: .infinity, alignment: .center)
                                     } else {
@@ -137,7 +136,7 @@ struct SearchableModelPicker: View {
                                                     Spacer()
                                                     if model == self.selectedModel {
                                                         Image(systemName: "checkmark")
-                                                            .foregroundStyle(self.theme.palette.accent)
+                                                            .foregroundStyle(self.theme.palette.accentText)
                                                     }
                                                 }
                                                 .padding(.horizontal, 10)
@@ -156,7 +155,7 @@ struct SearchableModelPicker: View {
                                 Divider()
                                 Text("\(self.filteredModels.count - 100) more (use search)")
                                     .font(.fluidSystem(.caption2))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(self.theme.palette.secondaryText)
                                     .padding(6)
                             }
                         }
@@ -164,6 +163,8 @@ struct SearchableModelPicker: View {
                     .id(self.searchText.isEmpty)
                 }
                 .frame(width: 280)
+                .foregroundStyle(self.theme.palette.primaryText)
+                .background(self.theme.palette.cardBackground)
             }
 
             // Refresh button
@@ -182,7 +183,6 @@ struct SearchableModelPicker: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(self.isRefreshing || !self.refreshEnabled)
-                    .opacity(self.refreshEnabled ? 1 : 0.45)
                     .help(PichiLocalization.text("Refresh model list"))
                 } else {
                     Button(action: {
@@ -202,7 +202,6 @@ struct SearchableModelPicker: View {
                     }
                     .fluidCompactButton(isReady: false)
                     .disabled(self.isRefreshing || !self.refreshEnabled)
-                    .opacity(self.refreshEnabled ? 1 : 0.45)
                     .help(PichiLocalization.text("Refresh model list"))
                 }
             }

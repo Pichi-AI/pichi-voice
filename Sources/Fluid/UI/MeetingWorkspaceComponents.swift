@@ -130,7 +130,9 @@ private struct MeetingDocumentTabButtonStyle: ButtonStyle {
         var body: some View {
             let highlighted = self.isEnabled && (self.isHovered || self.configuration.isPressed)
             self.configuration.label
-                .foregroundStyle(self.isSelected || highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+                .foregroundStyle(self.isEnabled
+                    ? (self.isSelected || highlighted ? self.theme.palette.primaryText : self.theme.palette.secondaryText)
+                    : self.theme.palette.tertiaryText)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .frame(height: FluidButtonSize.medium.controlHeight)
                 .background {
@@ -146,13 +148,12 @@ private struct MeetingDocumentTabButtonStyle: ButtonStyle {
                 .padding(.bottom, self.theme.metrics.spacing.sm)
                 .overlay(alignment: .bottom) {
                     Capsule()
-                        .fill(self.theme.palette.primaryText)
+                        .fill(self.isEnabled ? self.theme.palette.primaryText : self.theme.palette.tertiaryText)
                         .frame(height: 2)
                         .opacity(self.isSelected ? 1 : 0)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-                .opacity(self.isEnabled ? 1 : 0.45)
                 .animation(self.reduceMotion ? nil : .easeOut(duration: 0.14), value: highlighted)
                 .onHover { self.isHovered = $0 && self.isEnabled }
                 .onChange(of: self.isEnabled) { _, enabled in

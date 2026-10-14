@@ -85,7 +85,7 @@ struct OnboardingPolishPracticeView: View {
             HStack(spacing: 8) {
                 Image(systemName: self.isRunning ? "waveform" : "sparkles")
                     .font(.fluidSystem(size: 15, weight: .medium))
-                    .foregroundStyle(self.blue)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .symbolEffect(.variableColor, options: .repeating, isActive: self.isRunning && self.isActive && self.scenePhase == .active && !self.reduceMotion)
                     .accessibilityHidden(true)
                 Text(PichiLocalization.text(self.status))
@@ -94,7 +94,8 @@ struct OnboardingPolishPracticeView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(self.blue.opacity(0.09), in: Capsule())
+            .background(self.theme.palette.cardBackground, in: Capsule())
+            .overlay(Capsule().stroke(self.blue.opacity(0.09), lineWidth: 1))
             .accessibilityElement(children: .combine)
         } else if !self.hasActivated {
             Text(PichiLocalization.text(self.status))
@@ -128,7 +129,7 @@ struct OnboardingPolishPracticeView: View {
             }
         }
         .frame(height: 180)
-        .background(self.theme.palette.primaryText.opacity(self.isEditorFocused ? 0.055 : 0.025), in: RoundedRectangle(cornerRadius: 12))
+        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(self.isEditorFocused ? self.blue.opacity(0.8) : self.theme.palette.cardBorder)

@@ -33,11 +33,10 @@ struct FluidHoverIconButtonStyle: ButtonStyle {
 
         var body: some View {
             self.configuration.label
-                .foregroundStyle(self.isHovered && self.isEnabled ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                .foregroundStyle(self.isHovered && self.isEnabled ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                 .padding(4)
-                .background(RoundedRectangle(cornerRadius: 7).fill(self.theme.palette.accent.opacity(self.isEnabled && (self.isHovered || self.configuration.isPressed) ? 0.14 : 0)))
+                .background(RoundedRectangle(cornerRadius: 7).fill(!self.isEnabled || self.isHovered || self.configuration.isPressed ? self.theme.palette.elevatedCardBackground : .clear))
                 .contentShape(Rectangle())
-                .opacity(self.isEnabled ? 1 : 0.4)
                 .onHover { self.isHovered = $0 }
         }
     }

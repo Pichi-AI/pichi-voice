@@ -151,7 +151,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
             if self.row.showsLabel {
                 Text(self.sourceLabel)
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.isMicrophone ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                    .foregroundStyle(self.isMicrophone ? self.theme.palette.accentText : self.theme.palette.secondaryText)
             }
             Text(self.row.text)
                 // The partial→final color swap solidifies in place; it must never animate.

@@ -89,7 +89,7 @@ struct UIContrastTests {
     @MainActor
     static func verify(_ view: some View, name: String, theme: AppTheme, scheme: ColorScheme,
                        textBackground: [Double], directory: URL, expectedForeground: Color? = nil,
-                       labelOnly: Bool = false, requiredContrast: Double? = 4.5) throws {
+                       labelOnly: Bool = false, requiredContrast: Double? = 4.5, expectedSurface: Color? = nil) throws {
         let expected = self.components(expectedForeground ?? theme.palette.primaryText)
         if let requiredContrast {
             precondition(self.contrast(expected, textBackground) >= requiredContrast, "\(name): label contrast must meet \(requiredContrast):1")
@@ -109,6 +109,17 @@ struct UIContrastTests {
             bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        if let expectedSurface {
+            let surface = self.components(expectedSurface)
+            // This fixture has a 160x44-point row and 12 points of outer padding.
+            // Sample its interior left corner, away from centered glyph and border.
+            let index = (32 * image.width + 32) * 4
+            precondition(pixels[index + 3] == 255)
+            for channel in 0..<3 {
+                precondition(abs(Double(pixels[index + channel]) / 255 - surface[channel]) < 0.025,
+                             "\(name): production row must pair its glyph with the expected opaque surface")
+            }
+        }
         var matching = 0
         for index in stride(from: 0, to: pixels.count, by: 4) {
             if labelOnly {
@@ -131,8 +142,12 @@ struct UIContrastTests {
     }
 
     @MainActor
-    static func main() throws {
+    static func main() async throws {
         let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+        if CommandLine.arguments.contains("--segmented-only") {
+            try await FluidSegmentedPickerTests.run(directory: directory)
+            return
+        }
         let packages = [
             ("pichi", "Sources/Fluid/Branding/brand-package.json"),
             ("sber", "Configuration/BrandExamples/sber-demo.json"),
@@ -143,6 +158,7 @@ struct UIContrastTests {
         let savedPaleAccent = "#A98CFF"
         var checks = 0
         var actionChecks = 0
+        var reviewChecks = 0
         for (name, path) in packages {
             let package = try BrandPackage.decode(Data(contentsOf: URL(fileURLWithPath: path)))
             for scheme: ColorScheme in [.light, .dark] {
@@ -195,8 +211,11 @@ struct UIContrastTests {
                                 ("backup", AnyView(BackupPrimaryActionFixture())),
                                 ("updates", AnyView(UpdatePrimaryActionFixture())),
                             ] {
+                                let disabled = roleName == "updates" && !AppBrand.updatesEnabled
                                 try self.verify(control, name: "settings-\(roleName)-\(suffix)", theme: theme, scheme: scheme,
-                                    textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
+                                    textBackground: disabled ? self.components(theme.palette.elevatedCardBackground) : accentRGB,
+                                    directory: directory, expectedForeground: disabled ? theme.palette.secondaryText : foreground,
+                                    labelOnly: true, requiredContrast: disabled ? 3 : 4.5)
                             }
                             actionChecks += 4
                             if #available(macOS 26, *) {
@@ -231,18 +250,62 @@ struct UIContrastTests {
                                     .background(theme.palette.elevatedCardBackground)
                                 try self.verify(tone, name: "secondary-tone-\(suffix)", theme: theme, scheme: scheme,
                                     textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
-                                    expectedForeground: .red, labelOnly: true, requiredContrast: nil)
+                                    expectedForeground: theme.palette.readableText(.red), labelOnly: true, requiredContrast: 3)
                                 actionChecks += 3
                             }
-                            // Explicit semantic tones and live recording intentionally
-                            // retain their existing white ink, independently of the accent.
+                            // Explicit tones must pair ink with their actual fill, including
+                            // pale saved accents passed explicitly by the dictionary wizard.
+                            for (toneName, tone) in [("explicit-accent", theme.palette.accent), ("white", Color.white),
+                                                     ("black", Color.black), ("yellow", Color.yellow), ("red", Color.red)] {
+                                let ink = theme.palette.foreground(on: tone)
+                                try self.verify(Button("Tone action") {}.buttonStyle(AccentButtonStyle(tone: tone)),
+                                    name: "tone-\(toneName)-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: self.components(tone), directory: directory,
+                                    expectedForeground: ink, labelOnly: true)
+                                actionChecks += 1
+                            }
+                            let disabledBackground = self.components(theme.palette.elevatedCardBackground)
+                            try self.verify(ProductionCommandGlyphFixture(), name: "disabled-command-glyph-\(suffix)",
+                                theme: theme, scheme: scheme, textBackground: disabledBackground, directory: directory,
+                                expectedForeground: theme.palette.secondaryText, requiredContrast: 3)
+                            reviewChecks += 1
+                            try self.verify(Button {} label: {
+                                Image(systemName: "pencil").font(.system(size: 20, weight: .bold))
+                            }.buttonStyle(FluidHoverIconButtonStyle()).disabled(true),
+                                name: "disabled-edit-icon-\(suffix)", theme: theme, scheme: scheme,
+                                textBackground: disabledBackground, directory: directory,
+                                expectedForeground: theme.palette.secondaryText, requiredContrast: 3)
+                            reviewChecks += 1
+                            try self.verify(ProductionQuietPressedFixture(), name: "pressed-quiet-\(suffix)",
+                                theme: theme, scheme: scheme, textBackground: self.components(theme.palette.cardBackground),
+                                directory: directory, expectedForeground: theme.palette.secondaryText, requiredContrast: 3)
+                            reviewChecks += 1
+                            for (controlName, control) in [
+                                ("glass", AnyView(Button("Continue") {}.fluidGlassAction(prominent: true, tone: theme.palette.accent).disabled(true))),
+                                ("fallback", AnyView(Button("Continue") {}.buttonStyle(AccentButtonStyle(tone: theme.palette.accent)).disabled(true))),
+                                ("outlined", AnyView(Button("Continue") {}.buttonStyle(FluidOutlinedButtonStyle()).disabled(true))),
+                            ] {
+                                try self.verify(control, name: "disabled-\(controlName)-\(suffix)", theme: theme, scheme: scheme,
+                                    textBackground: disabledBackground, directory: directory,
+                                    expectedForeground: theme.palette.secondaryText, labelOnly: true, requiredContrast: 3)
+                                actionChecks += 1
+                            }
+                            precondition(theme.palette.readableText(theme.palette.primaryText.opacity(0.05)) == theme.palette.primaryText,
+                                         "Transparent label ink must fall back before it disappears on the surface")
+                            let paleTheme = AppTheme.adaptive(accent: .white, colorScheme: scheme, package: package)
+                            for surface in [paleTheme.palette.windowBackground, paleTheme.palette.contentBackground,
+                                            paleTheme.palette.sidebarBackground, paleTheme.palette.cardBackground,
+                                            paleTheme.palette.elevatedCardBackground, paleTheme.palette.toolbarBackground] {
+                                precondition(self.contrast(self.components(paleTheme.palette.accentText), self.components(surface)) >= 3,
+                                             "Legacy/saved pale accent text must be legible on every surface")
+                            }
                             try self.verify(Button("Tone role") {}.buttonStyle(AccentButtonStyle(tone: .red)), name: "tone-role-\(suffix)",
                                 theme: theme, scheme: scheme, textBackground: self.components(.red), directory: directory,
-                                expectedForeground: .white, labelOnly: true, requiredContrast: nil)
+                                expectedForeground: theme.palette.foreground(on: .red), labelOnly: true)
                             try self.verify(Button("Record role") {}.buttonStyle(FluidRecordInvitationStyle(inviting: false, recording: true)),
                                 name: "record-role-\(suffix)", theme: theme, scheme: scheme,
                                 textBackground: self.components(.red), directory: directory,
-                                expectedForeground: .white, labelOnly: true, requiredContrast: nil)
+                                expectedForeground: theme.palette.foreground(on: .red), labelOnly: true)
                             actionChecks += 6
                         }
                     } catch { failure = error }
@@ -252,7 +315,64 @@ struct UIContrastTests {
         }
         print("Actual delete, active badge and metric foreground: \(checks) native rendering checks passed")
         print("Actual fallback actions, toast and preserved semantic ink: \(actionChecks) rendering checks passed")
+        for (name, background, ink, accent) in [("gray-accent", "#FFFFFF", "#000000", "#949494"),
+                                                ("opposite-inks", "#606060", "#FFFFFF", "#000000"),
+                                                ("gray-secondary", "#FFFFFF", "#000000", "#000000")] {
+            let backgrounds: Set<String> = ["windowBackground", "contentBackground", "sidebarBackground",
+                                           "cardBackground", "elevatedCardBackground", "toolbarBackground"]
+            var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, backgrounds.contains($0) ? background : ink) })
+            if name == "gray-accent" { colors["warning"] = accent }
+            if name == "gray-secondary" {
+                colors["secondaryText"] = "#949494"
+                colors["tertiaryText"] = "#949494"
+                colors["accentForeground"] = "#FFFFFF"
+            }
+            let profile = BrandProfile(appName: "Contrast", meetingName: "Meet", assistantName: "AI", tagline: "Synthetic fixture",
+                                       accentLight: accent, accentDark: accent, website: "https://example.invalid", support: "https://example.invalid")
+            let palette = BrandPalette(colors: colors)
+            let package = try BrandPackage.decode(BrandPackage(profile: profile, theme: BrandTheme(light: palette, dark: palette)).encoded())
+            for scheme: ColorScheme in [.light, .dark] {
+                let theme = AppTheme.adaptive(accent: Color(hex: accent)!, colorScheme: scheme, package: package)
+                let suffix = "\(name)-\(scheme == .dark ? "dark" : "light")"
+                for (controlName, control) in [("help", AnyView(ProductionHelpActionFixture())),
+                                               ("number", AnyView(ProductionHelpNumberFixture())),
+                                               ("words", AnyView(ProductionWordMetricFixture()))] {
+                    try self.verify(control, name: "review-\(controlName)-\(suffix)", theme: theme, scheme: scheme,
+                        textBackground: self.components(theme.palette.cardBackground), directory: directory,
+                        expectedForeground: theme.palette.primaryText)
+                    reviewChecks += 1
+                }
+                try self.verify(ProductionAPIKeyWarningFixture(), name: "review-warning-\(suffix)", theme: theme, scheme: scheme,
+                    textBackground: self.components(theme.palette.cardBackground), directory: directory,
+                    expectedForeground: theme.palette.readableText(theme.palette.warning), requiredContrast: 3)
+                try self.verify(FluidIconTile(icon: "gearshape.fill", tint: theme.palette.accent), name: "review-icon-tile-\(suffix)",
+                    theme: theme, scheme: scheme, textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+                    expectedForeground: theme.palette.readableText(theme.palette.accent), requiredContrast: 3)
+                reviewChecks += 2
+                try self.verify(Button {} label: {
+                    Image(systemName: "pencil").font(.system(size: 20, weight: .bold))
+                }.buttonStyle(FluidHoverIconButtonStyle()).disabled(true),
+                    name: "review-disabled-edit-icon-\(suffix)", theme: theme, scheme: scheme,
+                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+                    expectedForeground: theme.palette.secondaryText, requiredContrast: 3)
+                reviewChecks += 1
+                try self.verify(Image(systemName: "checkmark").font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(theme.palette.accentText).frame(width: 160, height: 44)
+                    .searchablePickerSelectedRowBackground(isSelected: true),
+                    name: "review-selected-picker-row-\(suffix)", theme: theme, scheme: scheme,
+                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+                    expectedForeground: theme.palette.accentText, labelOnly: true, requiredContrast: 3,
+                    expectedSurface: theme.palette.elevatedCardBackground)
+                reviewChecks += 1
+                try self.verify(ProductionQuietPressedFixture(), name: "review-pressed-quiet-\(suffix)",
+                    theme: theme, scheme: scheme, textBackground: self.components(theme.palette.cardBackground),
+                    directory: directory, expectedForeground: theme.palette.secondaryText, requiredContrast: 3)
+                reviewChecks += 1
+            }
+        }
+        print("Production disabled command glyph, Help and word metric: \(reviewChecks) review regression rendering checks passed")
         self.verifyConstruction()
+        try await FluidSegmentedPickerTests.run(directory: directory)
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }
