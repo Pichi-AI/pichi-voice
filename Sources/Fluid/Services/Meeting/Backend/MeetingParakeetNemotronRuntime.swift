@@ -57,6 +57,9 @@ nonisolated struct MeetingParakeetEpochOutput: Sendable {
 nonisolated struct MeetingParakeetPhaseResult: Sendable {
     var outputs: [MeetingParakeetEpochOutput] = []
     var failures: [MeetingAnalysisEpochID: String] = [:]
+    /// Ownership transfers from a progressive ASR body to the subsequent speaker
+    /// phase. Only that same physical window is retained, never another buffer.
+    var boundedPCMSamples: [Float] = []
 }
 
 /// The composite backend's runtime, one per attempt. `withNemotronDiarization` is the only owner
@@ -67,6 +70,11 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
+    nonisolated var supportsProgressivePCMInput: Bool { get }
+    nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+                                 trackID: MeetingAudioTrackID, attemptID: UUID,
+                                 configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch
     nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
                                  attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch
     /// A display-only speech observation after the ASR scope has drained, before attribution.
@@ -92,6 +100,14 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 }
 
 extension MeetingParakeetNemotronRunning {
+    nonisolated var supportsProgressivePCMInput: Bool { false }
+
+    nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+                                 trackID: MeetingAudioTrackID, attemptID: UUID,
+                                 configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+        throw MeetingPCMInputError.unsupportedRuntime
+    }
     nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
                                  attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
         throw MeetingPCMInputError.unsupportedRuntime
