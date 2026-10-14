@@ -429,6 +429,9 @@ participant_first = participant_source.index(participant_start)
 participant_last_marker = '            .disabled(self.isSaving)'
 participant_last = participant_source.index(participant_last_marker, participant_first) + len(participant_last_marker)
 participant_field = participant_source[participant_first:participant_last]
+Path(sys.argv[1]).with_name('ProductionParticipantSheet.swift').write_text(participant_source)
+meeting_actions = Path('Sources/Fluid/UI/MeetingWorkspaceComponents.swift').read_text()
+Path(sys.argv[1]).with_name('ProductionMeetingActions.swift').write_text(meeting_actions[:meeting_actions.index('enum MeetingDocumentSection:')])
 with Path(sys.argv[1]).open('a') as output:
     output.write('struct ProductionParticipantInputFixture: View {\n'
         ' struct Speaker { let id: String; let displayName: String }\n'
@@ -635,6 +638,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
     Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
+    "$task_test_dir/ProductionParticipantSheet.swift" "$task_test_dir/ProductionMeetingActions.swift" \
     "$task_test_dir/ToolbarPageLayout.swift" \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
     Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift -o "$task_test_dir/tests"
