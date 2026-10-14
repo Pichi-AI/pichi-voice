@@ -27,6 +27,14 @@ final class MobileFirstUseModelTests: XCTestCase {
         XCTAssertEqual(settings.meetingSaveAudio, saveAudio)
         XCTAssertEqual(settings.meetingPIIRedactionEnabled, privacy)
         XCTAssertEqual(settings.meetingSpeakerLabelsEnabled, speakers)
+        if ProcessInfo.processInfo.environment["PICHI_ENABLE_DEVICE_PII"] == "1" {
+            // An explicitly requested privacy operation uses the same local service
+            // and setting as the privacy screen, after the unchanged model operation.
+            try await AppServices.shared.transcriptPrivacy.prepare()
+            settings.meetingPIIRedactionEnabled = true
+            XCTAssertTrue(settings.meetingPIIRedactionEnabled)
+            try await AppServices.shared.transcriptPrivacy.unload()
+        }
         XCTAssertTrue(UserDefaults.standard.synchronize())
         #endif
     }
