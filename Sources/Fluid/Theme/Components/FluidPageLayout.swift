@@ -42,13 +42,23 @@ extension EnvironmentValues {
 }
 
 private struct FluidPageActions<Actions: View>: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.fluidPageToolbarVisible) private var isVisible
     @Environment(\.fluidToolbarTrailingInset) private var trailingInset
     let enabled: Bool
     let actions: Actions
 
     func body(content: Content) -> some View {
-        content.toolbar {
+        // Capture the caller environment before native toolbar content is
+        // rehosted. Page actions must not inherit a stale hosting-root scheme.
+        let pageColorScheme = self.colorScheme
+        #if os(macOS)
+        ToolbarAppearanceTrace.emit(kind: "page-action-input", source: "FluidPageActions", payload: [
+            "colorScheme": pageColorScheme == .dark ? "dark" : "light",
+            "visible": self.isVisible, "enabled": self.enabled,
+        ])
+        #endif
+        return content.toolbar {
             if self.isVisible, self.enabled {
                 // Keep page actions separate from the shared trailing controls.
                 if #available(macOS 26, *) {
@@ -56,6 +66,7 @@ private struct FluidPageActions<Actions: View>: ViewModifier {
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     self.actions
+                        .environment(\.colorScheme, pageColorScheme)
                         .foregroundStyle(Color.primary)
                         .buttonStyle(.automatic)
                         .labelStyle(FluidToolbarLabelStyle())
@@ -77,11 +88,12 @@ extension View {
     // Native glass can choose an appearance independently of the app palette.
     // Color.primary resets inherited brand ink; HierarchicalShapeStyle.primary
     // would merely reuse that inherited foreground style.
-    func fluidToolbarIcon(foreground: Color = .primary) -> some View {
+    func fluidToolbarIcon(foreground: Color = .primary, file: StaticString = #fileID, line: UInt = #line) -> some View {
         self.foregroundStyle(foreground)
             .font(.system(size: 17, weight: .medium))
             .imageScale(.medium)
             .frame(width: 22, height: 22)
+            .traceToolbarAppearance(file: file, line: line)
     }
 
     func fluidPageContent(width: FluidPageLayout.Width = .standard, alignment: Alignment = .leading) -> some View {

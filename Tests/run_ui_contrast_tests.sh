@@ -477,13 +477,26 @@ page_layout = toolbar_source('Sources/Fluid/Theme/Components/FluidPageLayout.swi
 page_actions = page_layout[page_layout.index('                    self.actions\n'):]
 page_actions = page_actions[:page_actions.index('\n                }')]
 assert '.buttonStyle(.automatic)' in page_actions and '.labelStyle(FluidToolbarLabelStyle())' in page_actions
-# The actual page-action chain and private label style compile in their own
-# source file. A plain inner Button is only the non-native raster adapter.
+# Compile the actual caller-environment read as well as its action chain.
+# The optional stale host is a reference adapter for the observed native
+# rehosting mismatch; it does not claim to reproduce AppKit itself.
+page_capture = ''
+page_environment = ''
+if 'let pageColorScheme = self.colorScheme' in page_layout:
+    assert page_layout.count('let pageColorScheme = self.colorScheme') == 1
+    page_capture = '  let pageColorScheme = self.colorScheme\n'
+    page_environment = ' @Environment(\\.colorScheme) private var colorScheme\n'
+    assert page_environment.strip() in page_layout
 Path(sys.argv[1]).with_name('ToolbarPageLayout.swift').write_text(page_layout + '\n'
     'struct ProductionToolbarPageFixture: View {\n'
+    + page_environment +
+    ' @Environment(\\.colorScheme) private var referenceCallerScheme\n'
+    ' var staleHostScheme: ColorScheme? = nil\n'
     ' private var actions: some View {\n'
     '  Button(action: {}) { Label("Share", systemImage: "square.and.arrow.up") }.buttonStyle(.plain)\n'
-    ' }\n var body: some View {\n' + page_actions + '\n }\n}\n')
+    ' }\n var body: some View {\n' + page_capture +
+    '  return Group {\n' + page_actions + '\n  }\n'
+    '  .environment(\\.colorScheme, self.staleHostScheme ?? self.referenceCallerScheme)\n }\n}\n')
 content_source = toolbar_source('Sources/Fluid/ContentView.swift')
 main_toolbar = content_source[content_source.index('    private func applyMainWindowToolbar'):content_source.index('    private var hasPageToolbarActions:')]
 assert '.buttonStyle(.automatic)' in main_toolbar
@@ -522,7 +535,7 @@ Path(sys.argv[1]).with_name('ToolbarInkProductionSource.json').write_text(json.d
     'contentSHA256': hashlib.sha256(content_source.encode()).hexdigest(),
     'pageLayoutSHA256': hashlib.sha256(page_layout.encode()).hexdigest(),
     'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', toolbar_revision], text=True).strip() if toolbar_revision else None,
-    'adapters': ['synthetic statistics and theme-icon selection', 'reference native material colorScheme', 'plain inner page Button renderer'],
+    'adapters': ['synthetic statistics and theme-icon selection', 'reference native material colorScheme', 'plain inner page Button renderer', 'optional stale page-toolbar host scheme'],
     'nativeToolbarSchemePropagation': 'SKIP', 'nativeGlassRasterization': 'SKIP',
 }, indent=2) + '\n')
 
@@ -626,7 +639,9 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
     Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
     "$task_test_dir/ProductionParticipantSheet.swift" "$task_test_dir/ProductionMeetingActions.swift" \
-    "$task_test_dir/ToolbarPageLayout.swift" -o "$task_test_dir/tests"
+    "$task_test_dir/ToolbarPageLayout.swift" \
+    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
+    Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in
