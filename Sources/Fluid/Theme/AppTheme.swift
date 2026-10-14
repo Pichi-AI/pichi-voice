@@ -1,4 +1,9 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Shared product accents. Onboarding and feature surfaces use the same source of truth.
 enum FluidBrandColors {
@@ -32,14 +37,35 @@ struct AppTheme {
         /// A fill and text drawn on a neutral surface have different contrast needs.
         /// Saved accents and legacy profiles may predate package contrast validation.
         var accentText: Color {
-            self.readableText(self.accent)
+            self.readableText(self.accent, minimumContrast: 4.5)
         }
 
-        func readableText(_ proposed: Color) -> Color {
-            let backgrounds = [windowBackground, contentBackground, sidebarBackground,
-                               cardBackground, elevatedCardBackground, toolbarBackground]
-            return backgrounds.allSatisfy { Self.contrast(proposed, $0) >= 3 }
+        private var backgrounds: [Color] {
+            [windowBackground, contentBackground, sidebarBackground,
+             cardBackground, elevatedCardBackground, toolbarBackground]
+        }
+
+        func readableText(_ proposed: Color, minimumContrast: Double = 3) -> Color {
+            return self.backgrounds.allSatisfy { Self.contrast(proposed, $0) >= minimumContrast }
                 ? proposed : self.primaryText
+        }
+
+        /// Native controls paint their own ink and material. A portable palette
+        /// can use light surfaces in its dark variant, or the reverse; select
+        /// native ink against those surfaces without changing the brand variant.
+        func nativeColorScheme(fallback: ColorScheme) -> ColorScheme {
+            var result = fallback
+            let resolve = {
+                let lightContrast = self.backgrounds.map { Self.contrast(.black, $0) }.min() ?? 0
+                let darkContrast = self.backgrounds.map { Self.contrast(.white, $0) }.min() ?? 0
+                if lightContrast != darkContrast { result = lightContrast > darkContrast ? .light : .dark }
+            }
+            #if canImport(AppKit)
+            NSAppearance(named: fallback == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance(resolve)
+            #else
+            UITraitCollection(userInterfaceStyle: fallback == .dark ? .dark : .light).performAsCurrent(resolve)
+            #endif
+            return result
         }
 
         func foreground(on fill: Color) -> Color {
@@ -330,11 +356,16 @@ struct AppTheme {
     let typography: Typography
     let metrics: Metrics
     let materials: Materials
+    /// Retained across AppKit rehosting and export rendering so native control
+    /// appearance cannot switch the selected portable palette or logo variant.
+    var variant: ColorScheme? = nil
 
     static func adaptive(accent: Color, colorScheme: ColorScheme, package: BrandPackage = AppBrand.package) -> AppTheme {
         let base = colorScheme == .light ? Self.light(accent: accent) : Self.dark(accent: accent)
         let palette = colorScheme == .light ? package.theme?.light : package.theme?.dark
-        return base.applying(palette: palette, style: package.style, brandAccent: colorScheme == .light ? package.profile.accentLight : package.profile.accentDark)
+        var theme = base.applying(palette: palette, style: package.style, brandAccent: colorScheme == .light ? package.profile.accentLight : package.profile.accentDark)
+        theme.variant = colorScheme
+        return theme
     }
 
     private func applying(palette branded: BrandPalette?, style: BrandStyle?, brandAccent: String) -> AppTheme {
