@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import plistlib
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -152,15 +153,64 @@ class LocalAPILiveHarnessTests(unittest.TestCase):
         library = Mock(proc_pidpath=Mock(side_effect=pid_path))
         with patch.object(HARNESS.sys, "platform", "darwin"), patch.object(HARNESS.ctypes, "CDLL", return_value=library):
             self.assertEqual(HARNESS.process_path(12345), self.executable)
-        result = type("Result", (), dict(returncode=0, stdout="p12345\np12345\n"))()
+        # Darwin -Fp also emits file-descriptor fields (for example p12345\nf5\n).
+        # -t is the PID-only format, including duplicate rows for multiple sockets.
+        result = type("Result", (), dict(returncode=0, stdout="12345\n12345\n"))()
         with patch.object(HARNESS.subprocess, "run", return_value=result) as command:
             self.assertEqual(HARNESS.listener_pids(47733), {12345})
-        self.assertEqual(command.call_args.args[0], ["/usr/sbin/lsof", "-nP", "-iTCP:47733", "-sTCP:LISTEN", "-Fp"])
+        self.assertEqual(command.call_args.args[0], ["/usr/sbin/lsof", "-nP", "-iTCP:47733", "-sTCP:LISTEN", "-t"])
         self.assertEqual(command.call_args.kwargs["timeout"], 3)
-        for bad in ["", "p12345\ncPrivate command line\n", "pNotNumeric\n"]:
+
+    def test_listener_output_requires_bounded_ascii_positive_pid_rows(self):
+        result = type("Result", (), dict(returncode=0, stdout=""))()
+        for bad in ["", "\n", "12345\n\n", "p12345\nf5\n", "12345\ncPrivate command line\n",
+                    "NotNumeric\n", "0\n", "-12345\n", "+12345\n", " 12345\n", "12345 \n",
+                    "１２３４５\n", "١٢٣٤٥\n", "²\n", "1\n" * 8193]:
             result.stdout = bad
-            with patch.object(HARNESS.subprocess, "run", return_value=result), self.assertRaises(HARNESS.HarnessError):
+            with self.subTest(output=bad[:30]), patch.object(HARNESS.subprocess, "run", return_value=result), \
+                 self.assertRaisesRegex(HARNESS.HarnessError, "^listener_identity_unavailable$"):
                 HARNESS.listener_pids(47733)
+        for status, output in [(1, ""), (1, "12345\n"), (2, "12345\n")]:
+            result.returncode, result.stdout = status, output
+            with self.subTest(status=status), patch.object(HARNESS.subprocess, "run", return_value=result), \
+                 self.assertRaisesRegex(HARNESS.HarnessError, "^listener_identity_unavailable$"):
+                HARNESS.listener_pids(47733)
+
+    def test_listener_pid_only_output_retains_exclusive_ownership_checks(self):
+        for output in ["999\n", "12345\n999\n"]:
+            result = type("Result", (), dict(returncode=0, stdout=output))()
+            with self.subTest(output=output), patch.object(HARNESS, "process_path", return_value=self.executable), \
+                 patch.object(HARNESS.subprocess, "run", return_value=result), patch.object(HARNESS, "exchange") as send, \
+                 self.assertRaisesRegex(HARNESS.HarnessError, "^target_does_not_exclusively_own_listener$"):
+                HARNESS.run_live(self.args)
+            send.assert_not_called()
+
+    def test_pid_only_adapter_is_rechecked_before_and_after_every_request(self):
+        good = type("Result", (), dict(returncode=0, stdout="12345\n"))()
+        with patch.object(HARNESS, "process_path", return_value=self.executable), \
+             patch.object(HARNESS.subprocess, "run", return_value=good) as command, \
+             patch.object(HARNESS, "exchange", side_effect=self.scripted_exchange) as send:
+            rows = HARNESS.run_live(self.args)
+        self.assertEqual(HARNESS.summarize(rows), {"pass": 10, "fail": 0, "skip": 0})
+        self.assertEqual(send.call_count, 10)
+        self.assertEqual(command.call_count, 21, "One preflight plus ownership checks before and after all ten requests")
+        for output in ["999\n", "12345\n999\n", ""]:
+            changed = type("Result", (), dict(returncode=0, stdout=output))()
+            with self.subTest(output=output), patch.object(HARNESS, "process_path", return_value=self.executable), \
+                 patch.object(HARNESS.subprocess, "run", side_effect=[good, good, changed]), \
+                 patch.object(HARNESS, "exchange", side_effect=self.scripted_exchange) as send:
+                rows = HARNESS.run_live(self.args)
+            self.assertEqual(send.call_count, 1)
+            self.assertEqual([row["status"] for row in rows], ["FAIL"] + ["SKIP"] * 9)
+
+    def test_listener_timeout_or_unavailable_utility_never_sends_http(self):
+        for error in [subprocess.TimeoutExpired("lsof", 3), FileNotFoundError("lsof")]:
+            with self.subTest(error=type(error).__name__), \
+                 patch.object(HARNESS, "process_path", return_value=self.executable), \
+                 patch.object(HARNESS.subprocess, "run", side_effect=error), \
+                 patch.object(HARNESS, "exchange") as send, self.assertRaises(type(error)):
+                HARNESS.run_live(self.args)
+            send.assert_not_called()
 
     def test_bundle_and_fixture_symlinks_refused(self):
         alias = self.root / "alias.wav"

@@ -15,6 +15,12 @@ struct BrandProfileTests {
     }
 
     static func main() throws {
+        if let index = CommandLine.arguments.firstIndex(of: "--model-feed-cache-only") {
+            let expectedNamespace = CommandLine.arguments[index + 1]
+            let expectedFile = CommandLine.arguments[index + 2]
+            try self.verifyModelFeedCacheIsolation(expectedNamespace: expectedNamespace, expectedFile: expectedFile)
+            return
+        }
         let packageData = try Data(contentsOf: URL(fileURLWithPath: "Sources/Fluid/Branding/brand-package.json"))
         let packaged = try BrandPackage.decode(packageData)
         precondition(packaged.profile.appName == "Pichi Voice")
@@ -167,6 +173,7 @@ struct BrandProfileTests {
         precondition(AppBrand.keychainService.hasPrefix(AppBrand.bundleIdentifier))
         precondition(AppBrand.modelsDirectory.path.contains(AppBrand.bundleIdentifier))
         try self.verifyDiagnosticLogIsolation()
+        try self.verifyModelFeedCacheIsolation(expectedNamespace: "local.voice.unbundled", expectedFile: "speech-model-feed.json")
         precondition(!AppBrand.updatesEnabled && AppBrand.feedbackEndpoint == nil)
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://github.com/a/b", updatesEnabled: true).validate() }
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://attacker.invalid/a/b").validate() }
@@ -287,6 +294,36 @@ struct BrandProfileTests {
             try BrandPalette(colors: colors).validate(accent: accent)
         }
         print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections, 2 opposite-polarity rejections, 2 saturated-blend rejections and 2 readable palette checks passed")
+    }
+
+    static func verifyModelFeedCacheIsolation(expectedNamespace: String, expectedFile: String) throws {
+        let identities = ["ai.pichi.voice", "ai.pichi.voice.e2e-api", "ai.pichi.voice.debug", "com.FluidApp.app"]
+        precondition(Set(identities.map { AppBrand.storageNamespace(for: $0) }).count == identities.count)
+        for identifier in identities {
+            precondition(AppBrand.storageNamespace(for: identifier) == identifier)
+        }
+        for identifier in [nil, "", ".", "..", "../FluidVoice", "bad/id", "bad\\id", "bad\u{0}id", "Новая марка"] as [String?] {
+            precondition(AppBrand.storageNamespace(for: identifier) == "local.voice.unbundled")
+        }
+        let cache = CompactSpeechModelReleaseCatalog.defaultCacheURL()!
+        precondition(AppBrand.storageNamespace == expectedNamespace)
+        precondition(cache.deletingLastPathComponent() == AppBrand.applicationSupportDirectory,
+                     "The production feed cache must use the existing installation storage boundary")
+        precondition(cache.deletingLastPathComponent().lastPathComponent == expectedNamespace,
+                     "Different Release and Debug identities must never share feed state")
+        precondition(cache.lastPathComponent == expectedFile)
+        precondition(cache.appendingPathExtension("state").deletingLastPathComponent() == AppBrand.applicationSupportDirectory)
+        precondition(cache.appendingPathExtension("lock").deletingLastPathComponent() == AppBrand.applicationSupportDirectory)
+        // Imported appearance cannot provide a storage identity or feed path.
+        let packageData = try Data(contentsOf: URL(fileURLWithPath: "Configuration/BrandExamples/sber-demo.json"))
+        let object = try JSONSerialization.jsonObject(with: packageData) as! [String: Any]
+        for forbidden in ["bundleIdentifier", "storageNamespace", "applicationSupportDirectory", "cacheURL", "cacheFolderName"] {
+            var injected = object
+            injected[forbidden] = "../FluidVoice"
+            self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: injected)) }
+        }
+        precondition(CompactSpeechModelReleaseCatalog.defaultCacheURL() == cache)
+        print("Model feed cache identity \(expectedNamespace), \(expectedFile): trusted storage and appearance isolation passed")
     }
 
     static func verifyDiagnosticLogIsolation() throws {

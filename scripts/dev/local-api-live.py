@@ -103,14 +103,15 @@ def process_path(pid):
 
 
 def listener_pids(port):
-    result = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"],
+    # -t emits only PIDs; Darwin -Fp also includes file-descriptor fields.
+    result = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             text=True, timeout=3, check=False)
     require(result.returncode == 0 and len(result.stdout) <= 16384, "listener_identity_unavailable")
     rows = result.stdout.splitlines()
-    require(rows and all(row.startswith("p") and row[1:].isdigit() for row in rows),
+    require(rows and all(row.isascii() and row.isdigit() and int(row) > 0 for row in rows),
             "listener_identity_unavailable")
-    return {int(row[1:]) for row in rows}
+    return {int(row) for row in rows}
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,12 @@ final class SettingsStore: ObservableObject {
     let accentColor = Color.purple
 }
 
+// The appearance observer is real; this icon dependency never touches an app
+// bundle, installed brand state or application icon in nonactivating tests.
+@MainActor enum PichiBrandMark {
+    static var appIcon: NSImage { NSImage(size: NSSize(width: 16, height: 16)) }
+}
+
 @main
 struct UIContrastTests {
     // A renderer's inherited ink is applied around its configuration label, as
@@ -192,6 +198,18 @@ struct UIContrastTests {
         }
         if CommandLine.arguments.contains("--native-appearance-only") {
             try await NativePaletteAppearanceTests.run(directory: directory)
+            return
+        }
+        if CommandLine.arguments.contains("--native-sidebar-only") {
+            try await NativeSidebarContrastTests.run(directory: directory)
+            return
+        }
+        if CommandLine.arguments.contains("--dashboard-shortcuts-only") {
+            try await DashboardShortcutSurfaceTests.run(directory: directory)
+            return
+        }
+        if CommandLine.arguments.contains("--overlay-captions-only") {
+            try await OverlaySliderCaptionTests.run(directory: directory)
             return
         }
         let packages = [
@@ -424,6 +442,8 @@ struct UIContrastTests {
         self.verifyConstruction()
         try await FluidSegmentedPickerTests.run(directory: directory)
         try await NativePaletteAppearanceTests.run(directory: directory)
+        try await NativeSidebarContrastTests.run(directory: directory)
+        try await DashboardShortcutSurfaceTests.run(directory: directory)
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }

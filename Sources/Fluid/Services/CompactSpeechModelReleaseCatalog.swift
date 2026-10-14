@@ -261,24 +261,9 @@ final class CompactSpeechModelReleaseCatalog: ObservableObject {
         #endif
     }
 
-    private nonisolated static func defaultCacheURL() -> URL? {
-        #if DEBUG
-        let isDebug = true
-        #else
-        let isDebug = false
-        #endif
-        let folder = self.cacheFolderName(bundleIdentifier: Bundle.main.bundleIdentifier, isDebug: isDebug)
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent(folder, isDirectory: true)
+    nonisolated static func defaultCacheURL() -> URL? {
+        AppBrand.applicationSupportDirectory
             .appendingPathComponent(self.usesStaging ? "speech-model-feed-staging.json" : "speech-model-feed.json")
-    }
-
-    nonisolated static func cacheFolderName(bundleIdentifier: String?, isDebug: Bool) -> String {
-        guard isDebug else { return "FluidVoice" }
-        let identifier = bundleIdentifier ?? "debug"
-        let valid = !identifier.isEmpty && identifier != "." && identifier != ".."
-            && identifier.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 }
-        return "FluidVoice/\(valid ? identifier : "debug")"
     }
 
     private nonisolated static func fixedURL(_ value: String) -> URL {
