@@ -197,11 +197,10 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     func makeNSView(context _: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
-        // SwiftUI already keeps this view below the toolbar. Left on, AppKit adds a second
-        // toolbar-height inset on macOS 26 and paints its blurred edge effect in the gap.
-        scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsetsZero
-        scrollView.scrollerInsets = NSEdgeInsetsZero
+        // This native viewport can extend beneath a full-size window's toolbar.
+        // Let AppKit derive the actual intersection; a viewport already below the
+        // toolbar needs no extra inset. Search reveal uses the same contentInsets.
+        scrollView.automaticallyAdjustsContentInsets = true
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = false
