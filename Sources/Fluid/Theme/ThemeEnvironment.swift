@@ -13,11 +13,16 @@ extension EnvironmentValues {
 
 extension View {
     /// Applies an app theme to the view hierarchy.
-    func appTheme(_ theme: AppTheme) -> some View {
-        self.font(theme.typography.inheritedFont)
+    @ViewBuilder func appTheme(_ theme: AppTheme) -> some View {
+        let themed = self.font(theme.typography.inheritedFont)
         .foregroundStyle(theme.palette.primaryText)
         .environment(\.theme, theme)
         .buttonStyle(FluidOutlinedButtonStyle())
+        if let variant = theme.variant {
+            themed.environment(\.colorScheme, theme.palette.nativeColorScheme(fallback: variant))
+        } else {
+            themed
+        }
     }
 }
 
@@ -39,17 +44,18 @@ struct AdaptiveAppTheme<Content: View>: View {
         let activeAccent = self.settings.accentColorOption == .brand
             ? (Color(hex: activeScheme == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? self.accent)
             : self.accent
+        let theme = AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme)
 
         self.content
-            .appTheme(AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme))
+            .appTheme(theme)
             .environment(\.locale, PichiLocalization.locale)
             .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
             .tint(activeAccent)
             .preferredColorScheme(preferredScheme)
             #if os(macOS)
-            .toolbarColorScheme(activeScheme, for: .windowToolbar)
+            .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .windowToolbar)
             #else
-            .toolbarColorScheme(activeScheme, for: .navigationBar)
+            .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .navigationBar)
             #endif
     }
 }

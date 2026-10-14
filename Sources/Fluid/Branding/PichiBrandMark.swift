@@ -7,6 +7,7 @@ import SwiftUI
 
 struct PichiBrandMark: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.theme) private var theme
     let size: CGFloat
     let color: Color
 
@@ -60,8 +61,9 @@ struct PichiBrandMark: View {
     #endif
 
     var body: some View {
+        let variant = self.theme.variant ?? self.colorScheme
         Group {
-            if let image = Self.image(self.colorScheme == .dark ? AppBrand.package.logos?.dark : AppBrand.package.logos?.light, key: self.colorScheme == .dark ? "dark" : "light") ?? Self.customImage {
+            if let image = Self.image(variant == .dark ? AppBrand.package.logos?.dark : AppBrand.package.logos?.light, key: variant == .dark ? "dark" : "light") ?? Self.customImage {
                 #if canImport(AppKit)
                 Image(nsImage: image).resizable()
                 #else
