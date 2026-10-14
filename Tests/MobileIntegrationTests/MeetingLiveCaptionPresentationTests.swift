@@ -154,25 +154,31 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                 self.scrollViews(in: host.controller.view).contains { $0.bounds.height > 0 }
             }
             var projection = MeetingPendingSpeechProjection()
-            func feed(_ first: Int, _ last: Int, speech: Bool) {
+            func feed(_ first: Int, _ last: Int, speech: Bool) async throws {
                 for frame in first..<last {
                     let time = Double(frame) * 0.02
                     let rms: Float = speech ? 0.018 + 0.011 * Float(sin(time * 2 * .pi * 3)) : 0.001
                     projection.observe(source: .you, start: time, end: time + 0.02,
                         rms: rms, peak: rms * 3, zeroCrossingRate: 0.12)
+                    if host.model.pending != projection.snapshot { host.model.pending = projection.snapshot }
+                    try await Task.sleep(for: .milliseconds(20))
                 }
             }
-            feed(0, 100, speech: true)
+            try await feed(0, 100, speech: true)
             host.model.pending = projection.snapshot
             XCTAssertFalse(host.model.pending.tokens.isEmpty)
             try await settle(host, "Speech waveforms are rendered") { true }
+            if let viewport = scrollViews(in: host.controller.view).first {
+                let rect = viewport.convert(viewport.bounds, to: host.window)
+                print("[NATIVE_REVIEW_VIEWPORT] x=\(rect.minX) y=\(rect.minY) width=\(rect.width) height=\(rect.height) scale=\(host.window.screen.scale)")
+            }
             capture(host, step: "review-01-audio-pending", scheme: scheme)
-            feed(100, 400, speech: false)
+            try await feed(100, 400, speech: false)
             host.model.pending = projection.snapshot
             XCTAssertTrue(host.model.pending.tokens.isEmpty)
             try await settle(host, "Quiet cleanup is rendered") { true }
             capture(host, step: "review-02-after-quiet", scheme: scheme)
-            feed(400, 500, speech: true)
+            try await feed(400, 500, speech: true)
             host.model.pending = projection.snapshot
             XCTAssertFalse(host.model.pending.tokens.isEmpty)
             let approved = "Документы доступны в разделе с материалами встречи."
