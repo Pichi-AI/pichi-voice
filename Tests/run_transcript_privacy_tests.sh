@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 task_build_dir="$PWD/.build/pii-swiftpm"
-swift test --package-path Vendor/PichiGigaAM --scratch-path "$task_build_dir" --filter PichiTextPrivacyTests
+swift test --jobs 2 --package-path Vendor/PichiGigaAM --scratch-path "$task_build_dir" --filter PichiTextPrivacyTests
 task_test_dir="$PWD/.build/pii-resource-harness"
 mkdir -p "$task_test_dir"
 # Compile the owning downloader unchanged without its unrelated FluidAudio
