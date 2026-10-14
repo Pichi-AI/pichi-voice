@@ -1584,6 +1584,34 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
     }
 
+    func testPreinstalledArtifactIdentityStaysPinnedAcrossDependencyPreparation() async throws {
+        let suite = "PinnedPCMArtifact.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        var source = self.session(backendID: .whisperTiny, language: "en")
+        let approvedIdentity = "approved-synthetic-tiny-identity"
+        source.recordingASRArtifactFingerprint = approvedIdentity
+        var frozenRequest: MeetingBackendRequest?
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: { XCTFail("Runtime marker precedes ASR residency"); return ASRService() },
+            managesModelResidency: false, settings: settings, backendRegistry: .makeDefault(),
+            meetingRuntimeFactory: { request in frozenRequest = request; throw RuntimeReached() },
+            prepareDiarizationDependencies: { _ in source.recordingASRArtifactFingerprint = "later-unapproved-identity" })
+        do {
+            try await pipeline.prepareMemoryAudio(session: source, sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"),
+                checkpoint: { _ in XCTFail("The runtime marker cannot publish a checkpoint") })
+            XCTFail("Expected the requested runtime marker")
+        } catch is RuntimeReached { }
+        let request = try XCTUnwrap(frozenRequest)
+        XCTAssertEqual(source.recordingASRArtifactFingerprint, "later-unapproved-identity")
+        XCTAssertEqual(request.session.recordingASRArtifactFingerprint, approvedIdentity)
+        XCTAssertEqual(request.configuration.asrArtifactFingerprint, approvedIdentity)
+        XCTAssertEqual(request.configuration.asrModel, PichiMeetingProviderFactory.whisperTinyModelID)
+        XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+    }
+
     func testAllProductionPCMRegistrationsDispatchThroughTheirRuntimeOperation() async {
         for backendID in [MeetingBackendID.gigaam, .whisperTiny, .parakeetV3, .parakeetNemotron] {
             let language = backendID == .gigaam ? "ru" : "en"

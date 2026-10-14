@@ -439,6 +439,18 @@ final class MeetingSessionCoordinator: ObservableObject {
         // changed while they were open; final preparation still binds the exact session request.
         let initialDescriptor = try self.processing.validateRecordingInput(
             configuration: configuration, backendID: requestedBackendID)
+        // Explicit registered requests require a preinstalled artifact. Capture its identity
+        // before any dependency work or permission prompt and retain this exact snapshot.
+        let explicitRecordingConfiguration: MeetingFinalProcessingConfiguration?
+        if configuration.transcriptionBackendID != nil {
+            let snapshot = PichiMeetingProviderFactory.configuration(backendID: requestedBackendID,
+                languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true)
+            let registeredOverride = PichiMeetingProviderFactory.registeredBackendDescriptor(for: snapshot.asrModel)?.id == requestedBackendID
+            try PichiMeetingProviderFactory.validateRecordingConfiguration(snapshot,
+                isAppleSilicon: CPUArchitecture.isAppleSilicon, requiresInstalledArtifact: registeredOverride)
+            try self.validateFrozenRecordingConfiguration(snapshot)
+            explicitRecordingConfiguration = snapshot
+        } else { explicitRecordingConfiguration = nil }
         // Permission prompts are outside the exclusive audio lease. A prompt can remain
         // open indefinitely; reserving meeting audio first would unnecessarily block dictation.
         // This callback belongs to the ambient selected-ASR lifecycle. Explicit requests
@@ -509,7 +521,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                       self.settings.meetingTranscriptionBackendID == savedBackendID,
                       self.terminationTask == nil, !self.isMutatingSession else { throw CancellationError() }
             }
-            recordingASRConfiguration = PichiMeetingProviderFactory.configuration(
+            recordingASRConfiguration = explicitRecordingConfiguration ?? PichiMeetingProviderFactory.configuration(
                 backendID: recordingBackendID,
                 languageCode: configuration.languageCode,
                 diarizationEnabled: configuration.speakerLabelsEnabled ?? true
