@@ -23,9 +23,9 @@ declarations = declarations.replace('private nonisolated static func defaultCach
     'import Foundation\nnonisolated enum CompactSpeechModelReleaseCatalog {\n'
     + declarations + '\n}\n')
 PY
-xcrun swiftc -parse-as-library -module-cache-path "$pichi_test_dir/ModuleCache" -D FLUID_ASR_BASELINE Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift Sources/Fluid/Services/FileLogger.swift "$pichi_test_dir/ModelFeedCacheProjection.swift" Tests/BrandProfileTests.swift -o "$pichi_test_dir/tests"
+xcrun swiftc -parse-as-library -module-cache-path "$pichi_test_dir/ModuleCache" -D FLUID_ASR_BASELINE Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift "$pichi_test_dir/ModelFeedCacheProjection.swift" Tests/BrandProfileTests.swift -o "$pichi_test_dir/tests"
 "$pichi_test_dir/tests"
-xcrun swiftc -parse-as-library -module-cache-path "$pichi_test_dir/ModuleCache" -D DEBUG -D FLUID_ASR_BASELINE Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift Sources/Fluid/Services/FileLogger.swift "$pichi_test_dir/ModelFeedCacheProjection.swift" Tests/BrandProfileTests.swift -o "$pichi_test_dir/debug-tests"
+xcrun swiftc -parse-as-library -module-cache-path "$pichi_test_dir/ModuleCache" -D DEBUG -D FLUID_ASR_BASELINE Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift "$pichi_test_dir/ModelFeedCacheProjection.swift" Tests/BrandProfileTests.swift -o "$pichi_test_dir/debug-tests"
 # CLI probes inside real, isolated bundle layouts exercise Bundle.main identity.
 # They only compute URLs: no model feed fetch, app launch or user-state writes.
 python3 -S - "$pichi_test_dir" <<'PY'

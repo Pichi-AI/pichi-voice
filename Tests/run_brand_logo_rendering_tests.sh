@@ -7,7 +7,7 @@ xcrun swiftc -default-isolation MainActor -parse-as-library \
     -module-cache-path "$logo_test_dir/ModuleCache" -D FLUID_ASR_BASELINE \
     Sources/Fluid/Localization/PichiLocalization.swift Sources/Fluid/Branding/AppBrand.swift \
     Sources/Fluid/Branding/BrandPackage.swift Sources/Fluid/Branding/BrandDistribution.swift \
-    Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Branding/PichiBrandMark.swift \
+    Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift Sources/Fluid/Branding/PichiBrandMark.swift \
     Sources/Fluid/Theme/Components/FluidVoiceBrandIcon.swift Tests/BrandLogoRenderingTests.swift \
     -o "$logo_test_dir/tests"
 "$logo_test_dir/tests"

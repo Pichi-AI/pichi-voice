@@ -689,7 +689,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ProductionParticipantSheet.swift" "$task_test_dir/ProductionMeetingActions.swift" \
     "$task_test_dir/ToolbarPageLayout.swift" \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
-    Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift -o "$task_test_dir/tests"
+    Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in
