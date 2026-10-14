@@ -229,7 +229,7 @@ final class MeetingRecoveryTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = SettingsStore(defaults: defaults)
         settings.selectedSpeechModel = .gigaam
-        settings.meetingTranscriptionBackendID = .productionDefault
+        settings.meetingTranscriptionBackendID = .legacyCompatibility
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
@@ -261,7 +261,43 @@ final class MeetingRecoveryTests: XCTestCase {
         let persisted = try await store.load(id: session.id)
         XCTAssertEqual(persisted?.recordingBackendID, session.recordingBackendID)
         XCTAssertEqual(shared.meetingTranscriptionBackendID, .whisperTiny)
-        XCTAssertEqual(settings.meetingTranscriptionBackendID, .productionDefault)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, .legacyCompatibility)
+    }
+
+    func testExplicitBackendRequestPinsCapturedRouteWithoutMutatingPreferences() async throws {
+        let suite = "ExplicitCapturedBackend.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let ambient = MeetingBackendID(rawValue: "ambient-future-backend")
+        settings.meetingTranscriptionBackendID = ambient
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let track = self.makeMicrophoneTrack(chunks: [])
+        capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        let processing = MemoryCheckpointProcessingController()
+        var frozen: MeetingFinalProcessingConfiguration?
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
+            audioArbiter: StubArbiter(), settings: settings, validateFrozenRecordingConfiguration: { frozen = $0 })
+        var configuration = self.makeConfiguration()
+        configuration.mode = .inRoom
+        configuration.languageCode = "ru"
+        configuration.audioStorageMode = .memoryOnly
+        configuration.speakerLabelsEnabled = false
+        configuration.transcriptionBackendID = MeetingBackendID.gigaam.rawValue
+        let session = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(session.recordingBackendID, MeetingBackendID.gigaam.rawValue)
+        XCTAssertEqual(processing.validatedBackendIDs, [.gigaam, .gigaam])
+        XCTAssertEqual(frozen?.asrModel, PichiMeetingProviderFactory.gigaamModelID)
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.recordingBackendID, session.recordingBackendID)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
+        XCTAssertTrue(coordinator.isQuiescent)
     }
 
     func testOwnedBackendChangeDuringPromptCancelsThatOwnersAdmission() async throws {
