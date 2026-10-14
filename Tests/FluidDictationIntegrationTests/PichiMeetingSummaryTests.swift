@@ -1249,6 +1249,258 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
     }
 
+    func testLiveConditionalProposalAbilityQuestionAndPredictionStayUnacceptedWhenEnabled() async throws {
+        try await self.checkLiveMatrix(.unaccepted)
+    }
+
+    func testLiveTrueCancellationRetainsEveryOriginalDecisionAndTaskAsHistoryWhenEnabled() async throws {
+        try await self.checkLiveMatrix(.cancelled)
+    }
+
+    func testLivePronominalAcceptanceAndCompletionPreserveOriginalTaskAcrossChunksWhenEnabled() async throws {
+        // Two distinct predefined inputs, not a retry: first prove acceptance,
+        // then check the same request followed by acceptance and completion.
+        try await self.checkLiveMatrix(.accepted)
+        try await self.checkLiveMatrix(.completed)
+    }
+
+    func testLiveExplicitAnswerResolvesOnlyItsMatchingQuestionAndRemainsAvailableWhenEnabled() async throws {
+        try await self.checkLiveMatrix(.answered)
+    }
+
+    private func checkLiveMatrix(_ fixture: LiveMatrixFixture) async throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["PICHI_MEETING_SUMMARY_LIVE"] == "1",
+                          "Opt-in semantic regression using public synthetic text and an installed local model.")
+        var configuration = PichiMeetingSummaryConfiguration(providerID: "pichi-local",
+            modelID: environment["PICHI_MEETING_SUMMARY_LIVE_MODEL_ID"] ?? "qwen3.5:4b",
+            baseURL: "http://127.0.0.1:11434/v1", apiKey: "", language: "ru")
+        configuration.execution = .extended
+        configuration.execution.reasoningParameter = "enable_thinking"
+        configuration.execution.reasoningValue = "false"
+        let session = self.liveMatrixSession(fixture)
+        if fixture != .unaccepted {
+            XCTAssertGreaterThanOrEqual(PichiMeetingSummaryInput.chunks(PichiMeetingSummaryInput.turns(for: session)).count, 2)
+        }
+        let fingerprint = PichiMeetingSummaryInput.fingerprint(session)
+        let result = try await self.generateLiveSyntheticSummary(session: session, configuration: configuration)
+        let issues = self.liveMatrixIssues(result, fixture: fixture, session: session)
+        XCTAssertTrue(issues.isEmpty, issues.joined(separator: "\n"))
+        XCTAssertEqual(PichiMeetingSummaryInput.fingerprint(session), fingerprint)
+    }
+
+    func testLiveMatrixOraclesAcceptParaphrasesAndRejectWrongStateAttributionAndSource() throws {
+        for fixture in LiveMatrixFixture.allCases {
+            let session = self.liveMatrixSession(fixture)
+            if fixture != .unaccepted {
+                let chunks = PichiMeetingSummaryInput.chunks(PichiMeetingSummaryInput.turns(for: session))
+                XCTAssertEqual(chunks.count, 2)
+                XCTAssertEqual(Set(chunks[0].map(\.id)), Set([session.transcriptSegments[0].id]))
+                XCTAssertEqual(Set(chunks[1].map(\.id)), Set(session.transcriptSegments.dropFirst().map(\.id)))
+            }
+            let expected = self.liveMatrixDocument(fixture, session: session)
+            XCTAssertNoThrow(try expected.validated(against: PichiMeetingSummaryInput.turns(for: session)))
+            XCTAssertTrue(self.liveMatrixIssues(expected, fixture: fixture, session: session).isEmpty)
+            var faults: [PichiMeetingSummaryDocument] = []
+            var changed = expected
+            switch fixture {
+            case .unaccepted:
+                changed.actions[0].status = .agreed; faults.append(changed)
+                changed = expected; changed.actions[0].owner = "Иван"; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = "завтра"; faults.append(changed)
+                changed = expected; changed.actions[0].evidence = expected.openQuestions[0].evidence; faults.append(changed)
+                changed = expected; changed.openQuestions = []; faults.append(changed)
+            case .cancelled:
+                changed.actions[0].superseded = nil; faults.append(changed)
+                changed = expected; changed.actions[0].status = .agreed; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = "пятницу"; faults.append(changed)
+                changed = expected; changed.decisions[0].superseded = nil; faults.append(changed)
+                changed = expected; changed.actions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.actions.append(self.liveMatrixItem(session, text: "Подготовить выпуск.", indexes: [0]))
+                changed.actions[1].title = "Подготовить выпуск"; changed.actions[1].status = .requested
+                changed.actions[1].urgency = .unspecified; faults.append(changed)
+            case .accepted:
+                changed.actions[0].status = .requested; faults.append(changed)
+                changed = expected; changed.actions[0].superseded = true; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = nil; faults.append(changed)
+                changed = expected; changed.actions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.actions.append(expected.actions[0]); faults.append(changed)
+            case .completed:
+                let starts = session.transcriptSegments.map { $0.start.seconds }
+                XCTAssertEqual(starts, starts.sorted()); XCTAssertEqual(Set(starts).count, 3)
+                changed.actions[0].status = .agreed; faults.append(changed)
+                changed = expected; changed.actions[0].owner = nil; faults.append(changed)
+                changed = expected; changed.actions[0].deadline = nil; faults.append(changed)
+                changed = expected; changed.actions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.changes = nil; faults.append(changed)
+                changed = expected; changed.actions = []; faults.append(changed)
+            case .answered:
+                changed.openQuestions[1].resolved = true; faults.append(changed)
+                changed = expected; changed.openQuestions[0].resolved = nil; faults.append(changed)
+                changed = expected; changed.openQuestions[0].evidence.removeLast(); faults.append(changed)
+                changed = expected; changed.answers = nil; faults.append(changed)
+                changed = expected; changed.answers?[0].evidence = expected.openQuestions[1].evidence; faults.append(changed)
+                changed = expected; changed.openQuestions[1].evidence = expected.openQuestions[0].evidence; faults.append(changed)
+            }
+            for fault in faults {
+                XCTAssertFalse(self.liveMatrixIssues(fault, fixture: fixture, session: session).isEmpty,
+                               "\(fixture) must reject the changed typed state or evidence, independently of prose.")
+            }
+        }
+    }
+
+    private enum LiveMatrixFixture: CaseIterable { case unaccepted, cancelled, accepted, completed, answered }
+
+    private func liveMatrixSession(_ fixture: LiveMatrixFixture) -> MeetingSession {
+        if fixture == .accepted || fixture == .completed {
+            // Reuse the established request fixture's neutral padding. It forces
+            // actual production chunking, rather than mocking a part boundary.
+            var session = self.acceptanceSession()
+            session.transcriptSegments[1].text = "Согласен, сделаю это."
+            session.transcriptSegments[1].end = .init(value: 61_000, timescale: 1000)
+            if fixture == .completed {
+                var completion = session.transcriptSegments[1]
+                completion.id = UUID()
+                completion.start = .init(value: 120_000, timescale: 1000)
+                completion.end = .init(value: 121_000, timescale: 1000)
+                completion.text = "Это сделано: отчёт готов."
+                session.transcriptSegments.append(completion)
+            }
+            return session
+        }
+        let texts: [String]
+        switch fixture {
+        case .unaccepted:
+            texts = ["Если согласуют бюджет, предлагаю обновить дизайн.",
+                     "Сможет ли Иван подключиться к видеозвонку?",
+                     "Вероятно, Мария завтра доставит материалы, но мы ей ничего не поручали."]
+        case .cancelled:
+            // Public russian-v1 cancellation speech with neutral padding to
+            // place the original work before a genuinely later extraction part.
+            texts = ["Решили выпустить релиз в пятницу. Иван подготовит релиз в пятницу. " + String(repeating: "Детали. ", count: 965),
+                     "Отменяем выпуск релиза. Иван, подготовка релиза тоже отменена. Новую дату не назначаем."]
+        case .answered:
+            // Public explicit-answer speech, a separate question, and neutral
+            // padding so only a later answer can resolve the original question.
+            texts = ["Можно ли отправить итоговые материалы клиенту? " + String(repeating: "Детали. ", count: 965),
+                     "Можно ли вернуть платёж? Решения о возврате пока нет.",
+                     "Да, итоговые материалы можно отправить клиенту: согласование получено."]
+        case .accepted, .completed: preconditionFailure("Handled above")
+        }
+        var session = self.session()
+        let template = session.transcriptSegments[0]
+        session.transcriptSegments = texts.enumerated().map { index, text in
+            var segment = template
+            segment.id = UUID()
+            segment.start = .init(value: Int64(index * 60_000), timescale: 1000)
+            segment.end = .init(value: Int64(index * 60_000 + 1_000), timescale: 1000)
+            segment.text = text
+            return segment
+        }
+        return session
+    }
+
+    private func liveMatrixItem(_ session: MeetingSession, text: String, indexes: [Int]) -> PichiMeetingSummaryItem {
+        .init(text: text, evidence: indexes.map {
+            .init(segmentID: session.transcriptSegments[$0].id, quote: String(session.transcriptSegments[$0].text.prefix(200)))
+        })
+    }
+
+    private func liveMatrixDocument(_ fixture: LiveMatrixFixture, session: MeetingSession) -> PichiMeetingSummaryDocument {
+        func item(_ text: String, _ indexes: [Int]) -> PichiMeetingSummaryItem {
+            self.liveMatrixItem(session, text: text, indexes: indexes)
+        }
+        var document = PichiMeetingSummaryDocument(summary: [item("Обсудили отдельные вопросы.", [0])],
+                                                   decisions: [], actions: [], openQuestions: [])
+        switch fixture {
+        case .unaccepted:
+            document.actions = [item("Обновление дизайна предложено только при согласовании бюджета.", [0])]
+            document.actions[0].title = "Обновить дизайн"; document.actions[0].status = .proposed
+            document.actions[0].urgency = .unspecified
+            document.openQuestions = [item("Неизвестно, сможет ли Иван участвовать в звонке.", [1])]
+            document.summary.append(item("Ожидается доставка Марией, без поручения.", [2]))
+        case .cancelled:
+            document.decisions = [item("Пятничный выпуск был согласован, затем отменён.", [0, 1])]
+            document.decisions[0].superseded = true
+            document.actions = [item("Подготовить выпуск.", [0, 1])]
+            document.actions[0].title = "Подготовить выпуск"; document.actions[0].status = .cancelled
+            document.actions[0].superseded = true; document.actions[0].urgency = .unspecified
+            document.actions[0].owner = "Иван"; document.actions[0].deadline = "в пятницу"
+        case .accepted, .completed:
+            document.actions = [item("Подготовить отчёт.", fixture == .accepted ? [0, 1] : [0, 2])]
+            document.actions[0].title = "Подготовить отчёт"
+            document.actions[0].status = fixture == .accepted ? .agreed : .completed
+            document.actions[0].superseded = fixture == .accepted ? nil : true
+            document.actions[0].urgency = .unspecified
+            document.actions[0].owner = "Иван"; document.actions[0].deadline = "к пятнице"
+            if fixture == .completed { document.changes = [item("Участник явно принял порученную задачу.", [1])] }
+        case .answered:
+            document.openQuestions = [item("Разрешена ли передача итоговых материалов?", [0, 2]),
+                                      item("Возможен ли возврат платежа?", [1])]
+            document.openQuestions[0].resolved = true
+            document.answers = [item("Согласование получено, материалы разрешено отправить.", [2])]
+        }
+        return document
+    }
+
+    /// These fixture-specific oracles inspect typed relationships and exact source
+    /// identity, not model wording. They never enter a production/model prompt.
+    private func liveMatrixIssues(_ document: PichiMeetingSummaryDocument, fixture: LiveMatrixFixture,
+                                  session: MeetingSession) -> [String] {
+        var issues: [String] = []
+        func check(_ condition: Bool, _ message: String) { if !condition { issues.append(message) } }
+        func ids(_ item: PichiMeetingSummaryItem) -> Set<UUID> { Set(item.evidence.map(\.segmentID)) }
+        let sourceIDs = session.transcriptSegments.map(\.id)
+        check((try? document.validated(against: PichiMeetingSummaryInput.turns(for: session))) != nil,
+              "All quotes and attribution must pass the unchanged canonical validator")
+        switch fixture {
+        case .unaccepted:
+            check(document.decisions.isEmpty, "No proposal, ability question or prediction is an agreed decision")
+            check(document.actions.count == 1 && document.actions.allSatisfy {
+                ids($0) == Set([sourceIDs[0]]) && $0.status == .proposed && $0.owner == nil
+                    && $0.deadline == nil && $0.urgency == .unspecified && $0.superseded != true
+            }, "Retain only the conditional proposal, without acceptance or invented assignment")
+            check(document.openQuestions.count == 1 && document.openQuestions.allSatisfy {
+                ids($0) == Set([sourceIDs[1]]) && $0.resolved != true
+            }, "The independent ability question remains unanswered")
+            check(document.summary.contains { ids($0) == Set([sourceIDs[2]]) }, "Keep the prediction as a report, not a commitment")
+        case .cancelled, .accepted, .completed:
+            let original = document.actions.filter { ids($0).contains(sourceIDs[0]) }
+            let required = Set(sourceIDs)
+            let status: PichiMeetingSummaryActionStatus = fixture == .cancelled ? .cancelled : fixture == .accepted ? .agreed : .completed
+            let witnesses = fixture == .completed ? Set([sourceIDs[0], sourceIDs[2]]) : required
+            check(!original.isEmpty && original.allSatisfy {
+                $0.status == status && ($0.superseded == true) == (fixture != .accepted) && $0.owner == "Иван"
+                    && $0.deadline == (fixture == .cancelled ? "в пятницу" : "к пятнице")
+                    && $0.urgency == .unspecified && ids($0).isSuperset(of: witnesses) && ids($0).isSubset(of: required)
+            }, "Every original task retains literal owner/deadline, correct state and original/later witnesses")
+            check(document.actions.allSatisfy { $0.status == status && ids($0).isSubset(of: required) },
+                  "No inconsistent duplicate or unrelated replacement task survives the state update")
+            if fixture == .accepted {
+                check(document.actions.count == 1, "Acceptance keeps one current task rather than duplicating assigned work")
+            } else if fixture == .completed {
+                check(document.allItems.contains { ids($0).contains(sourceIDs[1]) },
+                      "Preserve acceptance evidence separately or with the original task; never drop its history")
+            }
+            if fixture == .cancelled {
+                let decisions = document.decisions.filter { ids($0).contains(sourceIDs[0]) }
+                check(!decisions.isEmpty && decisions.allSatisfy { $0.superseded == true && ids($0) == required },
+                      "Every original release decision is historical and cites its cancellation")
+            }
+        case .answered:
+            let answered = document.openQuestions.filter { ids($0).contains(sourceIDs[0]) }
+            let independent = document.openQuestions.filter { ids($0).contains(sourceIDs[1]) }
+            check(answered.count == 1 && answered.allSatisfy { $0.resolved == true && ids($0) == Set([sourceIDs[0], sourceIDs[2]]) },
+                  "Only the matching question resolves with both original and later evidence")
+            check(independent.count == 1 && independent.allSatisfy { $0.resolved != true && ids($0) == Set([sourceIDs[1]]) },
+                  "The unrelated refund question remains open with its own evidence")
+            check(document.openQuestions.count == 2 && document.actions.isEmpty, "Retain both questions without inventing assigned work")
+            check((document.answers ?? []).contains { ids($0).contains(sourceIDs[2]) && ids($0).isSubset(of: Set([sourceIDs[0], sourceIDs[2]])) },
+                  "Preserve the explicit matching answer in the existing answers section")
+        }
+        return issues
+    }
+
     // Only public synthetic opt-in fixtures use this trace helper. Never
     // attach a saved session's speech or dump API credentials/provider options.
     private func generateLiveSyntheticSummary(session: MeetingSession, configuration: PichiMeetingSummaryConfiguration) async throws -> PichiMeetingSummaryDocument {
