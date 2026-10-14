@@ -353,9 +353,10 @@ final class MeetingRecoveryTests: XCTestCase {
         capture.startResult = .init(tracks: [track], firstPresentationTime: nil)
         capture.stopResult = .init(tracks: [track], stoppedAt: Date())
         let processing = MemoryCheckpointProcessingController()
+        let arbiter = StubArbiter()
         var preparations = 0
         let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: processing,
-            audioArbiter: StubArbiter(), settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { configuration in
+            audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 }, validateFrozenRecordingConfiguration: { configuration in
                 if configuration.asrModel == PichiMeetingProviderFactory.gigaamModelID { throw MeetingProcessingError.modelUnavailable }
             })
         var configuration = self.makeConfiguration()
@@ -381,8 +382,40 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(normal.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
         XCTAssertEqual(preparations, 1)
         capture.stopResult = .init(tracks: [track], stoppedAt: Date())
-        _ = try await coordinator.stopAndTranscribe()
+        let completed = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(completed.state, .completed)
+        XCTAssertEqual(coordinator.state, .completed(normal.id))
+        XCTAssertEqual(capture.stopCount, 1)
+        XCTAssertEqual(arbiter.acquireCount, 1)
+        XCTAssertEqual(arbiter.releaseCount, 1, "Stop must join audio handback before returning")
+        // Success schedules retention maintenance after releasing audio. Wait for its real
+        // mutation gate, retaining a deadline so stuck cleanup still fails this regression.
+        for _ in 0..<200 {
+            if coordinator.isQuiescent { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
         XCTAssertTrue(coordinator.isQuiescent)
+        XCTAssertFalse(coordinator.isRecording)
+        XCTAssertFalse(coordinator.isProcessing)
+        // Prove the owner can admit another ordinary capture after maintenance joins.
+        let next = try await coordinator.startRecording(configuration: configuration)
+        XCTAssertEqual(next.recordingBackendID, MeetingBackendID.whisperTiny.rawValue)
+        XCTAssertEqual(capture.startCount, 2)
+        XCTAssertEqual(preparations, 2)
+        capture.stopResult = .init(tracks: [track], stoppedAt: Date())
+        let nextCompleted = try await coordinator.stopAndTranscribe()
+        XCTAssertEqual(nextCompleted.state, .completed)
+        XCTAssertEqual(coordinator.state, .completed(next.id))
+        XCTAssertEqual(capture.stopCount, 2)
+        XCTAssertEqual(arbiter.acquireCount, 2)
+        XCTAssertEqual(arbiter.releaseCount, 2, "Each admitted capture releases exactly once")
+        for _ in 0..<200 {
+            if coordinator.isQuiescent { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(coordinator.isQuiescent)
+        XCTAssertEqual(settings.selectedSpeechModel, .whisperTiny)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, ambient)
     }
 
     func testOwnedBackendChangeDuringPromptCancelsThatOwnersAdmission() async throws {
@@ -5557,6 +5590,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     var onPreflight: (@Sendable () async -> Void)?
     private(set) var preflightCount = 0
     private(set) var startCount = 0
+    private(set) var stopCount = 0
     private var eventHandler: (@Sendable (MeetingCaptureEvent) -> Void)?
 
     func emit(_ event: MeetingCaptureEvent) { self.eventHandler?(event) }
@@ -5585,6 +5619,7 @@ private final class StubCaptureController: MeetingCaptureControlling, @unchecked
     }
 
     func stop(sessionID: MeetingSessionID) async throws -> MeetingCaptureStopResult {
+        self.stopCount += 1
         try await self.onStop?()
         if let stopError { throw stopError }
         return self.stopResult ?? MeetingCaptureStopResult(tracks: [], stoppedAt: Date())
