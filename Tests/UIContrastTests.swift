@@ -200,6 +200,10 @@ struct UIContrastTests {
             try await NativePaletteAppearanceTests.run(directory: directory)
             return
         }
+        if CommandLine.arguments.contains("--native-sidebar-only") {
+            try await NativeSidebarContrastTests.run(directory: directory)
+            return
+        }
         let packages = [
             ("pichi", "Sources/Fluid/Branding/brand-package.json"),
             ("sber", "Configuration/BrandExamples/sber-demo.json"),
@@ -430,6 +434,7 @@ struct UIContrastTests {
         self.verifyConstruction()
         try await FluidSegmentedPickerTests.run(directory: directory)
         try await NativePaletteAppearanceTests.run(directory: directory)
+        try await NativeSidebarContrastTests.run(directory: directory)
         print("SKIP: native glass rasterization is unavailable in this nonactivating standalone renderer; parent frozen-app screenshots provide native glass evidence.")
     }
 }

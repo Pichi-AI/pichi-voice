@@ -1590,7 +1590,7 @@ struct ContentView: View {
 
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .padding(.top, self.theme.metrics.spacing.sm)
                 .padding(.bottom, self.theme.metrics.spacing.xs)
@@ -1631,16 +1631,11 @@ struct ContentView: View {
                 ForEach(self.filteredSettingsSections) { section in
                     let isSelected = self.settingsNavigation.selectedSection == section
                     NavigationLink(value: section) {
-                        HStack(spacing: self.theme.metrics.spacing.sm) {
+                        self.sidebarLabel(section.title, isSelected: isSelected) {
                             Image(systemName: section.systemImage)
                                 .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                                 .frame(width: 18)
-
-                            Text(section.title)
-                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
                         }
-                        .font(self.theme.typography.sidebarItem)
                     }
                     .sidebarOptionHover(
                         isSelected: isSelected,
@@ -1704,7 +1699,7 @@ struct ContentView: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: "gearshape")
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(width: 18)
 
                 Text("Settings")
@@ -1713,7 +1708,7 @@ struct ContentView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.horizontal, self.theme.metrics.spacing.md)
@@ -1748,7 +1743,7 @@ struct ContentView: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: "questionmark.circle")
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(width: 18)
 
                 Text("Help")
@@ -1757,7 +1752,7 @@ struct ContentView: View {
 
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.horizontal, self.theme.metrics.spacing.md)
@@ -1790,28 +1785,35 @@ struct ContentView: View {
     private func sidebarSectionHeader(_ title: String) -> some View {
         Text(title)
             .font(self.theme.typography.sidebarSection)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(self.theme.palette.secondaryText)
             .textCase(nil)
             .padding(.top, self.theme.metrics.spacing.sm)
             .padding(.bottom, self.theme.metrics.spacing.xs)
     }
 
+    /// Native sidebar labels must pair their ink with the selected brand's
+    /// surfaces, independently of the application's system appearance.
+    private func sidebarLabel<Icon: View>(_ title: String, isSelected: Bool, @ViewBuilder icon: () -> Icon) -> some View {
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            icon()
+                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.secondaryText)
+            Text(title)
+                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
+        }
+        .font(self.theme.typography.sidebarItem)
+    }
+
     private func sidebarNavigationLink(_ item: SidebarItem, systemImage: String) -> some View {
         let isSelected = self.selectedSidebarItem == item
         return NavigationLink(value: item) {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
+            self.sidebarLabel(item.title, isSelected: isSelected) {
                 Image(nsImage: SidebarSymbolCache.image(named: systemImage))
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
-
-                Text(item.title)
-                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
             }
-            .font(self.theme.typography.sidebarItem)
             .padding(.vertical, self.theme.metrics.spacing.xs / 2)
         }
         .sidebarOptionHover(
@@ -6075,29 +6077,29 @@ private enum SidebarSymbolCache {
 }
 
 private struct SidebarChromeButtonStyle: ButtonStyle {
+    @Environment(\.theme) private var theme
     let isHovered: Bool
     let reduceMotion: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         let scale = self.reduceMotion || !configuration.isPressed ? 1 : 0.985
+        let highlighted = configuration.isPressed || self.isHovered
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
 
         configuration.label
-            .foregroundStyle(.primary)
+            .foregroundStyle(self.theme.palette.primaryText)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(self.backgroundOpacity(isPressed: configuration.isPressed)))
+                shape.fill(highlighted ? self.theme.palette.elevatedCardBackground : .clear)
             )
+            .overlay {
+                shape.strokeBorder(highlighted ? self.theme.palette.secondaryText : .clear, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
             .scaleEffect(scale)
             .animation(.easeOut(duration: self.reduceMotion ? 0.08 : 0.1), value: configuration.isPressed)
             .animation(.easeOut(duration: 0.1), value: self.isHovered)
     }
 
-    private func backgroundOpacity(isPressed: Bool) -> Double {
-        if isPressed {
-            return 0.12
-        }
-        return self.isHovered ? 0.08 : 0
-    }
 }
 
 extension View {
@@ -6122,6 +6124,11 @@ private struct SidebarOptionHoverModifier: ViewModifier {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(self.backgroundColor)
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(self.isHovered && !self.isSelected ? self.theme.palette.secondaryText : .clear, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
             .padding(.horizontal, -5)
             .padding(.vertical, -3)
             .contentShape(Rectangle())
@@ -6133,7 +6140,7 @@ private struct SidebarOptionHoverModifier: ViewModifier {
         if self.isSelected {
             return self.theme.palette.accent
         }
-        return Color.primary.opacity(self.isHovered ? 0.08 : 0)
+        return self.isHovered ? self.theme.palette.elevatedCardBackground : .clear
     }
 }
 
