@@ -747,9 +747,11 @@ final class MeetingTranscriptionBackendTests: XCTestCase {
         let defaults = UserDefaults.standard
         let speechModelKey = "SelectedSpeechModel"
         let previousSpeechModel = defaults.object(forKey: speechModelKey)
-        let previous = settings.meetingTranscriptionBackendID
+        let backendKey = "MeetingTranscriptionBackendID"
+        let previousBackend = defaults.object(forKey: backendKey)
         defer {
-            settings.meetingTranscriptionBackendID = previous
+            if let previousBackend { defaults.set(previousBackend, forKey: backendKey) }
+            else { defaults.removeObject(forKey: backendKey) }
             if let previousSpeechModel { defaults.set(previousSpeechModel, forKey: speechModelKey) }
             else { defaults.removeObject(forKey: speechModelKey) }
         }
