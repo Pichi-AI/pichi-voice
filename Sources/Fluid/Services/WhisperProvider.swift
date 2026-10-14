@@ -5,6 +5,82 @@ import TranscribeCpp
 import Darwin
 #endif
 
+/// Aggregate diagnostics only. No PCM is retained; thresholds describe sample
+/// amplitude, not voice activity or a decision to discard quiet speech.
+nonisolated struct WhisperSignalDiagnostics: Sendable, Equatable {
+    static let sampleRate = 16_000
+    static let quietAmplitude: Double = 0.001 // -60 dBFS per sample, not a VAD threshold.
+    let sampleCount: Int
+    let rms: Double
+    let peak: Double
+    let dc: Double
+    let clippingFraction: Double
+    let quietFraction: Double
+
+    var durationMilliseconds: Double { Double(sampleCount) * 1_000 / Double(Self.sampleRate) }
+
+    /// Also performs the provider's finite-input validation in the same pass.
+    static func measure(_ samples: [Float]) -> Self? {
+        guard !samples.isEmpty else { return nil }
+        var squares: Double = 0
+        var sum: Double = 0
+        var peak: Double = 0
+        var clipped = 0
+        var quiet = 0
+        for sample in samples {
+            guard sample.isFinite else { return nil }
+            let value = Double(sample)
+            let amplitude = abs(value)
+            squares += value * value
+            sum += value
+            peak = max(peak, amplitude)
+            if amplitude >= 1 { clipped += 1 }
+            if amplitude <= Self.quietAmplitude { quiet += 1 }
+        }
+        let count = Double(samples.count)
+        return .init(sampleCount: samples.count, rms: sqrt(squares / count), peak: peak,
+                     dc: sum / count, clippingFraction: Double(clipped) / count,
+                     quietFraction: Double(quiet) / count)
+    }
+}
+
+/// The library calls token.p a family-specific confidence hint. This summary
+/// does not replace the app's confidence contract or imply calibrated accuracy.
+nonisolated struct WhisperProbabilityDiagnostics: Sendable, Equatable {
+    let validCount: Int
+    let invalidCount: Int
+    let mean: Double?
+
+    static func measure<S: Sequence>(_ probabilities: S) -> Self where S.Element == Float {
+        var count = 0
+        var invalid = 0
+        var sum: Double = 0
+        for probability in probabilities {
+            guard probability.isFinite, probability >= 0, probability <= 1 else {
+                invalid += 1
+                continue
+            }
+            count += 1
+            sum += Double(probability)
+        }
+        return .init(validCount: count, invalidCount: invalid, mean: count == 0 ? nil : sum / Double(count))
+    }
+
+    /// Only registered language codes enter support logs, never arbitrary strings
+    /// passed through the library's language fields.
+    static func languageField(_ value: String?, supportedCodes: Set<String>, absent: String) -> String {
+        guard let value else { return absent }
+        return supportedCodes.contains(value) ? value : "unsupported"
+    }
+
+    /// Native timing zero means unmeasured. Invalid values must not look like a
+    /// fast measured stage or enter logs as NaN/Inf.
+    static func timingField(_ milliseconds: Float) -> String {
+        guard milliseconds.isFinite, milliseconds > 0 else { return "unmeasured" }
+        return String(format: "%.3f", milliseconds)
+    }
+}
+
 /// TranscriptionProvider implementation using transcribe.cpp for Whisper GGUF models.
 final class WhisperProvider: TranscriptionProvider {
     let name = "Whisper (Universal)"
@@ -286,7 +362,12 @@ final class WhisperProvider: TranscriptionProvider {
                 userInfo: [NSLocalizedDescriptionKey: "\(targetModel.displayName) loaded on \(loadedModel.backend), but Metal is required on Apple Silicon."]
             )
         }
-        let loadedSession = try loadedModel.session()
+        let sessionOptions = SessionOptions()
+        let loadedSession = try loadedModel.session(sessionOptions)
+        DebugLogger.shared.info(
+            "whisper_session requested_threads=\(sessionOptions.nThreads) requested_context=\(sessionOptions.nCtx) threads_policy=library_default",
+            source: "WhisperProvider"
+        )
 
         if self.useAutomaticLanguageDetection,
            (!loadedModel.capabilities.supportsLanguageDetect
@@ -383,7 +464,7 @@ final class WhisperProvider: TranscriptionProvider {
             )
         }
 
-        guard samples.allSatisfy(\.isFinite) else {
+        guard let signal = WhisperSignalDiagnostics.measure(samples) else {
             throw NSError(domain: "WhisperProvider", code: -10, userInfo: [NSLocalizedDescriptionKey: "The audio contains invalid PCM samples."])
         }
 
@@ -394,10 +475,54 @@ final class WhisperProvider: TranscriptionProvider {
         let inferenceSamples = samples.count < 16_000
             ? samples + [Float](repeating: 0, count: 16_000 - samples.count)
             : samples
-        return try await session.run(
-            inferenceSamples,
-            options: Self.runOptions(languageCode: resolvedLanguageCode, timestamps: timestamps)
-        )
+        let options = Self.runOptions(languageCode: resolvedLanguageCode, timestamps: timestamps)
+        let supportedCodes = VoiceEngineLanguageCatalog.whisperSupportedLanguageCodes
+        let requestedLanguage = WhisperProbabilityDiagnostics.languageField(options.language, supportedCodes: supportedCodes, absent: "auto")
+        let targetLanguage = WhisperProbabilityDiagnostics.languageField(options.targetLanguage, supportedCodes: supportedCodes, absent: "none")
+        let autodetect = options.language == nil
+        let requestedTask = options.task == .transcribe ? "transcribe" : "translate"
+        let requestedTimestamps = Self.timestampLabel(options.timestamps)
+        let inferenceSampleCount = inferenceSamples.count
+        DebugLogger.shared.logLazy(source: "WhisperProvider") {
+            "whisper_input samples=\(signal.sampleCount) sample_rate=\(WhisperSignalDiagnostics.sampleRate) " +
+                "audio_ms=\(String(format: "%.3f", signal.durationMilliseconds)) inference_samples=\(inferenceSampleCount) " +
+                "rms=\(String(format: "%.6f", signal.rms)) peak=\(String(format: "%.6f", signal.peak)) " +
+                "dc=\(String(format: "%.6f", signal.dc)) clipping_fraction=\(String(format: "%.6f", signal.clippingFraction)) " +
+                "quiet_fraction=\(String(format: "%.6f", signal.quietFraction)) quiet_amplitude=\(WhisperSignalDiagnostics.quietAmplitude) " +
+                "language=\(requestedLanguage) autodetect=\(autodetect) task=\(requestedTask) " +
+                "target_language=\(targetLanguage) timestamps=\(requestedTimestamps)"
+        }
+        let started = ProcessInfo.processInfo.systemUptime
+        do {
+            let transcript = try await session.run(inferenceSamples, options: options)
+            let wallMilliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+            let probabilities = WhisperProbabilityDiagnostics.measure(transcript.tokens.lazy.map(\.p))
+            let language = WhisperProbabilityDiagnostics.languageField(transcript.language, supportedCodes: supportedCodes, absent: "unavailable")
+            let returnedTimestamps = Self.timestampLabel(transcript.timestampKind)
+            let segmentCount = transcript.segments.count
+            let wordCount = transcript.words.count
+            let tokenCount = transcript.tokens.count
+            let timings = transcript.timings
+            // Capture only aggregates, so the asynchronous logger never retains the
+            // transcript, its tokens/text, or the input sample array.
+            DebugLogger.shared.logLazy(source: "WhisperProvider") {
+                "whisper_output wall_ms=\(String(format: "%.3f", wallMilliseconds)) language=\(language) " +
+                    "timestamps=\(returnedTimestamps) segments=\(segmentCount) words=\(wordCount) tokens=\(tokenCount) " +
+                    "token_p_valid=\(probabilities.validCount) token_p_invalid=\(probabilities.invalidCount) " +
+                    "token_p_mean=\(probabilities.mean.map { String(format: "%.6f", $0) } ?? "unavailable") " +
+                    "mel_ms=\(WhisperProbabilityDiagnostics.timingField(timings.melMs)) " +
+                    "encode_ms=\(WhisperProbabilityDiagnostics.timingField(timings.encodeMs)) " +
+                    "decode_ms=\(WhisperProbabilityDiagnostics.timingField(timings.decodeMs))"
+            }
+            return transcript
+        } catch {
+            let wallMilliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+            let cancelled = Task.isCancelled
+            DebugLogger.shared.logLazy(level: .warning, source: "WhisperProvider") {
+                "whisper_failure wall_ms=\(String(format: "%.3f", wallMilliseconds)) cancelled=\(cancelled)"
+            }
+            throw error
+        }
     }
 
     func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
@@ -418,6 +543,16 @@ final class WhisperProvider: TranscriptionProvider {
 
     static func runOptions(languageCode: String?, timestamps: TimestampKind = .segment) -> RunOptions {
         RunOptions(timestamps: timestamps, language: languageCode == "auto" ? nil : languageCode)
+    }
+
+    private static func timestampLabel(_ kind: TimestampKind) -> String {
+        switch kind {
+        case .none: "none"
+        case .auto: "auto"
+        case .segment: "segment"
+        case .word: "word"
+        case .token: "token"
+        }
     }
 
     func resolvedLanguageCode(explicit: String? = nil) -> String? {
