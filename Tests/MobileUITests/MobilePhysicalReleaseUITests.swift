@@ -158,8 +158,8 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try await waitForCompletedTranscript(in: app, timeout: 120)
             ownsRecording = false
             try require(!app.buttons["meeting.stop"].exists, "The recording controls must disappear after joined completion")
-            try require(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.segment.")).count > 0,
-                        "The completed transcript must contain real segments")
+            try require(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.paragraph.")).count > 0,
+                        "The completed transcript must contain readable paragraphs backed by real segments")
             capture("15-completed-transcript", revision: revision)
             try tap(app.buttons["transcript.more"], "Open completed transcript actions")
             capture("16-transcript-actions", revision: revision)
