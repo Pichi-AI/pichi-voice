@@ -419,6 +419,54 @@ with Path(sys.argv[1]).open('a') as output:
             ' private func inspectDate(_ x: CGFloat, proxy: ChartProxy, pin: Bool) {}\n'
             ' var body: some View {\n' + code + '\n }\n}\n')
 
+# Speaker metadata is inert; compile the complete production palette and exact
+# producer. This path performs color checks only, with no NSApplication or window.
+speaker_source = Path('Sources/Fluid/UI/MeetingSpeakerPalette.swift').read_text()
+speaker_canvas = Path('Sources/Fluid/UI/MeetingSessionCanvases.swift').read_text()
+speaker_producer = snippet('Sources/Fluid/UI/MeetingSessionCanvases.swift',
+    '    private var speakerTints: [SessionSpeakerID: Color] {',
+    '    private var hasEchoSegments: Bool {')
+# Inventory every production call, not only the completed transcript producer.
+# A newly added consumer must be included in this compile projection explicitly.
+import re
+speaker_calls = {}
+for caller in Path('Sources').rglob('*.swift'):
+    calls = re.findall(r'\bMeetingSpeakerPalette\s*\.\s*(tints?)\s*\(', caller.read_text())
+    if calls:
+        speaker_calls[str(caller)] = calls
+assert speaker_calls == {
+    'Sources/Fluid/UI/MeetingSessionCanvases.swift': ['tints'],
+    'Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift': ['tint'],
+}, f'Uncovered production speaker palette caller: {speaker_calls}'
+live_source = Path('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift').read_text()
+live_fill = snippet('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift',
+    '    private var fill: Color {', '    var body: some View {')
+live_microphone = snippet('Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift',
+    '    private var isMicrophone: Bool {', '    private var sourceLabel: String {')
+assert '.foregroundStyle(self.theme.palette.readableText(self.tint))' in speaker_canvas
+assert 'self.speakerTint.map(self.theme.palette.readableText)' in speaker_canvas
+with Path(sys.argv[1]).open('a') as output:
+    # Reuse the complete participant sheet's inert Identifiable metadata.
+    output.write(speaker_source)
+    output.write('struct ProductionSpeakerPaletteProducer {\n'
+        ' struct Session { let activeSpeakers: [MeetingSessionSpeaker] }\n'
+        ' let session: Session; let theme: AppTheme; let colorScheme: ColorScheme\n'
+        + speaker_producer + '\n func currentTints() -> [SessionSpeakerID: Color] { self.speakerTints }\n}\n')
+    output.write('struct ProductionLiveSpeakerPaletteProducer {\n'
+        ' enum Speaker { case you, remote }; struct Row { let speaker: Speaker; let isPartial: Bool }\n'
+        ' let row: Row; let theme: AppTheme; let colorScheme: ColorScheme\n'
+        + live_microphone + live_fill + '\n func currentFill() -> Color { self.fill }\n}\n')
+Path(sys.argv[1]).with_name('SpeakerPaletteProductionSource.json').write_text(json.dumps({
+    'paletteSHA256': hashlib.sha256(speaker_source.encode()).hexdigest(),
+    'producerSHA256': hashlib.sha256(speaker_producer.encode()).hexdigest(),
+    'liveSourceSHA256': hashlib.sha256(live_source.encode()).hexdigest(),
+    'liveFillSHA256': hashlib.sha256(live_fill.encode()).hexdigest(),
+    'liveMicrophoneSHA256': hashlib.sha256(live_microphone.encode()).hexdigest(),
+    'productionCallerInventory': speaker_calls,
+    'adapters': ['inert speaker ID/name/local metadata and active-speaker list', 'inert live row speaker and partial metadata'],
+    'nativeMeetingPixelReplay': 'SKIP',
+}, indent=2) + '\n')
+
 # Extract the complete production participant editor, not a parallel test field.
 participant_path = 'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift'
 participant_revision = os.environ.get('PICHI_PARTICIPANT_INPUT_LEGACY_REVISION')
@@ -637,7 +685,7 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
     Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
-    Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
+    Tests/MeetingSpeakerPaletteContrastTests.swift Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
     "$task_test_dir/ProductionParticipantSheet.swift" "$task_test_dir/ProductionMeetingActions.swift" \
     "$task_test_dir/ToolbarPageLayout.swift" \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
@@ -657,6 +705,7 @@ case " $* " in
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
         ;;
     "  ")
+        "$task_test_dir/tests" "$task_test_dir" --speaker-palette-only
         "$task_test_dir/tests" "$task_test_dir"
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --overlay-captions-only
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --native-ink-only

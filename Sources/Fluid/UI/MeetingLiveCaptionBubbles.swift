@@ -378,6 +378,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
     var interfaceLanguageID = PichiLocalization.language.rawValue
 
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
 
     static func == (lhs: MeetingLiveBubbleRow, rhs: MeetingLiveBubbleRow) -> Bool {
         lhs.row == rhs.row && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility
@@ -392,7 +393,9 @@ struct MeetingLiveBubbleRow: View, Equatable {
 
     /// Distinguish capture sources without claiming that either source belongs to a person.
     private var fill: Color {
-        let base = self.isMicrophone ? self.theme.palette.accent : MeetingSpeakerPalette.tint(forSpeakerIndex: 0)
+        let scheme = self.theme.palette.nativeColorScheme(fallback: self.colorScheme)
+        let base = self.isMicrophone ? self.theme.palette.accent
+            : MeetingSpeakerPalette.tint(forSpeakerIndex: 0, isDark: scheme == .dark)
         return base.opacity(self.row.isPartial ? 0.05 : 0.10)
     }
 

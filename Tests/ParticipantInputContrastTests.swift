@@ -19,7 +19,7 @@ struct CloudTextProvider {
 typealias SessionSpeakerID = UUID
 struct MeetingSessionSpeaker: Identifiable {
     let id: SessionSpeakerID
-    let displayName: String
+    var displayName: String
     let isLocalUser: Bool
 }
 struct MeetingTranscriptSegment {
