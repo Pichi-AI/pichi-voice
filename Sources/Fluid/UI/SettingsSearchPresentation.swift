@@ -162,6 +162,47 @@ private final class SettingsPersistentScroller: NSScroller {
     }
 }
 
+#if DEBUG
+// Temporary local diagnosis of the native Settings viewport. Remove after the
+// exact frozen app identifies the toolbar/clip geometry responsible for clipping.
+private final class SettingsViewportDiagnosticScrollView: NSScrollView {
+    private let diagnosticID = UUID().uuidString
+    private var diagnosticCount = 0
+    private var lastGeometry: String?
+
+    override func layout() {
+        super.layout()
+        self.logViewportGeometry(stage: "layout")
+    }
+
+    func logViewportGeometry(stage: String) {
+        guard self.diagnosticCount < 8, let window, let documentView,
+              self.bounds.width > 0, self.bounds.height > 0 else { return }
+        let hostingRegions = (documentView as? NSHostingView<AnyView>)
+            .map { String(describing: $0.safeAreaRegions) } ?? "none"
+        let geometry = "windowStyle=\(window.styleMask.rawValue) "
+            + "transparentTitlebar=\(window.titlebarAppearsTransparent) "
+            + "contentLayout=\(window.contentLayoutRect) "
+            + "windowContentFrame=\(String(describing: window.contentView?.frame)) "
+            + "scrollFrame=\(self.frame) scrollBounds=\(self.bounds) "
+            + "scrollInWindow=\(self.convert(self.bounds, to: nil)) "
+            + "scrollSafeArea=\(self.safeAreaInsets) automaticInsets=\(self.automaticallyAdjustsContentInsets) "
+            + "contentInsets=\(self.contentInsets) scrollerInsets=\(self.scrollerInsets) "
+            + "clipFrame=\(self.contentView.frame) clipBounds=\(self.contentView.bounds) "
+            + "documentFrame=\(documentView.frame) documentBounds=\(documentView.bounds) "
+            + "documentSafeArea=\(documentView.safeAreaInsets) documentFlipped=\(documentView.isFlipped) "
+            + "hostingSafeAreaRegions=\(hostingRegions)"
+        guard geometry != self.lastGeometry else { return }
+        self.lastGeometry = geometry
+        self.diagnosticCount += 1
+        DebugLogger.shared.debug(
+            "SettingsViewportGeometry id=\(self.diagnosticID) sample=\(self.diagnosticCount) stage=\(stage) \(geometry)",
+            source: "SettingsPersistentScrollView"
+        )
+    }
+}
+#endif
+
 struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     private let theme: AppTheme
     private let colorScheme: ColorScheme
@@ -195,7 +236,11 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     }
 
     func makeNSView(context _: Context) -> NSScrollView {
+        #if DEBUG
+        let scrollView = SettingsViewportDiagnosticScrollView()
+        #else
         let scrollView = NSScrollView()
+        #endif
         scrollView.drawsBackground = false
         // This native viewport can extend beneath a full-size window's toolbar.
         // Let AppKit derive the actual intersection; a viewport already below the
@@ -240,6 +285,11 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
         scrollView.verticalScroller?.isHidden = false
         scrollView.verticalScroller?.alphaValue = 1
         self.updateSearchScrolling(for: scrollView)
+        #if DEBUG
+        DispatchQueue.main.async { [weak scrollView] in
+            (scrollView as? SettingsViewportDiagnosticScrollView)?.logViewportGeometry(stage: "updated")
+        }
+        #endif
     }
 
     private func updateSearchScrolling(for scrollView: NSScrollView) {
