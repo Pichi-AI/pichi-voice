@@ -192,5 +192,5 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
     Sources/Fluid/UI/AISettingsComponents.swift \
     "$task_test_dir/ProductionLabels.swift" \
-    Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift -o "$task_test_dir/tests"
+    Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$task_test_dir" "$@"
