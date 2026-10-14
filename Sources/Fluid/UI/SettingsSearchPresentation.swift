@@ -162,46 +162,61 @@ private final class SettingsPersistentScroller: NSScroller {
     }
 }
 
-#if DEBUG
-// Temporary local diagnosis of the native Settings viewport. Remove after the
-// exact frozen app identifies the toolbar/clip geometry responsible for clipping.
-private final class SettingsViewportDiagnosticScrollView: NSScrollView {
-    private let diagnosticID = UUID().uuidString
-    private var diagnosticCount = 0
-    private var lastGeometry: String?
-
-    override func layout() {
-        super.layout()
-        self.logViewportGeometry(stage: "layout")
+// NSHostingView's unconstrained ideal width can underestimate the height of
+// multiline settings. Give SwiftUI the clip's actual width so its intrinsic
+// document height includes wrapped rows, rather than centering overflow above it.
+private final class SettingsDocumentHostingView: NSHostingView<AnyView> {
+    var content: AnyView {
+        didSet {
+            self.contentNeedsUpdate = true
+            self.scheduleRootUpdate()
+        }
     }
 
-    func logViewportGeometry(stage: String) {
-        guard self.diagnosticCount < 8, let window, let documentView,
-              self.bounds.width > 0, self.bounds.height > 0 else { return }
-        let hostingRegions = (documentView as? NSHostingView<AnyView>)
-            .map { String(describing: $0.safeAreaRegions) } ?? "none"
-        let geometry = "windowStyle=\(window.styleMask.rawValue) "
-            + "transparentTitlebar=\(window.titlebarAppearsTransparent) "
-            + "contentLayout=\(window.contentLayoutRect) "
-            + "windowContentFrame=\(String(describing: window.contentView?.frame)) "
-            + "scrollFrame=\(self.frame) scrollBounds=\(self.bounds) "
-            + "scrollInWindow=\(self.convert(self.bounds, to: nil)) "
-            + "scrollSafeArea=\(self.safeAreaInsets) automaticInsets=\(self.automaticallyAdjustsContentInsets) "
-            + "contentInsets=\(self.contentInsets) scrollerInsets=\(self.scrollerInsets) "
-            + "clipFrame=\(self.contentView.frame) clipBounds=\(self.contentView.bounds) "
-            + "documentFrame=\(documentView.frame) documentBounds=\(documentView.bounds) "
-            + "documentSafeArea=\(documentView.safeAreaInsets) documentFlipped=\(documentView.isFlipped) "
-            + "hostingSafeAreaRegions=\(hostingRegions)"
-        guard geometry != self.lastGeometry else { return }
-        self.lastGeometry = geometry
-        self.diagnosticCount += 1
-        DebugLogger.shared.debug(
-            "SettingsViewportGeometry id=\(self.diagnosticID) sample=\(self.diagnosticCount) stage=\(stage) \(geometry)",
-            source: "SettingsPersistentScrollView"
-        )
+    private var appliedWidth: CGFloat?
+    private var contentNeedsUpdate = true
+    private var updateScheduled = false
+
+    required init(rootView: AnyView) {
+        self.content = rootView
+        super.init(rootView: AnyView(rootView.frame(width: nil).fixedSize(horizontal: false, vertical: true)))
+        // The scroll view owns horizontal constraints; only the measured document
+        // height should flow back from SwiftUI into AppKit.
+        self.sizingOptions = .intrinsicContentSize
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) { nil }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        self.scheduleRootUpdate()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = self.frame.width != newSize.width
+        super.setFrameSize(newSize)
+        if widthChanged { self.scheduleRootUpdate() }
+    }
+
+    private func scheduleRootUpdate() {
+        guard !self.updateScheduled else { return }
+        self.updateScheduled = true
+        // Updating a SwiftUI root during an AppKit constraint/layout pass can
+        // re-enter that pass. Coalesce changes and read the latest clip width.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.updateScheduled = false
+            guard let clipView = self.superview as? NSClipView else { return }
+            let width = clipView.bounds.width
+            guard width.isFinite, width > 0,
+                  self.contentNeedsUpdate || width != self.appliedWidth else { return }
+            self.appliedWidth = width
+            self.contentNeedsUpdate = false
+            self.rootView = AnyView(self.content.frame(width: width).fixedSize(horizontal: false, vertical: true))
+        }
     }
 }
-#endif
 
 struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     private let theme: AppTheme
@@ -236,11 +251,7 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     }
 
     func makeNSView(context _: Context) -> NSScrollView {
-        #if DEBUG
-        let scrollView = SettingsViewportDiagnosticScrollView()
-        #else
         let scrollView = NSScrollView()
-        #endif
         scrollView.drawsBackground = false
         // This native viewport can extend beneath a full-size window's toolbar.
         // Let AppKit derive the actual intersection; a viewport already below the
@@ -256,7 +267,7 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
         scrollView.verticalScrollElasticity = .allowed
         scrollView.horizontalScrollElasticity = .none
 
-        let hostingView = NSHostingView(rootView: self.hostedContent)
+        let hostingView = SettingsDocumentHostingView(rootView: self.hostedContent)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         hostingView.setContentHuggingPriority(.defaultLow, for: .horizontal)
         hostingView.setContentHuggingPriority(.required, for: .vertical)
@@ -274,7 +285,7 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context _: Context) {
-        (scrollView.documentView as? NSHostingView<AnyView>)?.rootView = self.hostedContent
+        (scrollView.documentView as? SettingsDocumentHostingView)?.content = self.hostedContent
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = false
@@ -285,11 +296,6 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
         scrollView.verticalScroller?.isHidden = false
         scrollView.verticalScroller?.alphaValue = 1
         self.updateSearchScrolling(for: scrollView)
-        #if DEBUG
-        DispatchQueue.main.async { [weak scrollView] in
-            (scrollView as? SettingsViewportDiagnosticScrollView)?.logViewportGeometry(stage: "updated")
-        }
-        #endif
     }
 
     private func updateSearchScrolling(for scrollView: NSScrollView) {
