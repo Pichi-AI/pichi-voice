@@ -227,6 +227,89 @@ with Path(sys.argv[1]).open('a') as output:
         '    var body: some View {\n        let content = Text("Marginal hovered row").frame(width: 160, height: 44)', 1)
     hover_fixture = hover_fixture.replace('        content\n            .frame(', '        return content\n            .frame(', 1)
     output.write(hover_fixture)
+
+# Compile the complete Dashboard section, not a copied keycap. Dependencies are
+# process-local synthetic state; production actions and Button labels stay intact.
+dashboard_file = 'Sources/Fluid/UI/DashboardView.swift'
+dashboard = Path(dashboard_file).read_text()
+quick = snippet(dashboard_file, '    private func quickActions(horizontal: Bool)',
+                '    private var intelligenceInvitation:')
+key = snippet(dashboard_file, '    @ViewBuilder\n    private var shortcutKey:',
+              '\n}\n\nprivate struct DashboardRecentRow:')
+row = snippet(dashboard_file, 'private struct DashboardQuickAction: View {',
+              'private struct DashboardSetupCard:')
+assert quick.count('ThemedCard(style: .standard, padding: 20)') == 1
+assert 'AnyLayout(HStackLayout' in quick and 'AnyLayout(VStackLayout' in quick
+assert quick.count('.disabled(self.busy)') == 3
+assert quick.count('Button(action: self.openShortcutSettings)') == 1
+assert quick.count('.fluidOutlinedButton()') == 1
+assert 'self.selectedSidebarItem = .customDictionary' in quick
+assert 'self.selectedSidebarItem = .cleanupStyles' in quick
+for required in ['Button(action: self.openShortcutSettings)',
+                 'self.settings.primaryDictationShortcuts.first?.displayString',
+                 '.font(.fluidSystem(size: 25, weight: .medium))',
+                 '.lineLimit(2).minimumScaleFactor(0.5)',
+                 '.buttonStyle(FluidOutlinedButtonStyle(height: 64, fillsWidth: true))',
+                 '.frame(width: 126, height: 64)', '.help(', '.accessibilityLabel(']:
+    assert key.count(required) == 1, f'Dashboard keycap contract changed: {required}'
+for forbidden in ['.glassEffect', '.fluidGlassAction', '.material', '.opacity(', 'Color.primary']:
+    assert forbidden not in key, f'Dashboard keycap cannot replace its validated surface: {forbidden}'
+row_style = '.buttonStyle(FluidOutlinedButtonStyle(fillsWidth: true))'
+assert row.count('Button(action: self.action)') == 1 and row.count(row_style) == 1
+assert '.padding(.horizontal' not in row, 'Shared style owns the existing 12-point horizontal padding'
+assert '.padding(.vertical, 16)' in row
+for forbidden in ['.buttonStyle(.plain)', '.opacity(', '.background(', '.onHover', '@State']:
+    assert forbidden not in row, f'Dashboard row must use the shared surface and lifecycle: {forbidden}'
+outlined = Path('Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift').read_text()
+assert '.padding(.horizontal, 12)' in outlined
+assert 'shape.fill(self.theme.palette.elevatedCardBackground)' in outlined
+assert 'let highlighted = self.isEnabled && self.isHovered' in outlined
+assert 'let pressed = self.isEnabled && self.configuration.isPressed' in outlined
+dependencies = '''
+    @ObservedObject var state: DashboardShortcutSurfaceTests.State
+    @Environment(\\.theme) private var theme
+    let horizontal: Bool
+    private var settings: DashboardShortcutSurfaceTests.Settings { self.state.settings }
+    private var busy: Bool { self.state.busy }
+    private var shortcut: String { self.state.settings.primaryDictationShortcutDisplayString }
+    private var selectedSidebarItem: DashboardShortcutSurfaceTests.Destination? {
+        get { self.state.destination }
+        nonmutating set { self.state.destination = newValue }
+    }
+    private func openShortcutSettings() { self.state.shortcutActivations += 1 }
+'''
+with Path(sys.argv[1]).open('a') as output:
+    output.write('struct ProductionDashboardShortcutsFixture: View {\n' + dependencies +
+        '    var body: some View { self.quickActions(horizontal: self.horizontal) }\n' + quick + key + '\n}\n' + row)
+    output.write('struct ProductionDashboardKeyFixture: View {\n' + dependencies +
+        '    var body: some View { self.shortcutKey.disabled(self.busy) }\n' + key + '\n}\n')
+    # The shared style paints its opaque surface in every state. Pointer hover
+    # and pressed outlines remain native E2E checks; no hover state is invented.
+    output.write(row.replace('private struct DashboardQuickAction:', 'struct ProductionDashboardRowFixture:', 1))
+    # Configuration is made by real production Buttons. These adapters replace
+    # ONLY the renderer to observe nil role, enabled environment and trigger.
+    inspected_row = row.replace('private struct DashboardQuickAction:', 'private struct ProductionDashboardInspectedAction:', 1)
+    inspected_row = inspected_row.replace('    var body: some View {',
+        '    @Environment(\\.dashboardObservations) private var observations\n    var body: some View {', 1)
+    inspected_row = inspected_row.replace(row_style,
+        '.buttonStyle(DashboardShortcutSurfaceTests.InspectionStyle(observations: self.observations!, identity: self.title))', 1)
+    inspected_quick = quick.replace('DashboardQuickAction(', 'ProductionDashboardInspectedAction(')
+    inspected_quick = inspected_quick.replace('.fluidOutlinedButton()',
+        '.buttonStyle(DashboardShortcutSurfaceTests.InspectionStyle(observations: self.state.observations, identity: "change"))', 1)
+    inspected_key = key.replace('.buttonStyle(FluidOutlinedButtonStyle(height: 64, fillsWidth: true))',
+        '.buttonStyle(DashboardShortcutSurfaceTests.InspectionStyle(observations: self.state.observations, identity: "key"))', 1)
+    output.write(inspected_row)
+    output.write('struct ProductionDashboardConstructionFixture: View {\n' + dependencies +
+        '    var body: some View { self.quickActions(horizontal: self.horizontal).environment(\\.dashboardObservations, self.state.observations) }\n' +
+        inspected_quick + inspected_key + '\n}\n')
+import hashlib, json
+Path(sys.argv[1]).with_name('DashboardProductionSource.json').write_text(json.dumps({
+    'source': dashboard_file, 'sha256': hashlib.sha256(dashboard.encode()).hexdigest(),
+    'excerpts': {name: hashlib.sha256(value.encode()).hexdigest() for name, value in
+                 [('quickActions', quick), ('shortcutKey', key), ('DashboardQuickAction', row)]},
+    'adapters': ['inert dependencies', 'construction renderer only'],
+    'nativeGlassRasterization': 'SKIP', 'physicalInputAndAccessibilityActivation': 'SKIP',
+}, indent=2) + '\n')
 PY
 
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
@@ -245,8 +328,9 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Theme/Components/FluidSegmentedPicker.swift \
     Sources/Fluid/Theme/Components/FluidDropdown.swift \
     Sources/Fluid/Theme/Components/FluidGlassControls.swift \
+    Sources/Fluid/Theme/Components/ThemedCard.swift \
     Sources/Fluid/UI/AISettingsComponents.swift \
     "$task_test_dir/ProductionLabels.swift" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
-    Tests/NativeSidebarContrastTests.swift -o "$task_test_dir/tests"
+    Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests" "$task_test_dir" "$@"
