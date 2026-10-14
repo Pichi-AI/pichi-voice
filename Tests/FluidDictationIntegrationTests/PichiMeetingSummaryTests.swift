@@ -2527,6 +2527,13 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertEqual(Set(result.openQuestions[1].evidence.map(\.segmentID)), Set([fixture.session.transcriptSegments[1].id, fixture.session.transcriptSegments[3].id]))
         let requests = await transport.ledgerRequests
         XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].apiKey, requests[1].apiKey)
+        XCTAssertEqual(requests[0].providerOptions, requests[1].providerOptions)
+        XCTAssertEqual(requests[0].streaming, requests[1].streaming)
+        XCTAssertEqual(requests[0].maxRetries, requests[1].maxRetries)
+        XCTAssertEqual(requests[0].retryDelayMs, requests[1].retryDelayMs)
+        XCTAssertEqual(try Self.wireJSON(requests[0].extraParameters), try Self.wireJSON(requests[1].extraParameters),
+                       "Repair must retain the exact schema, immutable artifact and provider execution options")
         XCTAssertEqual(requests[0].messages.last?["content"] as? String, requests[1].messages.last?["content"] as? String,
                        "Rejected response cannot mutate the snapshot, source catalog or candidate index batch")
         for config in requests {
