@@ -68,7 +68,8 @@ cp Sources/Fluid/Branding/brand-package.json "$task_bundle_dir/Contents/Resource
 xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift Sources/Fluid/Branding/BrandPackage.swift \
-    Sources/Fluid/Branding/BrandDistribution.swift Sources/Fluid/Theme/FluidTypography.swift \
+    Sources/Fluid/Branding/BrandDistribution.swift Sources/Fluid/Branding/BrandAppearanceController.swift \
+    Sources/Fluid/Theme/FluidTypography.swift \
     Sources/Fluid/Theme/AppTheme.swift "$task_test_dir/ThemeEnvironment.swift" \
     Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/Theme/Components/ThemedCard.swift \
@@ -88,10 +89,12 @@ report=json.loads((out/'report.json').read_text())
 paths=[Path(sys.argv[2]),Path('Sources/Fluid/UI/SettingsView.swift'),
        Path('Sources/Fluid/Theme/Components/ThemedCard.swift'),
        Path('Sources/Fluid/Theme/Components/FluidPageLayout.swift'),
-       Path('Sources/Fluid/Persistence/SettingsStore.swift')]
+       Path('Sources/Fluid/Persistence/SettingsStore.swift'),
+       Path('Sources/Fluid/Branding/BrandAppearanceController.swift'),
+       Path('Sources/Fluid/Theme/AppTheme.swift')]
 report['productionSourceSHA256']={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 (out/'report.json').write_text(json.dumps(report,indent=2)+'\n')
 if report['failures']:
     raise SystemExit('Settings viewport regression failed: '+'; '.join(report['failures']))
-print('Settings viewport: 5 real hosting layout states, resize/content/search and hosting/anchor identity passed; no visible windows')
+print('Settings viewport: 5 production hosting layout states and 8 native appearance/track states passed; resize/content/search and hosting/anchor/scroller identity preserved; no visible windows')
 PY
