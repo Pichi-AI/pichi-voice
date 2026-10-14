@@ -51367,6 +51367,108 @@
           }
         }
       }
+    },
+    "Command Mode needs a verified chat provider.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер."
+          }
+        }
+      }
+    },
+    "Command Mode needs a selected chat model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a selected chat model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужно выбрать чат-модель."
+          }
+        }
+      }
+    },
+    "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужна чат-модель. Выбранная модель не поддерживается интерфейсом chat/completions."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер. Выберите проверенную модель или проверьте провайдера в разделе «Провайдеры ИИ»."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер. Проверьте этого провайдера в разделе «Провайдеры ИИ», прежде чем использовать режим команд."
+          }
+        }
+      }
+    },
+    "%@ for Command Mode is coming soon. Choose a model from a verified chat provider.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ for Command Mode is coming soon. Choose a model from a verified chat provider."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддержка %@ в режиме команд скоро появится. Выберите модель проверенного чат-провайдера."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -302,6 +302,64 @@ with Path(sys.argv[1]).open('a') as output:
     output.write('struct ProductionDashboardConstructionFixture: View {\n' + dependencies +
         '    var body: some View { self.quickActions(horizontal: self.horizontal).environment(\\.dashboardObservations, self.state.observations) }\n' +
         inspected_quick + inspected_key + '\n}\n')
+# Retain actual controls/Charts, axis formatting and shared font roles. Only
+# app-owned data/actions are inert; no copied prompt or axis implementation.
+import os, subprocess, hashlib, json
+ink_revision = os.environ.get('PICHI_NATIVE_INK_LEGACY_REVISION')
+ink_sources = {}
+def ink_source(path):
+    source = subprocess.check_output(['git', 'show', f'{ink_revision}:{path}'], text=True) if ink_revision else Path(path).read_text()
+    ink_sources[path] = hashlib.sha256(source.encode()).hexdigest()
+    return source
+def ink_snippet(path, start, end):
+    source = ink_source(path)
+    assert source.count(start) == 1, f'Expected one native ink production boundary: {start}'
+    first = source.index(start)
+    return source[first:source.index(end, first)]
+activity_path = 'Sources/Fluid/UI/StatsActivityView.swift'
+activity = ink_source(activity_path)
+history = ink_snippet('Sources/Fluid/UI/TranscriptionHistoryView.swift',
+    '    private var searchBar: some View {', '    // MARK: - Entry List')
+files = ink_snippet('Sources/Fluid/UI/FileTranscriptionView.swift',
+    '            HStack(spacing: self.theme.metrics.spacing.sm) {\n                Image(systemName: "magnifyingglass")',
+    '            Divider()')
+def chart_block(source, start, height, offset=0):
+    first = source.index(start, offset)
+    last = source.index(f'.frame(height: {height})', first) + len(f'.frame(height: {height})')
+    return source[first:last]
+daily = chart_block(activity, '            Chart(period.days)', 124)
+growth = chart_block(activity, '                Chart(period.days)', 150, activity.index('private func growthCard'))
+rhythm = chart_block(activity, '                Chart(period.weekdays)', 150)
+hours = chart_block(ink_source('Sources/Fluid/UI/StatsHighlightsView.swift'),
+    '                Chart(Array(self.snapshot.hourlySessions.enumerated())', 140)
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\nimport Charts\n')
+    output.write('struct ProductionHistorySearchFixture: View {\n'
+        ' @Environment(\\.theme) private var theme\n @Binding var searchQuery: String\n'
+        ' var body: some View { self.searchBar }\n' + history + '}\n')
+    output.write('struct ProductionFilesSearchFixture: View {\n'
+        ' @Environment(\\.theme) private var theme\n @Binding var searchQuery: String\n'
+        ' var body: some View {\n' + files + '\n }\n}\n')
+    for name, code in [('Daily', daily), ('Growth', growth), ('Rhythm', rhythm), ('Hours', hours)]:
+        output.write('struct Production' + name + 'ChartFixture: View {\n'
+            ' @Environment(\\.theme) private var theme\n @Environment(\\.locale) private var interfaceLocale\n'
+            ' let period: StatsActivityPeriod\n'
+            ' @State private var hoveredDate: Date?\n @State private var selectedDate: Date?\n'
+            ' @State private var hoveredWeekday: String?\n @State private var pinnedWeekday: String?\n'
+            ' @State private var hoveredHour: Int?\n @State private var pinnedHour: Int?\n'
+            ' private let selected: StatsActivityPeriod.Day? = nil\n'
+            ' private struct Snapshot { let hourlySessions = (0..<24).map { $0 % 3 == 0 ? 0 : $0 + 3 } }\n'
+            ' private let snapshot = Snapshot()\n'
+            ' private func inspectDate(_ x: CGFloat, proxy: ChartProxy, pin: Bool) {}\n'
+            ' var body: some View {\n' + code + '\n }\n}\n')
+
+Path(sys.argv[1]).with_name('NativeInkProductionSource.json').write_text(json.dumps({
+    'sourceSHA256': ink_sources,
+    'sharedControlSHA256': hashlib.sha256(Path('Sources/Fluid/Theme/Components/FluidEditControls.swift').read_bytes()).hexdigest(),
+    'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', ink_revision], text=True).strip() if ink_revision else None,
+    'adapters': ['synthetic chart totals and selection', 'inert chart pointer callback'],
+    'visibleWindowOrApp': 'SKIP',
+}, indent=2) + '\n')
 import hashlib, json
 Path(sys.argv[1]).with_name('DashboardProductionSource.json').write_text(json.dumps({
     'source': dashboard_file, 'sha256': hashlib.sha256(dashboard.encode()).hexdigest(),
@@ -309,6 +367,67 @@ Path(sys.argv[1]).with_name('DashboardProductionSource.json').write_text(json.du
                  [('quickActions', quick), ('shortcutKey', key), ('DashboardQuickAction', row)]},
     'adapters': ['inert dependencies', 'construction renderer only'],
     'nativeGlassRasterization': 'SKIP', 'physicalInputAndAccessibilityActivation': 'SKIP',
+}, indent=2) + '\n')
+
+
+# Native toolbar labels must reset inherited brand ink at their existing label
+# boundary. These excerpts keep the actual label expressions and Button action.
+# Material appearance is supplied by the fixture, not claimed as native glass.
+import re
+toolbar_revision = os.environ.get('PICHI_TOOLBAR_INK_LEGACY_REVISION')
+def toolbar_source(path):
+    return subprocess.check_output(['git', 'show', f'{toolbar_revision}:{path}'], text=True) if toolbar_revision else Path(path).read_text()
+page_layout = toolbar_source('Sources/Fluid/Theme/Components/FluidPageLayout.swift')
+page_actions = page_layout[page_layout.index('                    self.actions\n'):]
+page_actions = page_actions[:page_actions.index('\n                }')]
+assert '.buttonStyle(.automatic)' in page_actions and '.labelStyle(FluidToolbarLabelStyle())' in page_actions
+# The actual page-action chain and private label style compile in their own
+# source file. A plain inner Button is only the non-native raster adapter.
+Path(sys.argv[1]).with_name('ToolbarPageLayout.swift').write_text(page_layout + '\n'
+    'struct ProductionToolbarPageFixture: View {\n'
+    ' private var actions: some View {\n'
+    '  Button(action: {}) { Label("Share", systemImage: "square.and.arrow.up") }.buttonStyle(.plain)\n'
+    ' }\n var body: some View {\n' + page_actions + '\n }\n}\n')
+content_source = toolbar_source('Sources/Fluid/ContentView.swift')
+main_toolbar = content_source[content_source.index('    private func applyMainWindowToolbar'):content_source.index('    private var hasPageToolbarActions:')]
+assert '.buttonStyle(.automatic)' in main_toolbar
+labels = {}
+for name, symbol in [('Sidebar', 'sidebar.left'), ('Issue', 'ladybug.fill')]:
+    match = re.search(r'Image\(systemName: "' + re.escape(symbol) + r'"\)\s*\.fluidToolbarIcon\(\)', main_toolbar)
+    assert match, 'Expected unchanged native toolbar label'
+    labels[name] = match.group()
+theme_button = content_source[content_source.index('    private var themePreferenceButton:'):content_source.index('    private func nextThemePreference(')]
+match = re.search(r'Image\(systemName: self.settings.themePreference.systemImageName\)\s*\.fluidToolbarIcon\(\)', theme_button)
+assert match
+labels['Theme'] = match.group()
+update = content_source[content_source.index('private struct UpdateAvailableToolbarButton:'):content_source.index('private struct TodayStatsToolbarButton:')]
+assert '.disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)' in update
+assert '.accessibilityLabel("Update available: \\(version)")' in update
+first = update.index('                Image(systemName:')
+labels['Update'] = update[first:update.index('\n            }', first)]
+today = content_source[content_source.index('private struct TodayStatsToolbarButton:'):content_source.index('// MARK: - Card Animation Modifier')]
+assert '.accessibilityLabel("Today stats")' in today
+first = today.index('        return Button(action: self.action)')
+today_button = today[first:today.index('        .help(', first)].replace('        return Button', '        Button', 1)
+with Path(sys.argv[1]).open('a') as output:
+    for name, label in labels.items():
+        output.write('struct ProductionToolbar' + name + 'Fixture: View {\n'
+            ' @Environment(\\.theme) private var theme\n'
+            ' private struct Preference { let systemImageName = "moon" }\n'
+            ' private struct Settings { let themePreference = Preference() }\n'
+            ' private let settings = Settings()\n'
+            ' var body: some View {\n' + label + '\n }\n}\n')
+    output.write('struct ProductionToolbarTodayFixture: View {\n'
+        ' let hasActivity: Bool\n let action: () -> Void\n'
+        ' private struct Summary { let words = 123 }\n'
+        ' private let summary = Summary()\n private let timeSaved = "2 min"\n'
+        ' var body: some View {\n' + today_button + '\n }\n}\n')
+Path(sys.argv[1]).with_name('ToolbarInkProductionSource.json').write_text(json.dumps({
+    'contentSHA256': hashlib.sha256(content_source.encode()).hexdigest(),
+    'pageLayoutSHA256': hashlib.sha256(page_layout.encode()).hexdigest(),
+    'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', toolbar_revision], text=True).strip() if toolbar_revision else None,
+    'adapters': ['synthetic statistics and theme-icon selection', 'reference native material colorScheme', 'plain inner page Button renderer'],
+    'nativeToolbarSchemePropagation': 'SKIP', 'nativeGlassRasterization': 'SKIP',
 }, indent=2) + '\n')
 
 # The four actual slider captions keep their complete production localization,
@@ -405,11 +524,14 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Sources/Fluid/UI/AISettingsComponents.swift \
     "$task_test_dir/ProductionLabels.swift" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
-    Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift -o "$task_test_dir/tests"
+    Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
+    Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
+    Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift \
+    "$task_test_dir/ToolbarPageLayout.swift" -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in
-    *" --overlay-captions-only "*|"  ")
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|"  ")
         xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
             --output-directory "$task_test_dir/OverlayCaptionFixture.app/Contents/Resources" --language en --language ru
         cp "$task_test_dir/tests" "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests"
@@ -417,12 +539,14 @@ case " $* " in
         ;;
 esac
 case " $* " in
-    *" --overlay-captions-only "*)
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*)
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
         ;;
     "  ")
         "$task_test_dir/tests" "$task_test_dir"
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --overlay-captions-only
+        "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --native-ink-only
+        "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" --toolbar-ink-only
         ;;
     *) "$task_test_dir/tests" "$task_test_dir" "$@" ;;
 esac

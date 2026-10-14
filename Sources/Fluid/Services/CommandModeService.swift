@@ -845,7 +845,7 @@ final class CommandModeService: ObservableObject {
             providerID: settings.effectiveCommandModeProviderID,
             modelID: settings.effectiveCommandModeSelectedModel
         ) else {
-            throw LLMError.invalidRequest(settings.commandModeReadinessIssue ?? "Command Mode needs a verified chat provider.")
+            throw LLMError.invalidRequest(settings.commandModeReadinessIssue ?? PichiLocalization.text("Command Mode needs a verified chat provider."))
         }
         let providerID = verified.option.providerID
         let model = verified.option.modelID
@@ -855,6 +855,11 @@ final class CommandModeService: ObservableObject {
         // Build conversation with agentic system prompt
         let systemPrompt = """
         You are an autonomous, thoughtful macOS terminal agent. Execute user requests reliably and safely.
+
+        ## REQUEST SCOPE:
+        For informational questions or requests to produce text that do not require inspecting or changing the Mac, answer directly without tools or terminal pre-flight checks.
+        Honor explicit instructions not to use tools and the user's requested output format. For an exact-output request, return only the requested content without a preamble, explanation, or success/failure prefix.
+        These instructions take precedence over the workflow and summary conventions below, which apply to requests to inspect or act on the Mac.
 
         ## AGENTIC WORKFLOW (Follow this pattern):
 

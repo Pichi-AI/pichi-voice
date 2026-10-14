@@ -2584,7 +2584,7 @@ extension DictationE2ETests {
             settings.commandModeSelectedModel = PrivateAIProviderFeature.shared.providerID
 
             XCTAssertEqual(settings.effectiveCommandModeProviderID, "")
-            XCTAssertTrue(settings.commandModeReadinessIssue?.contains("coming soon") == true)
+            XCTAssertEqual(settings.commandModeReadinessIssue, PichiLocalization.format("%@ for Command Mode is coming soon. Choose a model from a verified chat provider.", PrivateAIProviderFeature.displayName))
             XCTAssertFalse(settings.isCommandModeProviderVerified(PrivateAIProviderFeature.shared.providerID))
         }
     }

@@ -208,6 +208,14 @@ struct UIContrastTests {
             try await DashboardShortcutSurfaceTests.run(directory: directory)
             return
         }
+        if CommandLine.arguments.contains("--toolbar-ink-only") {
+            try await ToolbarInkTests.run(directory: directory)
+            return
+        }
+        if CommandLine.arguments.contains("--native-ink-only") {
+            try await NativeInkTransitionTests.run(directory: directory)
+            return
+        }
         if CommandLine.arguments.contains("--overlay-captions-only") {
             try await OverlaySliderCaptionTests.run(directory: directory)
             return

@@ -127,11 +127,14 @@ enum NativePaletteAppearanceTests {
                 defer { window.close() }
                 var originalControls: [NSView]?
                 for parent: ColorScheme in [.light, .dark] {
-                    state.seenAmbientSchemes.removeAll()
+                    // An unchanged parent need not invalidate Host. Retain its
+                    // actual last observation and wait for both sides of the
+                    // appearance boundary, not only already-settled controls.
                     window.appearance = NSAppearance(named: parent == .dark ? .darkAqua : .aqua)
                     await self.wait(in: host) {
                         let controls = self.nativeControls(in: host)
-                        return controls.count == 2 && controls.allSatisfy {
+                        return state.seenAmbientSchemes.last == parent
+                            && controls.count == 2 && controls.allSatisfy {
                             $0.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == (native == .dark ? .darkAqua : .aqua)
                         }
                     }
