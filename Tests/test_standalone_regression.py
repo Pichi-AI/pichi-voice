@@ -2,6 +2,7 @@
 """Portable runner regressions execute synthetic scripts, never application probes."""
 
 from contextlib import redirect_stdout
+import errno
 import importlib.util
 import io
 import json
@@ -138,13 +139,31 @@ class StandaloneRunnerTests(unittest.TestCase):
 
     def worker_probe(self, *, wait=True):
         worker = self.root / "worker.py"
-        worker.write_text('import signal, time\nfrom pathlib import Path\n'
+        os.mkfifo(self.root / "worker-release")
+        worker.write_text('import os, signal\nfrom pathlib import Path\n'
                           'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
-                          'Path("worker-started").touch()\ntime.sleep(0.5)\nPath("escaped-worker").touch()\n')
+                          'Path("worker-group").write_text(str(os.getpgrp()))\n'
+                          'Path("worker-started").touch()\n'
+                          'with open("worker-release") as gate: gate.read(1)\n'
+                          'Path("escaped-worker").touch()\n')
         command = f"{shlex.quote(sys.executable)} {shlex.quote(str(worker))} &\n"
         command += 'while [ ! -f worker-started ]; do sleep 0.01; done\n'
         command += "wait" if wait else "exit 0"
         return self.probe("descendant", command)
+
+    def assert_worker_joined(self):
+        group = int((self.root / "worker-group").read_text())
+        self.assertFalse(RUNNER.live_process_group(group))
+        # Release is attempted only AFTER cleanup returns. Any surviving reader
+        # could now write, so ENXIO proves the worker cannot resume its operation.
+        with self.assertRaises(OSError) as failure:
+            descriptor = os.open(self.root / "worker-release", os.O_WRONLY | os.O_NONBLOCK)
+            try:
+                os.write(descriptor, b"x")
+            finally:
+                os.close(descriptor)
+        self.assertEqual(failure.exception.errno, errno.ENXIO)
+        self.assertFalse((self.root / "escaped-worker").exists())
 
     def verify_real_signal_cleanup(self, number):
         probe = self.worker_probe()
@@ -172,8 +191,123 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertIn(report["results"][0]["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
         self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
         self.assertFalse((self.root / "later-executed").exists())
-        time.sleep(0.6)
-        self.assertFalse((self.root / "escaped-worker").exists(), "Descendant must not write after runner returns")
+        self.assert_worker_joined()
+        with RUNNER.run_lock(self.root):
+            pass
+
+    def test_absent_group_needs_no_external_inspection(self):
+        with patch.object(RUNNER.os, "killpg", side_effect=ProcessLookupError), \
+             patch.object(RUNNER.subprocess, "run") as inspection:
+            self.assertFalse(RUNNER.live_process_group(123456))
+        inspection.assert_not_called()
+
+    def test_darwin_inspects_only_owned_group_and_ignores_only_zombies(self):
+        for rows, expected in (("123456 Z\n", False), ("123456 Z\n123456 S\n", True)):
+            with self.subTest(rows=rows), patch.object(RUNNER.sys, "platform", "darwin"), \
+                 patch.object(RUNNER.os, "killpg"), \
+                 patch.object(RUNNER.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, rows, "")) as inspection:
+                self.assertEqual(RUNNER.live_process_group(123456), expected)
+                self.assertEqual(inspection.call_args.args[0], ["ps", "-g", "123456", "-o", "pgid=", "-o", "stat="])
+                self.assertEqual(inspection.call_args.kwargs["timeout"], 2)
+
+    def test_zombie_only_descendants_do_not_fail_successful_probe(self):
+        class Process:
+            pid = 123456
+            returncode = 0
+            def wait(self): return 0
+        with patch.object(RUNNER.subprocess, "Popen", return_value=Process()), \
+             patch.object(RUNNER.os, "killpg") as group_signal, \
+             patch.object(RUNNER.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "123456 Z\n", "")):
+            status, report, _ = self.run_probes([self.probe("zombie")])
+        self.assertEqual(status, 0)
+        self.assertEqual(report["results"][0]["exitCode"], 0)
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+        self.assertTrue(all(call.args == (123456, 0) for call in group_signal.call_args_list))
+
+    def test_group_inspection_fails_closed_on_error_or_malformed_output(self):
+        for code, rows, error in ((2, "", ""), (1, "", "ps failure"), (0, "unreadable", "")):
+            with self.subTest(code=code, rows=rows), patch.object(RUNNER.os, "killpg"), \
+                 patch.object(RUNNER.subprocess, "run", return_value=subprocess.CompletedProcess([], code, rows, error)):
+                with self.assertRaises(OSError):
+                    RUNNER.live_process_group(123456)
+
+    def test_stalled_inspection_cannot_prevent_term_escalation_and_join(self):
+        probe = self.worker_probe()
+        original_killpg = RUNNER.os.killpg
+        original_live = RUNNER.live_process_group
+        escalation = threading.Event()
+        inspected_after_join = []
+        sender = threading.Thread(target=lambda: (self.wait_for_worker(), os.kill(os.getpid(), signal.SIGTERM)), daemon=True)
+
+        def observe_kill(group, number):
+            result = original_killpg(group, number)
+            if number == signal.SIGKILL:
+                escalation.set()
+            return result
+
+        def unavailable_inspection(group):
+            # The slow/unavailable inspector is reached only after KILL and
+            # direct-child reap, never while a TERM-ignoring worker can write.
+            self.assertTrue(escalation.is_set())
+            with self.assertRaises(OSError) as failure:
+                descriptor = os.open(self.root / "worker-release", os.O_WRONLY | os.O_NONBLOCK)
+                os.close(descriptor)
+            self.assertEqual(failure.exception.errno, errno.ENXIO)
+            inspected_after_join.append(group)
+            raise subprocess.TimeoutExpired(["ps"], 2)
+
+        sender.start()
+        try:
+            with patch.object(RUNNER.os, "killpg", side_effect=observe_kill), \
+                 patch.object(RUNNER, "live_process_group", side_effect=unavailable_inspection), \
+                 patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+                status, report, _ = self.run_probes([probe, self.probe("later", "touch later-executed")])
+        finally:
+            sender.join(timeout=4)
+            # Keep this synthetic worker owned even when a mutation breaks the
+            # cleanup ordering assertion inside the inspector.
+            group_file = self.root / "worker-group"
+            if group_file.exists():
+                try:
+                    original_killpg(int(group_file.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        self.assertFalse(sender.is_alive())
+        self.assertEqual(status, 143)
+        self.assertTrue(inspected_after_join)
+        row = report["results"][0]
+        self.assertIn(row["exitCode"], [-signal.SIGTERM, -signal.SIGKILL])
+        self.assertIn("timed out", row["cleanupError"])
+        self.assertIn("timed out", row["inspectionError"])
+        self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
+        self.assertFalse((self.root / "later-executed").exists())
+        self.assertTrue((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+        self.assertFalse(original_live(inspected_after_join[0]))
+        self.assert_worker_joined()
+        with RUNNER.run_lock(self.root):
+            pass
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+
+    def test_successful_shell_with_orphan_and_inspector_timeout_still_joins(self):
+        probe = self.worker_probe(wait=False)
+        inspections = []
+        original_live = RUNNER.live_process_group
+
+        def unavailable_inspection(group):
+            inspections.append(group)
+            raise subprocess.TimeoutExpired(["ps"], 2)
+
+        with patch.object(RUNNER, "live_process_group", side_effect=unavailable_inspection), \
+             patch.object(RUNNER, "CANCEL_GRACE_SECONDS", 0.05):
+            status, report, _ = self.run_probes([probe, self.probe("later", "touch later-executed")])
+        self.assertEqual(status, 1)
+        self.assertEqual(report["results"][0]["exitCode"], 0)
+        self.assertIn("timed out", report["results"][0]["reason"])
+        self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
+        self.assertFalse((self.root / "later-executed").exists())
+        self.assertTrue((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+        self.assertFalse(original_live(inspections[0]))
+        self.assert_worker_joined()
         with RUNNER.run_lock(self.root):
             pass
 
@@ -204,8 +338,7 @@ class StandaloneRunnerTests(unittest.TestCase):
             status, report, _ = self.run_probes([probe])
         self.assertEqual(status, 130)
         self.assertEqual(report["status"], "FAIL")
-        time.sleep(0.6)
-        self.assertFalse((self.root / "escaped-worker").exists())
+        self.assert_worker_joined()
         self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
 
     def test_term_during_marker_write_is_deferred_then_joined(self):
@@ -226,8 +359,7 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertTrue(delivered)
         self.assertEqual(status, 143)
         self.assertEqual(report["runnerExitCode"], 143)
-        time.sleep(0.6)
-        self.assertFalse((self.root / "escaped-worker").exists())
+        self.assert_worker_joined()
 
     def test_creation_deferral_preserves_child_signal_mask(self):
         expected = sorted(int(number) for number in signal.pthread_sigmask(signal.SIG_BLOCK, set()))
@@ -416,8 +548,7 @@ sys.exit(status)
         self.assertEqual(status, 1)
         self.assertEqual(report["results"][0]["exitCode"], 0)
         self.assertIn("unjoined", report["results"][0]["reason"])
-        time.sleep(0.6)
-        self.assertFalse((self.root / "escaped-worker").exists())
+        self.assert_worker_joined()
 
     def test_interrupt_between_probes_still_finalizes_accounting(self):
         def stop_after_first(message, **options):
