@@ -301,7 +301,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     var samples: [Float] = []
                     var output: MeetingParakeetEpochOutput?
                     var sealed = false
-                    while let update = try await window.next() {
+                    while var update = try await window.next() {
                         try Task.checkCancellation()
                         guard update.totalFrames > 0, update.totalFrames <= 320_000,
                               update.totalFrames == samples.count + update.samples.count,
@@ -311,8 +311,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         }
                         // The prior native inference has joined before this append.
                         // Incoming deltas live in the consumer's charged queue meanwhile.
-                        samples.append(contentsOf: update.samples)
-                        if !update.samples.isEmpty {
+                        let hasNewPCM = !update.samples.isEmpty
+                        if samples.isEmpty { samples = update.samples }
+                        else { samples.append(contentsOf: update.samples) }
+                        update.samples = []
+                        if hasNewPCM {
                             let recognized = try await session.transcribeWithTimings(samples)
                             let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
                                 words: recognized.words, sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])

@@ -64,7 +64,9 @@ nonisolated enum MeetingMemoryAudioError: LocalizedError, Equatable {
 /// Ownership of the delta moves to the single worker. `totalFrames` describes the growing
 /// window, not the delta length. A final empty delta seals a previously delivered prefix.
 nonisolated struct MeetingPCMWindowUpdate: Sendable {
-    let samples: [Float]
+    /// The sole worker clears the transferred delta after appending it, before
+    /// awaiting inference. This prevents retaining both delta and accumulator.
+    var samples: [Float]
     let totalFrames: Int
     let isFinal: Bool
 }
