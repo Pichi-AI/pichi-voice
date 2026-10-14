@@ -51,6 +51,14 @@ getter_end = settings.index('\n', getter_start)
 key_start = settings.index('    func getAPIKey(for providerID: String)')
 key_end = settings.index('\n    }', key_start) + len('\n    }')
 (out / 'AdmissionCredentials.swift').write_text('extension SettingsStore {\n' + settings[getter_start:getter_end] + '\n' + settings[key_start:key_end] + '\n}\n')
+def declaration(text, marker):
+    start = text.index(marker)
+    brace = text.index('{', start)
+    depth, end = 1, brace + 1
+    while depth:
+        depth += (text[end] == '{') - (text[end] == '}')
+        end += 1
+    return text[start:end]
 source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryProvider.swift').read_text()
 baseline = os.environ.get('PICHI_SUMMARY_ADMISSION_BASELINE_REF')
 if baseline:
@@ -63,15 +71,35 @@ route = route[:route.index('    /// Provider selection is shared;')] + '}\n'
 remote = source[source.index('/// Uses a dedicated session'):]
 kind_source = Path('Sources/Fluid/Services/Meeting/MeetingSummaryController.swift').read_text()
 kind = kind_source[kind_source.index('nonisolated enum MeetingSummaryKind:'):kind_source.index('nonisolated enum MeetingSummaryInput {')]
-(out / 'AdmissionRoute.swift').write_text('import Combine\nimport CryptoKit\nimport Foundation\n' + selection + route + kind + remote)
-def declaration(text, marker):
-    start = text.index(marker)
-    brace = text.index('{', start)
-    depth, end = 1, brace + 1
-    while depth:
-        depth += (text[end] == '{') - (text[end] == '}')
-        end += 1
-    return text[start:end]
+# The prompt uses the controller's pure source-language contract. Keep the
+# actual declaration without linking capture, persistence or model services.
+language_input = ('nonisolated enum MeetingSummaryInput {\n'
+    + declaration(kind_source, '    static func transcriptLanguageName(') + '\n}\n')
+(out / 'AdmissionRoute.swift').write_text('import Combine\nimport CryptoKit\nimport Foundation\n' + selection + route + kind + language_input + remote)
+# Exercise the current production prompt even when admission uses an earlier
+# resolver as its negative control. This fixture performs no HTTP or inference.
+current_prompt = declaration(Path('Sources/Fluid/Services/Meeting/MeetingSummaryProvider.swift').read_text(), '    static func prompt(for kind:')
+(out / 'LanguageProjectionTests.swift').write_text('import Foundation\n' + kind + language_input
+    + '\nnonisolated enum MeetingSummaryRemotePromptProjection {\n' + current_prompt + '\n}\n' + '''
+@main enum LanguageProjectionTests {
+    static func main() {
+        var checks = 0
+        func check(_ value: Bool, _ message: String) {
+            precondition(value, message)
+            checks += 1
+        }
+        check(MeetingSummaryInput.transcriptLanguageName(" RU ") == "Russian (ru)", "Production metadata normalizes the Russian source language")
+        check(MeetingSummaryRemotePromptProjection.prompt(for: .executive, languageCode: "ru").contains("Required output language: Russian (ru)"), "Production template prompt retains Russian language guidance")
+        for code in ["auto", "und", "mul", "not-an-iso-code"] {
+            check(MeetingSummaryInput.transcriptLanguageName(code) == nil
+                && MeetingSummaryRemotePromptProjection.prompt(for: .executive, languageCode: code).contains("Infer the output language from the spoken transcript text"), "Unknown metadata must not choose a default language")
+        }
+        let custom = MeetingSummaryRemotePromptProjection.prompt(for: .custom, customInstructions: "Write in English.", languageCode: "ru")
+        check(custom.contains("Default output language: Russian (ru)") && custom.contains("use that requested language") && custom.hasSuffix("Write in English."), "Explicit custom language instructions retain precedence")
+        print("Template language projection: \\(checks) checks passed")
+    }
+}
+''')
 # Exercise the restored UI's exact Generate click and fresh route resolution,
 # without creating a SwiftUI view or an application service. Effects are captured
 # by an inert controller before the same explicit, intercepted transport is used.
@@ -204,6 +232,9 @@ errors = Path('Sources/Fluid/ContentView.swift').read_text()
 errors = errors[errors.index('nonisolated enum AIProcessingError:'):errors.index('nonisolated enum DictationAIFailurePresentationPolicy {')]
 (out / 'AdmissionErrors.swift').write_text('import Foundation\n' + errors)
 PY
+xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/AdmissionModuleCache" \
+    "$task_test_dir/LanguageProjectionTests.swift" -o "$task_test_dir/language-tests"
+"$task_test_dir/language-tests"
 xcrun swiftc -parse-as-library -swift-version 5 -D PICHI_CREDENTIAL_TEST_BACKEND_ONLY \
     -module-cache-path "$task_test_dir/AdmissionModuleCache" \
     "$task_test_dir/ModelRepository.swift" "$task_test_dir/AdmissionMetadata.swift" \
