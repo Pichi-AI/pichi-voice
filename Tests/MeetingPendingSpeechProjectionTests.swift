@@ -68,6 +68,11 @@ struct MeetingPendingSpeechProjectionTests {
         try require(speech.snapshot.tokens.starts(with: original), "Resuming preserves prior stable identities")
         print("PASS pause and resume")
         let beforeQuiet = speech.snapshot.tokens
+        var isolatedDuringQuiet = speech
+        feed(&isolatedDuringQuiet, start: 12, duration: 6, rms: { time in
+            Int(((time - 12) / 0.02).rounded()) % 50 == 0 ? 0.02 : 0.001
+        }, crest: 12)
+        try require(isolatedDuringQuiet.snapshot.tokens.isEmpty, "Isolated clicks cannot postpone quiet cleanup")
         feed(&speech, start: 12, duration: 6, rms: { _ in 0.001 })
         try require(!beforeQuiet.isEmpty && speech.snapshot.tokens.isEmpty, "Long quiet expires only visual estimates")
         var lateText = MeetingLiveTranscriptSnapshot.empty
@@ -180,8 +185,21 @@ struct MeetingPendingSpeechProjectionTests {
             let duration = Double(frames * 100) / sampleRate
             try require(!snapshot.tokens.isEmpty && snapshot.tokens.allSatisfy { $0.start >= 0 && $0.end <= duration + 0.01 },
                         "Native PCM tee uses capture-relative time even for non-divisible callback frames")
+            let quiet = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
+            quiet.frameLength = AVAudioFrameCount(frames)
+            for channel in 0..<channels {
+                for frame in 0..<frames { quiet.floatChannelData![channel][frame] = 0.001 }
+            }
+            for chunk in 0..<Int((6 * sampleRate / Double(frames)).rounded(.up)) {
+                capture.offer(kind: .microphone, sampleBuffer: try sampleBuffer(quiet,
+                    pts: CMTime(seconds: 77 + duration + Double(chunk * frames) / sampleRate,
+                                preferredTimescale: 1_000_000_000)))
+            }
+            CFRunLoopRunInMode(.defaultMode, 0.01, false)
+            try require(receipt.snapshots.count == 2 && receipt.snapshots.last?.tokens.isEmpty == true,
+                        "Real quiet PCM coalesces a cleanup update without adding or retaining waves")
             capture.stop()
-            print("PASS native \(Int(sampleRate))Hz \(channels)-channel metadata tee and bounded UI publication")
+            print("PASS native \(Int(sampleRate))Hz \(channels)-channel speech/quiet PCM and bounded UI publication")
         }
     }
     static func sampleBuffer(_ buffer: AVAudioPCMBuffer, pts: CMTime) throws -> CMSampleBuffer {
