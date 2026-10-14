@@ -136,9 +136,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 let snapshot = coordinator.liveTranscript
                 let isBackground = UIApplication.shared.applicationState == .background
                 let observationInterval = now - previousObservationTime
+                let adjacentBackgroundObservation = isBackground && wasBackground && observationInterval <= 2
                 // Only credit adjacent background observations at the expected cadence.
                 // A long scheduling gap provides no evidence about the intervening state.
-                if isBackground && wasBackground && observationInterval <= 2 {
+                if adjacentBackgroundObservation {
                     backgroundSeconds += min(observationInterval, 1.25)
                 }
                 let ids = Set(snapshot.utterances.filter { !$0.text.isEmpty }.map(\.id))
@@ -149,7 +150,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
                     updates += 1
                     lastUpdateSecond = second
-                    if isBackground && wasBackground {
+                    if adjacentBackgroundObservation {
                         backgroundUpdates += 1
                         lastBackgroundUpdateSecond = second
                     }
