@@ -187,6 +187,30 @@ nonisolated struct BrandLogo: Codable, Equatable, Sendable {
         return data
     }
 
+    /// Structural validity alone permits legacy fully transparent artwork.
+    /// Keep that data importable, but never use it as a visible app locator.
+    func visibleData() throws -> Data? {
+        let data = try self.validatedData()
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return data
+        default:
+            // Full resolution avoids missing a small nontransparent mark. The
+            // validated 4096-side limit bounds this RGBA buffer to 64 MiB.
+            guard let context = CGContext(data: nil, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue), let pixels = context.data else { return nil }
+            context.clear(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            context.setBlendMode(.copy)
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let rgba = UnsafeBufferPointer<UInt8>(start: pixels.assumingMemoryBound(to: UInt8.self),
+                count: context.bytesPerRow * image.height)
+            return stride(from: 3, to: rgba.count, by: 4).contains(where: { rgba[$0] != 0 }) ? data : nil
+        }
+    }
+
     private static func validatedType(_ data: Data) throws -> String {
         guard data.count <= Self.maximumBytes,
               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
@@ -208,6 +232,29 @@ nonisolated struct BrandLogos: Codable, Equatable, Sendable {
     var light: BrandLogo?
     var dark: BrandLogo?
     var menuBar: BrandLogo?
+
+    enum Role: String {
+        case primary, light, dark, menuBar
+    }
+
+    /// The existing appearance/menu variants fall back to usable primary art.
+    /// Native menu selection can defer primary fallback until after checking a
+    /// trusted distribution asset. Other callers use the normal variant chain.
+    /// Nil leaves the caller free to show its neutral, theme-aware locator.
+    func visibleData(for role: Role, fallbackToPrimary: Bool = true) -> Data? {
+        let preferred: BrandLogo?
+        switch role {
+        case .primary: preferred = nil
+        case .light: preferred = self.light
+        case .dark: preferred = self.dark
+        case .menuBar: preferred = self.menuBar
+        }
+        let primary = role == .primary || fallbackToPrimary ? self.primary : nil
+        for logo in [preferred, primary].compactMap({ $0 }) {
+            if let data = try? logo.visibleData() { return data }
+        }
+        return nil
+    }
 
     func validate() throws {
         let logos = [self.primary, self.light, self.dark, self.menuBar].compactMap { $0 }
@@ -244,16 +291,26 @@ nonisolated final class BrandPackageStore: @unchecked Sendable {
         return self.generation
     }
 
-    var hasOverride: Bool {
-        _ = self.current()
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.cachedOverride
+    struct Snapshot: Sendable {
+        let package: BrandPackage
+        let hasOverride: Bool
+        let revision: Int
     }
 
-    func current() -> BrandPackage {
+    var hasOverride: Bool { self.snapshot().hasOverride }
+
+    /// Rendering must bind artwork, fallback policy and cache generation to
+    /// the same commit, including imports completed on a background task.
+    func snapshot() -> Snapshot {
         self.lock.lock()
         defer { self.lock.unlock() }
+        let package = self.currentLocked()
+        return Snapshot(package: package, hasOverride: self.cachedOverride, revision: self.generation)
+    }
+
+    func current() -> BrandPackage { self.snapshot().package }
+
+    private func currentLocked() -> BrandPackage {
         if let cachedPackage { return cachedPackage }
         let storedData: Data?
         if let storageURL = self.storageURL,
