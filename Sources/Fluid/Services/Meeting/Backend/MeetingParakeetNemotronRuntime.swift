@@ -60,6 +60,9 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
     /// Ownership transfers from a progressive ASR body to the subsequent speaker
     /// phase. Only that same physical window is retained, never another buffer.
     var boundedPCMSamples: [Float] = []
+    /// Original consumed frame count when only an accepted prefix leaves ASR.
+    /// The uncovered tail remains explicit without retaining a second PCM buffer.
+    var boundedPCMSourceSampleCount: Int? = nil
 }
 
 /// The composite backend's runtime, one per attempt. `withNemotronDiarization` is the only owner

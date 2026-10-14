@@ -319,8 +319,14 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                             let recognized = try await session.transcribeWithTimings(samples)
                             let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
                                 words: recognized.words, sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])
-                            output = observed
-                            if let preview {
+                            // An empty observation can be silence or a provider's rejected
+                            // hypothesis. Neither invalidates speech already accepted for
+                            // a shorter prefix. Keep its original coverage and timings.
+                            let hasSpeech = !observed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            if hasSpeech || output == nil || output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                                output = observed
+                            }
+                            if let preview, hasSpeech || output?.sampleCount == observed.sampleCount {
                                 try await preview(self.pcmSpeechObservation(output: observed, epoch: epoch,
                                     offset: offset, duration: Double(samples.count) / 16_000, attemptID: attemptID))
                             }
@@ -328,10 +334,15 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         }
                         if update.isFinal { sealed = true; break }
                     }
-                    guard sealed, let output, output.sampleCount == samples.count else {
+                    guard sealed, let output, output.sampleCount > 0, output.sampleCount <= samples.count else {
                         throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
                     }
-                    return MeetingParakeetPhaseResult(outputs: [output], boundedPCMSamples: samples)
+                    let physicalSampleCount = samples.count
+                    // Native inference has joined. Transfer only the same array's covered
+                    // prefix to attribution; the scalar records the consumed physical tail.
+                    samples.removeSubrange(output.sampleCount..<samples.count)
+                    return MeetingParakeetPhaseResult(outputs: [output], boundedPCMSamples: samples,
+                        boundedPCMSourceSampleCount: physicalSampleCount)
                 }
                 try Task.checkCancellation()
                 guard phase.outputs.count == 1, let output = phase.outputs.first,
@@ -339,9 +350,19 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
                 }
                 // withPreparedASR has joined and released its weights before attribution.
-                return try await self.attributePCMSpeech(samples: phase.boundedPCMSamples, output: output,
+                var batch = try await self.attributePCMSpeech(samples: phase.boundedPCMSamples, output: output,
                     epoch: epoch, offset: offset, attemptID: attemptID, configuration: configuration,
                     priorProfiles: prior.profiles, priorSpeakers: prior.speakers)
+                let physicalSampleCount = phase.boundedPCMSourceSampleCount ?? phase.boundedPCMSamples.count
+                guard physicalSampleCount >= output.sampleCount, physicalSampleCount <= 320_000 else {
+                    throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+                }
+                if output.sampleCount < physicalSampleCount {
+                    batch.isComplete = false
+                    for index in batch.segments.indices { batch.segments[index].completeness = .incompleteTrack }
+                }
+                DebugLogger.shared.info("progressive_coverage offset=\(offset) coveredFrames=\(output.sampleCount) physicalFrames=\(physicalSampleCount) complete=\(batch.isComplete)", source: "MeetingPCMRuntime")
+                return batch
             }
         }
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
@@ -393,12 +414,20 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             priorProfiles: priorProfiles, priorSpeakers: priorSpeakers)
     }
 
-    private func attributePCMSpeech(samples: [Float], output: MeetingParakeetEpochOutput,
+    func attributePCMSpeech(samples: [Float], output: MeetingParakeetEpochOutput,
                                    epoch: MeetingAnalysisEpochID, offset: TimeInterval, attemptID: UUID,
                                    configuration: MeetingFinalProcessingConfiguration,
                                    priorProfiles: [MeetingSpeakerVoiceProfile],
                                    priorSpeakers: [MeetingSessionSpeaker]) async throws -> MeetingPCMTranscriptBatch {
+        try Task.checkCancellation()
         let duration = Double(samples.count) / 16_000
+        // pcmUnits produces no units exactly when the provider text is empty.
+        guard !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            // No current text units can acquire a speaker. Leave attempt-local identity
+            // evidence untouched and avoid loading attribution models for empty speech.
+            DebugLogger.shared.info("speaker_attribution_empty offset=\(offset) frames=\(samples.count)", source: "MeetingPCMRuntime")
+            return MeetingPCMTranscriptBatch(segments: [])
+        }
         var activity: [MeetingBackendSpeakerActivity] = []
         var currentProfiles: [MeetingSpeakerVoiceProfile] = []
         var voiceExcerptCount = 0
