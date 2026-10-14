@@ -272,3 +272,104 @@ extension EnvironmentValues {
         set { self[DashboardObservationsKey.self] = newValue }
     }
 }
+
+// The source-extracted captions use their actual unmodified shared font call.
+// Compiled String Catalogs and volatile process language drive both localization
+// paths: explicit PichiLocalization lookup and SwiftUI Text's locale lookup.
+enum OverlaySliderCaptionTests {
+    private static func pixels(_ image: CGImage) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = CGContext(data: &bytes, width: image.width, height: image.height, bitsPerComponent: 8,
+            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return bytes
+    }
+    @MainActor private static func render(_ view: some View, theme: AppTheme, locale: Locale,
+                                         name: String, directory: URL) throws -> CGImage {
+        let renderer = ImageRenderer(content: view.appTheme(theme).environment(\.locale, locale)
+            .background(theme.palette.cardBackground))
+        renderer.scale = 2
+        guard let image = renderer.cgImage else { preconditionFailure("Caption renderer must produce an image") }
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(name + ".png"))
+        return image
+    }
+
+    @MainActor static func run(directory: URL) async throws {
+        precondition(Set(Bundle.main.localizations).isSuperset(of: ["en", "ru"]), "Use the actual compiled RU/EN catalog")
+        let legacy = CommandLine.arguments.contains("--overlay-captions-legacy-negative")
+        precondition(!legacy || ProductionOverlayCaptionMetadata.legacyAvailable,
+                     "Compile the explicit historical negative with PICHI_OVERLAY_CAPTION_LEGACY_REVISION")
+        let previous = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { UserDefaults.standard.setVolatileDomain(previous, forName: UserDefaults.argumentDomain) }
+        let package = try BrandPackage.decode(Data(contentsOf: URL(fileURLWithPath: "Sources/Fluid/Branding/brand-package.json")))
+        precondition(AppBrand.package.style == package.style, "Read back the actual production-default brand style")
+        let captionDesign = AppBrand.package.style?.bodyFontDesign?.rawValue ?? "system-default"
+        var checks = 0
+        var report = [[String: Any]]()
+        for language in ["ru", "en"] {
+            var domain = previous
+            domain[PichiInterfaceLanguage.defaultsKey] = language
+            UserDefaults.standard.setVolatileDomain(domain, forName: UserDefaults.argumentDomain)
+            precondition(PichiLocalization.language.rawValue == language, "Process language must drive actual explicit catalog calls")
+            let locale = Locale(identifier: language)
+            let strings = ProductionOverlayCaptionMetadata.expected[language]!
+            precondition(PichiLocalization.text("scale.more", defaultValue: "More") == strings[0])
+            precondition(PichiLocalization.text("Less") == strings[1])
+            for scheme: ColorScheme in [.light, .dark] {
+                let theme = AppTheme.adaptive(accent: .purple, colorScheme: scheme, package: package)
+                for index in 0..<4 {
+                    let suffix = "\(legacy ? "legacy" : "current")-\(language)-\(scheme == .light ? "light" : "dark")-\(index)"
+                    let natural = try self.render(Text(verbatim: strings[index]).font(.fluidSystem(.caption))
+                        .foregroundStyle(theme.palette.primaryText).fixedSize(), theme: theme, locale: locale,
+                        name: "overlay-caption-natural-\(suffix)", directory: directory)
+                    let image = try self.render(ProductionOverlayCaptionFixture(index: index, legacy: legacy),
+                        theme: theme, locale: locale, name: "overlay-caption-\(suffix)", directory: directory)
+                    let expectedWidth = max(72, natural.width)
+                    let naturalHeight = natural.height
+                    let geometryFits = abs(image.width - expectedWidth) <= 1 && abs(image.height - naturalHeight) <= 1
+                    let row: [String: Any] = ["language": language, "scheme": scheme == .light ? "light" : "dark",
+                        "index": index, "text": strings[index], "widthPixels": image.width,
+                        "heightPixels": image.height, "naturalWidthPixels": natural.width,
+                        "naturalHeightPixels": natural.height, "fullWordSingleLine": geometryFits,
+                        "actualGlobalCaptionBodyFontDesign": captionDesign, "captionFontWeight": "regular"]
+                    report.append(row)
+                    try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                        .write(to: directory.appendingPathComponent("overlay-caption-\(legacy ? "legacy-negative" : "current")-results.json"))
+                    // This fails from the actual legacy raster's constrained
+                    // width/wrapped height. No source-property guard fakes it.
+                    precondition(geometryFits, "\(suffix): complete localized word must keep natural width and single-line height; actual \(image.width)x\(image.height), natural \(natural.width)x\(natural.height)")
+                    // A verbatim reference from the real compiled catalog must
+                    // render identically. This observes SwiftUI Text("Less")'s
+                    // actual localization as well as explicit More lookup.
+                    let expected = try self.render(Text(verbatim: strings[index]).font(.fluidSystem(.caption))
+                        .foregroundStyle(theme.palette.primaryText).lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(minWidth: 36, alignment: index == 0 || index == 2 ? .trailing : .leading),
+                        theme: theme, locale: locale, name: "overlay-caption-expected-\(suffix)", directory: directory)
+                    let bytes = self.pixels(image)
+                    // CoreGraphics can round an individual channel by one 8-bit
+                    // level between equivalent render trees. Keep every pixel
+                    // in place and require its full glyph shape within that
+                    // quantization bound, with no spatial/content tolerance.
+                    let expectedBytes = self.pixels(expected)
+                    precondition(image.width == expected.width && image.height == expected.height &&
+                                 zip(bytes, expectedBytes).allSatisfy({ abs(Int($0) - Int($1)) <= 1 }),
+                                 "Actual explicit/SwiftUI localized caption must match the complete catalog word")
+                    let expectedInk = UIContrastTests.components(theme.palette.primaryText)
+                    var glyphPixels = 0
+                    for offset in stride(from: 0, to: bytes.count, by: 4) {
+                        if bytes[offset + 3] == 255 && (0..<3).allSatisfy({ abs(Double(bytes[offset + $0]) / 255 - expectedInk[$0]) < 0.025 }) {
+                            glyphPixels += 1
+                        }
+                    }
+                    precondition(glyphPixels >= 12, "Actual localized caption glyphs must render")
+                    checks += 1
+                }
+            }
+        }
+        print("Overlay slider captions: \(checks) actual source-bound RU/EN Light/Dark natural-width/single-line/glyph checks passed; actual global shared caption font unchanged")
+        print("SKIP: other global brand font designs and the native 800-point Overlay viewport require parent frozen-app screenshots. No slider input or bindings are executed.")
+    }
+}
