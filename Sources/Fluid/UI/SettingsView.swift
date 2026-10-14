@@ -1498,7 +1498,9 @@ struct SettingsView: View {
                                 Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .trailing)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(minWidth: 36, alignment: .trailing)
 
                                 Slider(value: self.$visualizerNoiseThreshold, in: 0.01...0.8, step: 0.01)
                                     .controlSize(.regular)
@@ -1506,7 +1508,9 @@ struct SettingsView: View {
                                 Text("Less")
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .leading)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(minWidth: 36, alignment: .leading)
 
                                 Text(String(format: "%.2f", self.visualizerNoiseThreshold))
                                     .font(.fluidSystem(.caption, design: .monospaced))
@@ -1538,7 +1542,9 @@ struct SettingsView: View {
                                     Text("Less")
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .trailing)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .frame(minWidth: 36, alignment: .trailing)
 
                                     Slider(
                                         value: Binding(
@@ -1553,7 +1559,9 @@ struct SettingsView: View {
                                     Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .leading)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .frame(minWidth: 36, alignment: .leading)
                                 }
                             }
                             .settingsSearchTarget(.transcriptionPreviewLength)
