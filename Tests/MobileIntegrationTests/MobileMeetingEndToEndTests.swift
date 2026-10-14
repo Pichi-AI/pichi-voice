@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
+import Darwin
 import UIKit
 @testable import PichiVoiceMobile
 import XCTest
@@ -73,6 +74,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_E2E"] == "1" else {
             throw XCTSkip("Enable physical strict ASR, diarization and PII replay explicitly")
         }
+        guard let duration = Int(ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_SECONDS"] ?? "60"),
+              (60...300).contains(duration) else {
+            throw NSError(domain: "PhysicalStrictMeetingDuration", code: 1)
+        }
         guard AVAudioSession.sharedInstance().outputVolume > 0.05 else {
             throw XCTSkip("Physical speech replay requires audible device output")
         }
@@ -96,6 +101,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         player.numberOfLoops = -1
         var firstTextSecond: Int?
         var updates = 0
+        var lastUpdateSecond = 0
+        var lastBackgroundUpdateSecond = 0
         var previousIDs: Set<UUID> = []
         var previousPartial: MeetingLivePartial?
         let requiresBackground = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_MEETING_BACKGROUND"] == "1"
@@ -110,9 +117,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(recording.piiRedactionEnabled, true)
             try AVAudioSession.sharedInstance().overrideOutputAudioPort(.speaker)
             XCTAssertTrue(player.play())
-            print("[PHYSICAL_STRICT_E2E] speech_started model=\(model.rawValue)")
-            for second in 1...60 {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+            let captureStart = ProcessInfo.processInfo.systemUptime
+            var previousResourceTime = captureStart
+            var previousCPU = DiagnosticProcessCPUTime.capture()
+            print("[PHYSICAL_STRICT_E2E] speech_started model=\(model.rawValue) duration=\(duration)")
+            for second in 1...duration {
+                let remaining = captureStart + Double(second) - ProcessInfo.processInfo.systemUptime
+                if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
                 guard coordinator.isRecording else {
                     XCTFail("Strict \(model.rawValue) stopped at second \(second), before completing paced input")
                     throw MeetingMemoryAudioError.overload
@@ -127,20 +138,38 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 let partial = snapshot.partials[.you]
                 if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
                     updates += 1
-                    if isBackground && wasBackground { backgroundUpdates += 1 }
+                    lastUpdateSecond = second
+                    if isBackground && wasBackground {
+                        backgroundUpdates += 1
+                        lastBackgroundUpdateSecond = second
+                    }
                 }
                 previousIDs = ids
                 previousPartial = partial
                 wasBackground = isBackground
                 print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) background=\(isBackground)")
+                if second.isMultiple(of: 15) {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    let cpu = DiagnosticProcessCPUTime.capture()
+                    let cpuMS = previousCPU.flatMap { earlier in cpu?.milliseconds(since: earlier) } ?? -1
+                    let wallMS = Int64((now - previousResourceTime) * 1_000)
+                    print("[PHYSICAL_STRICT_RESOURCE] second=\(second) cpuMS=\(cpuMS) wallMS=\(wallMS) footprintBytes=\(physicalFootprintBytes() ?? 0)")
+                    previousCPU = cpu
+                    previousResourceTime = now
+                }
             }
             player.stop()
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
             XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
             if requiresBackground {
-                XCTAssertGreaterThanOrEqual(backgroundSeconds, 20, "The host must actually leave the foreground during paced recording")
+                XCTAssertGreaterThanOrEqual(backgroundSeconds, duration == 300 ? 280 : 20,
+                                            "The host must actually leave the foreground during paced recording")
                 XCTAssertGreaterThan(backgroundUpdates, 0, "Safe text must advance between actual background observations")
+            }
+            if duration == 300 {
+                XCTAssertGreaterThanOrEqual(lastUpdateSecond, 280, "Protected text must still advance near the end of the five-minute capture")
+                if requiresBackground { XCTAssertGreaterThanOrEqual(lastBackgroundUpdateSecond, 280) }
             }
             let completed = try await coordinator.stopAndTranscribe()
             XCTAssertEqual(completed.state, .completed)
@@ -159,7 +188,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let payload = try MeetingSharePayload.transcript(data: MeetingTranscriptExporter.json(for: completed), title: completed.title, fileExtension: "json")
             XCTAssertFalse(payload.includesAudio)
             payload.cleanup()
-            print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates) backgroundSeconds=\(backgroundSeconds) backgroundUpdates=\(backgroundUpdates)")
+            print("[PHYSICAL_STRICT_E2E] complete model=\(model.rawValue) duration=\(duration) firstTextSecond=\(firstTextSecond ?? -1) updates=\(updates) backgroundSeconds=\(backgroundSeconds) backgroundUpdates=\(backgroundUpdates) lastUpdateSecond=\(lastUpdateSecond)")
             // This is one service composition, not application termination. Stopping the
             // coordinator already joins capture/model work; terminating the shared model
             // residency here would invalidate later tests in this same hosted process.
@@ -174,6 +203,17 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             throw error
         }
         #endif
+    }
+
+    private func physicalFootprintBytes() -> UInt64? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return status == KERN_SUCCESS ? info.phys_footprint : nil
     }
 
     func testPhysicalMicrophoneThroughLiveGigaAMPrivacyAndExport() async throws {
