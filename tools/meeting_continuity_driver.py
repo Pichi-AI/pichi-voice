@@ -148,16 +148,27 @@ class OwnedProcesses:
         return [int(pid) for pid, pgid, state in (line.split() for line in output.splitlines())
                 if int(pgid) == group and not state.startswith("Z")]
 
-    def assert_owned(self, child, deadline=None):
-        if self.children.get(child.pid) is not child or self.poll(child) is not None:
-            raise ProtocolError("Refuse to signal a foreign or exited process.")
+    def assert_owned(self, child, deadline=None, require_live=True):
+        if self.children.get(child.pid) is not child:
+            raise ProtocolError("Refuse to signal a foreign process.")
+        if self.poll(child) is not None:
+            if require_live:
+                raise ProtocolError("Refuse to signal an exited process.")
+            return []
         expected = str(self.executable) if child.kind == "chrome" else "/usr/bin/afplay"
         if (self.executable_for(child.pid) != expected or self.group_for(child.pid) != child.pid
                 or child.args[0] != expected or (child.kind == "chrome"
                 and (f"--user-data-dir={self.profile}" not in child.args
                      or f"--user-data-dir={self.profile}" not in self.arguments_for(child.pid, deadline).split()))):
             raise ProtocolError("Owned executable, profile or process group does not match.")
-        self.verify_members(child, self.group_members(child.pid, deadline), deadline)
+        verified = self.verify_members(child, self.group_members(child.pid, deadline), deadline)
+        if require_live:
+            self.require_live_owner(child, verified)
+        return verified
+
+    def require_live_owner(self, child, verified):
+        if self.children.get(child.pid) is not child or child.pid not in verified or self.poll(child) is not None:
+            raise ProtocolError("Owned live leader disappeared during verification.")
 
     def verify_members(self, child, members, deadline=None):
         deadline = deadline if deadline is not None else time.monotonic() + 3
@@ -189,7 +200,8 @@ class OwnedProcesses:
         os.killpg(pid, value)
 
     def resume(self, child):
-        self.assert_owned(child)
+        verified = self.assert_owned(child)
+        self.require_live_owner(child, verified)
         self.send_group(child.pid, signal.SIGCONT)
 
     def stop(self, child):
@@ -197,8 +209,13 @@ class OwnedProcesses:
             raise ProtocolError("Refuse cleanup of a foreign process.")
         deadline = time.monotonic() + 3
         if self.poll(child) is None:
-            self.assert_owned(child, deadline)
-            self.kill_group(child, deadline)
+            verified = self.assert_owned(child, deadline, require_live=False)
+            if child.pid in verified and self.poll(child) is None:
+                self.kill_group(child, deadline)
+            elif self.poll(child) is not None and not self.group_members(child.pid, deadline):
+                return
+            elif self.poll(child) is None:
+                raise ProtocolError("Owned leader disappearance has no joined-child proof.")
         # After leader exit, only members from this unique copied bundle may remain.
         while time.monotonic() < deadline:
             self.poll(child)
@@ -286,7 +303,8 @@ class Driver:
         if child:
             value["processID"] = child.pid
             if action != "browserExited":
-                self.processes.assert_owned(child)
+                verified = self.processes.assert_owned(child)
+                self.processes.require_live_owner(child, verified)
             if action == "begin":
                 value["executablePath"] = child.args[0]
             if child.kind == "chrome" and action != "browserExited":

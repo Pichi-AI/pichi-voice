@@ -240,6 +240,62 @@ class DriverTests(unittest.TestCase):
                 self.processes.stop(child)
         self.assertEqual(self.processes.signals, [])
 
+    def test_initial_stop_live_leader_and_helper_exit_during_lookup_sends_no_signal(self):
+        child = self.processes.child("chrome")
+        self.processes.metadata[900] = dict(group=child.pid, executable=str(self.processes.chrome_app / "helper"))
+        self.processes.statuses[900] = None
+        def lookup(pid):
+            if pid == 900:
+                self.processes.statuses[child.pid] = -9
+                self.processes.statuses[900] = -9
+                raise ProtocolError("Helper and leader exited")
+            return self.processes.metadata[pid]["executable"]
+        with patch.object(self.processes, "executable_for", side_effect=lookup):
+            self.processes.stop(child)
+        self.assertEqual(self.processes.signals, [])
+        self.assertIsNotNone(self.processes.poll(child))
+        self.assertEqual(self.processes.group_members(child.pid), [])
+
+    def exit_player_during_validation(self, child):
+        calls = 0
+        def lookup(pid):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                self.processes.statuses[child.pid] = 0
+                raise ProtocolError("Suspended player exited during validation")
+            return self.processes.metadata[pid]["executable"]
+        return lookup
+
+    def test_suspended_player_exit_during_validation_never_sends_sigcont(self):
+        child = self.processes.child("player")
+        with patch.object(self.processes, "executable_for", side_effect=self.exit_player_during_validation(child)):
+            with self.assertRaisesRegex(ProtocolError, "live leader disappeared"):
+                self.processes.resume(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_phase_begin_rejects_player_that_exits_during_validation(self):
+        child = self.processes.child("player")
+        with patch.object(self.processes, "executable_for", side_effect=self.exit_player_during_validation(child)):
+            with self.assertRaisesRegex(ProtocolError, "live leader disappeared"):
+                self.driver.command(4, "begin", "secondSource", child)
+        self.assertFalse((self.root / "phase-command.json").exists())
+        self.assertEqual(self.processes.signals, [])
+
+    def test_joined_child_and_fresh_empty_group_cleanup_need_no_signal(self):
+        child = self.processes.child("chrome")
+        self.processes.statuses[child.pid] = -9
+        with patch.object(self.processes, "executable_for", side_effect=AssertionError("No lookup for absent members")):
+            self.processes.stop(child)
+        self.assertEqual(self.processes.signals, [])
+
+    def test_empty_group_without_joined_child_is_not_successful_cleanup(self):
+        child = self.processes.child("chrome")
+        with patch.object(self.processes, "group_members", return_value=[]):
+            with self.assertRaisesRegex(ProtocolError, "joined-child proof"):
+                self.processes.stop(child)
+        self.assertEqual(self.processes.signals, [])
+
     def test_exited_leader_pid_reuse_is_refused_even_for_same_copy_executable(self):
         child = self.processes.child("chrome")
         self.processes.statuses[child.pid] = -9
