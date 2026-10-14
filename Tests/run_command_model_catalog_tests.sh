@@ -14,6 +14,22 @@ trap 'rm -rf "$task_test_dir"' EXIT
 # Keep the actual model metadata/key rules; network model fetching is unavailable in this harness.
 sed '/^    \/\/ MARK: - Fetch Models from API/,$d' Sources/Fluid/Services/ModelRepository.swift > "$task_test_dir/ModelRepository.swift"
 echo '}' >> "$task_test_dir/ModelRepository.swift"
+# Foundation-only bundle loads the actual compiled catalog without an application,
+# views, windows, preferences, model inference or network access.
+task_catalog_bundle="$task_test_dir/CommandCatalogFixture.app"
+mkdir -p "$task_catalog_bundle/Contents/MacOS" "$task_catalog_bundle/Contents/Resources"
+python3 -S - "$task_catalog_bundle/Contents/Info.plist" <<'PY'
+from pathlib import Path
+import plistlib
+import sys
+Path(sys.argv[1]).write_bytes(plistlib.dumps({
+    'CFBundleIdentifier': 'ai.pichi.command-catalog.fixture',
+    'CFBundleExecutable': 'tests', 'CFBundlePackageType': 'APPL',
+    'CFBundleDevelopmentRegion': 'en', 'CFBundleLocalizations': ['en', 'ru'],
+}))
+PY
+xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
+    --output-directory "$task_catalog_bundle/Contents/Resources" --language en --language ru
 xcrun swiftc -parse-as-library \
     -module-cache-path "$task_test_dir/ModuleCache" \
     "$task_test_dir/ModelRepository.swift" \
@@ -24,8 +40,8 @@ xcrun swiftc -parse-as-library \
     Sources/Fluid/Views/CommandModelCatalog.swift \
     Sources/Fluid/Persistence/SettingsStore+CommandMode.swift \
     Tests/CommandModelCatalogTests.swift \
-    -o "$task_test_dir/catalog-tests"
-"$task_test_dir/catalog-tests"
+    -o "$task_catalog_bundle/Contents/MacOS/tests"
+"$task_catalog_bundle/Contents/MacOS/tests"
 
 # The second executable runs actual credential ownership, catalog verification,
 # summary resolution and HTTP transport against injected storage/URLProtocol.

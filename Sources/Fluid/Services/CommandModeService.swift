@@ -845,7 +845,7 @@ final class CommandModeService: ObservableObject {
             providerID: settings.effectiveCommandModeProviderID,
             modelID: settings.effectiveCommandModeSelectedModel
         ) else {
-            throw LLMError.invalidRequest(settings.commandModeReadinessIssue ?? "Command Mode needs a verified chat provider.")
+            throw LLMError.invalidRequest(settings.commandModeReadinessIssue ?? PichiLocalization.text("Command Mode needs a verified chat provider."))
         }
         let providerID = verified.option.providerID
         let model = verified.option.modelID

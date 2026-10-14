@@ -272,6 +272,7 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
 
     static func main() async {
         await self.directOutputPreservesRequestAndResponse()
+        await self.readinessKeysRemainLiteralUserModelAndRemoteErrorData()
         await self.generatedStepDescriptionsRespectLocale()
         await self.cancelDelayedLLM(response: .tool)
         await self.cancelDelayedLLM(response: .done)
@@ -342,6 +343,35 @@ enum LLMError: Error { case invalidRequest(String), invalidResponse }
             "Mac actions must share the same generic policy rather than a duplicated prompt or pipeline")
         self.check(TerminalService.executed == ["fake command"] && service.conversationHistory.last?.content == "Done",
             "The scoped direct-output policy must retain the existing tool loop")
+    }
+
+    static func readinessKeysRemainLiteralUserModelAndRemoteErrorData() async {
+        let original = UserDefaults.standard.string(forKey: PichiInterfaceLanguage.defaultsKey)
+        defer { UserDefaults.standard.set(original, forKey: PichiInterfaceLanguage.defaultsKey) }
+        let literal = "Command Mode needs a verified chat provider."
+        for language in ["en", "ru"] {
+            let service = self.fixture()
+            UserDefaults.standard.set(language, forKey: PichiInterfaceLanguage.defaultsKey)
+            LLMClient.shared.delay = false
+            LLMClient.shared.responses = [.init(content: literal, thinking: nil, toolCalls: [])]
+            await service.processUserCommand(literal)
+            self.check(LLMClient.shared.configs[0].messages.last?["content"] as? String == literal
+                && service.conversationHistory.map(\.content) == [literal, literal]
+                && ChatHistoryStore.shared.currentSession?.messages.map(\.content) == [literal, literal],
+                "User and model content equal to a readiness key must remain literal in either interface language")
+
+            let failed = self.fixture()
+            UserDefaults.standard.set(language, forKey: PichiInterfaceLanguage.defaultsKey)
+            let task = Task { await failed.processUserCommand(literal) }
+            await self.waitFor { LLMClient.shared.pending != nil }
+            LLMClient.shared.pending?.resume(throwing: NSError(domain: "SyntheticRemoteError", code: 17,
+                userInfo: [NSLocalizedDescriptionKey: literal]))
+            await task.value
+            self.check(failed.conversationHistory.last?.content == "Error: \(literal)"
+                && ChatHistoryStore.shared.currentSession?.messages.last?.content == "Error: \(literal)",
+                "Native remote error text equal to a readiness key must be preserved, not looked up as interface copy")
+            self.check(TerminalService.executed.isEmpty, "Readiness/data localization must not create tool execution")
+        }
     }
 
     static func generatedStepDescriptionsRespectLocale() async {
