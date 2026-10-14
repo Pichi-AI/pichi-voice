@@ -52,12 +52,33 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&hiss, duration: 4, rms: Self.speech, crossing: 0.5)
         try require(hiss.snapshot.tokens.isEmpty, "Modulated high-frequency hiss cannot mint progress")
         print("PASS impulse and modulated hiss rejection")
+        var roomNoise = MeetingPendingSpeechProjection()
+        feed(&roomNoise, duration: 20, rms: { time in 0.0025 + 0.0015 * Float(sin(time * 2 * .pi * 3)) })
+        try require(roomNoise.snapshot.tokens.isEmpty, "Quiet variable room noise must not mint words")
+        var bumps = MeetingPendingSpeechProjection()
+        feed(&bumps, duration: 20, rms: { time in
+            time.truncatingRemainder(dividingBy: 1) < 0.24 ? Self.speech(time) : 0.001
+        })
+        try require(bumps.snapshot.tokens.isEmpty, "Separated short bumps must not accumulate cadence debt")
+        print("PASS raised quiet threshold and separated bump rejection")
         let original = speech.snapshot.tokens
         feed(&speech, start: 8, duration: 2, rms: { _ in 0 })
         try require(speech.snapshot.tokens == original, "A pause neither adds nor erases waiting audio")
         feed(&speech, start: 10, duration: 2, rms: Self.speech)
         try require(speech.snapshot.tokens.starts(with: original), "Resuming preserves prior stable identities")
         print("PASS pause and resume")
+        let beforeQuiet = speech.snapshot.tokens
+        feed(&speech, start: 12, duration: 6, rms: { _ in 0.001 })
+        try require(!beforeQuiet.isEmpty && speech.snapshot.tokens.isEmpty, "Long quiet expires only visual estimates")
+        var lateText = MeetingLiveTranscriptSnapshot.empty
+        lateText.revision = 1
+        lateText.utterances = [.init(id: UUID(), speaker: .you, text: "Late approved words", start: 0, end: 12)]
+        speech.reconcile(visible: lateText)
+        try require(speech.snapshot.tokens.isEmpty, "Late text cannot resurrect expired waveforms")
+        feed(&speech, start: 18, duration: 2, rms: Self.speech)
+        try require(!speech.snapshot.tokens.isEmpty && speech.snapshot.tokens.allSatisfy { $0.start >= 18 },
+                    "Resumed speech starts fresh after quiet cleanup")
+        print("PASS long quiet expiry, late text and fresh speech")
         var cap = MeetingPendingSpeechProjection()
         feed(&cap, duration: 120, rms: Self.speech)
         try require(cap.snapshot.tokens.count == 64, "Long recognition delays keep exactly the bounded token cap")
@@ -111,6 +132,10 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&sources, duration: 3, rms: Self.speech)
         feed(&sources, duration: 3, source: .them, rms: Self.speech)
         let them = sources.snapshot.tokens.filter { $0.source == .them }
+        var quietSource = sources
+        feed(&quietSource, start: 3, duration: 6, rms: { _ in 0 })
+        try require(quietSource.snapshot.tokens == them, "Quiet microphone cleanup cannot erase the other audio source")
+        print("PASS source-specific quiet expiry")
         visible.revision = 2
         visible.utterances[0].end = 4
         sources.reconcile(visible: visible)

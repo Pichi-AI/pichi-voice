@@ -325,11 +325,15 @@ nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
 /// still resemble speech, so the UI must describe audio capture, never recognized words.
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
+    static let minimumActivityRMS: Float = 0.006
+    static let quietExpirySeconds: TimeInterval = 5
+    private static let cadenceResetSeconds: TimeInterval = 0.24
     private struct Track {
         var energies: [Float] = []
         var consecutiveActivity = 0
         var pendingDuration: Double = 0
         var lastEnd: Double?
+        var lastActivityEnd: Double?
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
     private var nextID: UInt64 = 0
@@ -360,11 +364,12 @@ nonisolated struct MeetingPendingSpeechProjection {
         let mean = track.energies.reduce(Float(0), +) / Float(track.energies.count)
         let variance = track.energies.reduce(Float(0)) { $0 + ($1 - mean) * ($1 - mean) } / Float(track.energies.count)
         let modulation = mean > 0 ? sqrt(variance) / mean : 0
-        // 60ms onset rejects isolated taps; modulation rejects a constant fan/tone; high ZCR
+        // 120ms onset rejects isolated taps; modulation rejects a constant fan/tone; high ZCR
         // rejects broadband hiss. These thresholds classify an animation candidate only.
-        let candidate = rms >= 0.0015 && modulation >= 0.12 && zeroCrossingRate < 0.34 && peak <= max(0.02, rms * 9)
-        track.consecutiveActivity = candidate ? min(3, track.consecutiveActivity + 1) : 0
-        if track.consecutiveActivity >= 3 {
+        let candidate = rms >= Self.minimumActivityRMS && modulation >= 0.12 && zeroCrossingRate < 0.34 && peak <= max(0.02, rms * 9)
+        track.consecutiveActivity = candidate ? min(6, track.consecutiveActivity + 1) : 0
+        if track.consecutiveActivity >= 6 {
+            track.lastActivityEnd = end
             track.pendingDuration += end - start
             // Baseline presentation cadence: 150 words/minute, not a claim about actual words.
             if track.pendingDuration >= 0.4 - 0.000_001 {
@@ -378,6 +383,15 @@ nonisolated struct MeetingPendingSpeechProjection {
                         level: min(1, max(0.08, sqrt(rms / 0.08)))))
                     self.snapshot.revision &+= 1
                 }
+            }
+        }
+        if let lastActivityEnd = track.lastActivityEnd {
+            // Unminted cadence must not accumulate across separate background bumps.
+            if end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
+            if end - lastActivityEnd >= Self.quietExpirySeconds {
+                let before = self.snapshot.tokens.count
+                self.snapshot.tokens.removeAll { $0.source == source && $0.end <= lastActivityEnd }
+                if self.snapshot.tokens.count != before { self.snapshot.revision &+= 1 }
             }
         }
         self.tracks[source] = track

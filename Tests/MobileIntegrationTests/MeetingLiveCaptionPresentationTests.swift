@@ -294,13 +294,20 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                     && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
             }
             capture(host, step: "04-pending-while-paused", scheme: scheme)
+            let heightBeforeQuietCleanup = scroll.contentSize.height
+            host.model.pending = .empty
+            try await settle(host, "Quiet cleanup must preserve the reader's position") {
+                scroll.contentSize.height < heightBeforeQuietCleanup - 20
+                    && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
+            }
+            capture(host, step: "05-quiet-cleanup-while-paused", scheme: scheme)
             scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll) - 20), animated: false)
             try await settle(host, "Almost reaching the bottom does not resume following") { !self.nearBottom(scroll) }
             scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll)), animated: false)
             try await settle(host, "Reaching the actual bottom resumes following") { self.nearBottom(scroll) }
             host.model.pending = pending(count: 64)
             try await settle(host, "New pending audio follows after reaching the bottom") { self.nearBottom(scroll) }
-            capture(host, step: "05-bottom-resumes-pending", scheme: scheme)
+            capture(host, step: "06-bottom-resumes-pending", scheme: scheme)
         }
     }
 
