@@ -1575,7 +1575,10 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
                 languageCode: modelID == "gigaam-v3-eou" ? "ru" : "auto", diarizationEnabled: true)
             XCTAssertEqual(configuration.asrModel, modelID)
             XCTAssertNil(configuration.asrArtifactDirectory)
-            XCTAssertNil(configuration.asrArtifactFingerprint)
+            if modelID == PichiMeetingProviderFactory.gigaamModelID {
+                // Admission reads catalog identity/file-presence metadata, not weight bytes.
+                XCTAssertTrue(configuration.asrArtifactFingerprint?.hasPrefix("gigaam-native-v1/") == true)
+            } else { XCTAssertNil(configuration.asrArtifactFingerprint) }
             XCTAssertTrue(configuration.diarizationFingerprint.hasPrefix("unavailable:"))
             XCTAssertNoThrow(try MeetingProviderOptions.resolve(configuration))
         }
@@ -1613,5 +1616,66 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(probe.dependencies, 0)
         XCTAssertEqual(probe.runtime, 0)
         XCTAssertEqual(probe.service, 0)
+    }
+
+    func testMeasuredPCMRestrictionIsExactAndPreservesNeighborConfigurations() throws {
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: PichiMeetingProviderFactory.gigaamModelID))
+        let restriction = try XCTUnwrap(descriptor.pcmAdmissionRestrictions.first)
+        XCTAssertEqual(descriptor.pcmAdmissionRestrictions.count, 1)
+        XCTAssertTrue(restriction.asrArtifactFingerprint.contains("gigaam-v3-e2e-ctc-int8"))
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
+            asrArtifactFingerprint: restriction.asrArtifactFingerprint, languageCode: "ru", speakerLabelsEnabled: true)
+        let context = MeetingPCMAdmissionContext(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: true)
+        XCTAssertThrowsError(try descriptor.validatePCMInput(configuration: configuration, mode: .inRoom, admissionContext: context)) { error in
+            XCTAssertEqual(error as? MeetingBackendError, .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction))
+            XCTAssertTrue(error.localizedDescription.contains(restriction.modelDisplayName))
+            XCTAssertTrue(error.localizedDescription.contains(restriction.alternativeModelDisplayName))
+        }
+        for neighbor in [
+            MeetingPCMAdmissionContext(physicalDeviceModel: "iPad7,2", operatingSystemVersion: "17.7.10", piiRedactionEnabled: true),
+            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.9", piiRedactionEnabled: true),
+            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "18.0.0", piiRedactionEnabled: true),
+            .init(physicalDeviceModel: nil, operatingSystemVersion: "17.7.10", piiRedactionEnabled: true),
+            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: false)
+        ] {
+            XCTAssertNoThrow(try descriptor.validatePCMInput(configuration: configuration, mode: .inRoom, admissionContext: neighbor))
+        }
+        let artifactNeighbors: [(String?, Bool)] = [(restriction.asrArtifactFingerprint, false), ("unmeasured-fp16-export", true), (nil, true)]
+        for (fingerprint, speakers) in artifactNeighbors {
+            let neighbor = MeetingFinalProcessingConfiguration(asrModel: configuration.asrModel,
+                asrArtifactFingerprint: fingerprint, languageCode: "ru", speakerLabelsEnabled: speakers)
+            XCTAssertNoThrow(try descriptor.validatePCMInput(configuration: neighbor, mode: .inRoom, admissionContext: context))
+        }
+        let tiny = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: PichiMeetingProviderFactory.whisperTinyModelID))
+        XCTAssertNoThrow(try tiny.validatePCMInput(configuration: .init(asrModel: PichiMeetingProviderFactory.whisperTinyModelID,
+            languageCode: "auto", speakerLabelsEnabled: true), mode: .inRoom, admissionContext: context))
+        var retained = self.session(backendID: descriptor.id, language: "ru")
+        retained.audioStorageMode = .retainedFiles
+        retained.piiRedactionEnabled = true
+        let wrongInput = MeetingBackendRequest(attemptID: UUID(), session: retained,
+            sessionDirectory: URL(fileURLWithPath: "/synthetic"), configuration: configuration)
+        XCTAssertThrowsError(try descriptor.validatePCMInput(wrongInput, admissionContext: context)) { error in
+            XCTAssertEqual(error as? MeetingBackendError, .unsupportedTrackTopology(backend: descriptor.id),
+                "The deployment restriction must not reinterpret retained-file input as strict PCM")
+        }
+    }
+
+    func testFrozenPublicExportAndPIIRejectBeforeResourcePreparation() async throws {
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: PichiMeetingProviderFactory.gigaamModelID))
+        let restriction = try XCTUnwrap(descriptor.pcmAdmissionRestrictions.first)
+        let probe = Probe()
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
+            probe.service += 1; XCTFail("Admission must precede ASR residency"); return ASRService()
+        }, managesModelResidency: false, pcmAdmissionContextProvider: { pii in
+            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: pii)
+        }, backendRegistry: .makeDefault(), meetingRuntimeFactory: { _ in
+            probe.runtime += 1; throw RuntimeReached()
+        }, prepareDiarizationDependencies: { _ in probe.dependencies += 1 })
+        var session = self.session(backendID: .gigaam, language: "ru")
+        session.piiRedactionEnabled = true
+        session.speakerLabelsEnabled = true
+        session.recordingASRArtifactFingerprint = restriction.asrArtifactFingerprint
+        await self.reject(pipeline, session: session,
+            expected: .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction), probe: probe)
     }
 }

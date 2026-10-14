@@ -27,17 +27,20 @@ extension MeetingProcessingPipeline {
         guard configuration.audioStorageMode == .memoryOnly else { throw MeetingMemoryAudioError.invalidBudget }
         let processingConfiguration = PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
             languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true)
-        return try self.resolveMemoryInputBackend(backendID: backendID, configuration: processingConfiguration, mode: configuration.mode).descriptor
+        let admissionContext = self.pcmAdmissionContextProvider(configuration.piiRedactionEnabled == true)
+        return try self.resolveMemoryInputBackend(backendID: backendID, configuration: processingConfiguration,
+            mode: configuration.mode, admissionContext: admissionContext).descriptor
     }
 
     private func resolveMemoryInputBackend(backendID: MeetingBackendID, configuration: MeetingFinalProcessingConfiguration,
-                                          mode: MeetingCaptureMode) throws -> any MeetingTranscriptionBackend {
+                                          mode: MeetingCaptureMode,
+                                          admissionContext: MeetingPCMAdmissionContext) throws -> any MeetingTranscriptionBackend {
         let backend = try self.backendRegistry.makeBackend(id: backendID,
             context: MeetingBackendHostContext(legacyExecutor: { _, _ in
                 throw MeetingBackendError.unsupportedInput(backend: backendID, input: .boundedMicrophonePCM)
             }))
-        try backend.descriptor.validatePCMInput(configuration: configuration, mode: mode)
-        try backend.validatePCMInput(configuration: configuration, mode: mode)
+        try backend.descriptor.validatePCMInput(configuration: configuration, mode: mode, admissionContext: admissionContext)
+        try backend.validatePCMInput(configuration: configuration, mode: mode, admissionContext: admissionContext)
         return backend
     }
 
@@ -58,6 +61,7 @@ extension MeetingProcessingPipeline {
         guard session.audioStorageMode == .memoryOnly, self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
         let attemptID = UUID()
+        let admissionContext = self.pcmAdmissionContextProvider(session.piiRedactionEnabled == true)
         func requestSnapshot() -> MeetingBackendRequest {
             MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
                 configuration: PichiMeetingProviderFactory.configuration(
@@ -70,11 +74,12 @@ extension MeetingProcessingPipeline {
         // bare factories are inspected too, and the backend must implement strict-input admission.
         let preflightRequest = MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
             configuration: PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
-                languageCode: session.languageCode, diarizationEnabled: session.speakerLabelsEnabled ?? true))
+                languageCode: session.languageCode, diarizationEnabled: session.speakerLabelsEnabled ?? true,
+                artifactFingerprintOverride: session.recordingASRArtifactFingerprint))
         let preflightBackend = try self.resolveMemoryInputBackend(backendID: backendID,
-            configuration: preflightRequest.configuration, mode: session.mode)
+            configuration: preflightRequest.configuration, mode: session.mode, admissionContext: admissionContext)
         let descriptor = preflightBackend.descriptor
-        try descriptor.validatePCMInput(preflightRequest)
+        try descriptor.validatePCMInput(preflightRequest, admissionContext: admissionContext)
         try await self.prepareSpeakerDependencies(for: descriptor, session: session)
         try Task.checkCancellation()
 
@@ -95,8 +100,8 @@ extension MeetingProcessingPipeline {
         guard backend.descriptor == descriptor else {
             throw MeetingBackendError.backendDescriptorMismatch(backend: backendID)
         }
-        try descriptor.validatePCMInput(request)
-        try backend.validatePCMInput(configuration: request.configuration, mode: session.mode)
+        try descriptor.validatePCMInput(request, admissionContext: admissionContext)
+        try backend.validatePCMInput(configuration: request.configuration, mode: session.mode, admissionContext: admissionContext)
         let redactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
         if session.piiRedactionEnabled == true, redactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         let runtime = try backend.makePCMRuntime(request)

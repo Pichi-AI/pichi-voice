@@ -49,19 +49,30 @@ final class AppServices: ObservableObject {
                 // cannot substitute later Settings values into a running meeting.
                 let preferences = settings.meetingRecordingDefaults
                 let modelID = settings.selectedSpeechModel.rawValue
+                let savedBackendID = settings.meetingTranscriptionBackendID
                 let storageMode: MeetingAudioStorageMode = settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
                 let speakerLabelsEnabled = settings.meetingSpeakerLabelsEnabled
                 let piiRedactionEnabled = settings.meetingPIIRedactionEnabled
                 let supported = PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID) ?? []
                 let language = preferences.languageCode.flatMap { supported.contains($0) ? $0 : nil }
                     ?? PichiMeetingProviderFactory.defaultLanguageCode(for: modelID) ?? "auto"
-                if piiRedactionEnabled, !(await privacy.isReady) { try await privacy.prepare() }
                 let microphone = try await resolveMicrophone(preferences.microphoneCoreAudioUID)
                 try Task.checkCancellation()
                 guard settings.selectedSpeechModel.rawValue == modelID else { throw CancellationError() }
-                return MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
+                let configuration = MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
                     microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
                     speakerLabelsEnabled: speakerLabelsEnabled, piiRedactionEnabled: piiRedactionEnabled)
+                // Deployment admission uses the frozen privacy request before preparing even
+                // the text redactor. Start/capture owners repeat it after asynchronous work.
+                if storageMode == .memoryOnly {
+                    let backendID = PichiMeetingProviderFactory.selectedBackendID(languageCode: language,
+                        selectedModelID: modelID, savedBackendID: savedBackendID)
+                    _ = try pipeline.validateMemoryAudioInput(configuration: configuration, backendID: backendID)
+                }
+                if piiRedactionEnabled, !(await privacy.isReady) { try await privacy.prepare() }
+                try Task.checkCancellation()
+                guard settings.selectedSpeechModel.rawValue == modelID else { throw CancellationError() }
+                return configuration
             },
             redactorProvider: { privacy },
             validateRecordingModels: {

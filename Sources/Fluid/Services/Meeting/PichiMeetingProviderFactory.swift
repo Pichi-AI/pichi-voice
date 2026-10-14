@@ -1,4 +1,5 @@
 import Foundation
+import PichiGigaAM
 
 /// Compiled downstream registrations. Adding a provider changes this composition boundary and
 /// its inference adapter, without adding model fields to the meeting pipeline or host context.
@@ -25,6 +26,8 @@ enum PichiMeetingProviderFactory {
         let configurationSnapshot: @MainActor @Sendable (String, String?, Bool) -> MeetingFinalProcessingConfiguration
         let modelsExistOnDisk: @MainActor @Sendable () -> Bool
         let liveAdmission: LiveAdmission
+        /// Cheap catalog/file-presence metadata only, never model hashing or preparation.
+        let admissionArtifactFingerprint: @MainActor @Sendable () -> String?
     }
 
     private nonisolated static let registrations: [String: Registration] = [
@@ -41,11 +44,23 @@ enum PichiMeetingProviderFactory {
                     "GigaAM supports Russian. For English or mixed speech, select a multilingual model.",
                     "Speaker labels are automatic and can be uncertain in short or overlapping speech.",
                     "Download the speaker models in Recording settings before an offline meeting.",
+                    "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
+                pcmAdmissionRestrictions: [
+                    // The recorded iPad7,1 strict profile suffered CPU termination. Separate
+                    // installation metadata identifies this public export; the historical crash
+                    // did not record its fingerprint. Other exports/deployments remain separate
+                    // evidence; changing the inference route requires revalidation.
+                    MeetingPCMAdmissionRestriction(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10",
+                        asrArtifactFingerprint: GigaAMModelCatalog.downloadableModel.fingerprint,
+                        speakerLabelsEnabled: true, piiRedactionEnabled: true,
+                        modelDisplayName: SettingsStore.SpeechModel.gigaam.displayName,
+                        alternativeModelDisplayName: SettingsStore.SpeechModel.whisperTiny.displayName)
+                ]
             ),
             defaultLanguageCode: "ru",
             providerFactory: { configuration in
@@ -59,7 +74,11 @@ enum PichiMeetingProviderFactory {
             modelsExistOnDisk: { PichiGigaAMModelStore.shared.modelsExistOnDisk() },
             // Sustained buffered captions passed on a nominal 4 GB iPad reporting
             // 4,166,696,960 physical bytes. Express this registration in decimal GB.
-            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4_000_000_000, maximumTrackCount: 2)
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4_000_000_000, maximumTrackCount: 2),
+            admissionArtifactFingerprint: {
+                // A fresh install prepares the public export. Complete imports retain priority.
+                (try? PichiGigaAMModelStore.shared.installedModelFingerprint()) ?? GigaAMModelCatalog.downloadableModel.fingerprint
+            }
         ),
         PichiMeetingProviderFactory.whisperTinyModelID: Registration(
             descriptor: MeetingBackendDescriptor(
@@ -96,7 +115,8 @@ enum PichiMeetingProviderFactory {
                 )
             },
             modelsExistOnDisk: { SettingsStore.SpeechModel.whisperTiny.isInstalled },
-            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 2 * 1_073_741_824, maximumTrackCount: 2)
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 2 * 1_073_741_824, maximumTrackCount: 2),
+            admissionArtifactFingerprint: { nil }
         ),
         PichiMeetingProviderFactory.parakeetV3ModelID: Registration(
             descriptor: MeetingBackendDescriptor(
@@ -134,7 +154,8 @@ enum PichiMeetingProviderFactory {
                 )
             },
             modelsExistOnDisk: { SettingsStore.SpeechModel.parakeetTDT.isInstalled },
-            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2)
+            liveAdmission: LiveAdmission(minimumPhysicalMemoryBytes: 4 * 1_073_741_824, maximumTrackCount: 2),
+            admissionArtifactFingerprint: { nil }
         ),
     ]
 
@@ -209,12 +230,14 @@ enum PichiMeetingProviderFactory {
     }
 
     /// Capability/option admission uses registered metadata only. Installed artifact identity
-    /// belongs to the later frozen attempt snapshot; probing it here would hash full weights on
-    /// the main actor before downloads, permissions or the audio lease.
+    /// belongs to the later frozen attempt snapshot. A restricted registration may supply cheap
+    /// expected export metadata here; weight verification remains with provider preparation.
     static func validationConfiguration(backendID: MeetingBackendID, languageCode: String,
-                                        diarizationEnabled: Bool) -> MeetingFinalProcessingConfiguration {
-        if let modelID = self.registrations.first(where: { $0.value.descriptor.id == backendID })?.key {
-            return MeetingFinalProcessingConfiguration(asrModel: modelID, languageCode: languageCode,
+                                        diarizationEnabled: Bool,
+                                        artifactFingerprintOverride: String? = nil) -> MeetingFinalProcessingConfiguration {
+        if let (modelID, registration) = self.registrations.first(where: { $0.value.descriptor.id == backendID }) {
+            return MeetingFinalProcessingConfiguration(asrModel: modelID,
+                asrArtifactFingerprint: artifactFingerprintOverride ?? registration.admissionArtifactFingerprint(), languageCode: languageCode,
                 diarizationFingerprint: "unavailable:input-admission", speakerLabelsEnabled: diarizationEnabled)
         }
         return MeetingFinalProcessingConfiguration(languageCode: languageCode,

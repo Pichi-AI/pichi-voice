@@ -1354,6 +1354,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
     var memoryAttempts: [MeetingSessionID: MeetingMemoryProcessingAttempt] = [:]
     let privacyRedactorProvider: @MainActor () throws -> (any TranscriptTextRedacting)?
+    /// Deployment/PII admission is separate from ASR identity and is frozen per strict attempt.
+    let pcmAdmissionContextProvider: @MainActor (Bool) -> MeetingPCMAdmissionContext
     private let managesModelResidency: Bool
     private let settings: SettingsStore
     let asrServiceProvider: @MainActor () -> any MeetingASRServicing
@@ -1385,6 +1387,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         managesModelResidency: Bool = true,
         settings: SettingsStore? = nil,
         privacyRedactorProvider: @escaping @MainActor () throws -> (any TranscriptTextRedacting)? = { nil },
+        pcmAdmissionContextProvider: @escaping @MainActor (Bool) -> MeetingPCMAdmissionContext = { .current(piiRedactionEnabled: $0) },
         serializationGate: MeetingProcessingSerializationGate = .shared,
         backendRegistry: MeetingTranscriptionBackendRegistry? = nil,
         backendID: MeetingBackendID? = nil,
@@ -1401,6 +1404,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         self.settings = settings
         self.asrServiceProvider = asrServiceProvider
         self.privacyRedactorProvider = privacyRedactorProvider
+        self.pcmAdmissionContextProvider = pcmAdmissionContextProvider
         self.usesRecordingBackendPin = backendID == nil && backendIDProvider == nil && backendRegistry == nil
         self.managesModelResidency = managesModelResidency
         self.serializationGate = serializationGate
