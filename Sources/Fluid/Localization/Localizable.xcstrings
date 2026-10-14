@@ -50053,6 +50053,159 @@
           }
         }
       }
+    },
+    "No call was detected. Choose its app under Change, or choose In person for microphone-only recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No call was detected. Choose its app under Change, or choose In person for microphone-only recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звонок не обнаружен. Выберите его приложение в меню «Изменить» или вариант «В одной комнате» для записи только микрофона."
+          }
+        }
+      }
+    },
+    "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранное приложение встречи недоступно. Откройте его и обновите источники или выберите другое приложение в меню «Изменить»."
+          }
+        }
+      }
+    },
+    "Choose the application that contains the online meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the application that contains the online meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите приложение, в котором проходит онлайн-встреча."
+          }
+        }
+      }
+    },
+    "System audio": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук"
+          }
+        }
+      }
+    },
+    "System audio · all apps": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio · all apps"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук · все приложения"
+          }
+        }
+      }
+    },
+    "Record audio from all apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record audio from all apps."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте звук всех приложений."
+          }
+        }
+      }
+    },
+    "System audio and your mic will be recorded, including apps opened during the meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio and your mic will be recorded, including apps opened during the meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Будут записаны системный звук и микрофон, включая приложения, открытые во время встречи."
+          }
+        }
+      }
+    },
+    "System audio includes apps opened during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio includes apps opened during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук включает приложения, открытые во время записи."
+          }
+        }
+      }
+    },
+    "System audio cannot be restricted to an application.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio cannot be restricted to an application."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук нельзя ограничить одним приложением."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

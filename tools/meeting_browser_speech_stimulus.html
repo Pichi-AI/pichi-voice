@@ -1,0 +1,178 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Browser speech capture test</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 48rem; margin: 4rem auto; padding: 0 2rem; }
+  button { font: inherit; margin: .5rem .5rem .5rem 0; padding: .8rem; }
+  audio { display: block; width: 100%; margin-top: 1rem; }
+  #status { min-height: 3rem; }
+</style>
+<h1>Browser speech capture test</h1>
+<p>Plays the local synthetic <code>speech.wav</code> from this server. The WebRTC
+  test sends it between two peers in this tab, then plays received audio, like a remote caller.
+  No microphone, camera, account, or external signaling service is used.</p>
+<button id="direct">Play local speech</button>
+<button id="rtc">Play received WebRTC speech</button>
+<button id="prepare" hidden>Prepare received WebRTC speech</button>
+<p id="status" role="status">Ready. Start meeting capture before playback.</p>
+<audio id="output" controls></audio>
+<script>
+  const output = document.querySelector('#output');
+  const status = document.querySelector('#status');
+  const buttons = [...document.querySelectorAll('button')];
+  const parameters = new URLSearchParams(location.search);
+  const instrumented = ['runID', 'token', 'phase', 'stimulus'].some(key => parameters.has(key));
+  const phase = parameters.get('phase');
+  const autoPrepare = instrumented && parameters.get('autoPrepare') === '1';
+  const stimulus = instrumented ? parameters.get('stimulus') : 'speech.wav';
+  let preparedStart = null;
+  let playbackActive = false;
+  async function phaseEvent(event, endpoint = '/phase-event') {
+    if (!instrumented) return;
+    const response = await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ runID: parameters.get('runID'), token: parameters.get('token'), phase, event })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Native phase barrier failed');
+    return result;
+  }
+  async function completed(message) {
+    if (instrumented && !playbackActive) return;
+    playbackActive = false;
+    try {
+      const ack = await phaseEvent('ended');
+      status.textContent = instrumented ? `${message} Native end acknowledged (${ack.sequence}).` : message;
+      buttons.forEach(button => button.disabled = instrumented);
+    } catch (error) { fail(error); }
+  }
+  let cleanup = async () => {};
+  async function play(received, prepareOnly = false) {
+    if (instrumented && !prepareOnly) {
+      if (!received || !preparedStart) { fail(new Error('Prepare WebRTC before starting native capture')); return; }
+      buttons.forEach(button => button.disabled = true);
+      const start = preparedStart;
+      preparedStart = null;
+      try { await start(); } catch (error) { fail(error); }
+      return;
+    }
+    await cleanup();
+    buttons.forEach(button => button.disabled = true);
+    const resources = [];
+    cleanup = async () => {
+      output.pause();
+      output.srcObject = null;
+      output.removeAttribute('src');
+      for (const resource of resources) {
+        if (resource instanceof RTCPeerConnection) resource.close();
+        else await resource.close();
+      }
+    };
+    try {
+      if (!received) {
+        output.src = stimulus;
+        output.onended = () => completed('Direct speech complete.');
+        await output.play();
+        status.textContent = 'Playing direct browser speech.';
+        return;
+      }
+      const context = new AudioContext();
+      resources.push(context);
+      if (!autoPrepare) await context.resume();
+      const buffer = await context.decodeAudioData(await (await fetch(stimulus)).arrayBuffer());
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      const destination = context.createMediaStreamDestination();
+      source.connect(destination);
+      const sender = new RTCPeerConnection({ iceServers: [] });
+      const receiver = new RTCPeerConnection({ iceServers: [] });
+      resources.push(sender, receiver);
+      const pendingSender = [], pendingReceiver = [];
+      sender.onicecandidate = event => {
+        if (!event.candidate) return;
+        if (receiver.remoteDescription) receiver.addIceCandidate(event.candidate).catch(fail);
+        else pendingReceiver.push(event.candidate);
+      };
+      receiver.onicecandidate = event => {
+        if (!event.candidate) return;
+        if (sender.remoteDescription) sender.addIceCandidate(event.candidate).catch(fail);
+        else pendingSender.push(event.candidate);
+      };
+      const playing = new Promise((resolve, reject) => {
+        receiver.ontrack = async event => {
+          output.srcObject = event.streams[0];
+          try {
+            if (!autoPrepare) await output.play();
+            resolve();
+          } catch (error) { reject(error); }
+        };
+      });
+      destination.stream.getTracks().forEach(track => sender.addTrack(track, destination.stream));
+      await sender.setLocalDescription(await sender.createOffer());
+      await receiver.setRemoteDescription(sender.localDescription);
+      for (const candidate of pendingReceiver) await receiver.addIceCandidate(candidate);
+      await receiver.setLocalDescription(await receiver.createAnswer());
+      await sender.setRemoteDescription(receiver.localDescription);
+      for (const candidate of pendingSender) await sender.addIceCandidate(candidate);
+      // Wait for the local transport before advancing the deterministic speech buffer.
+      const connected = receiver.connectionState === 'connected' ? Promise.resolve() :
+        new Promise((resolve, reject) => {
+          receiver.onconnectionstatechange = () => {
+            if (receiver.connectionState === 'connected') resolve();
+            if (receiver.connectionState === 'failed') reject(new Error('WebRTC connection failed'));
+          };
+        });
+      let timeout;
+      try {
+        await Promise.race([
+          Promise.all([connected, playing]),
+          new Promise((resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error('WebRTC playback timed out')), 5000);
+          })
+        ]);
+      } finally {
+        clearTimeout(timeout);
+      }
+      source.onended = () => completed('Received WebRTC speech complete.');
+      const start = async () => {
+        if (instrumented) {
+          // Invoke these during the actual CUA click, before awaiting the native barrier.
+          await Promise.all([context.resume(), output.play()]);
+          await phaseEvent('starting');
+          playbackActive = true;
+        }
+        source.start();
+        status.textContent = 'Playing received WebRTC browser speech.';
+      };
+      if (prepareOnly) {
+        preparedStart = start;
+        if (autoPrepare) await phaseEvent('prepared', '/browser-prepared');
+        status.textContent = 'Prepared. Await native begin acknowledgement before Play.';
+        document.querySelector('#rtc').disabled = false;
+      } else await start();
+    } catch (error) { fail(error); }
+  }
+  function fail(error) {
+    preparedStart = null;
+    playbackActive = false;
+    status.textContent = `Playback failed: ${error.message}`;
+    buttons.forEach(button => button.disabled = instrumented);
+    cleanup();
+  }
+  document.querySelector('#direct').onclick = () => play(false);
+  document.querySelector('#rtc').onclick = () => play(true);
+  document.querySelector('#prepare').onclick = () => play(true, true);
+  if (instrumented) {
+    buttons.forEach(button => button.disabled = true);
+    const valid = /^[0-9a-f-]{36}$/i.test(parameters.get('runID') || '') &&
+      /^[A-Za-z0-9_-]{32,128}$/.test(parameters.get('token') || '') &&
+      ['browserBefore', 'browserAfter'].includes(phase) &&
+      /^[A-Za-z0-9][A-Za-z0-9_-]*\.wav$/.test(stimulus || '');
+    output.controls = false;
+    document.querySelector('#prepare').hidden = autoPrepare;
+    document.querySelector('#prepare').disabled = !valid;
+    status.textContent = valid ? 'Prepare WebRTC before starting native capture.' : 'Invalid opt-in fixture parameters.';
+    if (valid && autoPrepare) play(true, true);
+  }
+</script>
