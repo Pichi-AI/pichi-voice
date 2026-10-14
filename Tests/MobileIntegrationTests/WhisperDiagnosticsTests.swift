@@ -98,6 +98,70 @@ private enum WhisperDiagnosticCases {
         }
         try require(WhisperProbabilityDiagnostics.timingField(1.25) == "1.250", "Measured library timing lost")
     }
+
+    static func tinyPolicyRequiresLoadedArtifactAndBoundedPhysicalInput() throws {
+        let tiny = "whisper-tiny-Q8_0.gguf"
+        for count in [1, 16_000, 320_000] {
+            try require(WhisperShortInputPolicy.applies(modelFile: tiny, sampleCount: count), "Supported short Tiny input lost")
+        }
+        for count in [-1, 0, 320_001, Int.max] {
+            try require(!WhisperShortInputPolicy.applies(modelFile: tiny, sampleCount: count), "Long/invalid input must retain the original recipe")
+        }
+        for artifact in [nil, "whisper-base-Q8_0.gguf", "whisper-tiny.en-Q8_0.gguf", "selected-whisper-tiny", "whisper-small-Q8_0.gguf"] {
+            try require(!WhisperShortInputPolicy.applies(modelFile: artifact, sampleCount: 16_000), "Policy must follow the actual loaded artifact")
+        }
+    }
+
+    static func nativeQualityKeepsClearAndQuietSpeechWithoutTokens() throws {
+        // Approved synthetic benchmark traces, including quiet RU at 1% gain.
+        // These are encoder-quality scalars, independent of absent token.p data.
+        for chunk in [
+            quality(avgLogprob: -0.4, noSpeechProbability: 0.1),
+            quality(avgLogprob: -0.6, noSpeechProbability: 0.057),
+            quality(avgLogprob: -0.849, noSpeechProbability: 0.702),
+            quality(avgLogprob: -1, compressionRatio: 2.4, noSpeechProbability: 0.899),
+        ] {
+            try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [chunk]) == .accepted, "Valid speech quality must remain accepted")
+        }
+        try require(WhisperShortInputPolicy.evaluate(hasText: false, chunks: []) == .empty, "An empty successful decode is not a capture failure")
+    }
+
+    static func uncertainFinalTierAndStrongNoSpeechAreNotPublished() throws {
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(avgLogprob: -1.001)]) == .lowLogprob, "Failed final decoder tier must be suppressed")
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(compressionRatio: 2.401)]) == .compression, "Repetitive final decoder tier must be suppressed")
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(noSpeechProbability: 0.9)]) == .noSpeech, "Strong no-speech evidence must suppress Tiny hallucination")
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(noSpeechProbability: 0.01, noSpeechTriggered: true)]) == .noSpeech, "Native no-speech decision must be honored")
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(), quality(avgLogprob: -1.01, fallbacks: 5)]) == .lowLogprob, "A good earlier chunk cannot hide a failed later tier")
+        // Successful fallback is not intrinsically bad quality. It is the
+        // native final-tier measurements that determine acceptance.
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [quality(temperature: 0.2, fallbacks: 1)]) == .accepted, "Do not invent a confidence penalty from the fallback count")
+    }
+
+    static func missingOrMalformedNativeQualityCannotBecomePerfectConfidence() throws {
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: []) == .missingQuality, "Nonempty result without quality cannot imply success")
+        for value in [Float.nan, .infinity, -.infinity] {
+            for chunk in [quality(temperature: value), quality(avgLogprob: value), quality(compressionRatio: value), quality(noSpeechProbability: value)] {
+                try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [chunk]) == .invalidQuality, "Non-finite quality must be rejected")
+            }
+        }
+        for chunk in [quality(temperature: -1), quality(avgLogprob: 0.1), quality(compressionRatio: -1), quality(noSpeechProbability: -0.1), quality(noSpeechProbability: 1.1), quality(fallbacks: -1)] {
+            try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [chunk]) == .invalidQuality, "Out-of-domain quality must be rejected")
+        }
+    }
+
+    static func partialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection() throws {
+        // This approved noise control still passes the native thresholds. Keep
+        // the limitation explicit instead of tightening a quiet-speech RMS gate.
+        let noise = quality(avgLogprob: -0.9629, noSpeechProbability: 0.7977)
+        try require(WhisperShortInputPolicy.evaluate(hasText: true, chunks: [noise]) == .accepted, "Native quality criteria do not prove semantic correctness")
+    }
+
+    private static func quality(temperature: Float = 0, avgLogprob: Float = -0.5,
+                                compressionRatio: Float = 1.2, noSpeechProbability: Float = 0.1,
+                                fallbacks: Int32 = 0, noSpeechTriggered: Bool = false) -> WhisperShortInputPolicy.Chunk {
+        .init(temperature: temperature, avgLogprob: avgLogprob, compressionRatio: compressionRatio,
+              noSpeechProbability: noSpeechProbability, fallbacks: fallbacks, noSpeechTriggered: noSpeechTriggered)
+    }
 }
 
 #if PICHI_WHISPER_DIAGNOSTICS_STANDALONE
@@ -111,7 +175,12 @@ private struct WhisperDiagnosticsStandalone {
         try WhisperDiagnosticCases.tokenProbabilitiesExcludeUnavailableOrInvalidValues()
         try WhisperDiagnosticCases.languageFieldsCannotLogArbitraryPayloads()
         try WhisperDiagnosticCases.unknownTimingsRemainUnknown()
-        print("PASS: 7 synthetic Whisper diagnostic scenarios using production values")
+        try WhisperDiagnosticCases.tinyPolicyRequiresLoadedArtifactAndBoundedPhysicalInput()
+        try WhisperDiagnosticCases.nativeQualityKeepsClearAndQuietSpeechWithoutTokens()
+        try WhisperDiagnosticCases.uncertainFinalTierAndStrongNoSpeechAreNotPublished()
+        try WhisperDiagnosticCases.missingOrMalformedNativeQualityCannotBecomePerfectConfidence()
+        try WhisperDiagnosticCases.partialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection()
+        print("PASS: 12 synthetic Whisper diagnostic/quality scenarios using production values")
     }
 }
 #else
@@ -124,6 +193,11 @@ final class WhisperDiagnosticsTests: XCTestCase {
     func testTokenProbabilitiesExcludeUnavailableOrInvalidValues() throws { try WhisperDiagnosticCases.tokenProbabilitiesExcludeUnavailableOrInvalidValues() }
     func testLanguageFieldsCannotLogArbitraryPayloads() throws { try WhisperDiagnosticCases.languageFieldsCannotLogArbitraryPayloads() }
     func testUnknownTimingsRemainUnknown() throws { try WhisperDiagnosticCases.unknownTimingsRemainUnknown() }
+    func testTinyPolicyRequiresLoadedArtifactAndBoundedPhysicalInput() throws { try WhisperDiagnosticCases.tinyPolicyRequiresLoadedArtifactAndBoundedPhysicalInput() }
+    func testNativeQualityKeepsClearAndQuietSpeechWithoutTokens() throws { try WhisperDiagnosticCases.nativeQualityKeepsClearAndQuietSpeechWithoutTokens() }
+    func testUncertainFinalTierAndStrongNoSpeechAreNotPublished() throws { try WhisperDiagnosticCases.uncertainFinalTierAndStrongNoSpeechAreNotPublished() }
+    func testMissingOrMalformedNativeQualityCannotBecomePerfectConfidence() throws { try WhisperDiagnosticCases.missingOrMalformedNativeQualityCannotBecomePerfectConfidence() }
+    func testPartialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection() throws { try WhisperDiagnosticCases.partialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection() }
 
     func testProductionRunOptionsKeepRecognitionAndAutomaticLanguageSemantics() {
         for language in [nil, "auto", "ru", "en"] as [String?] {
@@ -138,6 +212,27 @@ final class WhisperDiagnosticsTests: XCTestCase {
         XCTAssertTrue(words.timestamps == .word)
         XCTAssertTrue(words.task == .transcribe)
         XCTAssertNil(words.targetLanguage)
+    }
+
+    func testTinyBoundedRunOptionsKeepLanguageAndTimestampContract() {
+        for language in [nil, "auto", "ru", "en"] as [String?] {
+            let options = WhisperProvider.runOptions(languageCode: language, timestamps: .word,
+                                                     loadedModelName: "whisper-tiny-Q8_0.gguf", sampleCount: 32_000)
+            XCTAssertTrue(options.task == .transcribe)
+            XCTAssertNil(options.targetLanguage)
+            XCTAssertEqual(options.language, language == "auto" ? nil : language)
+            XCTAssertTrue(options.timestamps == .word)
+            guard case .whisper(let family) = options.family else { return XCTFail("Bounded Tiny options missing") }
+            XCTAssertEqual(family.temperature, 0)
+            XCTAssertEqual(family.temperatureInc, 0)
+            XCTAssertEqual(family.seed, 1)
+            XCTAssertNil(family.initialPrompt)
+            XCTAssertNil(family.logprobThold)
+            XCTAssertNil(family.noSpeechThold)
+        }
+        for pair in [("whisper-tiny-Q8_0.gguf", 320_001), ("whisper-base-Q8_0.gguf", 32_000)] {
+            XCTAssertNil(WhisperProvider.runOptions(languageCode: "auto", loadedModelName: pair.0, sampleCount: pair.1).family)
+        }
     }
 }
 #endif
