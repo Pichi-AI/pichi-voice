@@ -210,6 +210,57 @@ class StandaloneRunnerTests(unittest.TestCase):
                 self.assertEqual(inspection.call_args.args[0], ["ps", "-g", "123456", "-o", "pgid=", "-o", "stat="])
                 self.assertEqual(inspection.call_args.kwargs["timeout"], 2)
 
+    def test_signal_zero_permission_denied_requires_group_inspection(self):
+        for code, rows, expected in ((1, "", False), (0, "123456 Z\n", False),
+                                     (0, "123456 S\n", True)):
+            with self.subTest(rows=rows), patch.object(RUNNER.sys, "platform", "darwin"), \
+                 patch.object(RUNNER.os, "killpg", side_effect=PermissionError(errno.EPERM, "synthetic denied group")) as group_signal, \
+                 patch.object(RUNNER.subprocess, "run", return_value=subprocess.CompletedProcess([], code, rows, "")) as inspection:
+                self.assertEqual(RUNNER.live_process_group(123456), expected)
+                group_signal.assert_called_once_with(123456, 0)
+                inspection.assert_called_once_with(["ps", "-g", "123456", "-o", "pgid=", "-o", "stat="],
+                                                   capture_output=True, text=True, timeout=2)
+
+    def test_permission_denied_group_retains_marker_when_live_or_unobservable(self):
+        class Process:
+            pid = 123456
+            returncode = 0
+            def wait(self): return 0
+        for inspection_options in (
+            {"return_value": subprocess.CompletedProcess([], 0, "123456 S\n", "")},
+            {"side_effect": subprocess.TimeoutExpired(["ps"], 2)},
+        ):
+            with self.subTest(inspection_options=inspection_options), \
+                 patch.object(RUNNER.subprocess, "Popen", return_value=Process()), \
+                 patch.object(RUNNER.os, "killpg", side_effect=PermissionError(errno.EPERM, "synthetic denied group")), \
+                 patch.object(RUNNER.subprocess, "run", **inspection_options):
+                # Each scenario has its own marker: a live or unobservable group
+                # must prevent another probe from acquiring the build storage.
+                status, report, _ = self.run_probes([self.probe("denied"), self.probe("later")])
+                self.assertEqual(status, 1)
+                self.assertEqual(report["counts"], {"total": 2, "passed": 0, "failed": 1, "skipped": 1})
+                self.assertEqual(report["results"][0]["exitCode"], 0)
+                self.assertTrue((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+                with self.assertRaises((ValueError, subprocess.TimeoutExpired)):
+                    with RUNNER.run_lock(self.root):
+                        self.fail("An inaccessible live group must retain ownership")
+            # Synthetic marker only; no real process was created by this case.
+            (self.root / ".build" / RUNNER.PROCESS_MARKER).unlink()
+
+    def test_permission_denied_absent_group_releases_marker_after_child_reap(self):
+        class Process:
+            pid = 123456
+            returncode = 0
+            def wait(self): return 0
+        with patch.object(RUNNER.subprocess, "Popen", return_value=Process()), \
+             patch.object(RUNNER.os, "killpg", side_effect=PermissionError(errno.EPERM, "synthetic disappearing group")) as group_signal, \
+             patch.object(RUNNER.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "")):
+            status, report, _ = self.run_probes([self.probe("disappeared")])
+        self.assertEqual(status, 0)
+        self.assertEqual(report["results"][0]["exitCode"], 0)
+        self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
+        self.assertTrue(all(call.args == (123456, 0) for call in group_signal.call_args_list))
+
     def test_zombie_only_descendants_do_not_fail_successful_probe(self):
         class Process:
             pid = 123456
@@ -338,6 +389,8 @@ class StandaloneRunnerTests(unittest.TestCase):
             status, report, _ = self.run_probes([probe])
         self.assertEqual(status, 130)
         self.assertEqual(report["status"], "FAIL")
+        self.assertNotIn("cleanupError", report["results"][0])
+        self.assertNotIn("inspectionError", report["results"][0])
         self.assert_worker_joined()
         self.assertFalse((self.root / ".build" / RUNNER.PROCESS_MARKER).exists())
 
