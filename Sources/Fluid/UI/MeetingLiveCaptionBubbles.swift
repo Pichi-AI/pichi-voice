@@ -110,7 +110,9 @@ struct MeetingLiveBubbleScrollList: View {
                         if self.documentStyle {
                             ForEach(MeetingLiveCaptionParagraphs.compose(self.rows)) { paragraph in
                                 MeetingLiveParagraphRow(paragraph: paragraph,
-                                    hidesPartialFromAccessibility: self.hidesPartialFromAccessibility)
+                                    hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
+                                    interfaceLanguageID: self.locale.identifier)
+                                    .equatable()
                                     .id(paragraph.id)
                                     .transition(.opacity)
                             }
@@ -336,10 +338,19 @@ struct MeetingCaptionScrollTracking: ViewModifier {
     }
 }
 
-private struct MeetingLiveParagraphRow: View {
+// Like bubble rows, unchanged paragraphs should not rebuild their attributed
+// text when only microphone health or pending capture feedback changes.
+private struct MeetingLiveParagraphRow: View, Equatable {
     let paragraph: MeetingLiveCaptionParagraphs.Paragraph
     let hidesPartialFromAccessibility: Bool
+    let interfaceLanguageID: String
     @Environment(\.theme) private var theme
+
+    static func == (lhs: MeetingLiveParagraphRow, rhs: MeetingLiveParagraphRow) -> Bool {
+        lhs.paragraph == rhs.paragraph
+            && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility
+            && lhs.interfaceLanguageID == rhs.interfaceLanguageID
+    }
 
     private var flowingText: Text {
         var text = AttributedString()

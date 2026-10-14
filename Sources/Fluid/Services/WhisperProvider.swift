@@ -130,7 +130,26 @@ nonisolated enum WhisperShortInputPolicy {
     }
 }
 
+/// The pair moves between executors only after its producing native call has
+/// joined. It is never used concurrently; releasing clears the session first.
+private final nonisolated class WhisperNativeModelTransfer: @unchecked Sendable {
+    private var model: Model?
+    private var session: Session?
+
+    init(model: Model, session: Session) { self.model = model; self.session = session }
+
+    func take() throws -> (Model, Session) {
+        guard let model, let session else { throw CancellationError() }
+        self.session = nil; self.model = nil
+        return (model, session)
+    }
+
+    func release() { self.session = nil; self.model = nil }
+}
+
 /// TranscriptionProvider implementation using transcribe.cpp for Whisper GGUF models.
+/// Public state stays on the provider's existing actor. Blocking native
+/// allocations and destruction use the existing transcription executor.
 final class WhisperProvider: TranscriptionProvider {
     let name = "Whisper (Universal)"
 
@@ -139,11 +158,13 @@ final class WhisperProvider: TranscriptionProvider {
         return Transcribe.backendAvailable(Self.platformBackend)
     }
 
-    private static let backendInitialization: Result<Void, Error> = Result {
+    private nonisolated static let backendInitialization: Result<Void, Error> = Result {
         try Transcribe.initBackends()
     }
 
     private let stateLock = NSLock()
+    private let nativePreparationExecutor = TranscriptionExecutor()
+    private var preparationGeneration: UInt64 = 0
     private var model: Model?
     private var session: Session?
     private var ready = false
@@ -327,12 +348,12 @@ final class WhisperProvider: TranscriptionProvider {
                 "WhisperProvider: Model changed from \(loadedModelName ?? "nil") to \(currentModelName), forcing reload",
                 source: "WhisperProvider"
             )
-            self.unloadModel()
+            await self.releaseResidency()
         }
 
         guard !self.isReady else { return }
 
-        try Self.backendInitialization.get()
+        try await self.nativePreparationExecutor.runBlocking { try Self.backendInitialization.get() }
         try self.validateBackendAvailability(for: targetModel)
 
         try FileManager.default.createDirectory(at: self.modelDirectory, withIntermediateDirectories: true)
@@ -363,12 +384,6 @@ final class WhisperProvider: TranscriptionProvider {
                 userInfo: [NSLocalizedDescriptionKey: "Whisper model file is missing or corrupted. Please re-download the model."]
             )
         }
-        if let expected = self.expectedArtifactFingerprint,
-           try Self.installedArtifactFingerprint(for: targetModel, directory: self.modelDirectory) != expected {
-            throw NSError(domain: "WhisperProvider", code: -8, userInfo: [
-                NSLocalizedDescriptionKey: "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.",
-            ])
-        }
         self.removeLegacyModelIfNeeded()
 
         let requiredMemoryGB = targetModel.requiredMemoryGB
@@ -398,37 +413,57 @@ final class WhisperProvider: TranscriptionProvider {
         progressHandler?(.loading)
 
         let loadedModelURL = self.modelURL
-        let loadedModel = try Model(
-            path: loadedModelURL.path,
-            options: ModelOptions(backend: self.backend)
-        )
-        let runtimeBackend = loadedModel.backend.lowercased()
-        if self.backend == .metal,
-           !runtimeBackend.contains("metal"),
-           !runtimeBackend.contains("mtl")
-        {
-            throw NSError(
-                domain: "WhisperProvider",
-                code: -7,
-                userInfo: [NSLocalizedDescriptionKey: "\(targetModel.displayName) loaded on \(loadedModel.backend), but Metal is required on Apple Silicon."]
+        let backend = self.backend
+        let expectedFingerprint = self.expectedArtifactFingerprint
+        let expectedBytes = targetModel.expectedDownloadBytes
+        let requiresAutomaticLanguageDetection = self.useAutomaticLanguageDetection
+        let modelDisplayName = targetModel.displayName
+        self.preparationGeneration &+= 1
+        let preparationGeneration = self.preparationGeneration
+        let preparationStarted = ProcessInfo.processInfo.systemUptime
+        // Model(path:) and session() are blocking native calls. Every strict PCM
+        // window may prepare them again after the speaker phase releases ASR.
+        // Freeze the artifact and backend before crossing the existing executor.
+        let prepared = try await self.nativePreparationExecutor.runBlocking {
+            try Task.checkCancellation()
+            if let expectedFingerprint,
+               try Self.artifactFingerprint(at: loadedModelURL, expectedBytes: expectedBytes) != expectedFingerprint {
+                throw NSError(domain: "WhisperProvider", code: -8, userInfo: [
+                    NSLocalizedDescriptionKey: "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.",
+                ])
+            }
+            let model = try Model(path: loadedModelURL.path, options: ModelOptions(backend: backend))
+            try Task.checkCancellation()
+            let options = SessionOptions()
+            let session = try model.session(options)
+            let runtimeBackend = model.backend.lowercased()
+            if backend == .metal, !runtimeBackend.contains("metal"), !runtimeBackend.contains("mtl") {
+                throw NSError(domain: "WhisperProvider", code: -7, userInfo: [
+                    NSLocalizedDescriptionKey: "\(modelDisplayName) loaded on \(model.backend), but Metal is required on Apple Silicon.",
+                ])
+            }
+            if requiresAutomaticLanguageDetection,
+               (!model.capabilities.supportsLanguageDetect
+                    || !Set(model.capabilities.languages).isSuperset(of: ["ru", "en"])) {
+                throw NSError(domain: "WhisperProvider", code: -9, userInfo: [
+                    NSLocalizedDescriptionKey: "This Whisper artifact does not support automatic Russian and English recognition.",
+                ])
+            }
+            try Task.checkCancellation()
+            let elapsed = Int((ProcessInfo.processInfo.systemUptime - preparationStarted) * 1_000)
+            DebugLogger.shared.info("whisper_native_preparation elapsedMs=\(elapsed) mainThread=\(Thread.isMainThread)", source: "WhisperProvider")
+            DebugLogger.shared.info(
+                "whisper_session requested_threads=\(options.nThreads) requested_context=\(options.nCtx) threads_policy=library_default",
+                source: "WhisperProvider"
             )
+            return WhisperNativeModelTransfer(model: model, session: session)
         }
-        let sessionOptions = SessionOptions()
-        let loadedSession = try loadedModel.session(sessionOptions)
-        DebugLogger.shared.info(
-            "whisper_session requested_threads=\(sessionOptions.nThreads) requested_context=\(sessionOptions.nCtx) threads_policy=library_default",
-            source: "WhisperProvider"
-        )
-
-        if self.useAutomaticLanguageDetection,
-           (!loadedModel.capabilities.supportsLanguageDetect
-                || !Set(loadedModel.capabilities.languages).isSuperset(of: ["ru", "en"])) {
-            throw NSError(domain: "WhisperProvider", code: -9, userInfo: [
-                NSLocalizedDescriptionKey: "This Whisper artifact does not support automatic Russian and English recognition.",
-            ])
+        // Exclusive ownership crosses back only after native work has joined.
+        guard !Task.isCancelled, preparationGeneration == self.preparationGeneration else {
+            await self.releaseNative(prepared)
+            throw CancellationError()
         }
-
-        try Task.checkCancellation()
+        let (loadedModel, loadedSession) = try prepared.take()
         self.installModel(loadedModel, session: loadedSession, modelName: loadedModelURL.lastPathComponent)
         DebugLogger.shared.info(
             "WhisperProvider: Model ready (\(currentModelName), backend=\(loadedModel.backend), arch=\(loadedModel.arch))",
@@ -654,7 +689,32 @@ final class WhisperProvider: TranscriptionProvider {
         return selected == "auto" ? nil : selected
     }
 
-    func releaseResidency() async { self.unloadModel() }
+    func releaseResidency() async {
+        self.preparationGeneration &+= 1
+        let retired = self.stateLock.withLock { () -> WhisperNativeModelTransfer? in
+            guard let model, let session else { self.ready = false; return nil }
+            let retired = WhisperNativeModelTransfer(model: model, session: session)
+            self.session = nil; self.model = nil; self.ready = false; self.loadedModelName = nil
+            return retired
+        }
+        // Owners already drain inference before release. Explicitly free the pair
+        // on the same native executor; dropping it on MainActor can stall scrolling.
+        if let retired { await self.releaseNative(retired) }
+    }
+
+    private func releaseNative(_ retired: WhisperNativeModelTransfer) async {
+        // Cleanup has its own joined task, so cancellation of the meeting cannot
+        // skip the blocking release and move deallocation back onto the UI actor.
+        let cleanup = Task {
+            try await self.nativePreparationExecutor.runBlocking {
+                let started = ProcessInfo.processInfo.systemUptime
+                retired.release()
+                let elapsed = Int((ProcessInfo.processInfo.systemUptime - started) * 1_000)
+                DebugLogger.shared.info("whisper_native_release elapsedMs=\(elapsed) mainThread=\(Thread.isMainThread)", source: "WhisperProvider")
+            }
+        }
+        _ = await cleanup.result
+    }
     var shouldClearCacheAfterCancellation: Bool { self.overriddenModelDirectory == nil && self.expectedArtifactFingerprint == nil }
 
     /// The loader consumes GGUF, not legacy whisper.cpp GGML `.bin` exports. Inspect the
@@ -663,8 +723,12 @@ final class WhisperProvider: TranscriptionProvider {
         guard let file = model.whisperModelFile else { return nil }
         let root = directory ?? AppBrand.cachesDirectory.appendingPathComponent("WhisperModels", isDirectory: true)
         let url = root.appendingPathComponent(file)
+        return try self.artifactFingerprint(at: url, expectedBytes: model.expectedDownloadBytes)
+    }
+
+    private nonisolated static func artifactFingerprint(at url: URL, expectedBytes: Int64) throws -> String? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              (attributes[.size] as? NSNumber)?.int64Value == model.expectedDownloadBytes,
+              (attributes[.size] as? NSNumber)?.int64Value == expectedBytes,
               attributes[.type] as? FileAttributeType == .typeRegular
         else { return nil }
         let input = try FileHandle(forReadingFrom: url)
@@ -682,7 +746,7 @@ final class WhisperProvider: TranscriptionProvider {
     }
 
     func clearCache() async throws {
-        self.unloadModel()
+        await self.releaseResidency()
         let files = [self.modelURL, self.legacyModelURL].compactMap { $0 }
         let directory = self.modelDirectory
         try await Task.detached(priority: .userInitiated) {
