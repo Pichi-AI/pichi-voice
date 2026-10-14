@@ -122,6 +122,12 @@ struct PichiMeetingSummaryView: View {
                 self.summarySection(PichiLocalization.text("Decisions"), items: document.decisions)
                 self.summarySection(PichiLocalization.text("Action items"), items: document.actions, actions: true)
                 self.summarySection(PichiLocalization.text("Questions and answers"), items: document.openQuestions, questions: true)
+                if let changes = document.changes, !changes.isEmpty {
+                    self.summarySection(PichiLocalization.text("Corrections"), items: changes)
+                }
+                if let answers = document.answers, !answers.isEmpty {
+                    self.summarySection(PichiLocalization.text("Answers"), items: answers)
+                }
                 HStack(spacing: self.theme.metrics.spacing.md) {
                     Button("Copy summary", systemImage: "doc.on.doc") { self.copy(document) }
                         .meetingGlassAction()

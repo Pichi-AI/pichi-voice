@@ -6230,6 +6230,23 @@
         }
       }
     },
+    "Answers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответы"
+          }
+        }
+      }
+    },
     "Any transcription text or audio.": {
       "extractionState": "manual",
       "localizations": {
