@@ -21,6 +21,16 @@ def declaration(source: str, marker: str) -> str:
     return source[start:end]
 
 
+def array_literal(source: str, marker: str) -> str:
+    start = source.index("[", source.index(marker) + len(marker))
+    depth = 1
+    end = start + 1
+    while depth:
+        depth += (source[end] == "[") - (source[end] == "]")
+        end += 1
+    return source[start:end]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-ref", help="Optional pre-fix git ref for reproduction checks")
@@ -63,20 +73,54 @@ def main() -> None:
     factory_source = (ROOT / "Sources/Fluid/Services/Meeting/PichiMeetingProviderFactory.swift").read_text()
     factory = factory_source[factory_source.index("enum PichiMeetingProviderFactory {"):
                              factory_source.index("    static func validateRecordingConfiguration(")] + "}\n"
-    for field in ("providerFactory", "configurationSnapshot", "modelsExistOnDisk"):
+    for field in ("providerFactory", "configurationSnapshot", "modelsExistOnDisk", "admissionArtifactFingerprint"):
         factory = "\n".join(line for line in factory.splitlines()
                             if not line.strip().startswith(f"let {field}:"))
-        clause = declaration(factory, f"{field}: {{")
+        while f"{field}: {{" in factory:
+            clause = declaration(factory, f"{field}: {{")
+            factory = factory.replace(clause + ",", "").replace(clause, "")
+    factory = factory.replace(declaration(factory, "    static func registeredModelsExistOnDisk("), "")
+    # Strict PCM/device admission is not consulted by these backup UI handlers.
+    # Omit its stored restriction payload as well as its callbacks, rather than
+    # introducing fake artifact identities, display names or admission validators.
+    while "pcmAdmissionRestrictions:" in factory:
+        clause = "pcmAdmissionRestrictions: " + array_literal(factory, "pcmAdmissionRestrictions:")
         factory = factory.replace(clause + ",", "").replace(clause, "")
-    factory = factory.replace(declaration(factory, "    nonisolated static func registeredModelsExistOnDisk("), "")
     factory += "\n" + declaration(factory_source, "extension MeetingBackendID {") + "\n"
     backend_source = (ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift").read_text()
     metadata = "\n".join(declaration(backend_source, marker) for marker in (
         "nonisolated struct MeetingBackendID:",
         "nonisolated enum MeetingBackendExecutionLocality:",
         "nonisolated enum MeetingBackendResultContract:",
+        "nonisolated enum MeetingDiarizationDependency:",
+        "nonisolated enum MeetingBackendInputKind:",
         "nonisolated struct MeetingBackendDescriptor:",
     ))
+    # PCM admission is exercised by the native backend tests, not these UI handlers.
+    # Keep UI metadata fields/initializer; omit strict-PCM payload and validators below.
+    for marker in ("    func validatePCMInput(configuration:", "    func validatePCMInput(_ request:"):
+        while marker in metadata:
+            metadata = metadata.replace(declaration(metadata, marker), "")
+    metadata = "\n".join(line for line in metadata.splitlines() if not any(
+        fragment in line for fragment in (
+            "let pcmAdmissionRestrictions:", "pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction]",
+            "self.pcmAdmissionRestrictions =",
+        )
+    ))
+    language_source = (ROOT / "Sources/Fluid/Persistence/VoiceEngineLanguageCatalog.swift").read_text()
+    whisper_marker = "    nonisolated static let whisperSupportedLanguageCodes: Set<String> = "
+    whisper_languages = array_literal(language_source, whisper_marker)
+    parakeet_source = (ROOT / "Sources/Fluid/Services/ParakeetSpeechModelCatalog.swift").read_text()
+    parakeet_v3 = parakeet_source[parakeet_source.index("    static let v3 = Descriptor("):]
+    parakeet_languages = array_literal(parakeet_v3, "supportedLanguageCodes:")
+    # Substitute only the immutable catalog array so the real language policy compiles
+    # without unrelated Parakeet artifact-verification/filesystem dependencies.
+    parakeet_policy = next(line for line in language_source.splitlines()
+                           if "static let parakeetV3LanguageIDs =" in line)
+    parakeet_policy = parakeet_policy.replace("ParakeetSpeechModelCatalog.v3.supportedLanguageCodes",
+                                             parakeet_languages)
+    metadata += "\nenum VoiceEngineLanguageCatalog {\n" + whisper_marker + whisper_languages + "\n"
+    metadata += parakeet_policy + "\n}\n"
     metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text(),
                                    "nonisolated enum MeetingAudioTrackKind:")
     metadata += "\n" + declaration((ROOT / "Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift").read_text(),
@@ -269,13 +313,28 @@ struct StartReadiness {
     check(rapid.setupDraft.languageCode == "de" && rapid.setupDraft.mode == .onlineCall, "rapid change-back restore keeps latest values")
     restored("fr", .inRoom); rapid.notifyRestore(); restored("de", .inRoom); rapid.notifyRestore()
     check(rapid.setupDraft.languageCode == "de" && !rapid.pendingBackupSetupRefresh, "same-mode repeated restores consume latest language without stale pending state")
-    let legacy = fresh(); SettingsStore.shared.meetingRecordingDefaults.languageCode = nil
-    legacy.notifyRestore()
-    check(legacy.setupDraft.languageCode == PichiMeetingProviderFactory.defaultLanguageCode(for: SettingsStore.shared.selectedSpeechModel.rawValue)
-          && legacy.hardwareQueries == 0, "legacy language uses selected provider metadata without source discovery")
-    SettingsStore.shared.meetingRecordingDefaults.languageCode = "de"
-    legacy.notifyRestore()
-    check(legacy.setupDraft.languageCode == "de", "explicit restored language takes precedence over selected provider metadata")
+    for (modelID, expectedDefault) in [
+        (PichiMeetingProviderFactory.gigaamModelID, "ru"),
+        (PichiMeetingProviderFactory.whisperTinyModelID, "auto"),
+        (PichiMeetingProviderFactory.parakeetV3ModelID, "auto"),
+    ] {
+        let legacy = fresh()
+        SettingsStore.shared.selectedSpeechModel = .init(rawValue: modelID)
+        SettingsStore.shared.meetingRecordingDefaults.languageCode = nil
+        legacy.notifyRestore()
+        check(PichiMeetingProviderFactory.registeredBackendDescriptor(for: modelID) != nil,
+              "restored model retains its real registration")
+        check(PichiMeetingProviderFactory.registeredLanguageCodes(for: modelID)?.contains(expectedDefault) == true,
+              "default language is supported by actual registered metadata")
+        check(legacy.setupDraft.languageCode == expectedDefault && legacy.hardwareQueries == 0,
+              "legacy language uses selected provider metadata without source discovery")
+        SettingsStore.shared.meetingRecordingDefaults.languageCode = "de"
+        legacy.notifyRestore()
+        check(legacy.setupDraft.languageCode == "de", "explicit restored language takes precedence over selected provider metadata")
+    }
+    check(PichiMeetingProviderFactory.defaultLanguageCode(for: "unknown-synthetic-model") == nil
+          && PichiMeetingProviderFactory.registeredLanguageCodes(for: "unknown-synthetic-model") == nil,
+          "unknown models do not acquire fabricated registration metadata")
     let missing = fresh(); missing.microphones = []; missing.applications = []
     restored(); missing.notifyRestore()
     check(missing.setupDraft.selectedMicrophoneID == nil && missing.setupDraft.selectedApplicationID == nil, "missing cached sources stay unselected")

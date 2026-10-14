@@ -1,10 +1,9 @@
-import CoreAudio
 import Foundation
 
 // Persisted metadata is shared by the application and read-only meeting helper.
 // These existing codecs perform no capture, inference, settings or filesystem work.
 nonisolated enum MeetingMicrophoneBindingOutcome: Equatable, Sendable {
-    case boundVerified(AudioObjectID)
+    case boundVerified(UInt32)
     /// Bind failed but the default input already IS the requested device (Bluetooth/aggregate).
     case defaultMatchesRequested
     case unavailable(reason: String)
@@ -18,7 +17,7 @@ extension MeetingMicrophoneBindingOutcome: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
         case .boundVerified:
-            self = try .boundVerified(container.decode(AudioObjectID.self, forKey: .deviceID))
+            self = try .boundVerified(container.decode(UInt32.self, forKey: .deviceID))
         case .defaultMatchesRequested:
             self = .defaultMatchesRequested
         case .unavailable:

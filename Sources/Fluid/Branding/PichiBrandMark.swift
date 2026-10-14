@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 struct PichiBrandMark: View {
@@ -7,6 +11,7 @@ struct PichiBrandMark: View {
     let size: CGFloat
     let color: Color
 
+    #if canImport(AppKit)
     private static var imageCache: [String: NSImage] = [:]
     private static var imageRevision = -1
     static var customImage: NSImage? { self.image(AppBrand.package.logos?.primary, key: "primary") }
@@ -47,11 +52,23 @@ struct PichiBrandMark: View {
         return image
     }
 
+    #else
+    private static func image(_ logo: BrandLogo?, key: String) -> UIImage? {
+        guard let logo, let data = Data(base64Encoded: logo.base64) else { return nil }
+        return UIImage(data: data)
+    }
+    static var customImage: UIImage? { self.image(AppBrand.package.logos?.primary, key: "primary") }
+    #endif
+
     var body: some View {
         let variant = self.theme.variant ?? self.colorScheme
         Group {
             if let image = Self.image(variant == .dark ? AppBrand.package.logos?.dark : AppBrand.package.logos?.light, key: variant == .dark ? "dark" : "light") ?? Self.customImage {
+                #if canImport(AppKit)
                 Image(nsImage: image).resizable()
+                #else
+                Image(uiImage: image).resizable()
+                #endif
             } else if !BrandPackageStore.shared.hasOverride, let asset = AppBrand.distribution.markAsset {
                 Image(asset).resizable().renderingMode(.template).foregroundStyle(self.color)
             } else {

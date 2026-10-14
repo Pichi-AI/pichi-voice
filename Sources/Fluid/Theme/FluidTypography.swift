@@ -1,4 +1,8 @@
+#if canImport(AppKit)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 /// Edit these four choices to experiment across the app, then rebuild.
@@ -25,7 +29,12 @@ enum FluidTypography {
     private static let monospaceName = resolvedName(for: monospace)
 
     static func resolvedName(for family: Family) -> String? {
-        guard case let .named(name) = family, NSFont(name: name, size: 12) != nil else { return nil }
+        guard case let .named(name) = family else { return nil }
+        #if canImport(AppKit)
+        guard NSFont(name: name, size: 12) != nil else { return nil }
+        #else
+        guard UIFont(name: name, size: 12) != nil else { return nil }
+        #endif
         return name
     }
 
@@ -70,6 +79,7 @@ enum FluidTypography {
     }
 
     static func pointSize(for style: Font.TextStyle) -> CGFloat {
+        #if canImport(AppKit)
         switch style {
         case .largeTitle: NSFont.preferredFont(forTextStyle: .largeTitle).pointSize
         case .title: NSFont.preferredFont(forTextStyle: .title1).pointSize
@@ -83,6 +93,22 @@ enum FluidTypography {
         case .caption2: NSFont.preferredFont(forTextStyle: .caption2).pointSize
         default: NSFont.preferredFont(forTextStyle: .body).pointSize
         }
+        #else
+        let native: UIFont.TextStyle = switch style {
+        case .largeTitle: .largeTitle
+        case .title: .title1
+        case .title2: .title2
+        case .title3: .title3
+        case .headline: .headline
+        case .subheadline: .subheadline
+        case .callout: .callout
+        case .footnote: .footnote
+        case .caption: .caption1
+        case .caption2: .caption2
+        default: .body
+        }
+        return UIFont.preferredFont(forTextStyle: native).pointSize
+        #endif
     }
 }
 
@@ -106,6 +132,7 @@ extension Font {
     }
 }
 
+#if canImport(AppKit)
 extension NSFont {
     static func fluidSystemFont(ofSize size: CGFloat, weight: NSFont.Weight = .regular,
                                 style: BrandStyle? = AppBrand.package.style) -> NSFont {
@@ -133,3 +160,5 @@ extension NSFont {
         return .systemFont(ofSize: size, weight: weight)
     }
 }
+
+#endif

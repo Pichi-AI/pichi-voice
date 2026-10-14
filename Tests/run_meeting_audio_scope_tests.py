@@ -13,6 +13,8 @@ models = (ROOT / "Sources/Fluid/Services/Meeting/MeetingModels.swift").read_text
 menu = (ROOT / "Sources/Fluid/Services/AppServices+MeetingMenuBar.swift").read_text()
 capture = (ROOT / "Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift").read_text()
 model_declarations = "\n".join(declaration(models, marker) for marker in (
+    "nonisolated enum MeetingLanguageCode",
+    "nonisolated enum MeetingAudioStorageMode:",
     "nonisolated enum MeetingCaptureMode:",
     "nonisolated enum MeetingApplicationAudioScope:",
     "nonisolated enum MeetingApplicationAudioSource:",

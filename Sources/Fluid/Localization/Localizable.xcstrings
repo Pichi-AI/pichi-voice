@@ -1858,6 +1858,23 @@
         }
       }
     },
+    "%@ with speaker identification and sensitive data redaction can be stopped by the system in the background on this iPad. For recording without saving audio, select %@ in Voice Engine settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ with speaker identification and sensitive data redaction can be stopped by the system in the background on this iPad. For recording without saving audio, select %@ in Voice Engine settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сочетание %@ с определением участников и удалением чувствительных данных может быть остановлено системой в фоне на этом iPad. Для записи без сохранения аудио выберите %@ в настройках распознавания речи."
+          }
+        }
+      }
+    },
     "%@ words": {
       "extractionState": "manual",
       "localizations": {
@@ -26486,6 +26503,23 @@
         }
       }
     },
+    "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На iPad Pro 12,9 дюйма (2-го поколения) с iPadOS 17.7.10 публичная INT8-версия недоступна для записи без сохранения аудио, если одновременно включены определение участников и удаление чувствительных данных. Для этого сочетания используйте Whisper Tiny."
+          }
+        }
+      }
+    },
     "On your Mac": {
       "extractionState": "manual",
       "localizations": {
@@ -50203,6 +50237,1133 @@
           "stringUnit": {
             "state": "translated",
             "value": "Системный звук нельзя ограничить одним приложением."
+          }
+        }
+      }
+    },
+    "About the model": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About the model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "О модели"
+          }
+        }
+      }
+    },
+    "Another PCM window still owns the meeting inference runtime.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another PCM window still owns the meeting inference runtime."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
+          }
+        }
+      }
+    },
+    "Applies to past meetings too. Transcripts are always kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to past meetings too. Transcripts are always kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применяется и к прошлым встречам. Расшифровки сохраняются всегда."
+          }
+        }
+      }
+    },
+    "Audio recordings and transcripts are stored on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recordings and transcripts are stored on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозаписи и расшифровки хранятся на этом устройстве."
+          }
+        }
+      }
+    },
+    "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В аудиозаписи остаются исходные голоса и чувствительные данные. Удаление данных из текста не изменяет аудио."
+          }
+        }
+      }
+    },
+    "Audio storage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio storage"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранение аудио"
+          }
+        }
+      }
+    },
+    "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Battery use and recognition speed depend on the device. Test longer meetings on your iPad."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные встречи на своём iPad."
+          }
+        }
+      }
+    },
+    "Changes apply to new meetings. Audio retention also applies to existing recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes apply to new meetings. Audio retention also applies to existing recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменения применяются к новым встречам. Срок хранения аудио применяется и к существующим записям."
+          }
+        }
+      }
+    },
+    "Delete Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить встречу"
+          }
+        }
+      }
+    },
+    "Delete this meeting and its recordings?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this meeting and its recordings?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить эту встречу и её записи?"
+          }
+        }
+      }
+    },
+    "Download the speaker models in Recording settings before an offline meeting.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the speaker models in Recording settings before an offline meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "До офлайн-встречи загрузите модели определения участников в настройках записи."
+          }
+        }
+      }
+    },
+    "Error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка"
+          }
+        }
+      }
+    },
+    "Export as JSON": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export as JSON"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортировать как JSON"
+          }
+        }
+      }
+    },
+    "Export as Text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export as Text"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортировать как текст"
+          }
+        }
+      }
+    },
+    "Exported audio includes the original voices and sensitive information. It is outside app retention controls.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exported audio includes the original voices and sensitive information. It is outside app retention controls."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортированное аудио содержит исходные голоса и чувствительные данные. Приложение не управляет его сроком хранения."
+          }
+        }
+      }
+    },
+    "GigaAM supports Russian. For English or mixed speech, select a multilingual model.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM supports Russian. For English or mixed speech, select a multilingual model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM поддерживает русский язык. Для английской или смешанной речи выберите мультиязычную модель."
+          }
+        }
+      }
+    },
+    "In-memory transcription could not keep up with microphone capture.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up with microphone capture."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает обрабатывать аудио микрофона."
+          }
+        }
+      }
+    },
+    "In-memory transcription could not keep up. Recording stopped and completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up. Recording stopped and completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает за разговором. Запись остановлена, готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "In-memory transcription is not available for this attempt.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription is not available for this attempt."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой попытки недоступно распознавание только из памяти."
+          }
+        }
+      }
+    },
+    "In-memory transcription requires finite mono 16 kHz PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription requires finite mono 16 kHz PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для распознавания в памяти нужен корректный одноканальный сигнал 16 кГц."
+          }
+        }
+      }
+    },
+    "In-memory transcription stopped. Completed text was preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription stopped. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание из памяти остановлено. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст во время записи обновляется фрагментами. Участник может остаться неопределённым в коротких или одновременных репликах."
+          }
+        }
+      }
+    },
+    "Meeting backend \"%@\" does not support %@ input.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting backend \"%@\" does not support %@ input."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обработчик встречи «%@» не поддерживает аудиовход %@."
+          }
+        }
+      }
+    },
+    "Meeting backend \"%@\" produced capabilities different from its registration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting backend \"%@\" produced capabilities different from its registration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возможности обработчика встречи «%@» отличаются от зарегистрированных."
+          }
+        }
+      }
+    },
+    "Microphone PCM conversion failed. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone PCM conversion failed. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудио микрофона. %@"
+          }
+        }
+      }
+    },
+    "Microphone sample-buffer construction failed (%d).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone sample-buffer construction failed (%d)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать аудиобуфер микрофона (%d)."
+          }
+        }
+      }
+    },
+    "Minimal resource usage. Best for older devices or battery life.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimal resource usage. Best for older devices or battery life."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Минимальное потребление ресурсов. Подходит для старых устройств и экономии заряда."
+          }
+        }
+      }
+    },
+    "Mixed Russian and English speech may contain errors or transliteration.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixed Russian and English speech may contain errors or transliteration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При смешанной русской и английской речи возможны ошибки и запись слов буквами другого языка."
+          }
+        }
+      }
+    },
+    "Only in-room microphone capture is available on this platform.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only in-room microphone capture is available on this platform."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом устройстве можно записывать только разговор в одной комнате через микрофон."
+          }
+        }
+      }
+    },
+    "Parakeet v3 supports 25 languages, including Russian and English.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parakeet v3 supports 25 languages, including Russian and English."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parakeet v3 поддерживает 25 языков, включая русский и английский."
+          }
+        }
+      }
+    },
+    "Prepare the local privacy model before enabling sensitive data redaction.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prepare the local privacy model before enabling sensitive data redaction."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовьте локальную модель приватности перед включением удаления чувствительных данных."
+          }
+        }
+      }
+    },
+    "Privacy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приватность"
+          }
+        }
+      }
+    },
+    "Recording settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки записи"
+          }
+        }
+      }
+    },
+    "Redact sensitive data": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redact sensitive data"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалять чувствительные данные"
+          }
+        }
+      }
+    },
+    "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Русские имена и структурированные идентификаторы удаляются локально до сохранения текста. Распознавание может пропустить чувствительные данные. Проверьте результат перед отправкой."
+          }
+        }
+      }
+    },
+    "Save audio recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save audio recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранять аудиозаписи"
+          }
+        }
+      }
+    },
+    "Sensitive data": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чувствительные данные"
+          }
+        }
+      }
+    },
+    "Sensitive data redaction requires a compatible meeting backend.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction requires a compatible meeting backend."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+          }
+        }
+      }
+    },
+    "Sensitive data redaction stopped. Recording was interrupted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction stopped. Recording was interrupted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление чувствительных данных остановлено. Запись прервана."
+          }
+        }
+      }
+    },
+    "Speaker labels are automatic and can be uncertain in short or overlapping speech.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels are automatic and can be uncertain in short or overlapping speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участники определяются автоматически. Короткие или одновременные реплики могут остаться без точной метки."
+          }
+        }
+      }
+    },
+    "Stored on this device. Place the microphone where everyone can be heard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stored on this device. Place the microphone where everyone can be heard."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранится на этом устройстве. Расположите микрофон так, чтобы было слышно всех."
+          }
+        }
+      }
+    },
+    "System Default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System Default"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию в системе"
+          }
+        }
+      }
+    },
+    "The app is shutting down.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app is shutting down."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приложение завершает работу."
+          }
+        }
+      }
+    },
+    "The audio contains invalid PCM samples.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio contains invalid PCM samples."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио содержит некорректные отсчёты PCM."
+          }
+        }
+      }
+    },
+    "The audio session was interrupted by the operating system.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio session was interrupted by the operating system."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Операционная система прервала запись аудио."
+          }
+        }
+      }
+    },
+    "The bounded audio writer rejected microphone PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded audio writer rejected microphone PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось принять аудио микрофона для сохранения."
+          }
+        }
+      }
+    },
+    "The bounded microphone queue is full.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded microphone queue is full."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очередь аудио микрофона заполнена."
+          }
+        }
+      }
+    },
+    "The in-memory audio budget is invalid.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio budget is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный лимит памяти для обработки аудио."
+          }
+        }
+      }
+    },
+    "The in-memory microphone timeline changed. Completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory microphone timeline changed. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона изменились. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The installed meeting model changed after this attempt was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The meeting PCM window is outside the bounded inference contract.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting PCM window is outside the bounded inference contract."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
+          }
+        }
+      }
+    },
+    "The microphone PCM timeline changed unexpectedly.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone PCM timeline changed unexpectedly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона неожиданно изменились."
+          }
+        }
+      }
+    },
+    "The microphone audio configuration changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone audio configuration changed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки аудиосигнала микрофона изменились."
+          }
+        }
+      }
+    },
+    "The microphone supplied a non-finite PCM sample.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied a non-finite PCM sample."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректное значение аудиосигнала."
+          }
+        }
+      }
+    },
+    "The microphone supplied an invalid PCM buffer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid PCM buffer."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректный аудиобуфер."
+          }
+        }
+      }
+    },
+    "The microphone supplied an invalid presentation timestamp.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid presentation timestamp."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректную временную метку."
+          }
+        }
+      }
+    },
+    "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The selected meeting runtime does not support in-memory audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting runtime does not support in-memory audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
+          }
+        }
+      }
+    },
+    "This Whisper artifact does not support automatic Russian and English recognition.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Whisper artifact does not support automatic Russian and English recognition."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель Whisper не поддерживает автоматическое распознавание русского и английского языков."
+          }
+        }
+      }
+    },
+    "Unknown converter error.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown converter error."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неизвестная ошибка преобразования аудио."
+          }
+        }
+      }
+    },
+    "Unsupported source format.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported source format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат аудиосигнала не поддерживается."
+          }
+        }
+      }
+    },
+    "Use Model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать модель"
+          }
+        }
+      }
+    },
+    "When different people speak in one transcript phrase, speaker labels may remain unknown.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When different people speak in one transcript phrase, speaker labels may remain unknown."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если в одной распознанной фразе говорят разные люди, участник может остаться неопределённым."
+          }
+        }
+      }
+    },
+    "When disabled, audio is never written to files, including temporary files. Only the transcript is saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When disabled, audio is never written to files, including temporary files. Only the transcript is saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если выключено, аудио не записывается в файлы, даже временные. Сохраняется только расшифровка."
+          }
+        }
+      }
+    },
+    "Whisper CPU backend is unavailable on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper CPU backend is unavailable on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU-бэкенд Whisper недоступен на этом устройстве."
+          }
+        }
+      }
+    },
+    "Whisper Tiny is small and fast, with lower recognition accuracy.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny is small and fast, with lower recognition accuracy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny занимает мало места и работает быстро, но точность распознавания ниже."
+          }
+        }
+      }
+    },
+    "Selected for new meetings. Recognition runs during the meeting or after recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected for new meetings. Recognition runs during the meeting or after recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель выбрана для новых встреч. Распознавание выполняется во время встречи или после записи."
           }
         }
       }

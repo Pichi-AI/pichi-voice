@@ -63,7 +63,9 @@ final nonisolated class PichiGigaAMModelStore: @unchecked Sendable {
          importDescriptors: [GigaAMModelDescriptor] = GigaAMModelCatalog.models,
          preferences: UserDefaults = .standard,
          environment: [String: String] = ProcessInfo.processInfo.environment,
-         download: @escaping Download = PichiGigaAMModelStore.downloadArtifact) {
+         download: @escaping Download = { source, maximumBytes, progress in
+             try await PichiGigaAMModelStore.downloadArtifact(source, maximumBytes: maximumBytes, progress: progress)
+         }) {
         self.overriddenDirectory = directory
         self.preferences = preferences
         self.environment = environment

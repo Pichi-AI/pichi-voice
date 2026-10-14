@@ -131,7 +131,7 @@ struct FluidGlassControlGroup<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        if #available(macOS 26, *), !self.reduceTransparency {
+        if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
             GlassEffectContainer(spacing: 8) { self.content() }
         } else {
             self.content()
@@ -156,7 +156,7 @@ private struct FluidGlassActionModifier: ViewModifier {
             // Native disabled glass discards its tint and can retain white ink on
             // a white surface. Use paired neutral tokens without fading the label.
             content.buttonStyle(FluidDisabledActionStyle(circular: self.circular, spacious: self.spacious))
-        } else if #available(macOS 26, *), !self.reduceTransparency {
+        } else if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
             if self.prominent {
                 content.buttonStyle(FluidGlassProminentActionStyle(tone: self.tone))
                     .tint(self.tone ?? self.theme.palette.accent)
@@ -177,7 +177,7 @@ private struct FluidGlassActionModifier: ViewModifier {
 
 /// Secondary glass uses neutral material, independently of the inherited accent
 /// tint. Keep its theme/semantic ink inside the native button's actual label.
-@available(macOS 26, *)
+@available(macOS 26, iOS 26, *)
 struct FluidGlassSecondaryActionStyle: PrimitiveButtonStyle {
     let tone: Color?
     @Environment(\.theme) private var theme
@@ -194,7 +194,7 @@ struct FluidGlassSecondaryActionStyle: PrimitiveButtonStyle {
 
 /// Native glass replaces an inherited foreground on Button itself. Decorate the
 /// label inside the real button, then delegate activation and rendering to glass.
-@available(macOS 26, *)
+@available(macOS 26, iOS 26, *)
 struct FluidGlassProminentActionStyle: PrimitiveButtonStyle {
     let tone: Color?
     @Environment(\.theme) private var theme
@@ -281,7 +281,7 @@ private struct FluidGlassMenuActionModifier: ViewModifier {
             .buttonStyle(FluidGlassMenuActionStyle())
             .fixedSize(horizontal: true, vertical: false)
         // Stationary glass: native menu tracking swallows the release that interactive glass waits for.
-        if #available(macOS 26, *), !self.reduceTransparency {
+        if #available(macOS 26, iOS 26, *), !self.reduceTransparency {
             menu.glassEffect(.regular, in: .capsule)
         } else {
             menu

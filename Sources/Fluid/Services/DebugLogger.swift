@@ -1,4 +1,42 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
+
+/// Diagnostic process counters, never a scheduling policy. User plus system CPU
+/// covers every thread in this app, including work outside the measured phase.
+nonisolated struct DiagnosticProcessCPUTime: Sendable, Equatable {
+    let userSeconds: Double
+    let systemSeconds: Double
+
+    static func capture() -> Self? {
+        #if canImport(Darwin)
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return nil }
+        return .init(userSeconds: Double(usage.ru_utime.tv_sec) + Double(usage.ru_utime.tv_usec) / 1_000_000,
+                     systemSeconds: Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1_000_000)
+        #else
+        return nil
+        #endif
+    }
+
+    var totalMilliseconds: Int64? {
+        guard userSeconds.isFinite, systemSeconds.isFinite, userSeconds >= 0, systemSeconds >= 0 else { return nil }
+        return Self.milliseconds(userSeconds + systemSeconds)
+    }
+
+    func milliseconds(since earlier: Self) -> Int64? {
+        guard totalMilliseconds != nil, earlier.totalMilliseconds != nil,
+              userSeconds >= earlier.userSeconds, systemSeconds >= earlier.systemSeconds else { return nil }
+        return Self.milliseconds((userSeconds - earlier.userSeconds) + (systemSeconds - earlier.systemSeconds))
+    }
+
+    private static func milliseconds(_ seconds: Double) -> Int64? {
+        let value = seconds * 1_000
+        guard value.isFinite, value >= 0, value < Double(Int64.max) else { return nil }
+        return Int64(value)
+    }
+}
 
 final nonisolated class DebugLogger: @unchecked Sendable {
     static let shared = DebugLogger()

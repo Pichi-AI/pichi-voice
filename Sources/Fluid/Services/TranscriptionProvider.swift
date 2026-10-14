@@ -106,7 +106,7 @@ final nonisolated class ModelPreparationProgressRelay: @unchecked Sendable {
 
 /// Unified result type for ASR transcription across all providers
 /// Named ASRTranscriptionResult to avoid conflict with MeetingTranscriptionService.TranscriptionResult
-struct ASRTranscriptionResult {
+nonisolated struct ASRTranscriptionResult: Sendable {
     let text: String
     let confidence: Float
     /// Optional calibrated endpoint evidence from providers that actually expose an EOU head.

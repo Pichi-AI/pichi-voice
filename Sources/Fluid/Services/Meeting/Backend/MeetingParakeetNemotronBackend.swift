@@ -11,7 +11,7 @@ import Foundation
 
 @MainActor
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
-    static let descriptor = MeetingBackendDescriptor(
+    nonisolated static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
         version: "5",
         execution: .local,
@@ -26,7 +26,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
-        analysisSampleRate: 16_000
+        analysisSampleRate: 16_000,
+        diarizationDependencies: [.speakerSeparation, .voiceMatching],
+        supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
     )
 
     let descriptor: MeetingBackendDescriptor
@@ -50,6 +52,17 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         self.materializer = materializer
         self.descriptor = descriptor
         self.diarizationPolicy = diarizationPolicy
+    }
+
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        try self.descriptor.validatePCMInput(configuration: configuration, mode: mode)
+        _ = try MeetingProviderOptions.resolve(configuration)
+    }
+
+    func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning {
+        try self.descriptor.validatePCMInput(request)
+        try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode)
+        return try self.runtimeFactory(request)
     }
 
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
@@ -472,6 +485,50 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             status: status,
             reasonCode: reasonCode
         )
+    }
+
+    /// A PCM window has no removed gaps or file spans. Keep the original speaker
+    /// coverage and handoff decisions while admitting only physically valid word times.
+    nonisolated static func pcmUnits(
+        result: ASRTranscriptionResult,
+        words: [ASRWordTiming],
+        epoch: MeetingAnalysisEpochID,
+        duration: TimeInterval,
+        activity: [MeetingBackendSpeakerActivity],
+        identityTokens: Set<MeetingBackendSpeakerToken>
+    ) -> [MeetingFinalTextUnit] {
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        let usable = words.count <= 8_192 && !words.isEmpty && words.allSatisfy {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+                && $0.end > $0.start && $0.end <= duration + 1e-6
+        }
+        func admitted(_ assignment: MeetingBackendSpeakerAssignment) -> MeetingBackendSpeakerAssignment {
+            if case let .assigned(token) = assignment, !identityTokens.contains(token) { return .unassigned }
+            return assignment
+        }
+        guard usable else {
+            return [MeetingFinalTextUnit(
+                id: "pcm:\(epoch):utterance", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .utterance, text: text, analysisStart: 0, analysisEnd: duration,
+                speaker: admitted(Self.assignment(start: 0, end: duration, activity: activity, allowDominance: false)),
+                analysisSpanIDs: [], confidence: nil
+            )]
+        }
+        var previous: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
+        return words.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { index, word in
+            let coverage = Self.assignment(start: word.start, end: word.end, activity: activity, allowDominance: true)
+            let assignment = admitted(Self.handoffAssignment(coverage, start: word.start, end: word.end,
+                                                            activity: activity, previousAssignedWord: previous))
+            if case let .assigned(token) = assignment { previous = (token, word.end) } else { previous = nil }
+            return MeetingFinalTextUnit(
+                id: "pcm:\(epoch):\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .word, text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                analysisStart: word.start, analysisEnd: word.end, speaker: assignment,
+                analysisSpanIDs: [], confidence: nil
+            )
+        }
     }
 
     /// Word-timed units for one successful epoch. Provider times are seconds into the epoch's

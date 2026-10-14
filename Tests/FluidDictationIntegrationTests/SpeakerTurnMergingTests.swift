@@ -1493,6 +1493,10 @@ final class MeetingSessionModelTests: XCTestCase {
         configuration.languageCode = "fr"
         XCTAssertNoThrow(try configuration.validate())
         configuration.languageCode = "zh"
+        // Capture accepts language identifiers independently of any selected engine.
+        // The frozen provider descriptor admits or rejects its own language capabilities.
+        XCTAssertNoThrow(try configuration.validate())
+        configuration.languageCode = "not a language"
         self.assertConfigurationValidationError(.unsupportedLanguage, configuration: configuration)
 
         configuration = MeetingModelFixture.makeOnlineConfiguration()

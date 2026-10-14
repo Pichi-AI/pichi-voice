@@ -151,16 +151,22 @@ def verify_extraction() -> int:
 extraction_checks = verify_extraction()
 print(f"PASS {extraction_checks} Swift declaration extraction fixtures", flush=True)
 source = (repo / 'Sources/Fluid/Services/ASRService.swift').read_text()
+# Older repository arguments keep these declarations inside ASRService. A
+# present split file must provide its declarations; never replace missing ones.
+lease_path = repo / 'Sources/Fluid/Services/ASRActivityLease.swift'
+lease_source = lease_path.read_text() if lease_path.exists() else source
+executor_path = repo / 'Sources/Fluid/Services/TranscriptionExecutor.swift'
+executor_source = executor_path.read_text() if executor_path.exists() else source
 methods = '\n'.join(declaration(source, 'func', name) for name in (
     'transcribeSamplesForAPI', 'transcribeSamplesForAPIWithLease', 'transcribeFileForAPI',
 ))
 leases = '\n'.join(declaration(source, 'func', name) for name in (
     'acquireExclusiveActivity', 'releaseExclusiveActivity',
 ))
-types = '\n'.join(declaration(source, kind, name) for kind, name in (
+types = '\n'.join(declaration(lease_source, kind, name) for kind, name in (
     ('enum', 'ASRExclusiveActivity'), ('struct', 'ASRActivityLease'), ('enum', 'ASRActivityError'),
 ))
-executor = declaration(source, 'actor', 'TranscriptionExecutor')
+executor = declaration(executor_source, 'actor', 'TranscriptionExecutor')
 swift = r'''
 import Foundation
 TYPES
@@ -311,7 +317,9 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) { if !condit
     }
 }
 '''.replace('TYPES', types).replace('EXECUTOR', executor).replace('LEASES', leases).replace('METHODS', methods)
-with tempfile.TemporaryDirectory(prefix="fluidvoice-api-regression-") as directory:
+build_root = repo / '.build/local-api-lease-tests'
+build_root.mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(prefix="probe-", dir=build_root) as directory:
     root = Path(directory)
     (root / 'api-proof.swift').write_text(swift)
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-module-cache-path', str(root/'module-cache'),

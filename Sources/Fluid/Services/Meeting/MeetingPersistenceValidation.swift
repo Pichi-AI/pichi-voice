@@ -9,7 +9,7 @@ nonisolated extension MeetingSession {
         else {
             throw MeetingModelValidationError.unsupportedSchema(self.schemaVersion)
         }
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
+        guard MeetingLanguageCode.isValid(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.selectedMicrophone.captureDeviceID.isEmpty else {
@@ -109,7 +109,7 @@ nonisolated extension MeetingSession {
 
 nonisolated extension MeetingCaptureConfiguration {
     func validate() throws {
-        guard VoiceEngineLanguageCatalog.parakeetV3LanguageIDs.contains(self.languageCode) else {
+        guard MeetingLanguageCode.isValid(self.languageCode) else {
             throw MeetingModelValidationError.unsupportedLanguage
         }
         guard !self.microphone.captureDeviceID.isEmpty else {

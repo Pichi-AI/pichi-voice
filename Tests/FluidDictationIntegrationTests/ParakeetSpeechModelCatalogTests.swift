@@ -4,6 +4,29 @@ import XCTest
 
 @MainActor
 final class ParakeetSpeechModelCatalogTests: XCTestCase {
+    func testFrozenMeetingArtifactIdentityChangesWithWeightsAndRejectsSymbolicLinks() throws {
+        let descriptor = ParakeetSpeechModelCatalog.v3
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for name in descriptor.requiredModelNames {
+            let root = directory.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("weights"), withIntermediateDirectories: true)
+            for file in ["coremldata.bin", "metadata.json", "weights/weight.bin"] {
+                try Data("synthetic model structure".utf8).write(to: root.appendingPathComponent(file))
+            }
+        }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent(descriptor.vocabularyFile))
+        let first = try XCTUnwrap(descriptor.installedArtifactFingerprint(at: directory))
+        XCTAssertEqual(first, try descriptor.installedArtifactFingerprint(at: directory))
+        let weight = directory.appendingPathComponent("Encoder.mlmodelc/weights/weight.bin")
+        try Data("changed synthetic weight".utf8).write(to: weight)
+        XCTAssertNotEqual(first, try descriptor.installedArtifactFingerprint(at: directory))
+        let link = directory.appendingPathComponent("Encoder.mlmodelc/weights/link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: weight)
+        XCTAssertNil(try descriptor.installedArtifactFingerprint(at: directory))
+    }
+
     func testManifestIdentityReadIsBoundedAndRejectsLinksWithoutChangingArchiveMarker() throws {
         let descriptor = ParakeetSpeechModelCatalog.mini
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

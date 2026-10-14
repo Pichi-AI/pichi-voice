@@ -53,6 +53,7 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
     var repositoryName: String { self.repository.flatMap(URL.init(string:))?.lastPathComponent ?? "" }
 
     var updatesAllowedForCurrentSignature: Bool {
+        #if os(macOS)
         guard self.updatesEnabled, let expectedSigningTeam = self.expectedSigningTeam else { return false }
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &code) == errSecSuccess,
@@ -62,5 +63,9 @@ nonisolated struct BrandDistribution: Codable, Equatable, Sendable {
               let values = information as? [String: Any],
               let team = values[kSecCodeInfoTeamIdentifier as String] as? String else { return false }
         return team == expectedSigningTeam
+        #else
+        // Mobile updates belong to the signed App Store distribution.
+        return false
+        #endif
     }
 }

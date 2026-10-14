@@ -424,17 +424,8 @@ struct MeetingResultCanvas: View {
     private func rows(
         for visibleSegments: [MeetingTranscriptSegment]
     ) -> [(segment: MeetingTranscriptSegment, showsLabel: Bool, isLocal: Bool)] {
-        let speakerNames = self.speakerNames
-        var previousLabelIdentity: String?
-        return visibleSegments.map { segment in
-            let labelIdentity = MeetingTranscriptExporter.speakerLabelIdentity(
-                for: segment,
-                in: self.session,
-                speakerNames: speakerNames
-            )
-            let showsLabel = labelIdentity != previousLabelIdentity
-            previousLabelIdentity = labelIdentity
-            return (segment, showsLabel, self.isLocalSegment(segment))
+        MeetingTranscriptExporter.displayRows(for: visibleSegments, in: self.session).map { row in
+            (row.segment, row.showsLabel, self.isLocalSegment(row.segment))
         }
     }
 

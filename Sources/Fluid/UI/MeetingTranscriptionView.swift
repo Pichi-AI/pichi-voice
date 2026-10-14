@@ -197,51 +197,6 @@ struct MeetingSetupReadiness: Equatable {
     )
 }
 
-/// Owned by the window, so leaving FluidMeet does not discard its last loaded history.
-@MainActor
-final class MeetingHistorySnapshot: ObservableObject {
-    @Published private(set) var sessions: [MeetingSession] = []
-    @Published private(set) var errorMessage: String?
-    @Published private(set) var hasLoaded = false
-    private let load: @Sendable () async throws -> [MeetingSession]
-    private var refreshTask: Task<Void, Never>?
-    private var refreshRequested = false
-
-    init(load: @escaping @Sendable () async throws -> [MeetingSession] = {
-        try await MeetingSessionStore.shared.loadAll()
-    }) {
-        self.load = load
-    }
-
-    func refresh() async {
-        self.refreshRequested = true
-        if let refreshTask {
-            await refreshTask.value
-            return
-        }
-        let task = Task { @MainActor in
-            // A mutation during a disk read requests one follow-up, never a competing read.
-            while self.refreshRequested {
-                self.refreshRequested = false
-                do {
-                    let sessions = try await self.load()
-                    guard !self.refreshRequested else { continue }
-                    self.sessions = sessions
-                    self.errorMessage = nil
-                    self.hasLoaded = true
-                } catch {
-                    guard !self.refreshRequested else { continue }
-                    self.errorMessage = PichiLocalization.text("Meeting history could not be loaded.")
-                    self.hasLoaded = true
-                }
-            }
-            self.refreshTask = nil
-        }
-        self.refreshTask = task
-        await task.value
-    }
-}
-
 struct MeetingTranscriptionView: View {
     @ObservedObject var coordinator: MeetingSessionCoordinator
     @ObservedObject var asrService: ASRService
@@ -725,7 +680,7 @@ struct MeetingTranscriptionView: View {
         let requiresAppleSilicon = self.settings.selectedSpeechModel.requiresAppleSilicon
         let (ready, speakerReady) = await Task.detached(priority: .utility) {
             let speakerReady = CPUArchitecture.isAppleSilicon && (try? MeetingNemotronModelLocator().locate()) != nil
-            let providerReady = registered ? (PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) ?? false) : speakerReady
+            let providerReady = registered ? (await PichiMeetingProviderFactory.registeredModelsExistOnDisk(for: selectedModelID) ?? false) : speakerReady
             return (providerReady && (!requiresAppleSilicon || CPUArchitecture.isAppleSilicon), speakerReady)
         }.value
         // An older check must not overwrite an import completion's newer result.
@@ -1184,75 +1139,15 @@ struct MeetingTranscriptionView: View {
         }
     }
 
-    private nonisolated static let audioExportLock = NSLock()
-
     nonisolated static func exportAudioFiles(
-        of session: MeetingSession,
-        from sourceDirectory: URL,
-        into destinationFolder: URL,
+        of session: MeetingSession, from sourceDirectory: URL, into destinationFolder: URL,
         copyItem: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }
     ) async throws {
-        // The session and URLs are immutable snapshots; no view state crosses to the worker.
-        try await Task.detached(priority: .utility) {
-            let accessing = destinationFolder.startAccessingSecurityScopedResource()
-            defer { if accessing { destinationFolder.stopAccessingSecurityScopedResource() } }
-            // Preserve the old serial export semantics when users request another export
-            // while copying. The lock and all filesystem work stay off the main actor.
-            try Self.audioExportLock.withLock {
-                try Self.stageExport(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
-            }
-        }.value
-    }
-
-    private nonisolated static func stageExport(
-        of session: MeetingSession,
-        from sourceDirectory: URL,
-        into destinationFolder: URL,
-        copyItem: (URL, URL) throws -> Void
-    ) throws {
-        let fileManager = FileManager.default
-        let baseName = Self.sanitizedExportName(session.title)
-        let name = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
-        let stagingDirectory = destinationFolder.appendingPathComponent(".\(name).\(UUID().uuidString).export-tmp", isDirectory: true)
-        try fileManager.createDirectory(at: stagingDirectory, withIntermediateDirectories: true)
-
-        do {
-            for track in session.audioTracks {
-                for chunk in track.chunks where chunk.finalizationState == .finalized && chunk.byteCount > 0 {
-                    let sourceURL = chunk.fileURL(relativeTo: sourceDirectory)
-                    let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension
-                    let fileName = "\(track.kind.rawValue)-\(String(format: "%03d", chunk.sequence)).\(ext)"
-                    try copyItem(sourceURL, stagingDirectory.appendingPathComponent(fileName, isDirectory: false))
-                }
-            }
-            var destinationName = name
-            do {
-                try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
-            } catch CocoaError.fileWriteFileExists {
-                // Destination appeared between the uniqueness check and the move; retry once with a fresh name.
-                destinationName = Self.uniqueExportName(baseName, in: destinationFolder, fileManager: fileManager)
-                try fileManager.moveItem(at: stagingDirectory, to: destinationFolder.appendingPathComponent(destinationName, isDirectory: true))
-            }
-        } catch {
-            try? fileManager.removeItem(at: stagingDirectory)
-            throw error
-        }
+        try await MeetingAudioExporter.exportAudioFiles(of: session, from: sourceDirectory, into: destinationFolder, copyItem: copyItem)
     }
 
     private nonisolated static func sanitizedExportName(_ title: String) -> String {
-        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _.-")
-        let sanitized = String(title.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }.prefix(80))
-        return sanitized.isEmpty ? PichiLocalization.text("Meeting") : sanitized
-    }
-
-    private nonisolated static func uniqueExportName(_ baseName: String, in folder: URL, fileManager: FileManager) -> String {
-        var candidate = baseName
-        var suffix = 2
-        while fileManager.fileExists(atPath: folder.appendingPathComponent(candidate).path) {
-            candidate = "\(baseName) \(suffix)"
-            suffix += 1
-        }
-        return candidate
+        MeetingAudioExporter.sanitizedExportName(title)
     }
 
     private func startNewMeeting() {

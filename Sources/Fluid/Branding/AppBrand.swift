@@ -78,13 +78,13 @@ nonisolated enum AppBrand {
     }
     static var applicationSupportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support", isDirectory: true)
         return base.appendingPathComponent(self.storageNamespace, isDirectory: true)
     }
     static var modelsDirectory: URL { self.applicationSupportDirectory.appendingPathComponent("Models", isDirectory: true) }
     static var cachesDirectory: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches", isDirectory: true)
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Caches", isDirectory: true)
         return base.appendingPathComponent(self.storageNamespace, isDirectory: true)
     }
     static var keychainService: String { self.bundleIdentifier + ".provider-api-keys" }
