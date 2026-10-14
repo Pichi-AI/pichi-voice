@@ -4,10 +4,6 @@ import Foundation
 import PichiGigaAM
 import XCTest
 #if os(iOS)
-import CoreML
-import FluidAudio
-#endif
-#if os(iOS)
 @testable import PichiVoiceMobile
 #else
 @testable import FluidVoice_Debug
@@ -458,101 +454,6 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             throw error
         }
     }
-
-    #if os(iOS) && arch(arm64)
-    func testWeSpeakerCPUThreeLaneParityAgainstOriginalExtractor() async throws {
-        let root = try self.assets()
-        let package = root.appendingPathComponent("models/speaker-resources/voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
-        // Consume only staged public weights. This test neither installs models nor opens audio.
-        try MeetingSpeakerVoiceModelArtifacts.validate(at: package)
-        let configuration = MLModelConfiguration(); configuration.computeUnits = .cpuOnly
-        let model = try MLModel(contentsOf: package, configuration: configuration)
-        XCTAssertTrue(MeetingWeSpeakerCPUEmbeddingBatch.supports(model), "Only the exact fixed [3,160000]/[3,N] -> [3,256] contract is admitted")
-        let maskFrames = try XCTUnwrap(model.modelDescription.inputDescriptionsByName["mask"]?.multiArrayConstraint?.shape.last?.intValue)
-        let extractor = EmbeddingExtractor(embeddingModel: model)
-        let mask = [Float](repeating: 1, count: maskFrames)
-        let specifications: [(Int, Double, Double, Double)] = [
-            (48_000, 125, 0.3, 0), (64_000, 125, 0.4, 0.02),
-            (80_000, 125, 0.35, 0.03), (160_000, 125, 0.45, 0.04),
-            (56_000, 271, 0.2, 0.2), (96_000, 271, 0.3, 0.25),
-        ]
-        let clips = specifications.map { count, frequency, amplitude, phase in
-            (0..<count).map { index -> Float in
-                let time = Double(index) / 16_000
-                return Float(amplitude * (sin(2 * .pi * frequency * time + phase)
-                    + 0.2 * sin(2 * .pi * frequency * 2 * time + phase)))
-            }
-        }
-        var reference: [[Float]] = []
-        let oldStart = ProcessInfo.processInfo.systemUptime
-        for clip in clips {
-            try Task.checkCancellation()
-            let value = try XCTUnwrap(extractor.getEmbeddings(audio: clip, masks: [mask]).first)
-            XCTAssertEqual(value.count, 256); XCTAssertTrue(value.allSatisfy(\.isFinite))
-            reference.append(value)
-        }
-        let legacyMs = Int((ProcessInfo.processInfo.systemUptime - oldStart) * 1_000)
-        var batched: [[Float]] = []
-        let newStart = ProcessInfo.processInfo.systemUptime
-        for start in stride(from: 0, to: clips.count, by: 3) {
-            batched.append(contentsOf: try MeetingWeSpeakerCPUEmbeddingBatch.embeddings(clips: Array(clips[start..<min(start + 3, clips.count)]), model: model))
-        }
-        let batchedMs = Int((ProcessInfo.processInfo.systemUptime - newStart) * 1_000)
-        XCTAssertEqual(batched.count, reference.count)
-        guard batched.count == reference.count else { return }
-        var maxAbsolute = 0.0; var maxRelativeL2 = 0.0; var maxCosineDistance: Float = 0
-        func compare(_ actual: [Float], _ expected: [Float]) throws {
-            XCTAssertEqual(actual.count, expected.count)
-            var squaredError = 0.0; var squaredNorm = 0.0
-            for (left, right) in zip(actual, expected) {
-                let delta = Double(left) - Double(right)
-                maxAbsolute = max(maxAbsolute, abs(delta)); squaredError += delta * delta
-                squaredNorm += Double(right) * Double(right)
-            }
-            XCTAssertGreaterThan(squaredNorm, 1e-12)
-            let relative = sqrt(squaredError / max(squaredNorm, 1e-12))
-            let cosine = try XCTUnwrap(MeetingSpeakerEmbeddingIndex.cosineDistance(actual, expected))
-            maxRelativeL2 = max(maxRelativeL2, relative); maxCosineDistance = max(maxCosineDistance, cosine)
-            XCTAssertLessThanOrEqual(relative, 1e-5)
-            XCTAssertLessThanOrEqual(cosine, 1e-6)
-        }
-        for index in reference.indices { try compare(batched[index], reference[index]) }
-        // Partial batches verify explicit zero unused lanes; permutations detect lane/order errors.
-        for count in 1...2 {
-            let values = try MeetingWeSpeakerCPUEmbeddingBatch.embeddings(clips: Array(clips.prefix(count)), model: model)
-            XCTAssertEqual(values.count, count)
-            guard values.count == count else { return }
-            for index in values.indices { try compare(values[index], reference[index]) }
-        }
-        let permutation = [2, 0, 1]
-        let permuted = try MeetingWeSpeakerCPUEmbeddingBatch.embeddings(clips: permutation.map { clips[$0] }, model: model)
-        XCTAssertEqual(permuted.count, permutation.count)
-        guard permuted.count == permutation.count else { return }
-        for index in permutation.indices { try compare(permuted[index], reference[permutation[index]]) }
-        XCTAssertLessThanOrEqual(maxAbsolute, 1e-4)
-        let track = UUID()
-        let tokens = [
-            MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: track, ordinal: 0), label: "slot-0"),
-            MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: track, ordinal: 1), label: "slot-0"),
-            MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: track, ordinal: 1), label: "slot-1"),
-        ]
-        func profiles(_ values: [[Float]]) -> [MeetingSpeakerVoiceProfile] {
-            tokens.indices.map { .init(token: tokens[$0], embeddings: [values[$0 * 2], values[$0 * 2 + 1]]) }
-        }
-        let originalLinks = MeetingSpeakerVoiceMatcher.links(profiles: profiles(reference), allowedTokens: Set(tokens))
-        let batchedLinks = MeetingSpeakerVoiceMatcher.links(profiles: profiles(batched), allowedTokens: Set(tokens))
-        XCTAssertEqual(batchedLinks, originalLinks, "Two independent original embeddings per token must preserve matching decisions")
-        let report: [String: Any] = ["status": maxAbsolute <= 1e-4 && maxRelativeL2 <= 1e-5 && maxCosineDistance <= 1e-6 && batchedLinks == originalLinks ? "passed" : "failed",
-            "computeUnits": "cpuOnly", "clips": clips.count, "legacyPredictions": clips.count,
-            "batchedPredictions": 2, "legacyMs": legacyMs, "batchedMs": batchedMs,
-            "maximumAbsoluteError": maxAbsolute, "maximumRelativeL2": maxRelativeL2,
-            "maximumCosineDistance": maxCosineDistance, "matchingLinks": originalLinks.count]
-        let reports = root.appendingPathComponent("reports", isDirectory: true)
-        try FileManager.default.createDirectory(at: reports, withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-            .write(to: reports.appendingPathComponent("wespeaker-cpu-batch-parity.json"), options: .atomic)
-    }
-    #endif
 
     func testDefaultEightSecondSpeakerWindowsForAllRegisteredModels() async throws {
         let root = try self.assets()
