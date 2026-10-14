@@ -1230,7 +1230,7 @@
 				7C078DA32E3B386A00FB7CAC /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */,
 				7C3697872ED70F9C005874CE /* XCRemoteSwiftPackageReference "DynamicNotchKit" */,
-				7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */,
+				7C9A71002F58B00000FB7CAF /* XCLocalSwiftPackageReference "TranscribeCpp" */,
 				7C5AF1492F15041600DE21B0 /* XCRemoteSwiftPackageReference "mediaremote-adapter" */,
 				2E9B00000000000000000003 /* XCRemoteSwiftPackageReference "zeppelin-embed" */,
 			);
@@ -2008,6 +2008,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		7C9A71002F58B00000FB7CAF /* XCLocalSwiftPackageReference "TranscribeCpp" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TranscribeCpp;
+		};
 		A51A10000000000000000001 /* XCLocalSwiftPackageReference "NativeTextInference" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Vendor/NativeTextInference;
@@ -2057,14 +2061,7 @@
 				version = 0.4.1;
 			};
 		};
-		7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/altic-dev/transcribe-cpp-swift.git";
-			requirement = {
-				kind = exactVersion;
-				version = 0.1.2;
-			};
-		};
+
 		7CE006BB2E80EBE600DDCCD6 /* XCRemoteSwiftPackageReference "AppUpdater" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/mxcl/AppUpdater.git";
@@ -2129,7 +2126,7 @@
 		};
 		7C9A71012F58B00000FB7CAF /* TranscribeCpp */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7C9A71002F58B00000FB7CAF /* XCRemoteSwiftPackageReference "transcribe-cpp-swift" */;
+			package = 7C9A71002F58B00000FB7CAF /* XCLocalSwiftPackageReference "TranscribeCpp" */;
 			productName = TranscribeCpp;
 		};
 /* End XCSwiftPackageProductDependency section */
