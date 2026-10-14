@@ -208,6 +208,12 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                 abs(scroll.bounds.width - host.model.width) < 2 && self.nearBottom(scroll)
             }
             capture(host, step: "04-narrow-waveforms", scheme: scheme)
+            let beforeQuietCleanup = scroll.contentSize.height
+            host.model.pending = .empty
+            try await settle(host, "Quiet cleanup removes waveforms and retains following") {
+                scroll.contentSize.height < beforeQuietCleanup - 20 && self.nearBottom(scroll)
+            }
+            capture(host, step: "05-quiet-cleanup", scheme: scheme)
         }
     }
 
