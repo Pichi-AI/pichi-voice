@@ -53,10 +53,7 @@ nonisolated enum MeetingLiveCaptionParagraphs {
         }
 
         static func separator(after previous: String?, before next: String) -> String {
-            guard let last = previous?.last, let first = next.first,
-                  !last.isWhitespace, !first.isWhitespace else { return "" }
-            if ".,;:!?…)]}»".contains(first) || "([{«".contains(last) { return "" }
-            return " "
+            MeetingTranscriptExporter.DisplayParagraph.separator(after: previous, before: next)
         }
     }
 
