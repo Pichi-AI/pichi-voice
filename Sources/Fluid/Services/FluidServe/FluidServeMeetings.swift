@@ -1,4 +1,3 @@
-import CryptoKit
 import Darwin
 import Foundation
 
@@ -224,6 +223,7 @@ nonisolated enum FluidServeMeetings {
             var text: String
             var promptHash: String?
             var providerID: String?
+            var promptVersion: Int?
             var providerName: String?
             var modelName: String?
             var generatedAt: Date?
@@ -231,13 +231,14 @@ nonisolated enum FluidServeMeetings {
         let prefix = "manual-summary-"
         let names = try directory.names(maximumEntries: self.maximumDirectoryEntries)
             .filter { $0.hasPrefix(prefix) && $0.hasSuffix(".json") }
-        let currentHash = self.fingerprint(self.summaryInput(for: entry.meeting))
-        let customPromptHash = self.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
+        let currentHash = MeetingSummaryInput.fingerprint(MeetingSummaryInput.transcript(for: entry.source, timeZone: self.systemTimeZone()))
+        let customPromptHash = MeetingSummaryInput.fingerprint(customPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
         var summaries = try names.compactMap { name -> SavedSummary? in
             let style = String(name.dropFirst(prefix.count).dropLast(".json".count))
             guard let file = try directory.read(name, maximumBytes: self.maximumSummaryBytes, budget: entry.budget),
                   let stored = try? JSONDecoder().decode(Stored.self, from: file.data),
-                  stored.providerID != nil, stored.transcriptHash == currentHash,
+                  stored.providerID != nil, stored.promptVersion == MeetingSummaryInput.currentPromptVersion,
+                  stored.transcriptHash == currentHash,
                   stored.promptHash == (style == "custom" ? customPromptHash : nil),
                   !stored.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return nil }
@@ -256,33 +257,6 @@ nonisolated enum FluidServeMeetings {
                 modelName: nil, generatedAt: current.generatedAt))
         }
         return summaries
-    }
-
-    /// The exact text the app summarizes, rebuilt here only to recognise which saved summaries are current.
-    /// It uses this Mac's time zone because the app does, whatever zone the listing is printed in.
-    static func summaryInput(for meeting: Meeting, timeZone: TimeZone = FluidServeMeetings.systemTimeZone()) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
-        formatter.dateStyle = .long
-        formatter.timeStyle = .none
-        let date = formatter.string(from: meeting.startedAt)
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        let time = formatter.string(from: meeting.startedAt)
-        let minutes = max(0, (meeting.endedAt ?? meeting.startedAt).timeIntervalSince(meeting.startedAt) / 60)
-        return """
-        Title: \(meeting.title)
-        Date: \(date)
-        Time: \(time)
-        Duration: \(Int(minutes)) minutes
-        Participants: \(meeting.activeSpeakers.map(\.displayName).joined(separator: ", "))
-        ----------
-        """ + "\n" + meeting.turns.map { "**\(self.speakerLabel(for: $0, in: meeting))**: \($0.text)" }.joined(separator: "\n")
-    }
-
-    static func fingerprint(_ text: String) -> String {
-        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Rendering

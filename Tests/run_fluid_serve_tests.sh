@@ -10,6 +10,7 @@ set -- Sources/Fluid/Services/ModelTemperatureSupport.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
+    Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \
     Sources/Fluid/Services/Meeting/PichiMeetingSummaryDocument.swift \
     Sources/Fluid/Services/FluidServe/FluidServeFileBoundary.swift \
     Sources/Fluid/Services/FluidServe/FluidServeSkill.swift \
