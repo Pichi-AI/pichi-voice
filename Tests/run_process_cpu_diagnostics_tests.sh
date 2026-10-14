@@ -26,9 +26,16 @@ python3 - "$task_test_dir/WhisperDiagnostics.swift" <<'PY'
 from pathlib import Path
 import sys
 source = Path('Sources/Fluid/Services/WhisperProvider.swift').read_text()
-start = source.index('/// Aggregate diagnostics only.')
-end = source.index('/// TranscriptionProvider implementation', start)
-Path(sys.argv[1]).write_text('import Foundation\n' + source[start:end])
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path('Tests').resolve()))
+from run_meeting_backup_refresh_tests import declaration
+
+diagnostics = '\n\n'.join(declaration(source, marker) for marker in (
+    'nonisolated struct WhisperSignalDiagnostics:',
+    'nonisolated struct WhisperProbabilityDiagnostics:',
+    'nonisolated enum WhisperShortInputPolicy {',
+))
+Path(sys.argv[1]).write_text('import Foundation\n' + diagnostics + '\n')
 PY
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     -D PICHI_WHISPER_DIAGNOSTICS_STANDALONE \
