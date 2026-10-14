@@ -56,9 +56,13 @@ struct StatsView: View {
         }
         .background(self.theme.palette.contentBackground)
         .fluidPageActions {
-            Button("Share my stats", systemImage: "square.and.arrow.up") { self.showShareSheet = true }
-                .disabled(self.statsStore.snapshot == nil)
-                .help(PichiLocalization.text("Make an image of your stats to post or send"))
+            Button { self.showShareSheet = true } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .fluidToolbarIcon()
+            }
+            .accessibilityLabel("Share my stats")
+            .disabled(self.statsStore.snapshot == nil)
+            .help(PichiLocalization.text("Make an image of your stats to post or send"))
         }
         .sheet(isPresented: self.$showShareSheet) {
             StatsShareSheet(content: self.shareContent) { self.showShareSheet = false }

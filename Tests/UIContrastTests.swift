@@ -119,6 +119,52 @@ struct UIContrastTests {
         return checks
     }
 
+    @MainActor
+    static func verifySecondaryLabels(theme: AppTheme, scheme: ColorScheme, suffix: String, directory: URL) throws -> Int {
+        guard #available(macOS 26, *) else { return 0 }
+        let secondary = SecondaryGlassLabelFixture(role: nil, tone: nil)
+            .buttonStyle(InheritedWhiteInkRenderer())
+            .padding(14)
+            .background(theme.palette.elevatedCardBackground)
+        try self.verify(secondary, name: "secondary-label-boundary-\(suffix)", theme: theme, scheme: scheme,
+            textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+            expectedForeground: self.nativePrimary(on: theme.palette.elevatedCardBackground,
+                scheme: theme.palette.nativeColorScheme(fallback: scheme)), labelOnly: true)
+        let destructive = SecondaryGlassLabelFixture(role: .destructive, tone: nil)
+            .buttonStyle(InheritedWhiteInkRenderer()).padding(14)
+            .background(theme.palette.elevatedCardBackground)
+        try self.verify(destructive, name: "secondary-destructive-label-\(suffix)", theme: theme, scheme: scheme,
+            textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+            expectedForeground: self.nativePrimary(on: theme.palette.elevatedCardBackground,
+                scheme: theme.palette.nativeColorScheme(fallback: scheme)), labelOnly: true)
+        let tone = SecondaryGlassLabelFixture(role: .destructive, tone: .red)
+            .buttonStyle(InheritedWhiteInkRenderer()).padding(14)
+            .background(theme.palette.elevatedCardBackground)
+        try self.verify(tone, name: "secondary-tone-\(suffix)", theme: theme, scheme: scheme,
+            textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
+            expectedForeground: self.resolvedForeground(theme.palette.readableText(.red),
+                scheme: theme.palette.nativeColorScheme(fallback: scheme)), labelOnly: true, requiredContrast: 3)
+        return 3
+    }
+
+    static func resolvedForeground(_ color: Color, scheme: ColorScheme) -> Color {
+        var environment = EnvironmentValues()
+        environment.colorScheme = scheme
+        return Color(color.resolve(in: environment))
+    }
+
+    static func nativePrimary(on fill: Color, scheme: ColorScheme) -> Color {
+        var environment = EnvironmentValues()
+        environment.colorScheme = scheme
+        let ink = Color.primary.resolve(in: environment)
+        let background = self.components(fill)
+        let alpha = Double(ink.opacity)
+        return Color(.sRGB,
+            red: Double(ink.red) * alpha + background[0] * (1 - alpha),
+            green: Double(ink.green) * alpha + background[1] * (1 - alpha),
+            blue: Double(ink.blue) * alpha + background[2] * (1 - alpha))
+    }
+
     static func components(_ color: Color) -> [Double] {
         let rgb = NSColor(color).usingColorSpace(.sRGB)!
         return [Double(rgb.redComponent), Double(rgb.greenComponent), Double(rgb.blueComponent)]
@@ -206,6 +252,10 @@ struct UIContrastTests {
         }
         if CommandLine.arguments.contains("--dashboard-shortcuts-only") {
             try await DashboardShortcutSurfaceTests.run(directory: directory)
+            return
+        }
+        if CommandLine.arguments.contains("--secondary-glass-ink-only") {
+            try await SecondaryGlassInkTests.run(directory: directory)
             return
         }
         if CommandLine.arguments.contains("--toolbar-ink-only") {
@@ -306,26 +356,7 @@ struct UIContrastTests {
                                 try self.verify(button, name: "native-label-boundary-\(suffix)", theme: theme, scheme: scheme,
                                     textBackground: accentRGB, directory: directory, expectedForeground: foreground, labelOnly: true)
                                 actionChecks += 1
-                                let secondary = SecondaryGlassLabelFixture(role: nil, tone: nil)
-                                    .buttonStyle(InheritedWhiteInkRenderer())
-                                    .padding(14)
-                                    .background(theme.palette.elevatedCardBackground)
-                                try self.verify(secondary, name: "secondary-label-boundary-\(suffix)", theme: theme, scheme: scheme,
-                                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
-                                    expectedForeground: theme.palette.primaryText, labelOnly: true)
-                                let destructive = SecondaryGlassLabelFixture(role: .destructive, tone: nil)
-                                    .buttonStyle(InheritedWhiteInkRenderer()).padding(14)
-                                    .background(theme.palette.elevatedCardBackground)
-                                try self.verify(destructive, name: "secondary-destructive-label-\(suffix)", theme: theme, scheme: scheme,
-                                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
-                                    expectedForeground: theme.palette.primaryText, labelOnly: true)
-                                let tone = SecondaryGlassLabelFixture(role: .destructive, tone: .red)
-                                    .buttonStyle(InheritedWhiteInkRenderer()).padding(14)
-                                    .background(theme.palette.elevatedCardBackground)
-                                try self.verify(tone, name: "secondary-tone-\(suffix)", theme: theme, scheme: scheme,
-                                    textBackground: self.components(theme.palette.elevatedCardBackground), directory: directory,
-                                    expectedForeground: theme.palette.readableText(.red), labelOnly: true, requiredContrast: 3)
-                                actionChecks += 3
+                                actionChecks += try self.verifySecondaryLabels(theme: theme, scheme: scheme, suffix: suffix, directory: directory)
                             }
                             // Explicit tones must pair ink with their actual fill, including
                             // pale saved accents passed explicitly by the dictionary wizard.
