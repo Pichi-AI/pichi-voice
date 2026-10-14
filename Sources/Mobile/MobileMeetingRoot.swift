@@ -12,6 +12,7 @@ struct MobileMeetingRoot: View {
     let microphones: @Sendable () async throws -> MeetingMicrophoneCatalogSnapshot
     @ObservedObject private var settings = SettingsStore.shared
     @Environment(\.theme) private var theme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var destination = Destination.meetings
     @State private var settingsPath: [MobileSettingsDestination] = []
@@ -479,19 +480,22 @@ struct MobileMeetingRoot: View {
                 if !session.activeSpeakers.isEmpty {
                     Text(PichiLocalization.text("Speaker labels are automatic and may not be exact. Click a name to fix it."))
                         .font(theme.typography.caption).foregroundStyle(theme.palette.secondaryText)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading,
-                              spacing: theme.metrics.spacing.sm) {
-                        ForEach(session.activeSpeakers) { speaker in
-                            Button {
-                                edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
-                            } label: {
-                                Label(speaker.displayName, systemImage: "person.crop.circle")
-                                    .font(theme.typography.captionStrong)
-                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            }.disabled(!coordinator.isQuiescent)
-                                .accessibilityIdentifier("transcript.speaker.\(speaker.id)")
-                        }
-                    }.accessibilityIdentifier("transcript.speakers")
+                    if UIDevice.current.userInterfaceIdiom == .phone || horizontalSizeClass == .compact {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: theme.metrics.spacing.sm) {
+                                ForEach(session.activeSpeakers) { speaker in
+                                    participantButton(speaker, session: session, expands: false)
+                                }
+                            }
+                        }.scrollIndicators(.hidden).accessibilityIdentifier("transcript.speakers")
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], alignment: .leading,
+                                  spacing: theme.metrics.spacing.sm) {
+                            ForEach(session.activeSpeakers) { speaker in
+                                participantButton(speaker, session: session, expands: true)
+                            }
+                        }.accessibilityIdentifier("transcript.speakers")
+                    }
                 }
                 if let message = playback.errorMessage {
                     Text(PichiLocalization.text(message)).font(theme.typography.caption).foregroundStyle(theme.palette.warning)
@@ -503,6 +507,17 @@ struct MobileMeetingRoot: View {
                 }
             }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
         }.accessibilityIdentifier("meeting.transcript")
+    }
+
+    private func participantButton(_ speaker: MeetingSessionSpeaker, session: MeetingSession, expands: Bool) -> some View {
+        Button {
+            edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
+        } label: {
+            Label(speaker.displayName, systemImage: "person.crop.circle")
+                .font(theme.typography.captionStrong)
+                .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
+        }.disabled(!coordinator.isQuiescent)
+            .accessibilityIdentifier("transcript.speaker.\(speaker.id)")
     }
 
     private func transcriptParagraph(_ paragraph: MeetingTranscriptExporter.DisplayParagraph, session: MeetingSession,

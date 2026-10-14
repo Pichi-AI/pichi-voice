@@ -177,6 +177,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
             XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
+            XCTAssertGreaterThanOrEqual(lastUpdateSecond, duration - 15,
+                                        "Protected text must keep advancing near the end, not only during the first window")
             if requiresBackground {
                 XCTAssertGreaterThanOrEqual(backgroundSeconds, duration == 300 ? 280.0 : 20.0,
                                             "The host must actually leave the foreground during paced recording")

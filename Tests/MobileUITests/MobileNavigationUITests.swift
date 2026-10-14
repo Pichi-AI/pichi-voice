@@ -208,14 +208,30 @@ final class MobileNavigationUITests: XCTestCase {
             let body = app.staticTexts[sentence].firstMatch
             XCTAssertTrue(body.waitForExistence(timeout: 5), "Canonical words must appear in one readable paragraph")
             XCTAssertFalse(app.staticTexts["обсудим"].exists, "Each word must not become a separate display row")
-            if !body.isHittable { app.scrollViews.firstMatch.swipeUp() }
-            XCTAssertTrue(body.isHittable)
+            try revealParagraphAboveNavigation(body, step: "word-timing-\(appearance)-portrait-reading")
             capture("word-timing-\(appearance)-portrait-paragraph")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
             XCTAssertTrue(body.waitForExistence(timeout: 5))
+            try revealParagraphAboveNavigation(body, step: "word-timing-\(appearance)-landscape-reading")
             capture("word-timing-\(appearance)-landscape-paragraph")
         }
+    }
+
+    private func revealParagraphAboveNavigation(_ paragraph: XCUIElement, step: String) throws {
+        let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
+        XCTAssertTrue(scroll.exists)
+        for attempt in 0..<6 {
+            let top = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : app.windows.firstMatch.frame.minY
+            let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.windows.firstMatch.frame.maxY
+            if paragraph.isHittable && paragraph.frame.minY >= top && paragraph.frame.maxY <= bottom { return }
+            let upwards = paragraph.frame.maxY > bottom
+            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.65 : 0.35))
+            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.35 : 0.65))
+            from.press(forDuration: 0.05, thenDragTo: to)
+            capture("\(step)-scroll-\(attempt)")
+        }
+        XCTFail("The full paragraph must be readable above the navigation controls")
     }
 
 
