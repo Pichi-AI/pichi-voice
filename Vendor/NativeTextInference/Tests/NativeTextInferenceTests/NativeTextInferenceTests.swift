@@ -32,6 +32,12 @@ final class NativeTextInferenceTests: XCTestCase {
     func testRejectsUnloadedGenerationAndInvalidLoadBeforeNativeAllocation() async throws {
         let runtime = NativeTextInference()
         do {
+            _ = try await runtime.tokenCount(in: "Hello")
+            XCTFail("Token counting must require a model")
+        } catch {
+            XCTAssertEqual(error as? NativeTextInferenceError, .modelNotLoaded)
+        }
+        do {
             _ = try await runtime.generate(prompt: "Hello", maxOutputTokens: 32)
             XCTFail("Generation must require a model")
         } catch {
@@ -90,6 +96,28 @@ final class NativeTextInferenceTests: XCTestCase {
         XCTAssertFalse(isLoaded)
     }
 
+    func testAlreadyCancelledTokenCountFailsBeforeSessionValidation() async throws {
+        let runtime = NativeTextInference()
+        let task = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return try await runtime.tokenCount(in: "Hello")
+        }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("A cancelled task must fail before tokenizing")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        // Cancellation must release operation ownership for the next caller.
+        do {
+            _ = try await runtime.tokenCount(in: "Hello")
+            XCTFail("Token counting must still require a model")
+        } catch {
+            XCTAssertEqual(error as? NativeTextInferenceError, .modelNotLoaded)
+        }
+    }
+
     /// No downloads or private fixture paths are committed. Use an approved local GGUF.
     func testOptInRealInferenceCompletesAndRejectsTruncation() async throws {
         let environment = ProcessInfo.processInfo.environment
@@ -100,6 +128,16 @@ final class NativeTextInferenceTests: XCTestCase {
         let runtime = NativeTextInference()
         try await runtime.load(modelURL: URL(fileURLWithPath: path), contextTokenLimit: 8192)
         do {
+            let promptTokenCount = try await runtime.tokenCount(in: prompt)
+            XCTAssertGreaterThan(promptTokenCount, 0)
+            for invalidText in ["", String(repeating: "Ё", count: 4 * 1024 * 1024 + 1)] {
+                do {
+                    _ = try await runtime.tokenCount(in: invalidText)
+                    XCTFail("Token counting must reject empty and oversized text")
+                } catch {
+                    XCTAssertEqual(error as? NativeTextInferenceError, invalidText.isEmpty ? .tokenizationFailed : .promptTooLarge)
+                }
+            }
             let stream = StreamCapture()
             let output = try await runtime.generate(prompt: prompt, maxOutputTokens: 512, streamHandler: { stream.append($0) })
             XCTAssertEqual(stream.text, output)
@@ -121,19 +159,19 @@ final class NativeTextInferenceTests: XCTestCase {
                 _ = try await cancelled.value
                 XCTFail("Cancellation during successful inference must reject partial output")
             } catch { XCTAssertTrue(error is CancellationError) }
-            // Failed and cancelled generation must clear state rather than contaminate a retry.
-            let retry = try await runtime.generate(prompt: prompt, maxOutputTokens: 512)
-            XCTAssertEqual(retry, output)
+            // Token counting must not contaminate generation after failed or cancelled work.
+            let repeatedPromptTokenCount = try await runtime.tokenCount(in: prompt)
+            XCTAssertEqual(repeatedPromptTokenCount, promptTokenCount)
+            let oversizedPrompt = String(repeating: "hello ", count: 9000)
+            let oversizedTokenCount = try await runtime.tokenCount(in: oversizedPrompt)
             do {
-                _ = try await runtime.generate(prompt: String(repeating: "hello ", count: 9000), maxOutputTokens: 512)
+                _ = try await runtime.generate(prompt: oversizedPrompt, maxOutputTokens: 512)
                 XCTFail("Oversized prompt must be rejected before decode")
             } catch {
-                guard case .contextLimitExceeded = error as? NativeTextInferenceError else {
-                    XCTFail("Expected context overflow, got \(error)")
-                    await runtime.unload()
-                    return
-                }
+                XCTAssertEqual(error as? NativeTextInferenceError, .contextLimitExceeded(promptTokens: oversizedTokenCount, outputTokens: 512, contextTokens: 8192))
             }
+            let retry = try await runtime.generate(prompt: prompt, maxOutputTokens: 512)
+            XCTAssertEqual(retry, output)
             await runtime.unload()
         } catch {
             await runtime.unload()
