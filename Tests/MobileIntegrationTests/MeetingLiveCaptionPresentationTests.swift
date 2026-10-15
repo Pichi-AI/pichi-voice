@@ -305,7 +305,12 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             try await settle(host, "Short review document is rendered") {
                 self.scrollViews(in: host.controller.view).contains { $0.bounds.height > 0 }
             }
-            var projection = MeetingPendingSpeechProjection()
+            let diagnosticID = UUID()
+            var projection = MeetingPendingSpeechProjection(diagnostics: { event in
+                DebugLogger.shared.logLazy(level: .debug, source: "MeetingPendingSpeech") {
+                    "fixture=delayed-caption captureID=\(diagnosticID.uuidString) \(event.logFields)"
+                }
+            })
             func feed(_ first: Int, _ last: Int, speech: Bool) async throws {
                 for frame in first..<last {
                     let time = Double(frame) * 0.02
@@ -325,17 +330,19 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                 print("[NATIVE_REVIEW_VIEWPORT] x=\(rect.minX) y=\(rect.minY) width=\(rect.width) height=\(rect.height) scale=\(host.window.screen.scale)")
             }
             capture(host, step: "review-01-audio-pending", scheme: scheme)
-            try await feed(100, 400, speech: false)
+            let waitingIDs = host.model.pending.tokens.map(\.id)
+            try await feed(100, 700, speech: false)
             host.model.pending = projection.snapshot
-            XCTAssertTrue(host.model.pending.tokens.isEmpty)
-            try await settle(host, "Quiet cleanup is rendered") { true }
-            capture(host, step: "review-02-after-quiet", scheme: scheme)
-            try await feed(400, 500, speech: true)
+            XCTAssertEqual(host.model.pending.tokens.map(\.id), waitingIDs,
+                           "A long pause cannot remove speech while the recognizer is still working")
+            try await settle(host, "Waiting speech remains visible during quiet") { true }
+            capture(host, step: "review-02-quiet-still-waiting", scheme: scheme)
+            try await feed(700, 800, speech: true)
             host.model.pending = projection.snapshot
             XCTAssertFalse(host.model.pending.tokens.isEmpty)
             let approved = "Документы доступны в разделе с материалами встречи."
             projection.reconcile(visible: .init(revision: 1,
-                utterances: [.init(id: UUID(), speaker: .you, text: approved, start: 8, end: 10)]))
+                utterances: [.init(id: UUID(), speaker: .you, text: approved, start: 0, end: 16)]))
             host.model.rows.append(row(approved))
             host.model.pending = projection.snapshot
             XCTAssertTrue(host.model.pending.tokens.isEmpty)
@@ -410,12 +417,13 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                 abs(scroll.bounds.width - host.model.width) < 2 && self.nearBottom(scroll)
             }
             capture(host, step: "04-narrow-waveforms", scheme: scheme)
-            let beforeQuietCleanup = scroll.contentSize.height
+            let beforeNextReplacement = scroll.contentSize.height
+            host.model.rows.append(row("Следующая фраза распознана. The next words replace captured audio."))
             host.model.pending = .empty
-            try await settle(host, "Quiet cleanup removes waveforms and retains following") {
-                scroll.contentSize.height < beforeQuietCleanup - 20 && self.nearBottom(scroll)
+            try await settle(host, "The next recognized words replace waveforms and retain following") {
+                scroll.contentSize.height < beforeNextReplacement - 20 && self.nearBottom(scroll)
             }
-            capture(host, step: "05-quiet-cleanup", scheme: scheme)
+            capture(host, step: "05-next-text-replacement", scheme: scheme)
         }
     }
 
@@ -532,13 +540,13 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                     && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
             }
             capture(host, step: "04-pending-while-paused", scheme: scheme)
-            let heightBeforeQuietCleanup = scroll.contentSize.height
+            let heightBeforeStop = scroll.contentSize.height
             host.model.pending = .empty
-            try await settle(host, "Quiet cleanup must preserve the reader's position") {
-                scroll.contentSize.height < heightBeforeQuietCleanup - 20
+            try await settle(host, "Terminal capture cleanup must preserve the reader's position") {
+                scroll.contentSize.height < heightBeforeStop - 20
                     && abs(scroll.contentOffset.y - olderOffset) < 3 && !self.nearBottom(scroll)
             }
-            capture(host, step: "05-quiet-cleanup-while-paused", scheme: scheme)
+            capture(host, step: "05-capture-stop-while-paused", scheme: scheme)
             scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll) - 20), animated: false)
             try await settle(host, "Almost reaching the bottom does not resume following") { !self.nearBottom(scroll) }
             scroll.setContentOffset(CGPoint(x: scroll.contentOffset.x, y: self.bottomOffset(scroll)), animated: false)

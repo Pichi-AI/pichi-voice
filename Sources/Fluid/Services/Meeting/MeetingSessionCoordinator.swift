@@ -146,12 +146,15 @@ final class MeetingSessionCoordinator: ObservableObject {
     private var startupTrackHealth: [MeetingAudioTrackID: MeetingTrackHealth] = [:]
     private var startupWriterFailures: Set<MeetingAudioTrackID?> = []
     private var pendingSpeechCapture: MeetingPendingSpeechCapture?
+    private var pendingSpeechDiagnosticID: UUID?
     private var captureGeneration: UUID? {
         didSet {
             if self.captureGeneration != oldValue {
+                self.logPendingSpeechState("generation_reset")
                 self.pendingSpeechCapture?.stop()
                 self.pendingSpeechCapture = nil
                 self.pendingSpeech = .empty
+                self.pendingSpeechDiagnosticID = nil
             }
         }
     }
@@ -582,16 +585,34 @@ final class MeetingSessionCoordinator: ObservableObject {
             }
             CFRunLoopWakeUp(CFRunLoopGetMain())
         }
-        let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin) { [weak self] snapshot in
+        let pendingDiagnosticID = UUID()
+        self.pendingSpeechDiagnosticID = pendingDiagnosticID
+        let pendingDiagnostics: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)?
+        if DebugLogger.diagnosticsEnabled {
+            pendingDiagnostics = { event in
+                DebugLogger.shared.logLazy(level: .debug, source: "MeetingPendingSpeech") {
+                    "captureID=\(pendingDiagnosticID.uuidString) \(event.logFields)"
+                }
+            }
+        } else { pendingDiagnostics = nil }
+        let pendingSpeechCapture = MeetingPendingSpeechCapture(originBox: captureOrigin,
+            diagnostics: pendingDiagnostics) { [weak self] snapshot in
             MainActor.assumeIsolated {
-                guard let self, self.captureGeneration == generation,
+                guard let self else { return }
+                guard self.captureGeneration == generation,
                       self.pendingSpeechCapture != nil,
-                      snapshot.revision > self.pendingSpeech.revision else { return }
+                      snapshot.revision > self.pendingSpeech.revision else {
+                    self.logPendingSpeechState("capture_snapshot_rejected", incomingRevision: snapshot.revision,
+                        incomingCaptureID: pendingDiagnosticID)
+                    return
+                }
                 self.pendingSpeech = snapshot
+                self.logPendingSpeechState("capture_snapshot_published", incomingRevision: snapshot.revision)
             }
         }
         self.pendingSpeechCapture = pendingSpeechCapture
         self.pendingSpeech = MeetingPendingSpeechSnapshot(isCapturing: true)
+        self.logPendingSpeechState("capture_started")
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
         self.lastLiveSpeechAt = nil
@@ -1836,6 +1857,42 @@ final class MeetingSessionCoordinator: ObservableObject {
     private func reconcilePendingSpeech() {
         guard let capture = self.pendingSpeechCapture else { return }
         self.pendingSpeech = capture.reconcile(visible: self.liveTranscript)
+        self.logPendingSpeechState("caption_snapshot_published")
+    }
+
+    /// Capture event time before the logger queue runs. Only bounded IDs, timings
+    /// and character counts are retained by the asynchronous diagnostic closure.
+    private func logPendingSpeechState(_ event: String, incomingRevision: UInt64? = nil,
+                                       incomingCaptureID: UUID? = nil) {
+        guard DebugLogger.diagnosticsEnabled else { return }
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let captureID = self.pendingSpeechDiagnosticID?.uuidString ?? "none"
+        let incomingID = incomingCaptureID?.uuidString ?? captureID
+        let generation = self.captureGeneration?.uuidString ?? "none"
+        let pendingRevision = self.pendingSpeech.revision
+        let pendingIDs = self.pendingSpeech.tokens.map(\.id)
+        let transcriptRevision = self.liveTranscript.revision
+        let rowCount = self.liveTranscript.utterances.count
+        let rows = self.liveTranscript.utterances.suffix(8).map {
+            (id: $0.id, start: $0.start, end: $0.end,
+             incomplete: $0.hasIncompleteTextCoverage, characters: $0.text.utf16.count)
+        }
+        let partials = self.liveTranscript.partials.values.prefix(2).map {
+            (id: $0.id, start: $0.start, end: $0.end, characters: $0.text.utf16.count)
+        }
+        DebugLogger.shared.logLazy(level: .debug, source: "MeetingPendingSpeech") {
+            func time(_ value: TimeInterval?) -> String { value.map { String(format: "%.6f", $0) } ?? "none" }
+            let rowFields = rows.map {
+                "\($0.id.uuidString):\(time($0.start))-\(time($0.end)):utf16=\($0.characters):incomplete=\($0.incomplete)"
+            }.joined(separator: ",")
+            let partialFields = partials.map {
+                "\($0.id.uuidString):\(time($0.start))-\(time($0.end)):utf16=\($0.characters)"
+            }.joined(separator: ",")
+            return "event=\(event) eventUptime=\(time(uptime)) captureID=\(captureID) incomingCaptureID=\(incomingID) "
+                + "generation=\(generation) incomingRevision=\(incomingRevision.map(String.init) ?? "none") "
+                + "pendingRevision=\(pendingRevision) transcriptRevision=\(transcriptRevision) rowCount=\(rowCount) "
+                + "pendingIDs=[\(pendingIDs.map(String.init).joined(separator: ","))] recentRows=[\(rowFields)] partials=[\(partialFields)]"
+        }
     }
 
     private func process(_ inputSession: MeetingSession, generation: UUID) async throws -> MeetingSession {
@@ -2313,9 +2370,11 @@ final class MeetingSessionCoordinator: ObservableObject {
         // start new privacy work while the canceled worker is being joined.
         let coordinator = self.liveTranscriptionCoordinator
         self.liveTranscriptionCoordinator = nil
+        self.logPendingSpeechState("capture_teardown")
         self.pendingSpeechCapture?.stop()
         self.pendingSpeechCapture = nil
         self.pendingSpeech = .empty
+        self.pendingSpeechDiagnosticID = nil
         let publication = self.livePrivacyPublication
         let cleanup = Task { @MainActor in
             await publication.stop()

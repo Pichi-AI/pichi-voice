@@ -83,23 +83,25 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&bumpsAfterSpeech, start: 12, duration: 20, rms: { time in
             (time - 12).truncatingRemainder(dividingBy: 1) < 0.24 ? Self.speech(time) : 0.001
         })
-        try require(bumpsAfterSpeech.snapshot.tokens.isEmpty, "Short bumps must not keep previously captured waves alive indefinitely")
+        try require(bumpsAfterSpeech.snapshot.tokens.starts(with: beforeQuiet)
+                    && bumpsAfterSpeech.snapshot.tokens.count <= beforeQuiet.count + 1,
+                    "Noise bumps cannot erase earlier speech or accumulate waves across quiet gaps")
         var isolatedDuringQuiet = speech
         feed(&isolatedDuringQuiet, start: 12, duration: 6, rms: { time in
             Int(((time - 12) / 0.02).rounded()) % 50 == 0 ? 0.02 : 0.001
         }, crest: 12)
-        try require(isolatedDuringQuiet.snapshot.tokens.isEmpty, "Isolated clicks cannot postpone quiet cleanup")
+        try require(isolatedDuringQuiet.snapshot.tokens == beforeQuiet, "Clicks cannot clear waiting speech or mint more waves")
         feed(&speech, start: 12, duration: 6, rms: { _ in 0.001 })
-        try require(!beforeQuiet.isEmpty && speech.snapshot.tokens.isEmpty, "Long quiet expires only visual estimates")
+        try require(!beforeQuiet.isEmpty && speech.snapshot.tokens == beforeQuiet, "Quiet must retain speech until visible text covers it")
         var lateText = MeetingLiveTranscriptSnapshot.empty
         lateText.revision = 1
         lateText.utterances = [.init(id: UUID(), speaker: .you, text: "Late approved words", start: 0, end: 12)]
         speech.reconcile(visible: lateText)
-        try require(speech.snapshot.tokens.isEmpty, "Late text cannot resurrect expired waveforms")
+        try require(speech.snapshot.tokens.isEmpty, "Late approved text replaces exactly the earlier captured speech")
         feed(&speech, start: 18, duration: 2, rms: Self.speech)
         try require(!speech.snapshot.tokens.isEmpty && speech.snapshot.tokens.allSatisfy { $0.start >= 18 },
-                    "Resumed speech starts fresh after quiet cleanup")
-        print("PASS long quiet expiry, late text and fresh speech")
+                    "Resumed speech starts fresh after approved coverage")
+        print("PASS quiet waiting, late text replacement and fresh speech")
         var cap = MeetingPendingSpeechProjection()
         feed(&cap, duration: 120, rms: Self.speech)
         try require(cap.snapshot.tokens.count == 64, "Long recognition delays keep exactly the bounded token cap")
@@ -108,7 +110,9 @@ struct MeetingPendingSpeechProjectionTests {
         visible.revision = 1
         visible.utterances = [.init(id: UUID(), speaker: .you, text: "Approved synthetic caption", start: 0, end: 3)]
         cap.reconcile(visible: visible)
-        try require(cap.snapshot.tokens == captured.filter { $0.end > 3 }, "Timed recognition replaces only its captured coverage")
+        try require(cap.snapshot.tokens.map(\.id) == captured.filter { $0.end > 3 }.map(\.id)
+                    && cap.snapshot.tokens.allSatisfy { $0.start >= 3 },
+                    "Timed recognition replaces only its captured coverage and retains an uncovered boundary")
         print("PASS bounded state and timed replacement")
         var partials = MeetingPendingSpeechProjection()
         feed(&partials, duration: 4, rms: Self.speech)
@@ -121,11 +125,12 @@ struct MeetingPendingSpeechProjectionTests {
         partial.revision = 2
         partial.partials[.you]?.end = 1.5
         partials.reconcile(visible: partial)
-        try require(partials.snapshot.tokens == before.filter { $0.end > 1.5 }, "Timed partial replaces only processed coverage")
+        try require(partials.snapshot.tokens.map(\.id) == before.filter { $0.end > 1.5 }.map(\.id), "Timed partial replaces only processed coverage")
+        try require(partials.snapshot.tokens.allSatisfy { $0.start >= 1.5 }, "A boundary-straddling estimate retains only uncovered audio")
         partial.revision = 3
         partial.partials[.you]?.text = String(repeating: "Approved word ", count: 80)
         partials.reconcile(visible: partial)
-        try require(partials.snapshot.tokens == before.filter { $0.end > 1.5 }, "Many delayed words cannot erase newly captured audio")
+        try require(partials.snapshot.tokens.map(\.id) == before.filter { $0.end > 1.5 }.map(\.id), "Many delayed words cannot erase newly captured audio")
         let afterGrowth = partials.snapshot
         partial.revision = 2
         partial.partials[.you]?.text = "Older revision with many invented words"
@@ -141,7 +146,7 @@ struct MeetingPendingSpeechProjectionTests {
         partial.revision = 5
         partial.partials[.you] = .init(id: turnID, text: "Next window", start: 1.5, end: 3)
         partials.reconcile(visible: partial)
-        try require(partials.snapshot.tokens == before.filter { $0.end > 3 }, "Reused preview identity with fewer words still replaces the next window")
+        try require(partials.snapshot.tokens.map(\.id) == before.filter { $0.end > 3 }.map(\.id), "Reused preview identity with fewer words still replaces the next window")
         let afterNextWindow = partials.snapshot.tokens
         print("PASS next-window and long-session partial coverage")
         var empty = MeetingLiveTranscriptSnapshot.empty
@@ -155,8 +160,8 @@ struct MeetingPendingSpeechProjectionTests {
         let them = sources.snapshot.tokens.filter { $0.source == .them }
         var quietSource = sources
         feed(&quietSource, start: 3, duration: 6, rms: { _ in 0 })
-        try require(quietSource.snapshot.tokens == them, "Quiet microphone cleanup cannot erase the other audio source")
-        print("PASS source-specific quiet expiry")
+        try require(quietSource.snapshot.tokens == sources.snapshot.tokens, "Quiet cannot erase either source before recognition")
+        print("PASS source-specific quiet waiting")
         visible.revision = 2
         visible.utterances[0].end = 4
         sources.reconcile(visible: visible)
@@ -170,7 +175,42 @@ struct MeetingPendingSpeechProjectionTests {
         feed(&sources, start: 4, duration: 4, rms: Self.speech)
         try require(sources.snapshot.tokens.isEmpty && !sources.snapshot.isCapturing, "Stopped generations cannot resurrect progress")
         print("PASS invalid PTS, duplicates and terminal intake")
+        try testDelayedReplacementDiagnostics()
         try testCaptureTee()
+    }
+
+    static func testDelayedReplacementDiagnostics() throws {
+        final nonisolated class Receipt: @unchecked Sendable {
+            private let lock = NSLock()
+            private var events: [MeetingPendingSpeechProjection.DiagnosticEvent] = []
+            func append(_ event: MeetingPendingSpeechProjection.DiagnosticEvent) { lock.withLock { events.append(event) } }
+            func values() -> [MeetingPendingSpeechProjection.DiagnosticEvent] { lock.withLock { events } }
+        }
+        let receipt = Receipt()
+        var projection = MeetingPendingSpeechProjection(diagnostics: { receipt.append($0) })
+        feed(&projection, duration: 2, rms: Self.speech)
+        let original = projection.snapshot
+        feed(&projection, start: 2, duration: 18, rms: { _ in 0.001 })
+        try require(projection.snapshot == original, "Even an 18-second ASR delay cannot erase earlier speech during silence")
+        let quiet = receipt.values()
+        try require(quiet.filter { $0.kind == .quietWaiting }.count == 1, "One quiet transition produces one diagnostic, not a PCM-frame log flood")
+        try require(!quiet.contains { $0.kind == .replaced }, "Quiet is never logged as replacement")
+        var held = MeetingLiveTranscriptSnapshot.empty
+        held.revision = 1
+        projection.reconcile(visible: held)
+        try require(projection.snapshot == original, "An empty/privacy-held update cannot remove pending audio")
+        held.revision = 2
+        held.partials[.you] = .init(id: UUID(), text: "SYNTHETIC_CONTENT_MUST_NOT_ENTER_DIAGNOSTICS", start: 0, end: 2)
+        projection.reconcile(visible: held)
+        try require(projection.snapshot.tokens.isEmpty, "Approved visible words replace the held interval")
+        let events = receipt.values()
+        let replaced = events.filter { $0.kind == .replaced }
+        try require(replaced.flatMap(\.tokens).map(\.id) == original.tokens.map(\.id), "Diagnostic removal IDs match the actual replaced waveform IDs")
+        try require(replaced.allSatisfy { $0.captionID == held.partials[.you]?.id && $0.start == 0 && $0.end == 2 }, "Replacement is correlated with the displayed caption and exact coverage")
+        try require(events.allSatisfy { !$0.logFields.contains("SYNTHETIC_CONTENT_MUST_NOT_ENTER_DIAGNOSTICS") && $0.uptime.isFinite }, "Diagnostic fields contain timing and counts, never transcript content")
+        projection.stop()
+        try require(receipt.values().last?.kind == .stopped, "Terminal cleanup has an explicit reason distinct from replacement")
+        print("PASS delayed speech replacement and bounded content-free diagnostics")
     }
     static func testCaptureTee() throws {
         final nonisolated class Receipt: @unchecked Sendable {
@@ -206,14 +246,34 @@ struct MeetingPendingSpeechProjectionTests {
             for channel in 0..<channels {
                 for frame in 0..<frames { quiet.floatChannelData![channel][frame] = 0.001 }
             }
-            for chunk in 0..<Int((6 * sampleRate / Double(frames)).rounded(.up)) {
+            let quietChunkCount = Int((6 * sampleRate / Double(frames)).rounded(.up))
+            for chunk in 0..<quietChunkCount {
                 capture.offer(kind: .microphone, sampleBuffer: try sampleBuffer(quiet,
                     pts: CMTime(seconds: 77 + duration + Double(chunk * frames) / sampleRate,
                                 preferredTimescale: 1_000_000_000)))
             }
             CFRunLoopRunInMode(.defaultMode, 0.01, false)
-            try require(receipt.snapshots.count == 2 && receipt.snapshots.last?.tokens.isEmpty == true,
-                        "Real quiet PCM coalesces a cleanup update without adding or retaining waves")
+            let afterQuiet = receipt.snapshots.last!
+            // Non-divisible callbacks can finish one 20ms meter containing the
+            // final speech samples. That mixed boundary is not six seconds of noise.
+            try require(afterQuiet.tokens.starts(with: snapshot.tokens)
+                        && afterQuiet.tokens.count <= snapshot.tokens.count + 1
+                        && afterQuiet.tokens.allSatisfy { $0.end <= duration + 0.04 },
+                        "Quiet retains speech, with at most its final mixed-meter boundary")
+            let publicationCount = receipt.snapshots.count
+            for chunk in quietChunkCount..<(quietChunkCount + 50) {
+                capture.offer(kind: .microphone, sampleBuffer: try sampleBuffer(quiet,
+                    pts: CMTime(seconds: 77 + duration + Double(chunk * frames) / sampleRate,
+                                preferredTimescale: 1_000_000_000)))
+            }
+            CFRunLoopRunInMode(.defaultMode, 0.01, false)
+            try require(receipt.snapshots.count == publicationCount,
+                        "Entirely quiet PCM cannot mint waves or trigger repeated UI publication")
+            var approved = MeetingLiveTranscriptSnapshot.empty
+            approved.revision = 1
+            approved.utterances = [.init(id: UUID(), speaker: .you, text: "Approved captured speech", start: 0, end: duration + 0.04)]
+            try require(capture.reconcile(visible: approved).tokens.isEmpty,
+                        "The capture tee retires its held waves only when visible words cover that audio")
             capture.stop()
             print("PASS native \(Int(sampleRate))Hz \(channels)-channel speech/quiet PCM and bounded UI publication")
         }

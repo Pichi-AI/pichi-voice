@@ -353,8 +353,46 @@ nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
 nonisolated struct MeetingPendingSpeechProjection {
     static let maximumTokens = 64
     static let minimumActivityRMS: Float = 0.0042
-    static let quietExpirySeconds: TimeInterval = 5
+    static let quietWaitingSeconds: TimeInterval = 5
     private static let cadenceResetSeconds: TimeInterval = 0.24
+
+    /// Bounded scalar evidence for the existing debug logger. No audio or transcript
+    /// content crosses this callback, including when publication is held by privacy.
+    nonisolated struct DiagnosticEvent: Sendable {
+        enum Kind: String, Sendable {
+            case created, replaced, trimmed, stopped
+            case quietWaiting = "quiet_waiting"
+            case capacityReached = "capacity_reached"
+            case reconciled, staleTranscript = "stale_transcript", capturePublished = "capture_published"
+        }
+        let kind: Kind
+        let uptime: TimeInterval
+        let source: MeetingLiveSpeaker?
+        let tokens: [MeetingPendingSpeechToken]
+        let remainingIDs: [UInt64]
+        let pendingRevision: UInt64
+        let transcriptRevision: UInt64?
+        let captionID: UUID?
+        let visibleUTF16: Int
+        let start: TimeInterval?
+        let end: TimeInterval?
+
+        var logFields: String {
+            func time(_ value: TimeInterval?) -> String {
+                value.map { String(format: "%.6f", $0) } ?? "none"
+            }
+            func tag(_ source: MeetingLiveSpeaker?) -> String {
+                switch source { case .you: "microphone"; case .them: "meeting_audio"; case nil: "all" }
+            }
+            let intervals = tokens.map { "\($0.id):\(tag($0.source)):\(time($0.start))-\(time($0.end))" }.joined(separator: ",")
+            return "event=\(kind.rawValue) eventUptime=\(time(uptime)) source=\(tag(source)) "
+                + "pendingRevision=\(pendingRevision) transcriptRevision=\(transcriptRevision.map(String.init) ?? "none") "
+                + "captionID=\(captionID?.uuidString ?? "none") visibleUTF16=\(visibleUTF16) "
+                + "coverageStart=\(time(start)) coverageEnd=\(time(end)) "
+                + "tokens=[\(intervals)] remainingIDs=[\(remainingIDs.map(String.init).joined(separator: ","))]"
+        }
+    }
+
     private struct Track {
         var energies: [Float] = []
         var consecutiveActivity = 0
@@ -362,11 +400,18 @@ nonisolated struct MeetingPendingSpeechProjection {
         var lastEnd: Double?
         var lastActivityEnd: Double?
         var lastProgressEnd: Double?
+        var reportedQuietWaiting = false
     }
     private var tracks: [MeetingLiveSpeaker: Track] = [:]
     private var nextID: UInt64 = 0
     private var visibleRevision: UInt64 = 0
+    private var reportedCapacity = false
+    private let onDiagnostic: (@Sendable (DiagnosticEvent) -> Void)?
     private(set) var snapshot = MeetingPendingSpeechSnapshot(isCapturing: true)
+
+    init(diagnostics: (@Sendable (DiagnosticEvent) -> Void)? = nil) {
+        self.onDiagnostic = diagnostics
+    }
 
     /// Exactly one short scalar frame from admitted PCM, using its capture PTS timeline.
     mutating func observe(source: MeetingLiveSpeaker, start: Double, end: Double,
@@ -405,6 +450,7 @@ nonisolated struct MeetingPendingSpeechProjection {
                 // A short accepted bump must not keep old waves alive forever.
                 // Only sustained activity that earns a visual fragment extends its lifetime.
                 track.lastProgressEnd = end
+                track.reportedQuietWaiting = false
                 if self.snapshot.tokens.count < Self.maximumTokens {
                     let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
                     self.nextID &+= 1
@@ -413,6 +459,11 @@ nonisolated struct MeetingPendingSpeechProjection {
                         widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))],
                         level: min(1, max(0.08, sqrt(rms / 0.08)))))
                     self.snapshot.revision &+= 1
+                    self.reportedCapacity = false
+                    self.emit(.created, source: source, tokens: [self.snapshot.tokens.last!])
+                } else if !self.reportedCapacity {
+                    self.reportedCapacity = true
+                    self.emit(.capacityReached, source: source, start: start, end: end)
                 }
             }
         }
@@ -420,10 +471,13 @@ nonisolated struct MeetingPendingSpeechProjection {
             // Unminted cadence must not accumulate across separate background bumps.
             if end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
         }
-        if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietExpirySeconds {
-            let before = self.snapshot.tokens.count
-            self.snapshot.tokens.removeAll { $0.source == source && $0.end <= lastProgressEnd }
-            if self.snapshot.tokens.count != before { self.snapshot.revision &+= 1 }
+        if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietWaitingSeconds,
+           !track.reportedQuietWaiting {
+            // Silence stops minting. It does not prove the preceding speech has
+            // been recognized, rejected as noise, or admitted by privacy yet.
+            track.reportedQuietWaiting = true
+            self.emit(.quietWaiting, source: source,
+                tokens: self.snapshot.tokens.filter { $0.source == source }, start: lastProgressEnd, end: end)
         }
         self.tracks[source] = track
     }
@@ -432,15 +486,17 @@ nonisolated struct MeetingPendingSpeechProjection {
     /// unavailable/empty hypotheses cannot clear captured progress. Timed closed turns remove
     /// their own coverage. Untimed prefixes retain progress until coverage is known.
     mutating func reconcile(visible: MeetingLiveTranscriptSnapshot) {
-        guard visible.revision > self.visibleRevision else { return }
+        guard visible.revision > self.visibleRevision else {
+            self.emit(.staleTranscript, transcriptRevision: visible.revision)
+            return
+        }
         self.visibleRevision = visible.revision
-        let before = self.snapshot.tokens
         for utterance in visible.utterances where !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             guard !utterance.hasIncompleteTextCoverage,
-                  utterance.start.isFinite, utterance.end.isFinite, utterance.end > utterance.start else { continue }
-            self.snapshot.tokens.removeAll {
-                $0.source == utterance.speaker && $0.end <= utterance.end + 0.000_001 && $0.end > utterance.start
-            }
+                  utterance.start.isFinite, utterance.start >= 0,
+                  utterance.end.isFinite, utterance.end > utterance.start else { continue }
+            self.applyCoverage(source: utterance.speaker, start: utterance.start, end: utterance.end,
+                captionID: utterance.id, visibleUTF16: utterance.text.utf16.count)
         }
         for (source, partial) in visible.partials {
             guard partial.start.isFinite, partial.start >= 0,
@@ -448,18 +504,64 @@ nonisolated struct MeetingPendingSpeechProjection {
                   !partial.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !visible.finalizedTurnIDs.contains(partial.id),
                   !visible.utterances.contains(where: { $0.id == partial.id }) else { continue }
-            self.snapshot.tokens.removeAll {
-                $0.source == source && $0.end > partial.start && $0.end <= end + 0.000_001
-            }
+            self.applyCoverage(source: source, start: partial.start, end: end,
+                captionID: partial.id, visibleUTF16: partial.text.utf16.count)
         }
-        if self.snapshot.tokens != before { self.snapshot.revision &+= 1 }
+        let visibleUTF16 = visible.utterances.reduce(0) { $0 + $1.text.utf16.count }
+            + visible.partials.values.reduce(0) { $0 + $1.text.utf16.count }
+        self.emit(.reconciled, transcriptRevision: visible.revision, visibleUTF16: visibleUTF16)
+    }
+
+    private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,
+                                       captionID: UUID, visibleUTF16: Int) {
+        var removed: [MeetingPendingSpeechToken] = []
+        var trimmed: [MeetingPendingSpeechToken] = []
+        self.snapshot.tokens = self.snapshot.tokens.compactMap { token in
+            guard token.source == source, token.end > start, token.start < end else { return token }
+            if token.start + 0.000_001 >= start, token.end <= end + 0.000_001 {
+                removed.append(token)
+                return nil
+            }
+            // A word-shaped estimate can straddle a recognized boundary. Keep its
+            // uncovered part and stable identity instead of deleting other audio.
+            var retained = token
+            if start <= token.start { retained.start = min(end, token.end) }
+            else if end >= token.end { retained.end = max(start, token.start) }
+            // Coverage strictly inside an estimate cannot justify erasing either
+            // outside edge. Conservatively retain it until more text covers it.
+            if retained != token { trimmed.append(token) }
+            return retained
+        }
+        guard !removed.isEmpty || !trimmed.isEmpty else { return }
+        self.snapshot.revision &+= 1
+        self.reportedCapacity = false
+        if !removed.isEmpty {
+            self.emit(.replaced, source: source, tokens: removed, transcriptRevision: self.visibleRevision,
+                captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
+        }
+        if !trimmed.isEmpty {
+            self.emit(.trimmed, source: source, tokens: trimmed, transcriptRevision: self.visibleRevision,
+                captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
+        }
+    }
+
+    private func emit(_ kind: DiagnosticEvent.Kind, source: MeetingLiveSpeaker? = nil,
+                      tokens: [MeetingPendingSpeechToken] = [], transcriptRevision: UInt64? = nil,
+                      captionID: UUID? = nil, visibleUTF16: Int = 0, start: TimeInterval? = nil, end: TimeInterval? = nil) {
+        guard let onDiagnostic else { return }
+        onDiagnostic(DiagnosticEvent(kind: kind, uptime: ProcessInfo.processInfo.systemUptime,
+            source: source, tokens: tokens, remainingIDs: self.snapshot.tokens.map(\.id),
+            pendingRevision: self.snapshot.revision, transcriptRevision: transcriptRevision,
+            captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end))
     }
 
     mutating func stop() {
+        let removed = self.snapshot.tokens
         self.tracks.removeAll()
         self.snapshot.tokens.removeAll()
         self.snapshot.isCapturing = false
         self.snapshot.revision &+= 1
+        self.emit(.stopped, tokens: removed)
     }
 
 }
@@ -479,14 +581,19 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
     private let lock = NSLock()
     private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingPendingSpeechSnapshot) -> Void
-    private var projection = MeetingPendingSpeechProjection()
+    private var projection: MeetingPendingSpeechProjection
+    private let onDiagnostic: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)?
     private var meters: [MeetingLiveSpeaker: Meter] = [:]
     private var publicationScheduled = false
     private var lastPublishedRevision: UInt64 = 0
 
-    init(originBox: MeetingLiveOriginBox, onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
+    init(originBox: MeetingLiveOriginBox,
+         diagnostics: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)? = nil,
+         onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
         self.originBox = originBox
         self.onUpdate = onUpdate
+        self.onDiagnostic = diagnostics
+        self.projection = MeetingPendingSpeechProjection(diagnostics: diagnostics)
     }
 
     func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
@@ -584,6 +691,9 @@ final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
                 self.lastPublishedRevision = snapshot.revision
                 return snapshot
             }
+            self.onDiagnostic?(.init(kind: .capturePublished, uptime: ProcessInfo.processInfo.systemUptime,
+                source: nil, tokens: [], remainingIDs: snapshot.tokens.map(\.id), pendingRevision: snapshot.revision,
+                transcriptRevision: nil, captionID: nil, visibleUTF16: 0, start: nil, end: nil))
             self.onUpdate(snapshot)
         }
         CFRunLoopWakeUp(CFRunLoopGetMain())
