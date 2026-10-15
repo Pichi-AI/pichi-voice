@@ -73,7 +73,10 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
             recognize: { window, _ in
                 try await fixture.runtime.recognizePCM(window: window, offset: 8, trackID: track,
                     attemptID: attempt, configuration: fixture.configuration, preview: { batch in
-                        await MainActor.run { observed.batches.append(batch); first.fulfill() }
+                        await MainActor.run {
+                            observed.batches.append(batch)
+                            if observed.batches.count == 1 { first.fulfill() }
+                        }
                     })
             }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
             failure: { _ in XCTFail("Empty provider hypothesis is not a capture failure") })
