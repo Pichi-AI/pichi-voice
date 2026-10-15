@@ -16,6 +16,42 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativeKnownNonPersonNERKeepsStrictPreviewAdvancingAcrossWindows() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await store.isInstalled() else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let context = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let track = UUID()
+        var previousVisible = ""
+        let texts = [
+            "Здравствуйте! Сегодня мы обсудим инструкции и посмотрим раздел с документами. После встречи запишем вопросы, которые нужно уточнить. Сайте, у вас есть.",
+            "Запишем вопросы, которые нужно уточнить. Здравствуйте!",
+            "Сегодня мы обсудим инструкции и посмотрим раздел с документами. После встречи запишем вопросы, которые нужно уточнить.",
+        ]
+        for (index, text) in texts.enumerated() {
+            let start = Int64(index * 12)
+            let row = MeetingTranscriptSegment(id: UUID(), start: .init(value: start, timescale: 1),
+                end: .init(value: start + 12, timescale: 1), sourceTrackID: track, speakerID: nil,
+                text: text, revision: 0, status: .final, overlap: .none, completeness: .complete)
+            var observation = MeetingPCMTranscriptBatch(segments: [row], isComplete: false)
+            _ = try await context.previewSpeech(observation)
+            let stable = try await context.previewSpeech(observation)
+            XCTAssertNotNil(stable, "A repeated stable hypothesis must not freeze on a known ordinary greeting")
+            observation.speechObservationIsFinal = true
+            let sealed = try await context.previewSpeech(observation)
+            XCTAssertNotNil(sealed, "Sealing must preserve the approved greeting prefix")
+            let checkpoint = try await context.redact(.init(segments: [row]))
+            let visible = checkpoint.segments.map(\.text).joined(separator: " ") + " " + (checkpoint.livePreview?.text ?? "")
+            XCTAssertGreaterThan(visible.utf16.count, previousVisible.utf16.count)
+            XCTAssertFalse(visible.contains("[ИМЯ]"))
+            previousVisible = visible
+        }
+        _ = try await context.finish()
+        try await privacy.unload()
+    }
+
     func testNativePIIDoesNotClassifyATransientASRSpellingAsAName() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))

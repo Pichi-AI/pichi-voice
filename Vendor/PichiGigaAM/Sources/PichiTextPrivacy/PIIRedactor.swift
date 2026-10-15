@@ -75,6 +75,13 @@ public enum PIIRedactor {
     // are not a name dictionary or a substitute for real token classification.
     private static let nonNames = Set("аспирин инсулин витамин пенициллин анальгин метформин оземпик лизиноприл метотрексат дофамин серотонин адреналин мелатонин кофеин никотин протеин проверь проведи изучите сделай готов хорошо спасибо здравствуйте русский английский".split(separator: " ").map(String.init))
 
+    /// Reuse the existing durable precision guard at the preview boundary too.
+    /// A known ordinary word cannot become an unresolved name solely because
+    /// the same NER evaluation labels it PER in a longer meeting context.
+    static func isKnownNonPersonWord(_ word: String) -> Bool {
+        self.nonNames.contains(word.lowercased())
+    }
+
     public static func redact(_ text: String, ner: [PIINERSpan]) throws -> PIIRedactionResult {
         guard text.utf16.count <= PIIWordPieceTokenizer.maximumInputUTF16 else { throw TextPrivacyError.inputTooLong }
         var entities = try structured(text) + PIIRussianNameHeuristics.detect(text)
@@ -91,7 +98,7 @@ public enum PIIRedactor {
             let letters = value.unicodeScalars.filter { CharacterSet.letters.contains($0) }
             guard letters.count >= 3 else { continue }
             let words = value.split(whereSeparator: { $0.isWhitespace }).map { $0.lowercased() }
-            guard !words.contains(where: { nonNames.contains($0) }) else { continue }
+            guard !words.contains(where: self.isKnownNonPersonWord) else { continue }
             if words.count == 1, letters.count < 4, span.score < 0.9 { continue }
             // Mixed alphabets inside one word are common ASR transliteration
             // debris. Separate RU/EN words are still valid mixed-language text.

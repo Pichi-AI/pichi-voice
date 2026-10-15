@@ -9,6 +9,16 @@ private struct StructuredPrivacyRedactor: TranscriptTextRedacting {
     }
 }
 
+private struct KnownNonPersonNERPrivacyRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let range = (text as NSString).range(of: "Здравствуйте")
+        let ner: [PIINERSpan] = range.location == NSNotFound ? [] : [.init(range: range, label: "PER", score: 0.61)]
+        let output = try PIIRedactor.redact(text, ner: ner)
+        return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) },
+            provisionalSafeUTF16: try PIIRedactor.provisionalSafePrefix(in: text, ner: ner, redactedSpans: output.spans))
+    }
+}
+
 #if !PII_POLICY_STANDALONE
 private actor NativePrivacyRedactor: TranscriptTextRedacting {
     let runtime = PIINERRuntime()
@@ -117,11 +127,14 @@ struct MeetingPrivacyContextTests {
             try await suite(using: native)
             try await liveSuite(using: native)
             try await provisionalSuite(using: native)
+            try await knownNonPersonPCMContextSuite(using: native)
         }
         #endif
         try await liveDeliverySuite()
         try await stableLiveHypothesisSuite()
         try await stablePCMHypothesisSuite()
+        try await knownNonPersonPCMContextSuite(using: KnownNonPersonNERPrivacyRedactor())
+        try await partialUtteranceCoverageSuite()
         let track = UUID()
         let invalid = MeetingPCMTranscriptBatch(segments: [segment("🙂 Иван", track: track, start: 0)])
         do {
@@ -149,6 +162,82 @@ struct MeetingPrivacyContextTests {
         let cancelledTail = try await cancelled.finish()
         try check(cancelledTail == nil, "cancelled transform committed a raw pending tail")
         print("Meeting privacy context tests passed: actual segments/evidence, structured rules, opt-in native NER, delayed tail and final flush")
+    }
+
+    static func knownNonPersonPCMContextSuite(using redactor: any TranscriptTextRedacting) async throws {
+        let punctuationText = "! Сегодня обсуждаем документы и условия хранения препарата."
+        let punctuationNER = [PIINERSpan(range: NSRange(location: 0, length: 1), label: "PER", score: 0.49)]
+        try check((try PIIRedactor.provisionalSafePrefix(in: punctuationText, ner: punctuationNER, redactedSpans: []) ?? 0) > 1,
+                  "a punctuation-only PER result froze later ordinary speech")
+        for candidate in ["ан", "ан сер", "Ан Сер обсуждает инструкцию и условия хранения препарата.",
+                          "доктор ан на обсуждает инструкцию и условия хранения препарата."] {
+            let output = try PIIRedactor.redact(candidate, ner: [])
+            try check(try PIIRedactor.provisionalSafePrefix(in: candidate, ner: [], redactedSpans: output.spans) == 0,
+                      "a positional name-prefix guard admitted an unresolved name fragment")
+        }
+        let context = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let track = UUID()
+        let texts = [
+            "Здравствуйте! Сегодня мы обсудим инструкции и посмотрим раздел с документами. После встречи запишем вопросы, которые нужно уточнить. Сайте, у вас есть.",
+            "Запишем вопросы, которые нужно уточнить. Здравствуйте!",
+            "Сегодня мы обсудим инструкции и посмотрим раздел с документами. После встречи запишем вопросы, которые нужно уточнить.",
+        ]
+        var previousText = ""
+        for (index, text) in texts.enumerated() {
+            let row = segment(text, track: track, start: index * 12)
+            var observation = MeetingPCMTranscriptBatch(segments: [row], isComplete: false)
+            _ = try await context.previewSpeech(observation)
+            let stable = try await context.previewSpeech(observation)
+            try check(stable != nil, "a known non-person PER froze a repeated stable hypothesis")
+            observation.speechObservationIsFinal = true
+            let sealed = try await context.previewSpeech(observation)
+            try check(sealed != nil, "sealing erased protected speech after a known non-person PER")
+            let checkpoint = try await context.redact(.init(segments: [row]))
+            let visible = checkpoint.segments.map(\.text).joined(separator: " ") + " " + (checkpoint.livePreview?.text ?? "")
+            try check(visible.utf16.count > previousText.utf16.count, "bounded raw context stopped advancing after a window rollover")
+            try check(!visible.contains("[ИМЯ]"), "a known ordinary greeting became a false person mask")
+            previousText = visible
+        }
+        for (index, text) in ["доктор иван", "петрович сидоров, обсуждает переносимость препарата и схему дальнейшего лечения."].enumerated() {
+            let row = segment(text, track: track, start: 36 + index * 12)
+            var observation = MeetingPCMTranscriptBatch(segments: [row], isComplete: false)
+            _ = try await context.previewSpeech(observation)
+            let stable = try await context.previewSpeech(observation)
+            observation.speechObservationIsFinal = true
+            let sealed = try await context.previewSpeech(observation)
+            let checkpoint = try await context.redact(.init(segments: [row]))
+            let visible = [stable?.text ?? "", sealed?.text ?? "", checkpoint.segments.map(\.text).joined(separator: " "), checkpoint.livePreview?.text ?? ""].joined(separator: " ")
+            for name in ["иван", "петрович", "сидоров"] {
+                try check(!visible.lowercased().contains(name), "ordinary greeting exclusion admitted a later cross-window name")
+            }
+        }
+        let tail = try await context.finish()
+        try check(tail != nil, "the display-only fix discarded the durable context tail")
+    }
+
+    static func partialUtteranceCoverageSuite() async throws {
+        let first = "Сегодня мы обсудим подробную инструкцию и посмотрим раздел с документами."
+        let prefix = "После встречи запишем вопросы которые нужно уточнить "
+        let track = UUID()
+        var firstRow = segment(first, track: track, start: 0)
+        firstRow.end = .init(value: 4, timescale: 1)
+        var secondRow = segment(prefix + "Анна", track: track, start: 4)
+        secondRow.end = .init(value: 9, timescale: 1)
+        let context = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
+        _ = try await context.previewSpeech(.init(segments: [firstRow, secondRow], isComplete: false))
+        secondRow.text = prefix + "детали"
+        let preview = try await context.previewSpeech(.init(segments: [firstRow, secondRow], isComplete: false))
+        try check(preview?.text.contains("После встречи") == true, "native utterance coverage probe did not admit a partial later fragment")
+        try check(preview?.end == 4, "a clipped last utterance discarded an earlier source fragment's real endpoint")
+
+        let coarseContext = MeetingTranscriptPrivacyContext(redactor: StructuredPrivacyRedactor())
+        var coarse = firstRow
+        coarse.end = secondRow.end
+        coarse.text = first + " " + prefix + "Анна"
+        _ = try await coarseContext.previewSpeech(.init(segments: [coarse], isComplete: false))
+        coarse.text = first + " " + prefix + "детали"
+        let coarsePreview = try await coarseContext.previewSpeech(.init(segments: [coarse], isComplete: false))
+        try check(coarsePreview != nil && coarsePreview?.end == nil, "a coarse source utterance acquired a fabricated partial audio endpoint")
     }
 
     static func liveSuite(using redactor: any TranscriptTextRedacting) async throws {

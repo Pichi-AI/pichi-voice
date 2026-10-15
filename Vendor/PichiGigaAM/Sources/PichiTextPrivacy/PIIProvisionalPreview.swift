@@ -56,6 +56,14 @@ extension PIIRedactor {
             guard valid(span.range), span.score.isFinite, (0...1).contains(span.score) else {
                 throw TextPrivacyError.invalidSpan
             }
+            let candidate = source.substring(with: span.range)
+            // Native token classification can label a sentence mark PER. It has
+            // no person-name letters; initials still retain their letter below.
+            if !candidate.contains(where: { $0.isLetter }) { continue }
+            let candidateWords = candidate.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            // Only an entirely known non-person span shares the durable exclusion.
+            // A span containing any unknown name fragment still waits for context.
+            if !candidateWords.isEmpty, candidateWords.allSatisfy(Self.isKnownNonPersonWord) { continue }
             if !covered(span.range) { retreat(span.range.location) }
         }
         for range in PIIRussianNameHeuristics.provisionalCandidates(text, doseQualifiedWords: doseQualifiedWords)

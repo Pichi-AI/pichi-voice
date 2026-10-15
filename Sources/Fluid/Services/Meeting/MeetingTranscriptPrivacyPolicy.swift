@@ -490,6 +490,7 @@ actor MeetingTranscriptPrivacyContext {
         var admitted: [MeetingTranscriptSegment] = []
         var position = 0
         var clippedAudioCoverage = false
+        var completeSourceEnd = pending.filter { !$0.text.isEmpty }.map { $0.end.seconds }.max()
         for segment in ordered {
             let count = segment.text.utf16.count
             if position < stableCount {
@@ -498,7 +499,10 @@ actor MeetingTranscriptPrivacyContext {
                 copy.text = try MeetingTranscriptPrivacyPolicy.stablePrefix(in: copy.text, utf16Count: admittedCount)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 copy.originalText = nil
-                if !copy.text.isEmpty { admitted.append(copy) }
+                if !copy.text.isEmpty {
+                    admitted.append(copy)
+                    if admittedCount == count { completeSourceEnd = max(completeSourceEnd ?? 0, segment.end.seconds) }
+                }
                 if admittedCount < count { clippedAudioCoverage = true }
             }
             position += count + 1
@@ -509,9 +513,15 @@ actor MeetingTranscriptPrivacyContext {
             provisionalPreviewID: provisionalPreviewID, provisionalSegmentIDs: Set(combined.segments.map(\.id)))
         try Task.checkCancellation()
         var preview = safe.livePreview
-        // A clipped utterance has no word-level audio endpoint. It cannot retire
-        // all of the source segment's captured waveform progress.
-        if clippedAudioCoverage { preview?.end = nil }
+        // The clipped utterance has no word-level endpoint. Earlier fully admitted
+        // source fragments still have real endpoints; preserve only their approved
+        // coverage instead of discarding it or claiming the clipped source's end.
+        if clippedAudioCoverage {
+            let approvedEnd = preview?.end
+            preview?.end = approvedEnd.flatMap { approvedEnd in
+                completeSourceEnd.map { min(approvedEnd, $0) }
+            }
+        }
         diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
         lastSafePreview = preview
         completed = true
