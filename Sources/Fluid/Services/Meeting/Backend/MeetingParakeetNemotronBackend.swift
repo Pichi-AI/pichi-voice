@@ -222,12 +222,13 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         }
 
         let pcmMaterializations = MaterializationCache()
+        let ownerProfile = runtime.ownerVoiceProfileSnapshot
 
         // Phase A: Nemotron diarization, one continuous state per track, then drained. A track's
         // epochs are diarized in order as one stream, so a voice keeps its slot across a reset;
         // each epoch still maps its own segments back through its own spans.
         if artifact != nil { await progress(.identifyingSpeakers) }
-        let phaseA = try await Self.withOptionalDiarization(runtime: runtime, artifact: artifact) { factory in
+        var phaseA = try await Self.withOptionalDiarization(runtime: runtime, artifact: artifact) { factory in
             var result = MeetingNemotronPhaseResult()
             for track in manifest.tracks {
                 var pieces: [(work: EpochWork, materialized: MeetingMaterializedEpoch, offset: Int)] = []
@@ -270,6 +271,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 do {
                     let diarizer = try await factory.makeDiarizer(epoch: first.work.epoch.id)
                     let segments = try await diarizer.diarize(samples: trackSamples)
+                    if ownerProfile != nil {
+                        result.voiceSamples.append(contentsOf: MeetingSpeakerVoiceSamples.collect(
+                            epoch: first.work.epoch.id, samples: trackSamples, segments: segments
+                        ).prefix(max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)))
+                    }
                     for piece in pieces {
                         let pieceStart = Double(piece.offset) / piece.materialized.sampleRate
                         let pieceEnd = pieceStart + piece.materialized.durationSeconds
@@ -312,6 +318,20 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             return result
         }
         try Task.checkCancellation()
+        // Explicit owner identity is optional. The same bounded encoder runs after diarizer
+        // weights drain and before ASR loads. Only confirmed token IDs leave this phase.
+        var ownerTokens = Set<MeetingBackendSpeakerToken>()
+        if ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
+            do {
+                let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
+                let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles)
+                let matchedSlots = Set(confirmed.map { "\($0.analysisEpochID.trackID.uuidString):\($0.label)" })
+                ownerTokens = Set(phaseA.activity.map(\.token).filter {
+                    matchedSlots.contains("\($0.analysisEpochID.trackID.uuidString):\($0.label)")
+                })
+            } catch { try Task.checkCancellation() }
+        }
+        phaseA.voiceSamples.removeAll()
 
         // Phase B: Parakeet ASR inside the attempt's single prepared-meeting scope. Epochs that
         // failed phase A are excluded from ASR as well: an epoch is one unit of work.
@@ -368,7 +388,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             epochWork: epochWork,
             phaseA: phaseA,
             phaseB: phaseB,
-            backendID: backendID
+            backendID: backendID,
+            confirmedLocalUserTokens: ownerTokens
         )
     }
 
@@ -426,7 +447,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         epochWork: [EpochWork],
         phaseA: MeetingNemotronPhaseResult,
         phaseB: MeetingParakeetPhaseResult,
-        backendID: MeetingBackendID
+        backendID: MeetingBackendID,
+        confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
     ) throws -> MeetingCanonicalResultBundle {
         let outputsByEpoch = Dictionary(
             phaseB.outputs.map { ($0.epochID, $0) },
@@ -468,7 +490,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },
                 speakerSlotsContinueAcrossEpochs: true
             ),
-            coverageReceipts: receipts
+            coverageReceipts: receipts,
+            confirmedLocalUserTokens: confirmedLocalUserTokens
         )
     }
 

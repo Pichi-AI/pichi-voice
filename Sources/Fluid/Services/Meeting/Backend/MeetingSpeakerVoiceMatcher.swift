@@ -177,7 +177,7 @@ nonisolated enum MeetingSpeakerVoiceMatcher {
         }
     }
 
-    private static func distance(_ left: MeetingSpeakerVoiceProfile, _ right: MeetingSpeakerVoiceProfile) -> Float? {
+    static func distance(_ left: MeetingSpeakerVoiceProfile, _ right: MeetingSpeakerVoiceProfile) -> Float? {
         guard left.embeddings.count == 2, right.embeddings.count == 2 else { return nil }
         var worst: Float = 0
         for lhs in left.embeddings {

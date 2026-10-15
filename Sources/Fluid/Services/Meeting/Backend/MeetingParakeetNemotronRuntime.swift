@@ -74,6 +74,7 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
     nonisolated var supportsProgressivePCMInput: Bool { get }
+    nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { get }
     nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
                                  trackID: MeetingAudioTrackID, attemptID: UUID,
                                  configuration: MeetingFinalProcessingConfiguration,
@@ -104,6 +105,7 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 
 extension MeetingParakeetNemotronRunning {
     nonisolated var supportsProgressivePCMInput: Bool { false }
+    nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { nil }
 
     nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
                                  trackID: MeetingAudioTrackID, attemptID: UUID,

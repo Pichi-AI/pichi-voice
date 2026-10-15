@@ -22,7 +22,7 @@ nonisolated enum MeetingSpeakerActivityCoverage {
 // coverage receipts and per-unit echo verdicts, and produces product speakers, transcript
 // segments, the durable result sidecar, skipped chunks and product coverage gaps.
 //
-// It does no I/O, runs no aligner or diarizer, and never identifies You. Every input text unit
+// It does no I/O, runs no aligner or diarizer, and applies only confirmed owner identity tokens. Every input text unit
 // leaves with exactly one disposition, in the plan's precedence order: timing/provenance
 // quarantine, inadmissible capture era, echo suppression, outside speaker activity,
 // timing/overlap ambiguity, emitted. Every admissible manifest span must be tiled exactly once by
@@ -71,19 +71,22 @@ nonisolated struct MeetingAssemblyInput {
     /// Echo verdicts keyed by unit ID. Required for every online-call microphone unit that
     /// survives quarantine and admission; never consulted for in-room or application audio.
     let echoVerdicts: [String: MeetingUnitEchoVerdict]
+    let confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken>
 
     init(
         plan: MeetingBackendPlan,
         manifest: MeetingAnalysisManifest,
         evidence: MeetingFinalTranscriptEvidence,
         coverageReceipts: [MeetingSpanCoverageReceipt],
-        echoVerdicts: [String: MeetingUnitEchoVerdict] = [:]
+        echoVerdicts: [String: MeetingUnitEchoVerdict] = [:],
+        confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
     ) {
         self.plan = plan
         self.manifest = manifest
         self.evidence = evidence
         self.coverageReceipts = coverageReceipts
         self.echoVerdicts = echoVerdicts
+        self.confirmedLocalUserTokens = confirmedLocalUserTokens
     }
 }
 
@@ -155,9 +158,11 @@ nonisolated enum MeetingAssemblyError: LocalizedError, Equatable {
 nonisolated struct MeetingTranscriptAssembler {
     private let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
     private let speakerNameFormat: String
+    private let localUserName: String
 
     /// The product resolves this trusted UI template before assembly; assembly remains pure.
-    init(speakerNameFormat: String = "Speaker %lld") {
+    init(speakerNameFormat: String = "Speaker %lld", localUserName: String = "You") {
+        self.localUserName = localUserName
         self.speakerNameFormat = speakerNameFormat
     }
 
@@ -330,7 +335,8 @@ nonisolated struct MeetingTranscriptAssembler {
             attemptID: manifest.attemptID,
             trackKinds: Dictionary(uniqueKeysWithValues: manifest.tracks.map { ($0.id, $0.kind) }),
             emitted: visibleUnits,
-            identityLinks: identityLinks
+            identityLinks: identityLinks,
+            confirmedLocalUserTokens: input.confirmedLocalUserTokens
         )
         let speakerIDsByToken = Dictionary(
             speakers.map { ($0.token, $0.speaker.id) },
@@ -620,13 +626,14 @@ nonisolated struct MeetingTranscriptAssembler {
     /// Only the assembler mints product speaker IDs. The key is attempt + track + epoch + token
     /// label. Cross-epoch identity requires explicit links: voice evidence, or a diarizer that kept
     /// one state per track. Recomputed attempts never inherit an old identity. You is never
-    /// identified here.
+    /// inferred here; only externally verified owner tokens can receive that label.
     private func makeSpeakers(
         attemptID: UUID,
         trackKinds: [MeetingAudioTrackID: MeetingAudioTrackKind],
         emitted: [(unit: MeetingFinalTextUnit, presentation: MeetingAnalysisInterval)],
         identityLinks: [MeetingSpeakerIdentityLink],
-        priorSpeakers: [MeetingSessionSpeaker] = []
+        priorSpeakers: [MeetingSessionSpeaker] = [],
+        confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
     ) -> [(token: MeetingBackendSpeakerToken, speaker: MeetingSessionSpeaker)] {
         var tokens: [MeetingBackendSpeakerToken] = []
         var seen = Set<MeetingBackendSpeakerToken>()
@@ -659,24 +666,28 @@ nonisolated struct MeetingTranscriptAssembler {
             let identity = canonicalByToken[token] ?? token
             return isSubstantial(identity) || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
-        let ordinals = Dictionary(uniqueKeysWithValues: speakingTokens.filter { canonicalByToken[$0] == nil }
-            .enumerated().map { ($0.element, $0.offset + priorSpeakers.count + 1) })
+        let localIdentities = Set(confirmedLocalUserTokens.map { canonicalByToken[$0] ?? $0 })
+        let ordinals = Dictionary(uniqueKeysWithValues: speakingTokens.filter {
+            canonicalByToken[$0] == nil && !localIdentities.contains($0)
+        }.enumerated().map { ($0.element, $0.offset + priorSpeakers.filter { !$0.isLocalUser }.count + 1) })
         return speakingTokens.map { token in
             let canonical = canonicalByToken[token] ?? token
             let normalizedLabel = canonical.label.precomposedStringWithCanonicalMapping
             let scopedClusterID = "\(canonical.analysisEpochID):\(normalizedLabel)"
             let speakerID = Self.stableUUID("speaker:\(attemptID.uuidString):\(scopedClusterID)")
-            if let prior = priorSpeakers.first(where: { $0.id == speakerID }) {
+            let isLocalUser = localIdentities.contains(canonical)
+            if var prior = priorSpeakers.first(where: { $0.id == speakerID }) {
+                if isLocalUser { prior.isLocalUser = true }
                 return (token, prior)
             }
             return (
                 token,
                 MeetingSessionSpeaker(
                     id: speakerID,
-                    displayName: String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
+                    displayName: isLocalUser ? self.localUserName : String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
                     diarizationClusterID: scopedClusterID,
                     trackKind: trackKinds[token.analysisEpochID.trackID] ?? .microphone,
-                    isLocalUser: false,
+                    isLocalUser: isLocalUser,
                     identityCandidates: []
                 )
             )
@@ -693,7 +704,8 @@ nonisolated struct MeetingTranscriptAssembler {
         duration: TimeInterval,
         units: [MeetingFinalTextUnit],
         identityLinks: [MeetingSpeakerIdentityLink] = [],
-        priorSpeakers: [MeetingSessionSpeaker] = []
+        priorSpeakers: [MeetingSessionSpeaker] = [],
+        confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
     ) throws -> MeetingPCMTranscriptBatch {
         guard offset.isFinite, offset >= 0, duration.isFinite, duration > 0,
               units.allSatisfy({ $0.trackID == epoch.trackID && $0.analysisEpochID == epoch
@@ -705,7 +717,7 @@ nonisolated struct MeetingTranscriptAssembler {
         let emitted = units.map { ($0, MeetingAnalysisInterval(start: offset + $0.analysisStart, end: offset + $0.analysisEnd)) }
         let visible = emitted.filter { if case .ambiguous = $0.0.speaker { return false }; return true }
         let speakers = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
-                                         emitted: visible, identityLinks: identityLinks, priorSpeakers: priorSpeakers)
+                                         emitted: visible, identityLinks: identityLinks, priorSpeakers: priorSpeakers, confirmedLocalUserTokens: confirmedLocalUserTokens)
         let speakerIDs = Dictionary(speakers.map { ($0.token, $0.speaker.id) }, uniquingKeysWith: { first, _ in first })
         let segments = emitted.map { unit, interval in
             let speakerID: SessionSpeakerID?

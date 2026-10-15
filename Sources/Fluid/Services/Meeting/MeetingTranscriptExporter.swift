@@ -2,6 +2,14 @@ import Foundation
 
 /// Single source of truth for rendering a `MeetingSession` transcript as plain text or JSON.
 nonisolated enum MeetingTranscriptExporter {
+    /// The persisted alias stays user data. UI and text export resolve the owner marker
+    /// with their chosen interface locale without rewriting a saved participant name.
+    static func speakerDisplayName(_ speaker: MeetingSessionSpeaker,
+                                   language: PichiInterfaceLanguage = .english,
+                                   bundle: Bundle = .main) -> String {
+        speaker.isLocalUser ? PichiLocalization.text("You", language: language, bundle: bundle) : speaker.displayName
+    }
+
     static func text(for session: MeetingSession, includeEchoes: Bool = false) -> String {
         let speakerNames = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let segments = session.transcriptSegments
@@ -29,14 +37,14 @@ nonisolated enum MeetingTranscriptExporter {
         bundle: Bundle = .main
     ) -> String {
         guard let state = segment.attributionState else {
-            if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames) {
+            if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle) {
                 return name
             }
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         }
         switch state {
         case .assigned:
-            return Self.resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames)
+            return Self.resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle)
                 ?? PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         case .overlappingSpeakers, .unassigned, .timingUncertain:
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
@@ -174,10 +182,14 @@ nonisolated enum MeetingTranscriptExporter {
     private static func resolvedSpeakerName(
         _ speakerID: SessionSpeakerID?,
         in session: MeetingSession,
-        speakerNames: [SessionSpeakerID: String]
+        speakerNames: [SessionSpeakerID: String],
+        language: PichiInterfaceLanguage, bundle: Bundle
     ) -> String? {
         guard let resolvedID = speakerID.map({ Self.resolvedAliasID($0, in: session) }) else {
             return nil
+        }
+        if let owner = session.activeSpeakers.first(where: { $0.id == resolvedID && $0.isLocalUser }) {
+            return self.speakerDisplayName(owner, language: language, bundle: bundle)
         }
         return speakerNames[resolvedID]
     }

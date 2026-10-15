@@ -1702,10 +1702,11 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             manifest: manifest,
             evidence: publishedEvidence,
             coverageReceipts: bundle.coverageReceipts,
-            echoVerdicts: echoVerdicts
+            echoVerdicts: echoVerdicts,
+            confirmedLocalUserTokens: bundle.confirmedLocalUserTokens
         )
         let assemblyTask = Task.detached(priority: .userInitiated) {
-            try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(assemblyInput)
+            try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat, localUserName: PichiLocalization.text("You")).assemble(assemblyInput)
         }
         let assembly = try await withTaskCancellationHandler {
             try await assemblyTask.value

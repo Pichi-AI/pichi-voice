@@ -190,6 +190,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private let voiceModelDirectory: URL
     private let usesDefaultVoiceModelDirectory: Bool
     private let pcmIdentityState = MeetingPCMIdentityState()
+    let ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot?
     private let compiledNemotron = MeetingNemotronCompiledModelOwner { source, target in
         #if arch(arm64)
         let began = MeetingPCMRuntimeDiagnostics.begin(.compile)
@@ -209,8 +210,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     init(
         asrServiceProvider: @escaping @MainActor () -> any MeetingASRServicing,
         modelLocator: any MeetingNemotronModelLocating,
-        voiceModelDirectory: URL? = nil
+        voiceModelDirectory: URL? = nil,
+        ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? = try? MeetingOwnerVoiceProfileStore().load()
     ) {
+        self.ownerVoiceProfileSnapshot = ownerVoiceProfileSnapshot
         self.asrServiceProvider = asrServiceProvider
         self.modelLocator = modelLocator
         self.voiceModelDirectory = voiceModelDirectory ?? MeetingSpeakerVoiceModelArtifacts.packageURL()
@@ -480,9 +483,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let units = MeetingParakeetNemotronBackend.pcmUnits(result: ASRTranscriptionResult(text: output.text),
                                                            words: output.words, epoch: epoch, duration: duration,
                                                            activity: activity, identityTokens: admission.identityTokens)
-        let batch = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat).assemblePCMWindow(attemptID: attemptID, epoch: epoch,
+        let ownerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(
+            owner: self.ownerVoiceProfileSnapshot, profiles: admission.retainedProfiles,
+            identityLinks: MeetingSpeakerVoiceMatcher.links(profiles: admission.retainedProfiles, allowedTokens: Set(admission.retainedProfiles.map(\.token)))
+        )
+        let batch = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat, localUserName: PichiLocalization.text("You")).assemblePCMWindow(attemptID: attemptID, epoch: epoch,
                                                                       offset: offset, duration: duration, units: units,
-                                                                      identityLinks: admission.links, priorSpeakers: priorSpeakers)
+                                                                      identityLinks: admission.links, priorSpeakers: priorSpeakers, confirmedLocalUserTokens: ownerTokens)
         try Task.checkCancellation()
         if configuration.speakerLabelsEnabled {
             let assigned = batch.segments.filter { $0.attributionState == .assigned }.count
@@ -507,47 +514,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     func speakerVoiceProfiles(samples: [MeetingSpeakerVoiceSamples]) async throws -> [MeetingSpeakerVoiceProfile] {
         let began = MeetingPCMRuntimeDiagnostics.begin(.voice)
         defer { MeetingPCMRuntimeDiagnostics.completed(.voice, since: began, samples: samples.count) }
-        #if arch(arm64)
-        guard !samples.isEmpty else { return [] }
-        try Task.checkCancellation()
-        #if os(iOS)
-        let computeUnits: MLComputeUnits = .cpuOnly
-        #else
-        let computeUnits: MLComputeUnits = .cpuAndNeuralEngine
-        #endif
-        if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
-        try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
-        let configuration = MLModelConfiguration()
-        configuration.computeUnits = computeUnits
-        let model = try MLModel(contentsOf: self.voiceModelDirectory, configuration: configuration)
-        try Task.checkCancellation()
-        guard let maskFrames = model.modelDescription.inputDescriptionsByName["mask"]?.multiArrayConstraint?.shape.last?.intValue,
-              (1...4096).contains(maskFrames) else {
-            throw MeetingModelResidencyError.unsupportedProvider
-        }
-        let extractor = EmbeddingExtractor(embeddingModel: model)
-        let mask = [Float](repeating: 1, count: maskFrames)
-        var profiles: [MeetingSpeakerVoiceProfile] = []
-        for sample in samples.prefix(MeetingSpeakerVoiceSamples.maximumProfiles) {
-            try Task.checkCancellation()
-            guard sample.clips.count == 2 else { continue }
-            var embeddings: [[Float]] = []
-            for clip in sample.clips {
-                try Task.checkCancellation()
-                guard (48_000...160_000).contains(clip.count) else { continue }
-                let output = try extractor.getEmbeddings(audio: clip, masks: [mask])
-                if let embedding = output.first, embedding.count == 256, embedding.allSatisfy(\.isFinite) {
-                    embeddings.append(embedding)
-                }
-            }
-            if embeddings.count == 2 {
-                profiles.append(.init(token: sample.token, embeddings: embeddings))
-            }
-        }
-        return profiles
-        #else
-        return []
-        #endif
+        return try MeetingSpeakerVoiceEncoder.encode(
+            samples: samples, directory: self.voiceModelDirectory,
+            validateDefaultRoot: self.usesDefaultVoiceModelDirectory
+        )
     }
 
     func withNemotronDiarization(
