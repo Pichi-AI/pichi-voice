@@ -418,6 +418,8 @@ actor MeetingTranscriptPrivacyContext {
     /// One bounded raw hypothesis belongs to one growing PCM window. It never
     /// enters NER until words agree with the next observation or the window seals.
     private var previousSpeechObservation: SpeechObservation?
+    /// Aggregate support fields only, read after the owned observation completes.
+    private(set) var speechAdmissionDiagnosticFields = ""
     init(redactor: any TranscriptTextRedacting) { self.redactor = redactor }
 
     /// Speech can be displayed before expensive attribution, but cannot enter the durable
@@ -426,9 +428,15 @@ actor MeetingTranscriptPrivacyContext {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         isProcessing = true
         var completed = false
+        var diagnosticRawUTF16 = 0
+        var diagnosticStableUTF16 = 0
+        var diagnosticPreviewUTF16 = 0
         defer {
             if !completed { lastSafePreview = nil; previousSpeechObservation = nil }
             isProcessing = false
+            // Scalar publication evidence only. Raw hypotheses, detected values,
+            // names and model outputs never enter the support logger.
+            speechAdmissionDiagnosticFields = "rawUTF16=\(diagnosticRawUTF16) stableUTF16=\(diagnosticStableUTF16) previewUTF16=\(diagnosticPreviewUTF16) pendingSegments=\(pending.count) sealed=\(batch.speechObservationIsFinal) completed=\(completed)"
         }
         try Task.checkCancellation()
         let tracks = Set(batch.segments.map(\.sourceTrackID))
@@ -444,7 +452,9 @@ actor MeetingTranscriptPrivacyContext {
         }
         if ordered.isEmpty {
             completed = true
-            return currentTrack == nil || continues ? lastSafePreview : nil
+            let preview = currentTrack == nil || continues ? lastSafePreview : nil
+            diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
+            return preview
         }
         var combined = batch
         combined.segments = pending + batch.segments
@@ -458,6 +468,7 @@ actor MeetingTranscriptPrivacyContext {
             remaining -= count
         }
         let rawText = ordered.map(\.text).joined(separator: " ")
+        diagnosticRawUTF16 = rawText.utf16.count
         let stableCount: Int
         if batch.speechObservationIsFinal {
             stableCount = rawText.utf16.count
@@ -465,12 +476,15 @@ actor MeetingTranscriptPrivacyContext {
                   previous.trackID == currentTrack, previous.firstSegmentID == ordered.first?.id {
             stableCount = MeetingSpeechHypothesisStability.stableUTF16Count(previous: previous.text, current: rawText)
         } else { stableCount = 0 }
+        diagnosticStableUTF16 = stableCount
         if let currentTrack, let first = ordered.first {
             previousSpeechObservation = SpeechObservation(trackID: currentTrack, firstSegmentID: first.id, text: rawText)
         }
         guard stableCount > 0 else {
             completed = true
-            return continues ? lastSafePreview : nil
+            let preview = continues ? lastSafePreview : nil
+            diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
+            return preview
         }
         _ = try MeetingTranscriptPrivacyPolicy.stablePrefix(in: rawText, utf16Count: stableCount)
         var admitted: [MeetingTranscriptSegment] = []
@@ -498,6 +512,7 @@ actor MeetingTranscriptPrivacyContext {
         // A clipped utterance has no word-level audio endpoint. It cannot retire
         // all of the source segment's captured waveform progress.
         if clippedAudioCoverage { preview?.end = nil }
+        diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
         lastSafePreview = preview
         completed = true
         return preview

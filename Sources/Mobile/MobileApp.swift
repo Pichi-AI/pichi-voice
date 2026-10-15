@@ -19,6 +19,7 @@ final class AppServices: ObservableObject {
          capture injectedCapture: (any MeetingCaptureControlling)? = nil,
          settings: SettingsStore? = nil,
          privacy: PichiTranscriptPrivacyService? = nil,
+         privacyRedactor: (any TranscriptTextRedacting)? = nil,
          microphoneResolver: (@MainActor (String?) async throws -> MeetingMicrophoneIdentity)? = nil) {
         // A cold-start operation only. Additional service compositions must not remove
         // files currently being used by an already-open native share sheet.
@@ -29,11 +30,14 @@ final class AppServices: ObservableObject {
         let settings = settings ?? SettingsStore.shared
         let store = store ?? MeetingSessionStore.shared
         let privacy = privacy ?? PichiTranscriptPrivacyService()
+        // A host can decorate the prepared privacy service without replacing its
+        // installation/readiness lifecycle or the shared publication contract.
+        let meetingRedactor: any TranscriptTextRedacting = privacyRedactor ?? privacy
         let resolveMicrophone = microphoneResolver ?? { try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: $0) }
         let asr = ASRService(settings: settings)
         self.asr = asr; self.meetingStore = store; self.transcriptPrivacy = privacy
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: { asr }, settings: settings,
-            privacyRedactorProvider: { privacy },
+            privacyRedactorProvider: { meetingRedactor },
             prepareDiarizationModel: { _ = try await MeetingDiarizationModelStore.shared.ensureInstalled(includingVoiceEncoder: true) },
             prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) })
         self.meetingProcessingPipeline = pipeline
@@ -78,7 +82,7 @@ final class AppServices: ObservableObject {
                       settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
                 return configuration
             },
-            redactorProvider: { privacy },
+            redactorProvider: { meetingRedactor },
             validateRecordingModels: {
                 try await asr.prepareSelectedModelForRecording()
             },

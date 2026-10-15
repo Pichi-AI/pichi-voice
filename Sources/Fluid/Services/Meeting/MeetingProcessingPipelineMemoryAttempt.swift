@@ -149,9 +149,12 @@ extension MeetingProcessingPipeline {
                 var speech = speech
                 speech.sourceTrack = track
                 let partial: MeetingLivePartial?
+                let admission: String
                 if let privacyContext {
                     partial = try await privacyContext.previewSpeech(speech)
+                    admission = await privacyContext.speechAdmissionDiagnosticFields
                 } else {
+                    admission = "privacy=false"
                     let ordered = speech.segments.sorted { $0.start < $1.start }
                     partial = ordered.first.map {
                         MeetingLivePartial(id: speechPreviewID, text: ordered.map(\.text).joined(separator: " "),
@@ -161,7 +164,7 @@ extension MeetingProcessingPipeline {
                 try Task.checkCancellation()
                 try await publishPreview(partial)
                 DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
-                    DebugLogger.shared.info("speech_preview visible=\(partial != nil) sourceSegments=\(speech.segments.count)", source: "MeetingMemoryAudio")
+                    DebugLogger.shared.info("speech_preview visible=\(partial != nil) sourceSegments=\(speech.segments.count) \(admission)", source: "MeetingMemoryAudio")
                 }
             }
         } else { observeSpeech = nil }

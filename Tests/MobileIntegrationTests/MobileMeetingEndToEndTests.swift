@@ -6,6 +6,60 @@ import UIKit
 @testable import PichiVoiceMobile
 import XCTest
 
+/// Explicitly enabled synthetic replay evidence belongs only to a private XCTest
+/// attachment. Support logs, the app store and export paths never receive it.
+private actor SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
+    private struct Observation: Encodable {
+        let elapsedSeconds: TimeInterval
+        let input: String
+        let output: String
+        let inputUTF16: Int
+        let provisionalSafeUTF16: Int?
+        let spans: [Span]
+    }
+    private struct Span: Encodable {
+        let start: Int
+        let length: Int
+        let replacement: String
+    }
+    private let wrapped: any TranscriptTextRedacting
+    private let startedAt = ProcessInfo.processInfo.systemUptime
+    private var observations: [Observation] = []
+    private var retainedUTF16 = 0
+    private var omittedObservations = 0
+
+    init(wrapping wrapped: any TranscriptTextRedacting) { self.wrapped = wrapped }
+
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let result = try await wrapped.redactWithSpans(text)
+        let size = text.utf16.count + result.text.utf16.count
+        if observations.count < 128, size <= 32_768, retainedUTF16 + size <= 131_072 {
+            retainedUTF16 += size
+            observations.append(.init(elapsedSeconds: ProcessInfo.processInfo.systemUptime - startedAt,
+                input: text, output: result.text, inputUTF16: text.utf16.count,
+                provisionalSafeUTF16: result.provisionalSafeUTF16,
+                spans: result.spans.map { .init(start: $0.range.location, length: $0.range.length, replacement: $0.replacement) }))
+        } else { omittedObservations += 1 }
+        return result
+    }
+
+    func attachmentData() throws -> Data {
+        struct Evidence: Encodable {
+            let observations: [Observation]
+            let omittedObservations: Int
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(Evidence(observations: observations, omittedObservations: omittedObservations))
+    }
+}
+
+private struct SyntheticDiagnosticEchoRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+    }
+}
+
 /// A synthetic microphone implements the existing capture contract. Everything after
 /// PCM delivery is the actual mobile composition, ASR, coordinator, pipeline and store.
 private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
@@ -57,6 +111,19 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
 
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
+    func testPrivateSyntheticPrivacyDiagnosticsAreBoundedAndTransparent() async throws {
+        let diagnostics = SyntheticPrivacyReplayDiagnostics(wrapping: SyntheticDiagnosticEchoRedactor())
+        for _ in 0..<130 {
+            let result = try await diagnostics.redactWithSpans("Synthetic fixture")
+            XCTAssertEqual(result.text, "Synthetic fixture")
+            XCTAssertEqual(result.provisionalSafeUTF16, 17)
+        }
+        let data = try await diagnostics.attachmentData()
+        let evidence = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual((evidence["observations"] as? [[String: Any]])?.count, 128)
+        XCTAssertEqual(evidence["omittedObservations"] as? Int, 2)
+    }
+
     func testPhysicalStrictGigaAMWithSpeakersAndPrivacyKeepsUp() async throws {
         try await verifyPhysicalStrictMeeting(model: .gigaam)
     }
@@ -97,7 +164,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         settings.meetingPIIRedactionEnabled = true
         let store = MeetingSessionStore(rootDirectory: root)
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: assets.appendingPathComponent("models/privacy")))
-        let services = AppServices(store: store, settings: settings, privacy: privacy)
+        let diagnostics = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_PRIVACY_DIAGNOSTICS"] == "1"
+            ? SyntheticPrivacyReplayDiagnostics(wrapping: privacy) : nil
+        let services = AppServices(store: store, settings: settings, privacy: privacy, privacyRedactor: diagnostics)
         let coordinator = services.meetingSessionCoordinator
         let twoVoiceFixture = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_TWO_VOICES"] == "1"
         let fixture = twoVoiceFixture ? "audio/mixed-two-voices.wav" : "audio/ru.wav"
@@ -252,13 +321,24 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertFalse(services.asr.hasActiveModelPreparation)
             await coordinator.shutdownForTermination()
             try await privacy.unload()
+            try await addPrivatePrivacyDiagnostics(diagnostics, model: model)
         } catch {
             player.stop()
             await coordinator.shutdownForTermination()
             try? await privacy.unload()
+            try await addPrivatePrivacyDiagnostics(diagnostics, model: model)
             throw error
         }
         #endif
+    }
+
+    private func addPrivatePrivacyDiagnostics(_ diagnostics: SyntheticPrivacyReplayDiagnostics?,
+                                             model: SettingsStore.SpeechModel) async throws {
+        guard let diagnostics else { return }
+        let attachment = XCTAttachment(data: try await diagnostics.attachmentData(), uniformTypeIdentifier: "public.json")
+        attachment.name = "Private-synthetic-privacy-observations-\(model.rawValue)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func physicalFootprintBytes() -> UInt64? {

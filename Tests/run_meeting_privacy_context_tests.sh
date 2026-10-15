@@ -52,6 +52,11 @@ source = 'import Foundation\n'
 source += section('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift', 'nonisolated enum MeetingLiveSpeaker:', 'nonisolated enum MeetingLiveTimeConversion')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift', 'nonisolated struct MeetingBackendID:', 'nonisolated enum MeetingBackendExecutionLocality:')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift', 'nonisolated enum MeetingBackendEvidenceSchema', 'nonisolated extension MeetingFinalTextUnit: Codable')
+voice_source = Path('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift').read_text()
+# The privacy batch references only this owner-declared metadata bound, never
+# excerpt collection or inference. Extract its declaration instead of copying a value.
+voice_bound = next(line for line in voice_source.splitlines() if line.strip().startswith('static let maximumProfiles ='))
+source += 'nonisolated enum MeetingSpeakerVoiceSamples {\n' + voice_bound + '\n}\n'
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift', 'nonisolated struct MeetingSpeakerVoiceProfile:', '/// Explicit identity evidence across resets.')
 Path(sys.argv[1]).write_text(source)
 PY
