@@ -5,6 +5,26 @@ import UIKit
 @testable import PichiVoiceMobile
 
 final class MeetingLiveCaptionPresentationTests: XCTestCase {
+    func testBufferedCaptionCoverageDoesNotInventTimingForGrowingIdenticalWords() {
+        let coarse = PichiMeetingCaptionRecognition(text: "Same words", endOfUtteranceProbability: nil)
+        for count in [48_000, 96_000, 192_000] {
+            XCTAssertNil(coarse.nativeCoverage(sampleCount: count, sampleRate: 16_000),
+                         "A longer buffer with identical words cannot retire more captured audio")
+        }
+        let native = PichiMeetingCaptionRecognition(text: "Same words", endOfUtteranceProbability: nil,
+            segmentTimings: [.init(text: "Same words", start: 0.2, end: 1.1)])
+        for count in [48_000, 96_000, 192_000] {
+            XCTAssertEqual(native.nativeCoverage(sampleCount: count, sampleRate: 16_000), 0.2..<1.1,
+                           "Only actual native speech intervals survive a growing window")
+        }
+        let partialMetadata = PichiMeetingCaptionRecognition(text: "Same words", endOfUtteranceProbability: nil,
+            segmentTimings: [.init(text: "Same", start: 0.2, end: 1.1)])
+        XCTAssertNil(partialMetadata.nativeCoverage(sampleCount: 48_000, sampleRate: 16_000))
+        let words = PichiMeetingCaptionRecognition(text: "Same words", endOfUtteranceProbability: nil,
+            words: [.init(text: "Same", start: 0.2, end: 0.6), .init(text: "words", start: 0.7, end: 1.1)])
+        XCTAssertEqual(words.nativeCoverage(sampleCount: 48_000, sampleRate: 16_000), 0.2..<1.1)
+    }
+
     func testRepeatedHypothesesAdmitWholeWordsWithoutFreezingAnOpenToken() {
         XCTAssertEqual(MeetingSpeechHypothesisStability.stableUTF16Count(previous: "кот", current: "которая пишет"), 0)
         XCTAssertEqual(MeetingSpeechHypothesisStability.stableUTF16Count(previous: "слово которого", current: "слово которое меняется"), "слово ".utf16.count)

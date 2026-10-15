@@ -7,11 +7,27 @@ nonisolated struct PichiMeetingCaptionRecognition: Sendable {
     let text: String
     let endOfUtteranceProbability: Float?
     let words: [ASRWordTiming]
+    let segmentTimings: [ASRSegmentTiming]
 
-    init(text: String, endOfUtteranceProbability: Float?, words: [ASRWordTiming] = []) {
+    init(text: String, endOfUtteranceProbability: Float?, words: [ASRWordTiming] = [],
+         segmentTimings: [ASRSegmentTiming] = []) {
         self.text = text
         self.endOfUtteranceProbability = endOfUtteranceProbability
         self.words = words
+        self.segmentTimings = segmentTimings
+    }
+
+    /// A growing input buffer is not word coverage. Preserve actual provider
+    /// intervals when present; otherwise show the hypothesis without retiring waves.
+    func nativeCoverage(sampleCount: Int, sampleRate: Double) -> Range<TimeInterval>? {
+        guard sampleCount > 0, sampleRate.isFinite, sampleRate > 0 else { return nil }
+        let duration = Double(sampleCount) / sampleRate
+        let wordSegments = self.words.map { ASRSegmentTiming(text: $0.text, start: $0.start, end: $0.end) }
+        let words = ASRSegmentTiming.validated(wordSegments, text: self.text, duration: duration)
+        let intervals = words.isEmpty
+            ? ASRSegmentTiming.validated(self.segmentTimings, text: self.text, duration: duration) : words
+        guard let first = intervals.first, let last = intervals.last else { return nil }
+        return first.start..<last.end
     }
 
     /// A forced buffer rotation needs a closed word and real acoustic space before its
@@ -127,10 +143,12 @@ final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
             if wordTimings, provider.supportsWordTimings {
                 let output = try await provider.transcribeWithWordTimings(samples)
                 return PichiMeetingCaptionRecognition(text: output.result.text,
-                    endOfUtteranceProbability: output.result.endOfUtteranceProbability, words: output.words)
+                    endOfUtteranceProbability: output.result.endOfUtteranceProbability, words: output.words,
+                    segmentTimings: output.result.segmentTimings)
             }
             let result = try await provider.transcribeStreaming(samples)
-            return PichiMeetingCaptionRecognition(text: result.text, endOfUtteranceProbability: result.endOfUtteranceProbability)
+            return PichiMeetingCaptionRecognition(text: result.text, endOfUtteranceProbability: result.endOfUtteranceProbability,
+                segmentTimings: result.segmentTimings)
         }
         self.inference = work
         return try await withTaskCancellationHandler {
@@ -417,10 +435,17 @@ actor PichiMeetingBufferedTrackEngine {
             let result = try await self.recognizer.recognize(input)
             guard !self.isStopped, !Task.isCancelled, self.generation == generation,
                   self.activeInputEpoch == self.inputEpoch.current,
-                  let turnID, let startPTS, let endPTS else { return }
+                  let turnID, let startPTS, self.endPTS != nil else { return }
             self.lastRecognition = result
             self.lastRecognitionSampleCount = input.count
-            self.onPartial?(self.kind, turnID, result.text, startPTS, endPTS)
+            let coverage = result.nativeCoverage(sampleCount: input.count, sampleRate: Self.sampleRate)
+            let coveredStart = coverage.map {
+                startPTS + CMTime(seconds: $0.lowerBound, preferredTimescale: 16_000)
+            } ?? startPTS
+            let coveredEnd = coverage.map {
+                startPTS + CMTime(seconds: $0.upperBound, preferredTimescale: 16_000)
+            } ?? .invalid
+            self.onPartial?(self.kind, turnID, result.text, coveredStart, coveredEnd)
             // The model head sees only this current utterance. Require a small acoustic pause,
             // and retain a silence/duration fallback for artifacts without an EOU head.
             if (result.endOfUtteranceProbability ?? 0) >= Self.eouThreshold, self.quietSamples >= 2400 {
