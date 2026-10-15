@@ -107,12 +107,32 @@ private extension DynamicTypeSize {
 }
 #endif
 
+/// Immutable, bounded correlation between the accepted attributed text and its native layout.
+/// Only lengths and visual token IDs cross the logger queue, never caption contents.
+private nonisolated struct InlineCaptionRenderReceipt: Equatable, Sendable {
+    let rendererID: UUID
+    let sequence: UInt64
+    let pendingRevision: UInt64
+    let rowCount: Int
+    let visibleUTF16: Int
+    let pendingCount: Int
+    let pendingIDs: [UInt64]
+
+    var fields: String {
+        "renderer=\(rendererID.uuidString) renderSequence=\(sequence) pendingRevision=\(pendingRevision) " +
+            "rows=\(rowCount) visibleUTF16=\(visibleUTF16) pendingCount=\(pendingCount) pendingIDs=\(pendingIDs)"
+    }
+}
+
 /// Stable attachment/hosting identities preserve waveform state while only text or pending
 /// tokens change. Their fixed bounds mean waveform animation never requests text layout.
 @MainActor
 private final class InlineCaptionContent {
     private var attachments: [UInt64: InlineCaptionAttachment] = [:]
     private var previousText: NSAttributedString?
+    private let rendererID = UUID()
+    private var renderSequence: UInt64 = 0
+    private(set) var renderReceipt: InlineCaptionRenderReceipt?
 
     func attributedText(_ configuration: InlineCaptionConfiguration) -> NSAttributedString? {
         let font = configuration.font
@@ -152,9 +172,34 @@ private final class InlineCaptionContent {
             run.addAttributes(attributes, range: NSRange(location: 0, length: run.length))
             result.append(run)
         }
-        guard boundsChanged || previousText?.isEqual(to: result) != true else { return nil }
+        let changed = boundsChanged || previousText?.isEqual(to: result) != true
+        if changed { renderSequence &+= 1 }
+        if DebugLogger.diagnosticsEnabled {
+            renderReceipt = InlineCaptionRenderReceipt(rendererID: rendererID, sequence: renderSequence,
+                pendingRevision: configuration.pending.revision, rowCount: configuration.rows.count,
+                visibleUTF16: configuration.rows.reduce(0) { $0 + $1.text.utf16.count },
+                pendingCount: configuration.pending.tokens.count,
+                pendingIDs: Array(configuration.pending.tokens.prefix(MeetingPendingSpeechProjection.maximumTokens).map(\.id)))
+        }
+        guard changed else { return nil }
         previousText = result.copy() as? NSAttributedString
         return result
+    }
+
+    func logAcceptedText() {
+        guard let receipt = renderReceipt else { return }
+        let eventTime = ProcessInfo.processInfo.systemUptime
+        DebugLogger.shared.logLazy(level: .debug, source: "MeetingPendingSpeech") {
+            "inline_text.accepted t=\(eventTime) \(receipt.fields)"
+        }
+    }
+
+    func logDismantled() {
+        guard let receipt = renderReceipt else { return }
+        let eventTime = ProcessInfo.processInfo.systemUptime
+        DebugLogger.shared.logLazy(level: .debug, source: "MeetingPendingSpeech") {
+            "inline_view.dismantled t=\(eventTime) \(receipt.fields)"
+        }
     }
 }
 
@@ -210,29 +255,85 @@ private final class InlineCaptionAttachment: NSTextAttachment {
 
 @MainActor
 private final class InlineCaptionWavePlacement {
+    private nonisolated struct Placement: Equatable, Sendable {
+        let id: UInt64
+        let bounds: CGRect
+    }
+    private nonisolated struct LayoutReceipt: Equatable, Sendable {
+        let input: InlineCaptionRenderReceipt
+        let ready: Bool
+        let bounds: CGRect
+        let placements: [Placement]
+        let missingIDs: [UInt64]
+    }
     private var displayed: [UInt64: InlineCaptionAttachment] = [:]
+    private var lastLayoutReceipt: LayoutReceipt?
 
-    func layout(in view: InlineCaptionNativeView, manager: NSTextLayoutManager?, text: NSAttributedString?) {
-        guard let text, let manager, let content = manager.textContentManager else { return }
+    func layout(in view: InlineCaptionNativeView, manager: NSTextLayoutManager?, text: NSAttributedString?,
+                receipt: InlineCaptionRenderReceipt?) {
+        guard let text, let manager, let content = manager.textContentManager else {
+            if let receipt {
+                // An unavailable layout keeps its existing hosts. Report those actual
+                // mounted views rather than implying they disappeared from the screen.
+                let mounted = displayed.sorted { $0.key < $1.key }
+                    .prefix(MeetingPendingSpeechProjection.maximumTokens)
+                    .map { Placement(id: $0.key, bounds: $0.value.waveformView.frame) }
+                logLayout(receipt: receipt, ready: false, bounds: view.bounds, placements: mounted,
+                    missingIDs: receipt.pendingIDs.filter { displayed[$0] == nil })
+            }
+            return
+        }
         manager.ensureLayout(for: content.documentRange)
         var retained: [UInt64: InlineCaptionAttachment] = [:]
+        var placements: [Placement] = []
+        var missingIDs: [UInt64] = []
+        let captureDiagnostics = receipt != nil
         text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, range, _ in
-            guard let attachment = value as? InlineCaptionAttachment,
-                  let location = content.location(content.documentRange.location, offsetBy: range.location),
-                  let fragment = manager.textLayoutFragment(for: location) else { return }
+            guard let attachment = value as? InlineCaptionAttachment else { return }
+            guard let location = content.location(content.documentRange.location, offsetBy: range.location),
+                  let fragment = manager.textLayoutFragment(for: location) else {
+                if captureDiagnostics, missingIDs.count < MeetingPendingSpeechProjection.maximumTokens {
+                    missingIDs.append(attachment.tokenID)
+                }
+                return
+            }
             let local = fragment.frameForTextAttachment(at: location)
-            guard local.width > 0, local.height > 0 else { return }
+            guard local.width > 0, local.height > 0 else {
+                if captureDiagnostics, missingIDs.count < MeetingPendingSpeechProjection.maximumTokens {
+                    missingIDs.append(attachment.tokenID)
+                }
+                return
+            }
             let rect = local.offsetBy(dx: fragment.layoutFragmentFrame.minX,
                                       dy: fragment.layoutFragmentFrame.minY)
             let waveform = attachment.waveformView
             if waveform.superview !== view { view.addSubview(waveform) }
             if waveform.frame != rect { waveform.frame = rect }
             retained[attachment.tokenID] = attachment
+            if captureDiagnostics, placements.count < MeetingPendingSpeechProjection.maximumTokens {
+                placements.append(Placement(id: attachment.tokenID, bounds: rect))
+            }
         }
         for (id, attachment) in displayed where retained[id] == nil {
             attachment.waveformView.removeFromSuperview()
         }
         displayed = retained
+        logLayout(receipt: receipt, ready: true, bounds: view.bounds, placements: placements, missingIDs: missingIDs)
+    }
+
+    private func logLayout(receipt: InlineCaptionRenderReceipt?, ready: Bool, bounds: CGRect,
+                           placements: [Placement], missingIDs: [UInt64]) {
+        guard let receipt else { return }
+        let current = LayoutReceipt(input: receipt, ready: ready, bounds: bounds,
+            placements: placements, missingIDs: missingIDs)
+        guard current != lastLayoutReceipt else { return }
+        lastLayoutReceipt = current
+        let eventTime = ProcessInfo.processInfo.systemUptime
+        DebugLogger.shared.logLazy(level: .debug, source: "MeetingPendingSpeech") {
+            let mounted = placements.map { "\($0.id):\($0.bounds)" }.joined(separator: ",")
+            return "inline_layout.changed t=\(eventTime) \(receipt.fields) layoutReady=\(ready) " +
+                "viewBounds=\(bounds) mountedIDs=\(placements.map(\.id)) mountedBounds=[\(mounted)] missingIDs=\(missingIDs)"
+        }
     }
 }
 
@@ -240,20 +341,22 @@ private final class InlineCaptionWavePlacement {
 @MainActor
 private final class InlineCaptionTextView: UITextView {
     var retainedTextContentStorage: NSTextContentStorage?
+    var renderReceipt: InlineCaptionRenderReceipt?
     private let waves = InlineCaptionWavePlacement()
     override func layoutSubviews() {
         super.layoutSubviews()
-        waves.layout(in: self, manager: textLayoutManager, text: attributedText)
+        waves.layout(in: self, manager: textLayoutManager, text: attributedText, receipt: renderReceipt)
     }
 }
 #else
 @MainActor
 private final class InlineCaptionTextView: NSTextView {
     var retainedTextContentStorage: NSTextContentStorage?
+    var renderReceipt: InlineCaptionRenderReceipt?
     private let waves = InlineCaptionWavePlacement()
     override func layout() {
         super.layout()
-        waves.layout(in: self, manager: textLayoutManager, text: attributedString())
+        waves.layout(in: self, manager: textLayoutManager, text: attributedString(), receipt: renderReceipt)
     }
 }
 #endif
@@ -287,8 +390,17 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
-        if let text = context.coordinator.attributedText(configuration) { view.attributedText = text }
+        let text = context.coordinator.attributedText(configuration)
+        (view as? InlineCaptionTextView)?.renderReceipt = context.coordinator.renderReceipt
+        if let text {
+            view.attributedText = text
+            context.coordinator.logAcceptedText()
+        }
         view.setNeedsLayout()
+    }
+
+    static func dismantleUIView(_ view: UITextView, coordinator: InlineCaptionContent) {
+        coordinator.logDismantled()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView view: UITextView, context: Context) -> CGSize? {
@@ -331,8 +443,17 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSTextView, context: Context) {
-        if let text = context.coordinator.attributedText(configuration) { view.textStorage?.setAttributedString(text) }
+        let text = context.coordinator.attributedText(configuration)
+        (view as? InlineCaptionTextView)?.renderReceipt = context.coordinator.renderReceipt
+        if let text, let storage = view.textStorage {
+            storage.setAttributedString(text)
+            context.coordinator.logAcceptedText()
+        }
         view.needsLayout = true
+    }
+
+    static func dismantleNSView(_ view: NSTextView, coordinator: InlineCaptionContent) {
+        coordinator.logDismantled()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: NSTextView, context: Context) -> CGSize? {
