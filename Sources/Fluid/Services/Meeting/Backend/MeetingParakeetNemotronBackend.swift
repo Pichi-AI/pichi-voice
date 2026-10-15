@@ -159,42 +159,39 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         let spans: [MeetingAnalysisSpan]
     }
 
-    /// Per-attempt cache for the PCM-first path. The cache is intentionally scoped to this
-    /// detached attempt and bounded by the materializer's conservative sample limit; a future
-    /// production implementation should replace it with a hashed immutable disk working store.
+    /// The cache owns only replay handles and small span mappings. A retained recording's
+    /// decoded PCM lives in an attempt-owned derivative and is deleted when this scope drains.
     private final nonisolated class MaterializationCache: @unchecked Sendable {
         private let lock = NSLock()
-        private var values: [MeetingAnalysisEpochID: MeetingMaterializedEpoch] = [:]
-        private var totalSampleCount = 0
+        private var values: [MeetingAnalysisEpochID: MeetingEpochAudioReplay] = [:]
 
-        func value(for epochID: MeetingAnalysisEpochID) -> MeetingMaterializedEpoch? {
-            self.lock.lock(); defer { self.lock.unlock() }
-            return self.values[epochID]
+        func value(for epochID: MeetingAnalysisEpochID) -> MeetingEpochAudioReplay? {
+            self.lock.withLock { self.values[epochID] }
         }
 
-        func insert(_ value: MeetingMaterializedEpoch, spanID: String) throws {
-            self.lock.lock(); defer { self.lock.unlock() }
-            let replacing = self.values[value.epochID]?.samples.count ?? 0
-            let proposed = self.totalSampleCount - replacing + value.samples.count
-            guard proposed <= MeetingEpochAudioMaterializer.conservativeSampleLimit else {
-                throw MeetingEpochMaterializationError.sampleLimitExceeded(
-                    spanID: spanID,
-                    sampleCount: proposed
-                )
-            }
-            self.values[value.epochID] = value
-            self.totalSampleCount = proposed
+        func insert(_ value: MeetingEpochAudioReplay, epochID: MeetingAnalysisEpochID) {
+            self.lock.withLock { self.values[epochID] = value }
         }
     }
 
-    /// Check the whole track, including separators, before allocating its combined buffer.
-    nonisolated static func validateTrackSampleCount(current: Int, incoming: Int, separator: Int, spanID: String) throws {
-        let limit = MeetingEpochAudioMaterializer.conservativeSampleLimit
-        guard current >= 0, incoming >= 0, separator >= 0,
-              current <= limit, separator <= limit - current,
-              incoming <= limit - current - separator
-        else {
-            throw MeetingEpochMaterializationError.sampleLimitExceeded(spanID: spanID, sampleCount: limit + 1)
+    private nonisolated struct TrackReplay: MeetingPCMReplaySource {
+        let pieces: [(source: any MeetingPCMReplaySource, offset: Int)]
+        let totalSampleCount: Int
+
+        func readSamples(in range: Range<Int>) async throws -> [Float] {
+            guard range.lowerBound >= 0, range.upperBound <= self.totalSampleCount,
+                  range.count <= 30 * 16_000 else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+            var output = [Float](repeating: 0, count: range.count)
+            for piece in self.pieces {
+                try Task.checkCancellation()
+                let lower = max(range.lowerBound, piece.offset)
+                let upper = min(range.upperBound, piece.offset + piece.source.totalSampleCount)
+                guard upper > lower else { continue }
+                let samples = try await piece.source.readSamples(in: (lower - piece.offset)..<(upper - piece.offset))
+                guard samples.count == upper - lower else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+                output.replaceSubrange((lower - range.lowerBound)..<(upper - range.lowerBound), with: samples)
+            }
+            return output
         }
     }
 
@@ -231,11 +228,11 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         var phaseA = try await Self.withOptionalDiarization(runtime: runtime, artifact: artifact) { factory in
             var result = MeetingNemotronPhaseResult()
             for track in manifest.tracks {
-                var pieces: [(work: EpochWork, materialized: MeetingMaterializedEpoch, offset: Int)] = []
-                var trackSamples: [Float] = []
+                var pieces: [(work: EpochWork, materialized: MeetingEpochAudioReplay, offset: Int)] = []
+                var trackSampleCount = 0
                 for work in epochWork where work.track.id == track.id {
                     try Task.checkCancellation()
-                    let materialized: MeetingMaterializedEpoch
+                    let materialized: MeetingEpochAudioReplay
                     do {
                         materialized = try await Self.materialize(
                             work: work,
@@ -252,33 +249,30 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                         result.failures[work.epoch.id] = "epochMaterializationFailed"
                         continue
                     }
-                    let separatorSamples = trackSamples.isEmpty ? 0 : Int(Self.epochJoinSilenceSeconds * materialized.sampleRate)
-                    try Self.validateTrackSampleCount(
-                        current: trackSamples.count,
-                        incoming: materialized.samples.count,
-                        separator: separatorSamples,
-                        spanID: work.spans.last?.id ?? "unknown"
-                    )
-                    if !trackSamples.isEmpty {
-                        // Silence keeps a turn from running across the reset boundary.
-                        trackSamples += [Float](repeating: 0, count: separatorSamples)
+                    let separatorSamples = pieces.isEmpty ? 0 : Int(Self.epochJoinSilenceSeconds * materialized.sampleRate)
+                    guard materialized.source.totalSampleCount > 0,
+                          trackSampleCount <= Int.max - separatorSamples - materialized.source.totalSampleCount else {
+                        throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
                     }
-                    pieces.append((work, materialized, trackSamples.count))
-                    trackSamples += materialized.samples
+                    trackSampleCount += separatorSamples
+                    pieces.append((work, materialized, trackSampleCount))
+                    trackSampleCount += materialized.source.totalSampleCount
                 }
                 guard let first = pieces.first else { continue }
                 try Task.checkCancellation()
                 do {
                     let diarizer = try await factory.makeDiarizer(epoch: first.work.epoch.id)
-                    let segments = try await diarizer.diarize(samples: trackSamples)
+                    let source = TrackReplay(pieces: pieces.map { ($0.materialized.source, $0.offset) },
+                                             totalSampleCount: trackSampleCount)
+                    let segments = try await diarizer.diarize(source: source)
                     if ownerProfile != nil {
-                        result.voiceSamples.append(contentsOf: MeetingSpeakerVoiceSamples.collect(
-                            epoch: first.work.epoch.id, samples: trackSamples, segments: segments
+                        result.voiceSamples.append(contentsOf: try await MeetingSpeakerVoiceSamples.collect(
+                            epoch: first.work.epoch.id, source: source, segments: segments
                         ).prefix(max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)))
                     }
                     for piece in pieces {
                         let pieceStart = Double(piece.offset) / piece.materialized.sampleRate
-                        let pieceEnd = pieceStart + piece.materialized.durationSeconds
+                        let pieceEnd = pieceStart + Double(piece.materialized.source.totalSampleCount) / piece.materialized.sampleRate
                         for segment in segments {
                             let localStart = max(segment.start, pieceStart) - pieceStart
                             let localEnd = min(segment.end, pieceEnd) - pieceStart
@@ -286,12 +280,16 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                                   let start = Self.analysisTime(
                                       forMaterializedSeconds: localStart,
                                       boundary: .start,
-                                      materialized: piece.materialized,
+                                      sampleRate: piece.materialized.sampleRate,
+                                      sampleCount: piece.materialized.source.totalSampleCount,
+                                      spanSamples: piece.materialized.spanSamples,
                                       spans: piece.work.spans
                                   ), let end = Self.analysisTime(
                                       forMaterializedSeconds: localEnd,
                                       boundary: .end,
-                                      materialized: piece.materialized,
+                                      sampleRate: piece.materialized.sampleRate,
+                                      sampleCount: piece.materialized.source.totalSampleCount,
+                                      spanSamples: piece.materialized.spanSamples,
                                       spans: piece.work.spans
                                   )
                             else { continue }
@@ -343,7 +341,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             var result = MeetingParakeetPhaseResult()
             for work in epochWork where phaseA.failures[work.epoch.id] == nil {
                 try Task.checkCancellation()
-                let materialized: MeetingMaterializedEpoch
+                let materialized: MeetingEpochAudioReplay
                 do {
                     materialized = try await Self.materialize(
                         work: work,
@@ -362,16 +360,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 }
                 try Task.checkCancellation()
                 do {
-                    let output = try await asr.transcribeWithTimings(materialized.samples)
-                    result.outputs.append(MeetingParakeetEpochOutput(
-                        epochID: work.epoch.id,
-                        text: output.result.text,
-                        words: output.words,
-                        segmentTimings: output.result.segmentTimings,
-                        sampleRate: materialized.sampleRate,
-                        sampleCount: materialized.samples.count,
-                        spanSamples: materialized.spanSamples
-                    ))
+                    result.outputs.append(try await Self.transcribeReplay(materialized, epochID: work.epoch.id, asr: asr))
                 } catch let error as CancellationError {
                     throw error
                 } catch {
@@ -405,35 +394,68 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     }
 
     private nonisolated static func materialize(
-        work: EpochWork,
-        manifest: MeetingAnalysisManifest,
-        request: MeetingBackendRequest,
-        materializer: any MeetingEpochAudioMaterializing,
-        cache: MaterializationCache
-    ) async throws -> MeetingMaterializedEpoch {
-        let isPCMFirst = !work.spans.isEmpty && work.spans.allSatisfy {
-            $0.chunk.analysisEncoding == .linearPCMFloat32CAFV1
-        }
-        if isPCMFirst, let cached = cache.value(for: work.epoch.id) {
-            return cached
-        }
-        let materialized = try await materializer.materialize(
-            epoch: work.epoch,
-            track: work.track,
-            manifest: manifest,
-            sessionDirectory: request.sessionDirectory
-        )
+        work: EpochWork, manifest: MeetingAnalysisManifest, request: MeetingBackendRequest,
+        materializer: any MeetingEpochAudioMaterializing, cache: MaterializationCache
+    ) async throws -> MeetingEpochAudioReplay {
+        if let cached = cache.value(for: work.epoch.id) { return cached }
+        let value = try await materializer.makeReplay(epoch: work.epoch, track: work.track,
+            manifest: manifest, sessionDirectory: request.sessionDirectory)
         try Task.checkCancellation()
-        guard materialized.samples.count <= MeetingEpochAudioMaterializer.conservativeSampleLimit else {
-            throw MeetingEpochMaterializationError.sampleLimitExceeded(
-                spanID: work.spans.last?.id ?? "unknown",
-                sampleCount: materialized.samples.count
-            )
+        cache.insert(value, epochID: work.epoch.id)
+        return value
+    }
+
+    /// Timed providers receive overlapping context. A word belongs to the core containing its
+    /// midpoint, retaining a boundary word once with its original provider times. Providers
+    /// without word timing use contiguous cores; no textual/word alignment is manufactured.
+    private nonisolated static func transcribeReplay(_ audio: MeetingEpochAudioReplay,
+        epochID: MeetingAnalysisEpochID, asr: any MeetingParakeetASRSession) async throws -> MeetingParakeetEpochOutput {
+        let count = audio.source.totalSampleCount
+        let coreSamples = Int(20 * audio.sampleRate)
+        let contextSamples = Int(2 * audio.sampleRate)
+        var start = 0
+        var text: [String] = []
+        var words: [ASRWordTiming] = []
+        var segments: [ASRSegmentTiming] = []
+        var coarse = false
+        var hasCoarseText = false
+        while start < count {
+            try Task.checkCancellation()
+            let end = min(count, start + coreSamples)
+            var lower = coarse ? start : max(0, start - contextSamples)
+            var upper = coarse ? end : min(count, end + contextSamples)
+            var output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
+            if output.words.isEmpty, (lower != start || upper != end) {
+                // Coarse text cannot safely be trimmed at a word boundary. Re-run only this
+                // bounded core, then keep subsequent cores contiguous as well.
+                coarse = true
+                lower = start; upper = end
+                output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
+            }
+            let offset = Double(lower) / audio.sampleRate
+            let kept = output.words.filter { word in
+                guard word.start.isFinite, word.end.isFinite, word.start >= 0,
+                      word.end > word.start, word.end <= Double(upper - lower) / audio.sampleRate + 1e-6 else { return false }
+                let midpoint = (word.start + word.end) * audio.sampleRate / 2 + Double(lower)
+                return midpoint >= Double(start) && (midpoint < Double(end) || end == count)
+            }
+            if !output.words.isEmpty {
+                words.append(contentsOf: kept.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) })
+                text.append(kept.map(\.text).joined(separator: " "))
+            } else {
+                let value = output.result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    text.append(value)
+                    let native = ASRSegmentTiming.validated(output.result.segmentTimings, text: value,
+                        duration: Double(upper - lower) / audio.sampleRate)
+                    hasCoarseText = true
+                    segments.append(contentsOf: native.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) })
+                }
+            }
+            start = end
         }
-        if isPCMFirst {
-            try cache.insert(materialized, spanID: work.spans.last?.id ?? "unknown")
-        }
-        return materialized
+        return MeetingParakeetEpochOutput(epochID: epochID, text: text.filter { !$0.isEmpty }.joined(separator: " "),
+            words: hasCoarseText ? [] : words, segmentTimings: segments, sampleRate: audio.sampleRate, sampleCount: count, spanSamples: audio.spanSamples)
     }
 
     // MARK: - Units, assignment and receipts

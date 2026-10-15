@@ -9,22 +9,61 @@ import XCTest
 /// materializer and pipeline integration tests use real WAV files on disk.
 @MainActor
 final class MeetingParakeetNemotronBackendTests: XCTestCase {
-    func testCombinedTrackLimitIncludesEarlierEpochsAndSeparators() throws {
-        let limit = MeetingEpochAudioMaterializer.conservativeSampleLimit
-        XCTAssertNoThrow(try MeetingParakeetNemotronBackend.validateTrackSampleCount(
-            current: limit - 10, incoming: 8, separator: 2, spanID: "test"
-        ))
-        for (incoming, separator) in [(9, 2), (11, 0), (Int.max, 0)] {
-            XCTAssertThrowsError(try MeetingParakeetNemotronBackend.validateTrackSampleCount(
-                current: limit - 10, incoming: incoming, separator: separator, spanID: "test"
-            )) { error in
-                XCTAssertTrue((error as? MeetingEpochMaterializationError)?.isSampleLimitExceeded == true)
-                XCTAssertEqual(
-                    error.localizedDescription,
-                    "This meeting is too large to transcribe within the app’s current memory limit. Try processing shorter sections."
-                )
-            }
+    func testEightHourTrackUsesBoundedReplayAndASRWindows() async throws {
+        let seconds = 8.0 * 60 * 60
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + seconds)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let runtime = FakeRuntime()
+        let materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: runtime, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: self.makeSession(mode: .inRoom, tracks: [track]),
+                                                     directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: seconds)
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = Int(seconds * 16_000)
+        runtime.diarizerFactory.segmentsByEpoch[epoch.id] = [.init(slotIndex: 0, start: 0, end: seconds)]
+        runtime.asrSession.responses = (0..<1440).map { index in
+            .init(text: "word\(index)", words: [.init(text: "word\(index)", start: 2.5, end: 3)])
         }
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical result") }
+        XCTAssertEqual(runtime.diarizerFactory.createdEpochs, [epoch.id])
+        XCTAssertEqual(runtime.diarizerFactory.diarizedSampleCounts, [Int(seconds * 16_000)])
+        XCTAssertEqual(runtime.asrSession.callSampleCounts.count, 1440)
+        XCTAssertLessThanOrEqual(runtime.asrSession.callSampleCounts.max() ?? Int.max, 24 * 16_000)
+        XCTAssertLessThanOrEqual(materializer.maximumReplayRead, 24 * 16_000)
+        XCTAssertTrue(materializer.materializedEpochs.isEmpty, "No whole-epoch PCM allocation is allowed")
+        XCTAssertEqual(bundle.evidence.units.count, 1440)
+        XCTAssertEqual(bundle.coverageReceipts.map(\.status), [.processed])
+        XCTAssertGreaterThan(bundle.evidence.units.last?.analysisStart ?? 0, seconds - 30)
+    }
+
+    func testOverlappingASRContextKeepsOneBoundaryWordWithNativeTimes() async throws {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 145)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let runtime = FakeRuntime()
+        let materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: runtime, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: self.makeSession(mode: .inRoom, tracks: [track]),
+                                                     directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 45)
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = 45 * 16_000
+        runtime.diarizerFactory.segmentsByEpoch[epoch.id] = [.init(slotIndex: 0, start: 0, end: 45)]
+        runtime.asrSession.responses = [
+            .init(text: "left boundary", words: [.init(text: "left", start: 19.3, end: 19.8), .init(text: "boundary", start: 19.9, end: 20.5)]),
+            .init(text: "boundary right", words: [.init(text: "boundary", start: 1.9, end: 2.5), .init(text: "right", start: 2.6, end: 3)]),
+        ]
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical result") }
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["left", "boundary", "right"])
+        let boundary = try XCTUnwrap(bundle.evidence.units.first { $0.text == "boundary" })
+        XCTAssertEqual(boundary.analysisStart, 19.9, accuracy: 1e-6)
+        XCTAssertEqual(boundary.analysisEnd, 20.5, accuracy: 1e-6)
     }
 
     // MARK: - Session fixtures
@@ -506,7 +545,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(fixture.provider.prepareCalls, 1)
         XCTAssertEqual(fixture.provider.releaseCalls, 1)
         XCTAssertFalse(fixture.owner.isClaimed)
-        XCTAssertEqual(observed.batches.count, 2)
+        XCTAssertEqual(observed.batches.count, 3)
+        XCTAssertEqual(observed.batches.map(\.speechObservationIsFinal), [false, false, true])
         XCTAssertTrue(observed.batches.allSatisfy { !$0.isComplete && $0.speakers.isEmpty })
         XCTAssertTrue(observed.batches.flatMap(\.segments).allSatisfy { $0.status == .provisional && $0.speakerID == nil })
         XCTAssertEqual(final.segments.map(\.id), observed.batches.last?.segments.map(\.id))
@@ -587,7 +627,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
             recognize: { window, offset in
                 try await fixture.runtime.recognizePCM(window: window, offset: offset, trackID: UUID(),
-                    attemptID: attempt, configuration: fixture.configuration, preview: { _ in entered.fulfill() })
+                    attemptID: attempt, configuration: fixture.configuration, preview: { batch in if !batch.speechObservationIsFinal { entered.fulfill() } })
             }, checkpoint: { _ in }, failure: { _ in XCTFail("Pinned original configuration remains valid") })
         addTeardownBlock { try? await consumer.finish() }
         XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
@@ -2027,6 +2067,12 @@ private final nonisolated class FakeDiarizerFactory: MeetingNemotronDiarizerFact
     struct Session: MeetingNemotronDiarizerSession {
         let factory: FakeDiarizerFactory
         let segments: [MeetingNemotronSpeakerSegment]
+        func diarize(source: any MeetingPCMReplaySource) async throws -> [MeetingNemotronSpeakerSegment] {
+            var total = 0
+            try await source.replay { total += $0.count }
+            self.factory.diarizedSampleCounts.append(total)
+            return self.segments
+        }
         func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] {
             self.factory.diarizedSampleCounts.append(samples.count)
             return self.segments
@@ -2113,6 +2159,37 @@ private final nonisolated class FakeRuntime: MeetingParakeetNemotronRunning, @un
 private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing, @unchecked Sendable {
     var failingEpochs: Set<MeetingAnalysisEpochID> = []
     var customSpanSampleCounts: [MeetingAnalysisEpochID: [Int]] = [:]
+    var replaySampleCounts: [MeetingAnalysisEpochID: Int] = [:]
+    private(set) var maximumReplayRead = 0
+
+    struct GeneratedSource: MeetingPCMReplaySource {
+        let totalSampleCount: Int
+        let owner: FakeMaterializer
+        func readSamples(in range: Range<Int>) async throws -> [Float] {
+            try Task.checkCancellation()
+            guard range.lowerBound >= 0, range.upperBound <= self.totalSampleCount,
+                  range.count <= 24 * 16_000 else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+            self.owner.maximumReplayRead = max(self.owner.maximumReplayRead, range.count)
+            return [Float](repeating: 0.1, count: range.count)
+        }
+    }
+
+    func makeReplay(epoch: MeetingAnalysisEpochRecord, track: MeetingAnalysisTrackManifest,
+                    manifest: MeetingAnalysisManifest, sessionDirectory: URL) async throws -> MeetingEpochAudioReplay {
+        if let count = self.replaySampleCounts[epoch.id] {
+            return .init(source: GeneratedSource(totalSampleCount: count, owner: self), sampleRate: 16_000,
+                         spanSamples: [.init(spanID: epoch.spanIDs[0], sampleRange: 0..<count)])
+        }
+        let value = try await self.materialize(epoch: epoch, track: track, manifest: manifest, sessionDirectory: sessionDirectory)
+        return .init(source: SmallSource(samples: value.samples), sampleRate: value.sampleRate, spanSamples: value.spanSamples)
+    }
+
+    struct SmallSource: MeetingPCMReplaySource {
+        let samples: [Float]
+        var totalSampleCount: Int { self.samples.count }
+        func readSamples(in range: Range<Int>) async throws -> [Float] { Array(self.samples[range]) }
+    }
+
     private(set) var materializedEpochs: [MeetingAnalysisEpochID] = []
 
     func materialize(

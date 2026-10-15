@@ -47,6 +47,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingChunkAudioObserver.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingDiarizationModelStore.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingEpochAudioMaterializer.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingEpochAudioReplay.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingLegacyCompatibilityBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingModelInstaller.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingNemotronCompiledModelOwner.swift
