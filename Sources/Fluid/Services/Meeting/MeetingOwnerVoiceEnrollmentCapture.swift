@@ -84,7 +84,10 @@ final nonisolated class MeetingOwnerVoiceSampleBuffer: MeetingMemoryAudioConsumi
     private var failure: Error?
     static let maximumSamples = 320_000
 
-    init() throws { self.converter = try MeetingCapturePCMConverter() }
+    init() throws {
+        self.converter = try MeetingCapturePCMConverter()
+        self.samples.reserveCapacity(Self.maximumSamples)
+    }
 
     var capturedSeconds: Double { self.lock.withLock { Double(self.samples.count) / 16_000 } }
 

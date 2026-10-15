@@ -1,7 +1,11 @@
 @preconcurrency import AVFoundation
 import CoreMedia
 import XCTest
+#if os(iOS)
 @testable import PichiVoiceMobile
+#else
+@testable import FluidVoice_Debug
+#endif
 
 final class MeetingOwnerVoiceEnrollmentCaptureTests: XCTestCase {
     func testSampleIsBoundedAndDrainedBeforeItIsTaken() async throws {
