@@ -203,7 +203,7 @@ private final class InlineCaptionAttachment: NSTextAttachment {
         #endif
     }
 
-    override func image(forBounds bounds: CGRect, attributes: [NSAttributedString.Key: Any],
+    override func image(for bounds: CGRect, attributes: [NSAttributedString.Key: Any],
                         location: any NSTextLocation, textContainer: NSTextContainer?) ->
         InlineCaptionImage? { nil }
 }
