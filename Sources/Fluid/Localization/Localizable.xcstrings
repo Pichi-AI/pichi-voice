@@ -51928,6 +51928,108 @@
           }
         }
       }
+    },
+    "The in-memory audio archive configuration is invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio archive configuration is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректная конфигурация аудиоархива в памяти."
+          }
+        }
+      }
+    },
+    "The in-memory recording has already been released.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory recording has already been released."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозапись уже удалена из памяти."
+          }
+        }
+      }
+    },
+    "The in-memory recording must be stopped before analysis.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory recording must be stopped before analysis."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перед анализом необходимо остановить запись."
+          }
+        }
+      }
+    },
+    "The requested in-memory audio range is invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The requested in-memory audio range is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запрошен некорректный фрагмент аудиозаписи в памяти."
+          }
+        }
+      }
+    },
+    "The in-memory recording reached its audio memory limit. Completed text was preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory recording reached its audio memory limit. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Достигнут лимит памяти для аудиозаписи. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "The in-memory audio recording could not be converted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio recording could not be converted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудиозапись в памяти."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
