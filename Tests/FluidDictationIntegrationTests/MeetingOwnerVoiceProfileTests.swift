@@ -134,13 +134,16 @@ extension MeetingOwnerVoiceProfileTests {
             try file.read(into: buffer)
             return Array(UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
         }
-        let first = try read("voice-a")
-        let second = try read("voice-b")
+        // Explicitly staged Apple TTS. Enrollment and later speech have different
+        // text, so the positive comparison does not reuse identical PCM excerpts.
+        let enrollment = try read("owner-enrollment")
+        let first = try read("owner-observation")
+        let second = try read("other-observation")
         let store = try self.privateStore()
         let service = MeetingOwnerVoiceProfileService(store: store,
             prepareResources: { try MeetingSpeakerVoiceModelArtifacts.validate(at: package) },
             encode: { try MeetingSpeakerVoiceEncoder.encode(samples: $0, directory: package, validateDefaultRoot: false) })
-        let draft = try await service.prepare(samples: first)
+        let draft = try await service.prepare(samples: enrollment)
         XCTAssertNil(try store.load(), "Checking must not enroll a voice without Save.")
         _ = try await service.save(draft)
         let saved = try XCTUnwrap(store.load())

@@ -57,6 +57,9 @@ struct MeetingOwnerVoiceSettingsContent: View {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.actions }
             }
             .buttonStyle(.bordered)
+            #if os(iOS)
+            .controlSize(.large)
+            #endif
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("settings.ownerVoice")
