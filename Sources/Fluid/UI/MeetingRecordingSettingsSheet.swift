@@ -329,6 +329,11 @@ struct MeetingRecordingSettingsSheet: View {
 
             MeetingModelSettingsSection(onModelImported: self.onModelImported)
 
+            FluidManagementGroup(title: PichiLocalization.text("My voice")) {
+                MeetingOwnerVoiceSettingsContent(audioArbiter: self.appServices.meetingAudioActivityArbiter,
+                    microphone: self.microphones.first { $0.id == self.draft.selectedMicrophoneID }?.identity)
+            }
+
             if self.readiness.showMicrophoneSettingsAction || self.readiness.showScreenRecordingSettingsAction {
                 FluidManagementGroup(title: PichiLocalization.text("Permissions need attention")) {
                     Text("Allow the requested access in macOS Settings, then refresh your sources.")

@@ -263,6 +263,7 @@ struct MeetingTranscriptionView: View {
                     MeetingTranscriptionCanvas(
                         setupDraft: self.$setupDraft,
                         state: self.canvasState,
+                        pendingSpeech: self.coordinator.pendingSpeech,
                         applications: self.applications,
                         microphones: self.microphones,
                         readiness: self.readiness,
@@ -1408,6 +1409,7 @@ struct MeetingTranscriptionCanvas: View {
     @Binding var setupDraft: MeetingTranscriptionSetupDraft
 
     let state: MeetingTranscriptionCanvasState
+    var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     let applications: [MeetingApplicationOption]
     let microphones: [MeetingMicrophoneOption]
     let readiness: MeetingSetupReadiness
@@ -1488,6 +1490,7 @@ struct MeetingTranscriptionCanvas: View {
                     session: session,
                     trackHealth: trackHealth,
                     liveTranscript: liveTranscript,
+                    pendingSpeech: self.pendingSpeech,
                     isStopping: false,
                     onStop: self.onStop
                 )
@@ -1496,6 +1499,7 @@ struct MeetingTranscriptionCanvas: View {
                     session: session,
                     trackHealth: trackHealth,
                     liveTranscript: liveTranscript,
+                    pendingSpeech: self.pendingSpeech,
                     isStopping: true,
                     onStop: self.onStop
                 )

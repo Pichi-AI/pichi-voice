@@ -10,6 +10,14 @@ actor TranscriptionExecutor {
     var pendingOperationCountForTesting: Int { self.operationCancellations.count }
     #endif
 
+    /// Native model creation and destruction are synchronous too. An explicitly
+    /// sendable body runs on this executor rather than inheriting a caller's
+    /// MainActor context. The existing task chain still owns cancellation and
+    /// waits for the native body to return before teardown can release resources.
+    func runBlocking<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        try await self.run { @Sendable in try operation() }
+    }
+
     func run<T>(benchmarkSessionID: Int? = nil, _ operation: @escaping () async throws -> T) async throws -> T {
         try Task.checkCancellation()
         logTranscriptionExecutorPhase("entered", sessionID: benchmarkSessionID)

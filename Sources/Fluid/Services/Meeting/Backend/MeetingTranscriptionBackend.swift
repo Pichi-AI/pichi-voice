@@ -115,6 +115,13 @@ nonisolated struct MeetingPCMAdmissionRestriction: Equatable, Sendable {
     }
 }
 
+/// Registered scheduling preference for display observations inside one physical
+/// attribution window. It changes cadence, never PCM ownership or the budget.
+nonisolated struct MeetingPCMObservationPolicy: Equatable, Sendable {
+    let initialSeconds: Double
+    let intervalSeconds: Double
+}
+
 nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     let id: MeetingBackendID
     let version: String
@@ -130,6 +137,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
     let resultContract: MeetingBackendResultContract
     let supportedInputs: Set<MeetingBackendInputKind>
     let pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction]
+    let pcmObservationPolicy: MeetingPCMObservationPolicy?
     /// Human-readable, non-exhaustive statements of what this backend cannot guarantee.
     let knownLimits: [String]
     /// The backend's real analysis/resample rate, when it has one. The pipeline records it on the
@@ -151,7 +159,8 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         diarizationDependencies: Set<MeetingDiarizationDependency> = [],
         allowsTranscriptOnlyOnUnsupportedHardware: Bool = false,
         supportedInputs: Set<MeetingBackendInputKind> = [.recordedChunks],
-        pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction] = []
+        pcmAdmissionRestrictions: [MeetingPCMAdmissionRestriction] = [],
+        pcmObservationPolicy: MeetingPCMObservationPolicy? = nil
     ) {
         self.id = id
         self.version = version
@@ -162,6 +171,7 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         self.resultContract = resultContract
         self.supportedInputs = supportedInputs
         self.pcmAdmissionRestrictions = pcmAdmissionRestrictions
+        self.pcmObservationPolicy = pcmObservationPolicy
         self.knownLimits = knownLimits
         self.analysisSampleRate = analysisSampleRate
         self.diarizationDependencies = diarizationDependencies
@@ -180,6 +190,13 @@ nonisolated struct MeetingBackendDescriptor: Equatable, Sendable {
         }
         guard self.analysisSampleRate == 16_000, !self.supportedFinalPrecisions.isEmpty else {
             throw MeetingBackendError.unsupportedInput(backend: self.id, input: .boundedMicrophonePCM)
+        }
+        if let policy = self.pcmObservationPolicy {
+            guard policy.initialSeconds.isFinite, policy.intervalSeconds.isFinite,
+                  (0.25...12).contains(policy.initialSeconds),
+                  (0.25...12).contains(policy.intervalSeconds) else {
+                throw MeetingBackendError.unsupportedInput(backend: self.id, input: .boundedMicrophonePCM)
+            }
         }
         guard self.supportedLanguageCodes.contains(configuration.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: self.id, languageCode: configuration.languageCode)
@@ -320,6 +337,8 @@ nonisolated enum MeetingBackendPlanDefect: String, Equatable, Sendable {
 nonisolated struct MeetingCanonicalResultBundle: Equatable, Sendable {
     let evidence: MeetingFinalTranscriptEvidence
     let coverageReceipts: [MeetingSpanCoverageReceipt]
+    /// Ephemeral confirmed identity only. Owner embeddings never enter Codable evidence.
+    var confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
 }
 
 /// What a backend hands back.

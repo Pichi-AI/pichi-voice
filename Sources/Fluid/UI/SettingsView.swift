@@ -1498,7 +1498,9 @@ struct SettingsView: View {
                                 Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .trailing)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(minWidth: 36, alignment: .trailing)
 
                                 Slider(value: self.$visualizerNoiseThreshold, in: 0.01...0.8, step: 0.01)
                                     .controlSize(.regular)
@@ -1506,7 +1508,9 @@ struct SettingsView: View {
                                 Text("Less")
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .leading)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(minWidth: 36, alignment: .leading)
 
                                 Text(String(format: "%.2f", self.visualizerNoiseThreshold))
                                     .font(.fluidSystem(.caption, design: .monospaced))
@@ -1538,7 +1542,9 @@ struct SettingsView: View {
                                     Text("Less")
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .trailing)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .frame(minWidth: 36, alignment: .trailing)
 
                                     Slider(
                                         value: Binding(
@@ -1553,7 +1559,9 @@ struct SettingsView: View {
                                     Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .leading)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .frame(minWidth: 36, alignment: .leading)
                                 }
                             }
                             .settingsSearchTarget(.transcriptionPreviewLength)
@@ -2926,81 +2934,6 @@ struct FillerWordsEditor: View {
     }
 }
 
-// MARK: - Flow Layout
-
-struct FlowLayout: Layout {
-    struct Cache {
-        var sizes: [CGSize] = []
-        var positions: [CGPoint] = []
-        var containerSize: CGSize = .zero
-        var lastWidth: CGFloat = 0
-    }
-
-    var spacing: CGFloat = 8
-
-    func makeCache(subviews: Subviews) -> Cache {
-        Cache(sizes: Array(repeating: .zero, count: subviews.count))
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
-        self.arrangeSubviews(proposal: proposal, subviews: subviews, cache: &cache)
-        return cache.containerSize
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        self.arrangeSubviews(proposal: proposal, subviews: subviews, cache: &cache)
-        for (index, position) in cache.positions.enumerated() {
-            subviews[index].place(
-                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
-                proposal: .unspecified
-            )
-        }
-    }
-
-    private func arrangeSubviews(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout Cache
-    ) {
-        let proposedWidth = proposal.width ?? 0
-        let maxWidth = proposedWidth > 0 ? proposedWidth : 260
-        let needsLayout = cache.positions.count != subviews.count || cache.lastWidth != maxWidth
-
-        if needsLayout {
-            cache.positions = []
-            cache.positions.reserveCapacity(subviews.count)
-            cache.sizes = Array(repeating: .zero, count: subviews.count)
-        }
-
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-
-        for index in subviews.indices {
-            let size: CGSize
-            if needsLayout {
-                size = subviews[index].sizeThatFits(.unspecified)
-                cache.sizes[index] = size
-            } else {
-                size = cache.sizes[index]
-            }
-
-            if x + size.width > maxWidth, x > 0 {
-                x = 0
-                y += rowHeight + self.spacing
-                rowHeight = 0
-            }
-            if needsLayout {
-                cache.positions.append(CGPoint(x: x, y: y))
-            }
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + self.spacing
-        }
-
-        cache.containerSize = CGSize(width: maxWidth, height: y + rowHeight)
-        cache.lastWidth = maxWidth
-    }
-}
 
 private extension SettingsView {
     var spokenSendSettings: some View {

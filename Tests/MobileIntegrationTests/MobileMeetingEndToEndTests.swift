@@ -6,6 +6,61 @@ import UIKit
 @testable import PichiVoiceMobile
 import XCTest
 
+/// Explicitly enabled synthetic replay evidence belongs only to a private XCTest
+/// attachment. Support logs, the app store and export paths never receive it.
+@MainActor
+private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
+    private struct Observation: Encodable {
+        let elapsedSeconds: TimeInterval
+        let input: String
+        let output: String
+        let inputUTF16: Int
+        let provisionalSafeUTF16: Int?
+        let spans: [Span]
+    }
+    private struct Span: Encodable {
+        let start: Int
+        let length: Int
+        let replacement: String
+    }
+    private let wrapped: any TranscriptTextRedacting
+    private let startedAt = ProcessInfo.processInfo.systemUptime
+    private var observations: [Observation] = []
+    private var retainedUTF16 = 0
+    private var omittedObservations = 0
+
+    init(wrapping wrapped: any TranscriptTextRedacting) { self.wrapped = wrapped }
+
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let result = try await wrapped.redactWithSpans(text)
+        let size = text.utf16.count + result.text.utf16.count
+        if observations.count < 128, size <= 32_768, retainedUTF16 + size <= 131_072 {
+            retainedUTF16 += size
+            observations.append(.init(elapsedSeconds: ProcessInfo.processInfo.systemUptime - startedAt,
+                input: text, output: result.text, inputUTF16: text.utf16.count,
+                provisionalSafeUTF16: result.provisionalSafeUTF16,
+                spans: result.spans.map { .init(start: $0.range.location, length: $0.range.length, replacement: $0.replacement) }))
+        } else { omittedObservations += 1 }
+        return result
+    }
+
+    func attachmentData() throws -> Data {
+        struct Evidence: Encodable {
+            let observations: [Observation]
+            let omittedObservations: Int
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(Evidence(observations: observations, omittedObservations: omittedObservations))
+    }
+}
+
+private struct SyntheticDiagnosticEchoRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+    }
+}
+
 /// A synthetic microphone implements the existing capture contract. Everything after
 /// PCM delivery is the actual mobile composition, ASR, coordinator, pipeline and store.
 private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
@@ -57,12 +112,29 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
 
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
+    func testPrivateSyntheticPrivacyDiagnosticsAreBoundedAndTransparent() async throws {
+        let diagnostics = SyntheticPrivacyReplayDiagnostics(wrapping: SyntheticDiagnosticEchoRedactor())
+        for _ in 0..<130 {
+            let result = try await diagnostics.redactWithSpans("Synthetic fixture")
+            XCTAssertEqual(result.text, "Synthetic fixture")
+            XCTAssertEqual(result.provisionalSafeUTF16, 17)
+        }
+        let data = try await diagnostics.attachmentData()
+        let evidence = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual((evidence["observations"] as? [[String: Any]])?.count, 128)
+        XCTAssertEqual(evidence["omittedObservations"] as? Int, 2)
+    }
+
     func testPhysicalStrictGigaAMWithSpeakersAndPrivacyKeepsUp() async throws {
         try await verifyPhysicalStrictMeeting(model: .gigaam)
     }
 
     func testPhysicalStrictWhisperTinyWithSpeakersAndPrivacyKeepsUp() async throws {
         try await verifyPhysicalStrictMeeting(model: .whisperTiny)
+    }
+
+    func testPhysicalStrictParakeetWithSpeakersAndPrivacyKeepsUp() async throws {
+        try await verifyPhysicalStrictMeeting(model: .parakeetTDT)
     }
 
     /// The exact user configuration that serial, unpaced ASR fixtures did not cover.
@@ -93,14 +165,19 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         settings.meetingPIIRedactionEnabled = true
         let store = MeetingSessionStore(rootDirectory: root)
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: assets.appendingPathComponent("models/privacy")))
-        let services = AppServices(store: store, settings: settings, privacy: privacy)
+        let diagnostics = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_PRIVACY_DIAGNOSTICS"] == "1"
+            ? SyntheticPrivacyReplayDiagnostics(wrapping: privacy) : nil
+        let services = AppServices(store: store, settings: settings, privacy: privacy, privacyRedactor: diagnostics)
         let coordinator = services.meetingSessionCoordinator
         let twoVoiceFixture = ProcessInfo.processInfo.environment["PICHI_PHYSICAL_STRICT_TWO_VOICES"] == "1"
         let fixture = twoVoiceFixture ? "audio/mixed-two-voices.wav" : "audio/ru.wav"
         let player = try AVAudioPlayer(contentsOf: assets.appendingPathComponent(fixture))
         player.numberOfLoops = -1
         var firstTextSecond: Int?
+        var firstPendingSecond: Int?
+        var largestPendingCount = 0
         var updates = 0
+        var protectedUpdateSeconds: [Double] = []
         var lastUpdateSecond = 0
         var lastBackgroundUpdateSecond = 0
         var previousIDs: Set<UUID> = []
@@ -110,7 +187,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         var backgroundUpdates = 0
         var wasBackground = false
         do {
-            let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic strict speech")
+            let configuration: MeetingCaptureConfiguration
+            do {
+                configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic strict speech")
+            } catch let error as MeetingBackendError {
+                // The positive hardware probe cannot exercise a combination that the
+                // registered backend deliberately rejects before capture. Keep that
+                // refusal covered by MobilePCMAdmissionTests instead of bypassing it.
+                guard case .unsupportedPCMConfiguration = error else { throw error }
+                throw XCTSkip("Registered strict PCM admission rejects this exact deployment: \(error.localizedDescription)")
+            }
             let recording = try await coordinator.startRecording(configuration: configuration)
             XCTAssertEqual(recording.audioStorageMode, .memoryOnly)
             XCTAssertEqual(recording.speakerLabelsEnabled, true)
@@ -134,6 +220,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     throw MeetingMemoryAudioError.overload
                 }
                 let snapshot = coordinator.liveTranscript
+                let pending = coordinator.pendingSpeech
+                largestPendingCount = max(largestPendingCount, pending.tokens.count)
+                if !pending.tokens.isEmpty { firstPendingSecond = firstPendingSecond ?? second }
+                XCTAssertLessThanOrEqual(pending.tokens.count, 64)
                 let isBackground = UIApplication.shared.applicationState == .background
                 let observationInterval = now - previousObservationTime
                 let adjacentBackgroundObservation = isBackground && wasBackground && observationInterval <= 2
@@ -149,6 +239,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 let partial = snapshot.partials[.you]
                 if !ids.subtracting(previousIDs).isEmpty || (partial != nil && partial != previousPartial) {
                     updates += 1
+                    protectedUpdateSeconds.append(elapsed)
                     lastUpdateSecond = second
                     if adjacentBackgroundObservation {
                         backgroundUpdates += 1
@@ -159,7 +250,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 previousPartial = partial
                 wasBackground = isBackground
                 previousObservationTime = now
-                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) background=\(isBackground)")
+                print("[PHYSICAL_STRICT_E2E] second=\(second) model=\(model.rawValue) utterances=\(ids.count) updates=\(updates) pendingAudio=\(pending.tokens.count) background=\(isBackground)")
                 if now - previousResourceTime >= 15 {
                     let cpu = DiagnosticProcessCPUTime.capture()
                     let cpuMS = previousCPU.flatMap { earlier in cpu?.milliseconds(since: earlier) } ?? -1
@@ -172,9 +263,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let capturedSeconds = ProcessInfo.processInfo.systemUptime - captureStart
             player.stop()
             XCTAssertGreaterThanOrEqual(capturedSeconds, Double(duration))
+            XCTAssertNotNil(firstPendingSecond, "Real accepted microphone audio must show capture progress before recognition completes")
             XCTAssertNotNil(firstTextSecond, "Filtered live speech must be visible before stopping")
             XCTAssertLessThanOrEqual(firstTextSecond ?? 61, 12, "Speech must appear before slower attribution completes")
             XCTAssertGreaterThanOrEqual(updates, 3, "Repeated capture must keep advancing after the original 35-second failure")
+            XCTAssertGreaterThanOrEqual(lastUpdateSecond, duration - 15,
+                                        "Protected text must keep advancing near the end, not only during the first window")
             if requiresBackground {
                 XCTAssertGreaterThanOrEqual(backgroundSeconds, duration == 300 ? 280.0 : 20.0,
                                             "The host must actually leave the foreground during paced recording")
@@ -185,6 +279,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 if requiresBackground { XCTAssertGreaterThanOrEqual(lastBackgroundUpdateSecond, 280) }
             }
             let completed = try await coordinator.stopAndTranscribe()
+            XCTAssertTrue(coordinator.pendingSpeech.tokens.isEmpty, "Terminal teardown clears visual audio estimates")
             XCTAssertEqual(completed.state, .completed)
             XCTAssertFalse(completed.transcriptSegments.isEmpty)
             if twoVoiceFixture {
@@ -194,6 +289,24 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             let saved = try await store.load(id: completed.id)
             XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
+            // Opt-in replay evidence is retained privately in XCTest, never in
+            // routine support logs. The export contains protected text only.
+            let transcriptAttachment = XCTAttachment(data: try MeetingTranscriptExporter.json(for: completed),
+                                                       uniformTypeIdentifier: "public.json")
+            transcriptAttachment.name = "Physical-strict-protected-transcript-\(model.rawValue)"
+            transcriptAttachment.lifetime = .keepAlways
+            add(transcriptAttachment)
+            let timingData = try JSONSerialization.data(withJSONObject: [
+                "model": model.rawValue, "durationSeconds": capturedSeconds,
+                "firstTextSecond": firstTextSecond ?? -1,
+                "firstPendingSecond": firstPendingSecond ?? -1, "largestPendingCount": largestPendingCount,
+                "protectedUpdateSeconds": protectedUpdateSeconds,
+                "backgroundSeconds": backgroundSeconds
+            ], options: [.prettyPrinted, .sortedKeys])
+            let timingAttachment = XCTAttachment(data: timingData, uniformTypeIdentifier: "public.json")
+            timingAttachment.name = "Physical-strict-protected-update-timing-\(model.rawValue)"
+            timingAttachment.lifetime = .keepAlways
+            add(timingAttachment)
             let files = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
             for case let file as URL in files where try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
                 XCTAssertEqual(file.pathExtension, "json", "Strict capture must not create any audio file")
@@ -209,13 +322,24 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertFalse(services.asr.hasActiveModelPreparation)
             await coordinator.shutdownForTermination()
             try await privacy.unload()
+            try await addPrivatePrivacyDiagnostics(diagnostics, model: model)
         } catch {
             player.stop()
             await coordinator.shutdownForTermination()
             try? await privacy.unload()
+            try await addPrivatePrivacyDiagnostics(diagnostics, model: model)
             throw error
         }
         #endif
+    }
+
+    private func addPrivatePrivacyDiagnostics(_ diagnostics: SyntheticPrivacyReplayDiagnostics?,
+                                             model: SettingsStore.SpeechModel) async throws {
+        guard let diagnostics else { return }
+        let attachment = XCTAttachment(data: try await diagnostics.attachmentData(), uniformTypeIdentifier: "public.json")
+        attachment.name = "Private-synthetic-privacy-observations-\(model.rawValue)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     private func physicalFootprintBytes() -> UInt64? {
@@ -302,12 +426,15 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
             let payload = try MeetingSharePayload.transcript(data: MeetingTranscriptExporter.json(for: completed), title: completed.title, fileExtension: "json")
             payload.cleanup()
-            await services.asr.shutdownForTermination()
+            // Disposing one test composition must not terminate the process-shared
+            // model residency used by subsequent physical meeting probes.
+            XCTAssertNil(services.asr.activeExclusiveActivity)
+            XCTAssertFalse(services.asr.hasActiveModelPreparation)
+            await services.meetingSessionCoordinator.shutdownForTermination()
             try await privacy.unload()
         } catch {
             player.stop()
             await services.meetingSessionCoordinator.shutdownForTermination()
-            await services.asr.shutdownForTermination()
             try? await privacy.unload()
             throw error
         }
@@ -360,11 +487,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     XCTAssertEqual(file.pathExtension, "json", file.lastPathComponent)
                 }
             }
-            await microphone.shutdownForTermination()
-            await services.asr.shutdownForTermination()
+            XCTAssertNil(services.asr.activeExclusiveActivity)
+            XCTAssertFalse(services.asr.hasActiveModelPreparation)
+            await services.meetingSessionCoordinator.shutdownForTermination()
+            try await services.transcriptPrivacy.unload()
         } catch {
-            await microphone.shutdownForTermination()
-            await services.asr.shutdownForTermination()
+            await services.meetingSessionCoordinator.shutdownForTermination()
+            try? await services.transcriptPrivacy.unload()
             throw error
         }
     }

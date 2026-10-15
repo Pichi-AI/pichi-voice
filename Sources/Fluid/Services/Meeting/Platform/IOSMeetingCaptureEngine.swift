@@ -249,7 +249,8 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     }
 }
 
-private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
+/// Shared microphone runtime, also used for explicit RAM-only voice enrollment.
+final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
     private struct OwnedInput: @unchecked Sendable {
         let buffer: AVAudioPCMBuffer
         let pts: CMTime
@@ -269,6 +270,8 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     private let memoryConsumer: (any MeetingMemoryAudioConsuming)?
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
     private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    // Pauses only when explicitly supplied by a deterministic producer/drain test.
+    private let afterAdmission: (@Sendable () -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var stopping = false
     private var terminalFailure: Error?
@@ -290,13 +293,15 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     init(trackID: MeetingAudioTrackID, microphone: MeetingMicrophoneIdentity,
          writer: MeetingAudioChunkWriter?, memoryConsumer: (any MeetingMemoryAudioConsuming)?,
          eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
-         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?) throws {
+         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?,
+         afterAdmission: (@Sendable () -> Void)? = nil) throws {
         self.trackID = trackID
         self.microphone = microphone
         self.writer = writer
         self.memoryConsumer = memoryConsumer
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
+        self.afterAdmission = afterAdmission
         self.converter = try MeetingCapturePCMConverter()
     }
 
@@ -397,7 +402,6 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         self.trace("runtime.stop.begin")
 #endif
         self.lock.withLock { self.stopping = true }
-        self.gate.close()
         await withCheckedContinuation { continuation in
             self.controlQueue.async {
                 self.engine.stop()
@@ -410,7 +414,12 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         // A tap already admitted before stop may still be copying. Join those producers before
         // placing the PCM-queue drain, so no owned copy can arrive after the barrier.
         await withCheckedContinuation { continuation in
-            self.producerGroup.notify(queue: self.controlQueue) { continuation.resume() }
+            self.producerGroup.notify(queue: self.controlQueue) {
+                // Stop rejects new taps under the same lock as producer admission. A tap
+                // already admitted may still need its reservation before it can copy PCM.
+                self.gate.close()
+                continuation.resume()
+            }
         }
         // Enqueued copies and the finite resampling tail must finish before model/file ownership
         // is released. No callback task outlives this join.
@@ -466,6 +475,12 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
 
     func healthSnapshot() -> MeetingTrackHealth { self.lock.withLock { self.health } }
 
+#if DEBUG
+    // Inject synthetic native PCM without opening the microphone or activating a session.
+    func acceptForTesting(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) { self.accept(buffer, time: time) }
+    var hasClosedAdmissionForTesting: Bool { self.lock.withLock { self.stopping } }
+#endif
+
     private func accept(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
         let admitted = self.lock.withLock {
             guard !self.stopping else { return false }
@@ -474,6 +489,7 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         }
         guard admitted else { return }
         defer { self.producerGroup.leave() }
+        self.afterAdmission?()
         guard let reservation = self.gate.reserve(frames: Int(buffer.frameLength),
                                                    channels: Int(buffer.format.channelCount), sampleRate: buffer.format.sampleRate) else {
             self.fail(MeetingCapturePCMError.conversionFailed(PichiLocalization.text("The bounded microphone queue is full.")), kind: .writerBackpressure)
@@ -510,9 +526,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                       kind: .writerBackpressure)
             return
         }
-        // Strict checkpoints supply canonical text to the existing coordinator. A second live
-        // recognizer would duplicate inference/residency while this consumer owns the same PCM.
-        if self.memoryConsumer == nil { self.liveAudioHandler?(.microphone, sample) }
+        // Tee only after the selected sink accepted this PCM. The coordinator uses this for
+        // scalar capture progress in strict mode, without starting a second recognizer.
+        self.liveAudioHandler?(.microphone, sample)
         let now = Date()
         let snapshot: MeetingTrackHealth? = self.lock.withLock {
             self.health.status = .healthy

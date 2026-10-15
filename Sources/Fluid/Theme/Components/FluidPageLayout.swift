@@ -56,6 +56,7 @@ private struct FluidPageActions<Actions: View>: ViewModifier {
                 }
                 ToolbarItemGroup(placement: .primaryAction) {
                     self.actions
+                        .foregroundStyle(Color.primary)
                         .buttonStyle(.automatic)
                         .labelStyle(FluidToolbarLabelStyle())
                 }
@@ -73,10 +74,15 @@ private struct FluidToolbarLabelStyle: LabelStyle {
 }
 
 extension View {
-    func fluidToolbarIcon() -> some View {
-        self.font(.system(size: 17, weight: .medium))
+    // Native glass can choose an appearance independently of the app palette.
+    // Color.primary resets inherited brand ink; HierarchicalShapeStyle.primary
+    // would merely reuse that inherited foreground style.
+    func fluidToolbarIcon(foreground: Color = .primary, file: StaticString = #fileID, line: UInt = #line) -> some View {
+        self.foregroundStyle(foreground)
+            .font(.system(size: 17, weight: .medium))
             .imageScale(.medium)
             .frame(width: 22, height: 22)
+            .traceToolbarAppearance(file: file, line: line)
     }
 
     func fluidPageContent(width: FluidPageLayout.Width = .standard, alignment: Alignment = .leading) -> some View {

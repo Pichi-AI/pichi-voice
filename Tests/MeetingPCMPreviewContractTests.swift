@@ -11,6 +11,7 @@ nonisolated struct MeetingSpeakerVoiceProfile: Sendable {}
 nonisolated struct MeetingMaterializedSpanSamples: Sendable {}
 nonisolated struct MeetingNemotronModelArtifact: Sendable {}
 nonisolated struct MeetingFinalProcessingConfiguration: Sendable {}
+nonisolated struct MeetingPCMProgressiveWindow: Sendable {}
 nonisolated struct MeetingPCMTranscriptBatch: Sendable { let text: String }
 typealias MeetingAudioTrackID = UUID
 nonisolated enum MeetingModelResidencyError: Error { case unsupportedProvider }
@@ -25,6 +26,26 @@ private nonisolated struct LegacyRuntime: MeetingParakeetNemotronRunning {
     func recognizePCM(samples: [Float], offset: TimeInterval, trackID: UUID, attemptID: UUID,
                       configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
         await counter.increment(); return .init(text: "synthetic-final")
+    }
+    func withNemotronDiarization(artifact: MeetingNemotronModelArtifact,
+        _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult) async throws -> MeetingNemotronPhaseResult {
+        throw MeetingModelResidencyError.unsupportedProvider
+    }
+    func withPreparedASR(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+        body: @escaping @Sendable (any MeetingParakeetASRSession) async throws -> MeetingParakeetPhaseResult) async throws -> MeetingParakeetPhaseResult {
+        throw MeetingModelResidencyError.unsupportedProvider
+    }
+}
+private nonisolated struct ProgressiveRuntime: MeetingParakeetNemotronRunning {
+    let legacy: LegacyRuntime
+    var supportsProgressivePCMInput: Bool { true }
+    func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval, trackID: UUID,
+                      attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                      preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+        let result = try await legacy.recognizePCM(samples: [], offset: offset, trackID: trackID,
+            attemptID: attemptID, configuration: configuration)
+        if let preview { try await preview(result) }
+        return result
     }
     func withNemotronDiarization(artifact: MeetingNemotronModelArtifact,
         _ body: @escaping @Sendable (any MeetingNemotronDiarizerFactory) async throws -> MeetingNemotronPhaseResult) async throws -> MeetingNemotronPhaseResult {
@@ -90,6 +111,22 @@ struct MeetingPCMPreviewContractTests {
         } catch Refusal.observer { }
         try require(await calls.calls == 3, "A refused observer must not trigger a second ASR operation")
         print("PASS observer refusal propagation")
-        print("3 PCM preview protocol contract tests passed")
+        try require(!compatibility.supportsProgressivePCMInput, "An old injected runtime does not gain progressive support")
+        do {
+            _ = try await compatibility.recognizePCM(window: .init(), offset: 0, trackID: UUID(),
+                attemptID: UUID(), configuration: .init(), preview: nil)
+            throw NSError(domain: "UnexpectedProgressiveSuccess", code: 1)
+        } catch MeetingPCMInputError.unsupportedRuntime { }
+        try require(await calls.calls == 3, "Unsupported progressive input cannot call the legacy operation")
+        print("PASS progressive compatibility fails closed")
+        let progressive: any MeetingParakeetNemotronRunning = ProgressiveRuntime(legacy: legacy)
+        try require(progressive.supportsProgressivePCMInput, "The concrete runtime owns capability admission")
+        let progressiveFinal = try await progressive.recognizePCM(window: .init(), offset: 0, trackID: UUID(),
+            attemptID: UUID(), configuration: .init(), preview: { _ in await observations.increment() })
+        try require(progressiveFinal.text == "synthetic-final", "Progressive existential dispatch preserves output")
+        try require(await calls.calls == 4, "Progressive witness must run one operation")
+        try require(await observations.calls == 2, "Progressive witness must publish its observation")
+        print("PASS explicit existential progressive witness")
+        print("5 PCM preview protocol contract tests passed")
     }
 }

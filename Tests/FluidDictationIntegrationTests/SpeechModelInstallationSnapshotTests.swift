@@ -300,8 +300,25 @@ final class SpeechModelInstallationSnapshotTests: XCTestCase {
         await reopened.refreshIfNeeded()
         XCTAssertEqual(reopened.snapshot.sequence, 3)
         XCTAssertEqual(reopened.snapshot.rejectedManifestHashes, [firstHash, secondHash], "Overlapping processes must retain both failures after restart")
-        XCTAssertEqual(CompactSpeechModelReleaseCatalog.cacheFolderName(bundleIdentifier: "com.FluidApp.app", isDebug: false), "FluidVoice")
-        XCTAssertEqual(CompactSpeechModelReleaseCatalog.cacheFolderName(bundleIdentifier: "com.FluidApp.app.debug", isDebug: true), "FluidVoice/com.FluidApp.app.debug")
+    }
+
+    func testDefaultModelFeedCacheUsesTrustedApplicationSupportNamespace() throws {
+        let cache = try XCTUnwrap(CompactSpeechModelReleaseCatalog.defaultCacheURL())
+        XCTAssertEqual(cache.deletingLastPathComponent(), AppBrand.applicationSupportDirectory)
+        XCTAssertEqual(cache.deletingLastPathComponent().lastPathComponent, AppBrand.storageNamespace)
+        #if DEBUG
+        let expectedFile = ProcessInfo.processInfo.arguments.contains("--fv-model-feed=staging")
+            ? "speech-model-feed-staging.json" : "speech-model-feed.json"
+        #else
+        let expectedFile = "speech-model-feed.json"
+        #endif
+        XCTAssertEqual(cache.lastPathComponent, expectedFile)
+        XCTAssertEqual(AppBrand.storageNamespace(for: "ai.pichi.voice"), "ai.pichi.voice")
+        XCTAssertEqual(AppBrand.storageNamespace(for: "ai.pichi.voice.e2e-api"), "ai.pichi.voice.e2e-api")
+        XCTAssertEqual(AppBrand.storageNamespace(for: "ai.pichi.voice.debug"), "ai.pichi.voice.debug")
+        for identifier in [nil, "", ".", "..", "../FluidVoice", "bad/id", "bad\\id", "bad\u{0}id", "Новая марка"] as [String?] {
+            XCTAssertEqual(AppBrand.storageNamespace(for: identifier), "local.voice.unbundled")
+        }
     }
 
     func testSuccessfulChecksWaitOneDayAndFailedChecksRetryHourly() async throws {

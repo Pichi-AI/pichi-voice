@@ -26,23 +26,32 @@ final class MeetingSegmentPlayback: ObservableObject {
     private var failureObserver: NSObjectProtocol?
     private var statusObserver: NSKeyValueObservation?
     private var requestID = UUID()
+    private var activeSegmentIDs: [MeetingTranscriptSegmentID] = []
 
     func toggle(sessionID: MeetingSessionID, segmentID: MeetingTranscriptSegmentID) {
-        let wasActive = self.activeSegmentID == segmentID
+        self.toggle(sessionID: sessionID, segmentIDs: [segmentID])
+    }
+
+    /// Read the requested paragraph from fresh canonical data before resolving audio. The first
+    /// member remains the playback identity; the verified mapping covers the paragraph's range.
+    func toggle(sessionID: MeetingSessionID, segmentIDs: [MeetingTranscriptSegmentID]) {
+        guard let segmentID = segmentIDs.first else { return }
+        let wasActive = self.activeSegmentID == segmentID && self.activeSegmentIDs == segmentIDs
         if wasActive {
             self.togglePause()
             return
         }
         self.stop()
         self.activeSegmentID = segmentID
+        self.activeSegmentIDs = segmentIDs
         self.isLoading = true
         let requestID = self.requestID
         self.loadTask = Task { [weak self] in
             do {
                 guard let session = try await MeetingSessionStore.shared.load(id: sessionID),
-                      let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: sessionID),
-                      let segment = session.transcriptSegments.first(where: { $0.id == segmentID })
+                      let directory = try await MeetingSessionStore.shared.existingSessionDirectory(for: sessionID)
                 else { throw MeetingSegmentPlaybackError.unavailable }
+                let segment = try MeetingSegmentPlaybackPlan.segmentRange(in: session, segmentIDs: segmentIDs)
                 let composition = try await Self.composition(session: session, segment: segment, directory: directory)
                 try Task.checkCancellation()
                 guard let self, self.requestID == requestID else { return }
@@ -160,6 +169,7 @@ final class MeetingSegmentPlayback: ObservableObject {
         self.player?.replaceCurrentItem(with: nil)
         self.player = nil
         self.activeSegmentID = nil
+        self.activeSegmentIDs = []
         self.isLoading = false
     }
 
@@ -207,6 +217,30 @@ nonisolated enum MeetingSegmentPlaybackPlan {
         let url: URL
         let start: Double
         let end: Double
+    }
+
+    /// A transient interval only. Do not rewrite or persist grouped transcript members.
+    /// Recomposition refuses stale membership, reordered IDs or a changed attribution boundary.
+    static func segmentRange(in session: MeetingSession, segmentIDs: [MeetingTranscriptSegmentID]) throws -> MeetingTranscriptSegment {
+        guard !segmentIDs.isEmpty, Set(segmentIDs).count == segmentIDs.count else {
+            throw MeetingSegmentPlaybackError.unavailable
+        }
+        if segmentIDs.count == 1 {
+            guard let segment = session.transcriptSegments.first(where: { $0.id == segmentIDs[0] }) else {
+                throw MeetingSegmentPlaybackError.unavailable
+            }
+            return segment
+        }
+        let ordered = session.transcriptSegments.filter { !$0.isEcho }.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        guard let paragraph = MeetingTranscriptExporter.displayParagraphs(for: ordered, in: session)
+            .first(where: { $0.segments.map(\.id) == segmentIDs }) else {
+            throw MeetingSegmentPlaybackError.unavailable
+        }
+        var interval = paragraph.firstSegment
+        interval.end = paragraph.segments.map(\.end).max() ?? interval.end
+        return interval
     }
 
     static func slices(session: MeetingSession, segment: MeetingTranscriptSegment, directory: URL) throws -> [Slice] {

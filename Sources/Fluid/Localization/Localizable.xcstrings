@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "You": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вы"
+          }
+        }
+      }
+    },
     "Summary with sources": {
       "extractionState": "manual",
       "localizations": {
@@ -30061,7 +30078,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Записать снова"
+            "value": "Записать ещё раз"
           }
         }
       }
@@ -51364,6 +51381,550 @@
           "stringUnit": {
             "state": "translated",
             "value": "Модель выбрана для новых встреч. Распознавание выполняется во время встречи или после записи."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер."
+          }
+        }
+      }
+    },
+    "Command Mode needs a selected chat model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a selected chat model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужно выбрать чат-модель."
+          }
+        }
+      }
+    },
+    "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужна чат-модель. Выбранная модель не поддерживается интерфейсом chat/completions."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер. Выберите проверенную модель или проверьте провайдера в разделе «Провайдеры ИИ»."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер. Проверьте этого провайдера в разделе «Провайдеры ИИ», прежде чем использовать режим команд."
+          }
+        }
+      }
+    },
+    "%@ for Command Mode is coming soon. Choose a model from a verified chat provider.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ for Command Mode is coming soon. Choose a model from a verified chat provider."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддержка %@ в режиме команд скоро появится. Выберите модель проверенного чат-провайдера."
+          }
+        }
+      }
+    },
+    "Audio captured, waiting for transcription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio captured, waiting for transcription"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио записано, ожидается распознавание"
+          }
+        }
+      }
+    },
+    "My voice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "My voice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мой голос"
+          }
+        }
+      }
+    },
+    "Your voice is saved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your voice is saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш голос сохранён"
+          }
+        }
+      }
+    },
+    "Your voice is not set up": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your voice is not set up"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш голос ещё не настроен"
+          }
+        }
+      }
+    },
+    "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройте свой голос, чтобы в следующих встречах ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+          }
+        }
+      }
+    },
+    "Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Читайте вслух в обычном темпе в течение 15-20 секунд. Аудио остаётся в памяти и удаляется после проверки. Голосовой профиль сохраняется только по кнопке «Сохранить»."
+          }
+        }
+      }
+    },
+    "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегодня я настраиваю свой голос для расшифровки встреч. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+          }
+        }
+      }
+    },
+    "Voice sample duration": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice sample duration"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Длительность образца голоса"
+          }
+        }
+      }
+    },
+    "Checking voice sample…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking voice sample…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка образца голоса…"
+          }
+        }
+      }
+    },
+    "Preparing microphone…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing microphone…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка микрофона…"
+          }
+        }
+      }
+    },
+    "Voice sample is ready. Save to use it in future meetings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice sample is ready. Save to use it in future meetings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих встречах."
+          }
+        }
+      }
+    },
+    "Set up my voice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up my voice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить мой голос"
+          }
+        }
+      }
+    },
+    "Delete voice profile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete voice profile"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить голосовой профиль"
+          }
+        }
+      }
+    },
+    "Delete your voice profile?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete your voice profile?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить ваш голосовой профиль?"
+          }
+        }
+      }
+    },
+    "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В следующих встречах будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+          }
+        }
+      }
+    },
+    "Voice enrollment was interrupted. Please record a new sample.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice enrollment was interrupted. Please record a new sample."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройка голоса прервана. Запишите новый образец."
+          }
+        }
+      }
+    },
+    "The voice sample could not be read. Please record it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice sample could not be read. Please record it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать образец голоса. Запишите его ещё раз."
+          }
+        }
+      }
+    },
+    "Not enough clear speech. Read the text aloud for 15 to 20 seconds, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not enough clear speech. Read the text aloud for 15 to 20 seconds, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недостаточно чёткой речи. Читайте текст вслух в течение 15-20 секунд, затем попробуйте снова."
+          }
+        }
+      }
+    },
+    "The sample contains different voices or too much noise. Record your voice alone in a quiet room.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sample contains different voices or too much noise. Record your voice alone in a quiet room."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В образце слышны разные голоса или слишком много шума. Запишите только свой голос в тихой комнате."
+          }
+        }
+      }
+    },
+    "The saved voice profile could not be read. Please set up your voice again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The saved voice profile could not be read. Please set up your voice again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать сохранённый голосовой профиль. Настройте свой голос ещё раз."
+          }
+        }
+      }
+    },
+    "The voice profile changed while this sample was being checked. Please record it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice profile changed while this sample was being checked. Please record it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Голосовой профиль изменился во время проверки образца. Запишите его ещё раз."
+          }
+        }
+      }
+    },
+    "Voice setup is already in progress. Wait for it to finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice setup is already in progress. Wait for it to finish."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройка голоса уже выполняется. Дождитесь её завершения."
+          }
+        }
+      }
+    },
+    "Finish the current recording or transcription before setting up your voice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish the current recording or transcription before setting up your voice."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите текущую запись или распознавание перед настройкой голоса."
+          }
+        }
+      }
+    },
+    "Allow microphone access in system Settings, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow microphone access in system Settings, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешите доступ к микрофону в системных настройках, затем попробуйте снова."
+          }
+        }
+      }
+    },
+    "The selected microphone is unavailable. Choose an available microphone, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected microphone is unavailable. Choose an available microphone, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный микрофон недоступен. Выберите доступный микрофон, затем попробуйте снова."
+          }
+        }
+      }
+    },
+    "Voice setup could not finish. Check your microphone and connection, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice setup could not finish. Check your microphone and connection, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить настройку голоса. Проверьте микрофон и подключение, затем попробуйте снова."
           }
         }
       }

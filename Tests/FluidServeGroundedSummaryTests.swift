@@ -16,6 +16,7 @@ struct FluidServeGroundedSummaryTests {
             precondition(value, message)
             checks += 1
         }
+        try self.checkSpeakerTurnPresentation(check)
         let ordinaryClocks: [(String, TimeInterval)] = [("90", 90), ("12:30", 750), ("1:02:03", 3723)]
         let overflowClocks = ["\(Int.max):59", "\(Int.max / 60):\(Int.max % 60 + 1)"]
         for (text, expected) in ordinaryClocks {
@@ -193,5 +194,61 @@ struct FluidServeGroundedSummaryTests {
             check(changed.0 == 1 && !changed.1.contains("Versioned \(language) synthetic template."), "Changed capture language requires template regeneration")
         }
         print("FluidServe grounded summary tests: \(checks) checks passed")
+    }
+
+    /// Uses production codecs/projection/export without an app host, audio, models or user data.
+    private static func checkSpeakerTurnPresentation(_ check: (Bool, String) -> Void) throws {
+        let track = UUID(), firstID = UUID(), secondID = UUID()
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic speaker turns",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+                            firstPresentationTime: nil))
+        session.speakers = [firstID, secondID].map {
+            .init(id: $0, displayName: $0 == firstID ? "First" : "Second", diarizationClusterID: nil,
+                  trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        }
+        func segment(_ text: String, _ start: Int64, speaker: UUID? = firstID, source: UUID = track) -> MeetingTranscriptSegment {
+            .init(id: UUID(), start: .init(value: start, timescale: 1), end: .init(value: start + 1, timescale: 1),
+                  sourceTrackID: source, speakerID: speaker, text: text, originalText: "Private original wording",
+                  revision: 2, status: .final, overlap: .none, completeness: .complete,
+                  attributionState: speaker == nil ? .unassigned : .assigned)
+        }
+        var monologue = (0..<600).map { segment("слово\($0)", Int64($0) * 4) }
+        monologue[80].text += "\n\n"
+        monologue[160].text += "."
+        session.transcriptSegments = monologue
+        let before = session
+        let turns = MeetingTranscriptExporter.displayParagraphs(for: monologue, in: session)
+        check(turns.count == 1, "Long monologue remains one speaker block across pauses and sentence boundaries")
+        check(turns[0].segments == monologue, "Reading projection preserves every canonical member and revision")
+        check(turns[0].text.contains("слово80\n\nслово81"), "Explicit user line breaks remain inside the speaker block")
+        let text = MeetingTranscriptExporter.text(for: session)
+        check(text == "[00:00] First: " + turns[0].text, "Readable export uses exactly one speaker header for the turn")
+        check(!text.contains("Private original wording"), "Export contains only currently approved transcript text")
+        let json = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: session)) as! [String: Any]
+        let exported = json["segments"] as! [[String: Any]]
+        check(exported.count == monologue.count, "JSON export retains every canonical timed fragment")
+        check(exported.map { $0["id"] as! String } == monologue.map { $0.id.uuidString }, "JSON keeps exact member identities")
+        check(session == before, "Presentation and both exports do not mutate stored evidence")
+
+        let dialogue = [segment("First speaker.", 0), segment("Still first.", 40),
+                        segment("Second speaker.", 41, speaker: secondID), segment("First again.", 42),
+                        segment("to", 43, speaker: nil), segment("First continues.", 44)]
+        session.transcriptSegments = dialogue
+        let dialogueTurns = MeetingTranscriptExporter.displayParagraphs(for: dialogue, in: session)
+        check(dialogueTurns.map(\.segments) == [Array(dialogue[0...1]), [dialogue[2]], [dialogue[3]], [dialogue[4]], [dialogue[5]]],
+              "Actual speaker switches and unknown attribution remain distinct turns")
+        check(MeetingTranscriptExporter.text(for: session).contains("[00:43] Unknown speaker: to"),
+              "An unknown word never acquires the neighboring speaker's name")
+
+        let changedSource = [segment("Source one.", 0), segment("Source two.", 1, source: UUID())]
+        check(MeetingTranscriptExporter.displayParagraphs(for: changedSource, in: session).count == 2,
+              "Matching speaker IDs do not merge across source tracks")
+        var echo = segment("Echo.", 1); echo.isLikelyEcho = true
+        session.transcriptSegments = [dialogue[0], echo, segment("Continued.", 2)]
+        check(MeetingTranscriptExporter.text(for: session) == "[00:00] First: First speaker. Continued.",
+              "Default readable export excludes echoes before grouping")
+        check(MeetingTranscriptExporter.text(for: session, includeEchoes: true).components(separatedBy: "\n\n").count == 3,
+              "Explicit echo export retains evidence boundaries")
     }
 }

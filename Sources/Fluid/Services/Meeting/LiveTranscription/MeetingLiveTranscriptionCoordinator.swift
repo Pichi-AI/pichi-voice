@@ -37,7 +37,7 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var offerCounts: [MeetingAudioTrackKind: Int] = [:]
     /// nil (fail-safe) keeps the echo filter ON; guarded by `stateLock` on both sides.
     private var microphoneCaptureMethod: MeetingAudioTrackCaptureMethod?
-    private let originBox = MeetingLiveOriginBox()
+    private let originBox: MeetingLiveOriginBox
     private let onUpdate: @Sendable (MeetingLiveTranscriptSnapshot) -> Void
 
     private var bufferedMicrophoneEngine: PichiMeetingBufferedTrackEngine?
@@ -52,7 +52,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
     private var applicationEngine: MeetingLiveTrackEngine?
     #endif
 
-    init(onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
+    init(originBox: MeetingLiveOriginBox = MeetingLiveOriginBox(), onUpdate: @escaping @Sendable (MeetingLiveTranscriptSnapshot) -> Void) {
+        self.originBox = originBox
         self.onUpdate = onUpdate
     }
 
@@ -288,7 +289,8 @@ final nonisolated class MeetingLiveTranscriptionCoordinator: @unchecked Sendable
         guard let origin = self.originBox.current else { return }
         let startSeconds = MeetingLiveTimeConversion.sessionSeconds(pts: start, origin: origin)
         let speaker = Self.speaker(for: kind)
-        let partial = MeetingLivePartial(id: id, text: text, start: startSeconds)
+        let partial = MeetingLivePartial(id: id, text: text, start: startSeconds,
+            end: end.isNumeric ? MeetingLiveTimeConversion.sessionSeconds(pts: end, origin: origin) : nil)
         self.publish { $0.settingPartial(partial, for: speaker) }
     }
 

@@ -49,14 +49,33 @@ nonisolated struct MeetingParakeetEpochOutput: Sendable {
     let epochID: MeetingAnalysisEpochID
     let text: String
     let words: [ASRWordTiming]
+    let segmentTimings: [ASRSegmentTiming]
     let sampleRate: Double
     let sampleCount: Int
     let spanSamples: [MeetingMaterializedSpanSamples]
+
+    init(epochID: MeetingAnalysisEpochID, text: String, words: [ASRWordTiming],
+         segmentTimings: [ASRSegmentTiming] = [], sampleRate: Double, sampleCount: Int,
+         spanSamples: [MeetingMaterializedSpanSamples]) {
+        self.epochID = epochID
+        self.text = text
+        self.words = words
+        self.segmentTimings = segmentTimings
+        self.sampleRate = sampleRate
+        self.sampleCount = sampleCount
+        self.spanSamples = spanSamples
+    }
 }
 
 nonisolated struct MeetingParakeetPhaseResult: Sendable {
     var outputs: [MeetingParakeetEpochOutput] = []
     var failures: [MeetingAnalysisEpochID: String] = [:]
+    /// Ownership transfers from a progressive ASR body to the subsequent speaker
+    /// phase. Only that same physical window is retained, never another buffer.
+    var boundedPCMSamples: [Float] = []
+    /// Original consumed frame count when only an accepted prefix leaves ASR.
+    /// The uncovered tail remains explicit without retaining a second PCM buffer.
+    var boundedPCMSourceSampleCount: Int? = nil
 }
 
 /// The composite backend's runtime, one per attempt. `withNemotronDiarization` is the only owner
@@ -67,6 +86,12 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
+    nonisolated var supportsProgressivePCMInput: Bool { get }
+    nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { get }
+    nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+                                 trackID: MeetingAudioTrackID, attemptID: UUID,
+                                 configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch
     nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
                                  attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch
     /// A display-only speech observation after the ASR scope has drained, before attribution.
@@ -92,6 +117,15 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 }
 
 extension MeetingParakeetNemotronRunning {
+    nonisolated var supportsProgressivePCMInput: Bool { false }
+    nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { nil }
+
+    nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+                                 trackID: MeetingAudioTrackID, attemptID: UUID,
+                                 configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+        throw MeetingPCMInputError.unsupportedRuntime
+    }
     nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
                                  attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
         throw MeetingPCMInputError.unsupportedRuntime

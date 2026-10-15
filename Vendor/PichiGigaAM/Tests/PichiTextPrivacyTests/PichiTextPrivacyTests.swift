@@ -3,6 +3,65 @@ import XCTest
 @testable import PichiTextPrivacy
 
 final class PichiTextPrivacyTests: XCTestCase {
+    func testKnownNonPersonPERDoesNotFreezeProvisionalMeetingContext() throws {
+        let text = "Здравствуйте! Сегодня мы обсудим инструкции и посмотрим раздел с документами. После встречи запишем вопросы, которые нужно уточнить."
+        let span = PIINERSpan(range: (text as NSString).range(of: "Здравствуйте"), label: "PER", score: 0.61)
+        let output = try PIIRedactor.redact(text, ner: [span])
+        XCTAssertEqual(output.text, text)
+        let limit = try PIIRedactor.provisionalSafePrefix(in: text, ner: [span], redactedSpans: output.spans)
+        XCTAssertGreaterThan(try XCTUnwrap(limit), NSMaxRange(span.range))
+        let punctuation = PIINERSpan(range: (text as NSString).range(of: "!"), label: "PER", score: 0.49)
+        XCTAssertEqual(try PIIRedactor.provisionalSafePrefix(in: text, ner: [span, punctuation], redactedSpans: output.spans), limit)
+
+        // Reusing an existing precision exclusion must not admit an unrelated
+        // name merely because it shares one NER span with an ordinary word.
+        let candidate = "Здравствуйте Зальман обсуждает инструкцию и условия хранения препарата."
+        let mixed = PIINERSpan(range: (candidate as NSString).range(of: "Здравствуйте Зальман"), label: "PER", score: 0.61)
+        let candidateOutput = try PIIRedactor.redact(candidate, ner: [mixed])
+        XCTAssertEqual(try PIIRedactor.provisionalSafePrefix(in: candidate, ner: [mixed], redactedSpans: candidateOutput.spans), 0)
+    }
+
+    func testIsolatedCompletedNamePrefixDoesNotBlockEveryLaterSentence() throws {
+        let text = "У вас есть инструкция. Сегодня мы обсудим документы и уточним вопросы после встречи."
+        let output = try PIIRedactor.redact(text, ner: [])
+        let limit = try XCTUnwrap(PIIRedactor.provisionalSafePrefix(in: text, ner: [], redactedSpans: output.spans))
+        XCTAssertGreaterThan(limit, (text as NSString).range(of: "вас").upperBound)
+        for candidate in ["ан", "ан сер", "Ан", "Ан Сер обсуждает инструкцию и условия хранения препарата.",
+                          "доктор ан на обсуждает инструкцию и условия хранения препарата."] {
+            let output = try PIIRedactor.redact(candidate, ner: [])
+            XCTAssertEqual(try PIIRedactor.provisionalSafePrefix(in: candidate, ner: [], redactedSpans: output.spans), 0)
+        }
+    }
+
+    func testExplicitMedicationAndDosePreserveAnUnknownDrugWithoutExemptingPeople() throws {
+        for word in ["Амоксициллин", "Ксалендорин", "Xalendorin"] {
+            let text = "Лекарство \(word) 500 мг обсуждаем переносимость терапии и схему применения."
+            let range = (text as NSString).range(of: word)
+            let ner = [PIINERSpan(range: range, label: "PER", score: 0.99)]
+            let output = try PIIRedactor.redact(text, ner: ner)
+            XCTAssertEqual(output.text, text)
+            XCTAssertGreaterThan(try XCTUnwrap(PIIRedactor.provisionalSafePrefix(in: text, ner: ner, redactedSpans: output.spans)), range.upperBound)
+        }
+        for (text, person) in [
+            ("Иван 500 мг обсуждает инструкцию и условия хранения препарата.", "Иван"),
+            ("Лекарство Алиса 500 мг обсуждаем инструкцию и условия хранения.", "Алиса"),
+            ("Пациент Зальман получает 500 мг после обсуждения инструкции.", "Зальман"),
+            ("Назначили Зальман 500 мг после обсуждения инструкции.", "Зальман"),
+            ("Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения.", "Амоксициллин"),
+        ] {
+            let range = (text as NSString).range(of: person)
+            let output = try PIIRedactor.redact(text, ner: [.init(range: range, label: "PER", score: 0.99)])
+            XCTAssertFalse(output.text.contains(person))
+        }
+        let recipient = "Пациент Иван получает препарат Амоксициллин 500 мг после обсуждения инструкции."
+        let source = recipient as NSString
+        let result = try PIIRedactor.redact(recipient, ner: [
+            .init(range: source.range(of: "Иван"), label: "PER", score: 0.99),
+            .init(range: source.range(of: "Амоксициллин"), label: "PER", score: 0.99),
+        ])
+        XCTAssertEqual(result.text, "Пациент [ИМЯ] получает препарат Амоксициллин 500 мг после обсуждения инструкции.")
+    }
+
     func testUTF16OffsetsIncludeEmojiAndYoWithoutTranslatingUserText() throws {
         let tokenizer = try PIIWordPieceTokenizer(vocabulary: "[PAD]\n[UNK]\n[CLS]\n[SEP]\nЁлкин\nИван\n\n")
         let text = "🙂 Ёлкин Иван"

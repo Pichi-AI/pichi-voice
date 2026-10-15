@@ -15,6 +15,12 @@ struct BrandProfileTests {
     }
 
     static func main() throws {
+        if let index = CommandLine.arguments.firstIndex(of: "--model-feed-cache-only") {
+            let expectedNamespace = CommandLine.arguments[index + 1]
+            let expectedFile = CommandLine.arguments[index + 2]
+            try self.verifyModelFeedCacheIsolation(expectedNamespace: expectedNamespace, expectedFile: expectedFile)
+            return
+        }
         let packageData = try Data(contentsOf: URL(fileURLWithPath: "Sources/Fluid/Branding/brand-package.json"))
         let packaged = try BrandPackage.decode(packageData)
         precondition(packaged.profile.appName == "Pichi Voice")
@@ -36,6 +42,7 @@ struct BrandProfileTests {
             precondition(demo.logos != nil && demo.theme != nil)
             precondition(!demo.profile.appName.contains("Pichi"))
         }
+        try self.verifyLogoVisibility(packaged)
         try self.verifyPaletteForegroundContrast(packaged)
         try self.require(try BrandPackage.decode(packaged.encoded()) == packaged)
         let valid = try JSONEncoder().encode(packaged.profile)
@@ -167,6 +174,7 @@ struct BrandProfileTests {
         precondition(AppBrand.keychainService.hasPrefix(AppBrand.bundleIdentifier))
         precondition(AppBrand.modelsDirectory.path.contains(AppBrand.bundleIdentifier))
         try self.verifyDiagnosticLogIsolation()
+        try self.verifyModelFeedCacheIsolation(expectedNamespace: "local.voice.unbundled", expectedFile: "speech-model-feed.json")
         precondition(!AppBrand.updatesEnabled && AppBrand.feedbackEndpoint == nil)
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://github.com/a/b", updatesEnabled: true).validate() }
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://attacker.invalid/a/b").validate() }
@@ -289,6 +297,36 @@ struct BrandProfileTests {
         print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections, 2 opposite-polarity rejections, 2 saturated-blend rejections and 2 readable palette checks passed")
     }
 
+    static func verifyModelFeedCacheIsolation(expectedNamespace: String, expectedFile: String) throws {
+        let identities = ["ai.pichi.voice", "ai.pichi.voice.e2e-api", "ai.pichi.voice.debug", "com.FluidApp.app"]
+        precondition(Set(identities.map { AppBrand.storageNamespace(for: $0) }).count == identities.count)
+        for identifier in identities {
+            precondition(AppBrand.storageNamespace(for: identifier) == identifier)
+        }
+        for identifier in [nil, "", ".", "..", "../FluidVoice", "bad/id", "bad\\id", "bad\u{0}id", "Новая марка"] as [String?] {
+            precondition(AppBrand.storageNamespace(for: identifier) == "local.voice.unbundled")
+        }
+        let cache = CompactSpeechModelReleaseCatalog.defaultCacheURL()!
+        precondition(AppBrand.storageNamespace == expectedNamespace)
+        precondition(cache.deletingLastPathComponent() == AppBrand.applicationSupportDirectory,
+                     "The production feed cache must use the existing installation storage boundary")
+        precondition(cache.deletingLastPathComponent().lastPathComponent == expectedNamespace,
+                     "Different Release and Debug identities must never share feed state")
+        precondition(cache.lastPathComponent == expectedFile)
+        precondition(cache.appendingPathExtension("state").deletingLastPathComponent() == AppBrand.applicationSupportDirectory)
+        precondition(cache.appendingPathExtension("lock").deletingLastPathComponent() == AppBrand.applicationSupportDirectory)
+        // Imported appearance cannot provide a storage identity or feed path.
+        let packageData = try Data(contentsOf: URL(fileURLWithPath: "Configuration/BrandExamples/sber-demo.json"))
+        let object = try JSONSerialization.jsonObject(with: packageData) as! [String: Any]
+        for forbidden in ["bundleIdentifier", "storageNamespace", "applicationSupportDirectory", "cacheURL", "cacheFolderName"] {
+            var injected = object
+            injected[forbidden] = "../FluidVoice"
+            self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: injected)) }
+        }
+        precondition(CompactSpeechModelReleaseCatalog.defaultCacheURL() == cache)
+        print("Model feed cache identity \(expectedNamespace), \(expectedFile): trusted storage and appearance isolation passed")
+    }
+
     static func verifyDiagnosticLogIsolation() throws {
         let library = FileManager.default.temporaryDirectory.appendingPathComponent("log-identity-tests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: library) }
@@ -341,6 +379,69 @@ struct BrandProfileTests {
         try self.require(try Data(contentsOf: oldLog) == sentinel)
         print("Diagnostic log identity, isolated baseline, rotation, joined queue and direct crash writes passed")
         #endif
+    }
+
+    static func verifyLogoVisibility(_ packaged: BrandPackage) throws {
+        let whiteData = try self.logoPNG(width: 8, height: 8, pixel: [255, 255, 255, 255])
+        let blackData = try self.logoPNG(width: 8, height: 8, pixel: [0, 0, 0, 255])
+        let clearData = try self.logoPNG(width: 8, height: 8, pixel: [255, 255, 255, 0])
+        let white = try BrandLogo(data: whiteData)
+        let black = try BrandLogo(data: blackData)
+        let clear = try BrandLogo(data: clearData)
+        try self.require(try white.visibleData() == whiteData)
+        try self.require(try black.visibleData() == blackData)
+        try self.require(try clear.visibleData() == nil)
+        // No opacity threshold or downsampling: a final, minimally nonzero
+        // alpha pixel is still artwork, even on the maximum allowed width.
+        let thinData = try self.logoPNG(width: 4096, height: 1, pixel: [0, 0, 0, 0], lastAlpha: 1)
+        try self.require(try BrandLogo(data: thinData).visibleData() == thinData)
+        let variants = BrandLogos(primary: white, light: black, dark: white, menuBar: black)
+        precondition(variants.visibleData(for: .primary) == whiteData)
+        precondition(variants.visibleData(for: .light) == blackData)
+        precondition(variants.visibleData(for: .dark) == whiteData)
+        precondition(variants.visibleData(for: .menuBar) == blackData)
+        precondition(variants.visibleData(for: .menuBar, fallbackToPrimary: false) == blackData)
+        let primaryOnly = BrandLogos(primary: white)
+        // Explicit-only resolution lets the native owner check its packaged
+        // distribution asset before requesting primary artwork. Imports skip
+        // that trusted-asset branch, and still obtain their primary bytes.
+        precondition(primaryOnly.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
+        precondition(primaryOnly.visibleData(for: .primary) == whiteData)
+        precondition(primaryOnly.visibleData(for: .menuBar) == whiteData)
+        let blankVariants = BrandLogos(primary: black, light: clear, dark: clear, menuBar: clear)
+        precondition(blankVariants.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
+        for role in [BrandLogos.Role.primary, .light, .dark, .menuBar] {
+            precondition(blankVariants.visibleData(for: role) == blackData)
+            precondition(BrandLogos(primary: clear).visibleData(for: role) == nil)
+        }
+        // Keep legacy blank packages readable and preserve their product copy;
+        // source resolution must request the neutral renderer fallback instead.
+        let legacy = BrandPackage(profile: packaged.profile, logos: BrandLogos(primary: clear))
+        let decoded = try BrandPackage.decode(legacy.encoded())
+        precondition(decoded.profile == packaged.profile)
+        precondition(decoded.logos?.primary == clear)
+        precondition(decoded.logos?.visibleData(for: .menuBar) == nil)
+        var invalid = try JSONSerialization.jsonObject(with: JSONEncoder().encode(white)) as! [String: Any]
+        invalid["base64"] = "invalid"
+        let invalidLogo = try JSONDecoder().decode(BrandLogo.self, from: JSONSerialization.data(withJSONObject: invalid))
+        precondition(BrandLogos(primary: invalidLogo).visibleData(for: .menuBar) == nil)
+        print("Synthetic logo alpha, original-color bytes, appearance/menu source selection and legacy blank fallback passed")
+    }
+
+    static func logoPNG(width: Int, height: Int, pixel: [UInt8], lastAlpha: UInt8? = nil) throws -> Data {
+        precondition(pixel.count == 4)
+        var pixels = Array(repeating: pixel, count: width * height).flatMap { $0 }
+        if let lastAlpha { pixels[pixels.count - 1] = lastAlpha }
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+        let output = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, image, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        return output as Data
     }
 
     static func png(width: Int, height: Int) throws -> Data {

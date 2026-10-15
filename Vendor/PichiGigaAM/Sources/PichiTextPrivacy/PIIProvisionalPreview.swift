@@ -18,9 +18,12 @@ extension PIIRedactor {
         }
         let words = try NSRegularExpression(pattern: #"[\p{L}]+|\p{N}+(?:[.,]\p{N}+)?"#).matches(in: text, range: full)
         guard !words.isEmpty else { return 0 }
-        let units = Set("мг мкг мл г mg mcg ml gram grams единиц единицы ед iu".split(separator: " ").map(String.init))
+        let units = Self.quantityUnitWords
+        let quantityUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
         // Ambiguous year/count abbreviations are not positive drug evidence.
-        let doseUnits = units.subtracting(["г", "ед", "единиц", "единицы"])
+        let doseUnits = Self.unambiguousDoseUnitWords
+        let medicationWords = try Self.medicationQualifiedWords(in: text,
+            personRanges: PIIRussianNameHeuristics.detect(text).map(\.range))
         var doseQualifiedWords: Set<NSRange> = []
         for index in words.indices where index + 2 < words.count {
             let quantity = source.substring(with: words[index + 1].range)
@@ -55,6 +58,15 @@ extension PIIRedactor {
             guard valid(span.range), span.score.isFinite, (0...1).contains(span.score) else {
                 throw TextPrivacyError.invalidSpan
             }
+            if medicationWords.contains(span.range) { continue }
+            let candidate = source.substring(with: span.range)
+            // Native token classification can label a sentence mark PER. It has
+            // no person-name letters; initials still retain their letter below.
+            if !candidate.contains(where: { $0.isLetter }) { continue }
+            let candidateWords = candidate.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            // Only an entirely known non-person span shares the durable exclusion.
+            // A span containing any unknown name fragment still waits for context.
+            if !candidateWords.isEmpty, candidateWords.allSatisfy(Self.isKnownNonPersonWord) { continue }
             if !covered(span.range) { retreat(span.range.location) }
         }
         for range in PIIRussianNameHeuristics.provisionalCandidates(text, doseQualifiedWords: doseQualifiedWords)
@@ -122,15 +134,24 @@ extension PIIRedactor {
         let numberWord = try NSRegularExpression(pattern: #"^(?:ноля|нуля|одного|одной|одним|одну|двух|двум|двумя|трех|трёх|трем|трём|тремя|четырех|четырёх|четырем|четырём|четырьмя|пяти|пятью|шести|шестью|семи|семью|восьми|восемью|девяти|девятью|десяти|десятью|одиннадцать|двенадцать|тринадцать|четырнадцать|пятнадцать|шестнадцать|семнадцать|восемнадцать|девятнадцать|двадцать|тридцать|сорок|пятьдесят|шестьдесят|семьдесят|восемьдесят|девяносто|сто|ста|двести|триста|четыреста|пятьсот|шестьсот|семьсот|восемьсот|девятьсот|тысяча|тысячи|тысяч|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand)$"#, options: [.caseInsensitive])
         let shortGrammar = Set("я и а у о в к с i we he it an".split(separator: " ").map(String.init))
         let englishSentenceStarts = Set("a an the this that these those i we you they he she it today now hello".split(separator: " ").map(String.init))
+        var confirmedQuantityUnits: Set<NSRange> = []
         for index in words.indices {
-            if covered(words[index].range) || resolvedCues.contains(where: { contains($0, words[index].range) }) { continue }
+            if covered(words[index].range) || medicationWords.contains(words[index].range) || confirmedQuantityUnits.contains(words[index].range)
+                || resolvedCues.contains(where: { contains($0, words[index].range) }) { continue }
             let word = source.substring(with: words[index].range)
             let lower = word.lowercased()
             if spokenNumbers.contains(lower) || numberWord.firstMatch(in: word, range: NSRange(location: 0, length: word.utf16.count)) != nil {
                 retreat(words[index].range.location)
             }
             if word.first?.isNumber == true {
-                let quantity = index + 1 < words.count && units.contains(source.substring(with: words[index + 1].range).lowercased())
+                let suffix = source.substring(from: NSMaxRange(words[index].range))
+                let knownDoseUnit = index + 1 < words.count && units.contains(source.substring(with: words[index + 1].range).lowercased())
+                let explicitQuantity = quantityUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count))
+                let quantity = knownDoseUnit || explicitQuantity != nil
+                if index + 1 < words.count,
+                   knownDoseUnit || explicitQuantity.map({ NSMaxRange(words[index + 1].range) <= NSMaxRange(words[index].range) + NSMaxRange($0.range) }) == true {
+                    confirmedQuantityUnits.insert(words[index + 1].range)
+                }
                 if !quantity {
                     // A preceding street/month/local-part word may already be
                     // private before a numeric continuation supplies its syntax.

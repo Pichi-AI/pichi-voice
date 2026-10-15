@@ -18,6 +18,7 @@ xcrun swiftc -parse-as-library \
     Sources/Fluid/Branding/BrandDistribution.swift \
     Sources/Fluid/UI/AppNavigationState.swift \
     Sources/Fluid/Theme/Components/FluidPageLayout.swift \
+    Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift Sources/Fluid/Services/FileLogger.swift \
     "$task_test_dir/DashboardLayout.swift" \
     Tests/PagePresentationTests.swift \
     -o "$task_test_dir/tests"

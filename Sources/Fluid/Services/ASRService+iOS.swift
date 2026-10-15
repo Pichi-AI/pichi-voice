@@ -32,6 +32,7 @@ final class ASRService: ObservableObject {
     private var residentReleaseTask: Task<Void, Never>?
     #if DEBUG
     var modelProvidersForTesting: [SettingsStore.SpeechModel: any TranscriptionProvider] = [:]
+    var meetingASRPreparationOwnerForTesting: MeetingASRPreparationOwner?
     #endif
 
     private lazy var preparationOwner = MeetingASRPreparationOwner(
@@ -336,7 +337,12 @@ final class ASRService: ObservableObject {
     func withPreparedMeetingASR<T>(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration, body: @escaping (any TranscriptionProvider) async throws -> T) async throws -> T {
         guard let lease = self.activityLease, lease.activity == .meeting else { throw MeetingASRPreparationError.invalidActivityLease }
         defer { if let release = self.deferredRelease { self.releaseExclusiveActivity(release) } }
-        return try await self.scope.run(lease: lease, attemptID: attemptID, configuration: configuration, owner: self.preparationOwner, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: body)
+        #if DEBUG
+        let owner = self.meetingASRPreparationOwnerForTesting ?? self.preparationOwner
+        #else
+        let owner = self.preparationOwner
+        #endif
+        return try await self.scope.run(lease: lease, attemptID: attemptID, configuration: configuration, owner: owner, isActiveLease: { [weak self] in self?.activityLease == $0 }, body: body)
     }
 
     func transcribeMeetingSamples(_ samples: [Float], provider: any TranscriptionProvider, languageCode: String) async throws -> ASRTranscriptionResult {

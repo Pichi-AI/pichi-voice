@@ -87,7 +87,7 @@ def configs(label, test=False, hosted=False):
             settings.update(TEST_TARGET_NAME="PichiVoiceMobile", BUNDLE_LOADER="", TEST_HOST="")
         else:
             settings.update(INFOPLIST_FILE="Sources/Mobile/Info.plist", ASSETCATALOG_COMPILER_APPICON_NAME="MobileAppIcon",
-                CURRENT_PROJECT_VERSION="4", MARKETING_VERSION="0.1.0", ENABLE_PREVIEWS="YES")
+                CURRENT_PROJECT_VERSION="5", MARKETING_VERSION="0.1.0", ENABLE_PREVIEWS="YES", PICHI_SOURCE_REVISION="unknown")
         rendered = " ".join(f"{key} = {quoted(value)};" for key, value in settings.items())
         config_ids.append(obj(label+" "+name, f"isa = XCBuildConfiguration; buildSettings = {{ {rendered} }}; name = {name};"))
     return obj(label+" configurations", f"isa = XCConfigurationList; buildConfigurations = {arr(config_ids)}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;")
@@ -110,8 +110,9 @@ test_config = configs("Mobile test", True)
 test_target = obj("PichiVoiceMobileUITests", f'isa = PBXNativeTarget; buildConfigurationList = {test_config}; buildPhases = {arr([test_sources,test_frameworks])}; buildRules = (); dependencies = {arr([dependency])}; name = PichiVoiceMobileUITests; productName = PichiVoiceMobileUITests; productReference = {test_product}; productType = "com.apple.product-type.bundle.ui-testing";')
 integration_builds = []
 integration_paths = list((ROOT / "Tests/MobileIntegrationTests").glob("*.swift"))
-portable_inference_test = ROOT / "Tests/FluidDictationIntegrationTests/MobileRegisteredModelInferenceTests.swift"
-if portable_inference_test.is_file(): integration_paths.append(portable_inference_test)
+for portable_name in ["MobileRegisteredModelInferenceTests.swift", "MeetingOwnerVoiceProfileTests.swift"]:
+    portable_test = ROOT / "Tests/FluidDictationIntegrationTests" / portable_name
+    if portable_test.is_file(): integration_paths.append(portable_test)
 for path in sorted(integration_paths):
     relative = str(path.relative_to(ROOT))
     ref = obj("Mobile integration file " + relative, f"isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {quoted(relative)}; sourceTree = SOURCE_ROOT;")

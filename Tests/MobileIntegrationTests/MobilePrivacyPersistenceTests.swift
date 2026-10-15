@@ -16,6 +16,133 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativeStablePCMHypothesisSurvivesNativeAndCoarseTimingPartitions() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await store.isInstalled() else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let context = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let track = UUID()
+        let identity = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: UUID(),
+            epochID: .init(trackID: track, ordinal: 0))
+        func batch(_ pieces: [String], identity: MeetingPCMTranscriptBatch.SpeechObservationIdentity,
+                   drift: Int64 = 0) -> MeetingPCMTranscriptBatch {
+            let rows = pieces.enumerated().map { index, text in
+                MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index * 2_000) + drift, timescale: 1_000),
+                    end: .init(value: Int64(index * 2_000 + 1_500) + drift, timescale: 1_000), sourceTrackID: track,
+                    speakerID: nil, text: text, revision: 0, status: .provisional, overlap: .none, completeness: .complete)
+            }
+            var batch = MeetingPCMTranscriptBatch(segments: rows, isComplete: false)
+            batch.speechObservationIdentity = identity
+            return batch
+        }
+        let first = "Сегодня обсуждаем планы дальнейшего тестирования распознавания речи."
+        _ = try await context.previewSpeech(batch([first], identity: identity))
+        let native = try await context.previewSpeech(batch(["Сегодня обсуждаем планы", "дальнейшего тестирования",
+            "распознавания речи. Проверим работу микрофона."], identity: identity, drift: 60))
+        XCTAssertTrue(native?.text.hasPrefix("Сегодня обсуждаем") == true)
+        let coarse = try await context.previewSpeech(batch([first + " Проверим работу микрофона. Потом сохраним результат."], identity: identity))
+        XCTAssertNotNil(coarse)
+        let nextAttempt = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: UUID(), epochID: identity.epochID)
+        let reset = try await context.previewSpeech(batch([first], identity: nextAttempt))
+        XCTAssertNil(reset)
+        _ = try await context.finish()
+        try await privacy.unload()
+    }
+
+    func testNativeExplicitMedicationContextPreservesDrugAndRedactsRecipient() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await store.isInstalled() else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let clinical = "Лекарство Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения."
+        let output = try await privacy.redactWithSpans(clinical)
+        XCTAssertEqual(output.text, clinical)
+        XCTAssertGreaterThan(output.provisionalSafeUTF16 ?? 0, (clinical as NSString).range(of: "Амоксициллин").upperBound)
+        let recipient = try await privacy.redactWithSpans("Пациент Иван Петрович Сидоров, получает препарат Амоксициллин 500 мг после обсуждения инструкции.")
+        XCTAssertFalse(recipient.text.contains("Иван")); XCTAssertFalse(recipient.text.contains("Сидоров"))
+        XCTAssertTrue(recipient.text.contains("Амоксициллин 500 мг"))
+        let ambiguous = try await privacy.redactWithSpans("Лекарство Алиса 500 мг обсуждаем переносимость терапии и схему применения.")
+        XCTAssertFalse(ambiguous.text.contains("Алиса"))
+
+        let track = UUID()
+        let rows = ["Лекарство Амоксициллин", "500 мг обсуждаем переносимость терапии и схему применения."]
+            .enumerated().map { index, text in
+                MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index * 12), timescale: 1),
+                    end: .init(value: Int64(index * 12 + 12), timescale: 1), sourceTrackID: track, speakerID: nil,
+                    text: text, revision: 0, status: .final, overlap: .none, completeness: .complete)
+            }
+        let context = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let first = try await context.redact(.init(segments: [rows[0]]))
+        XCTAssertTrue(first.segments.isEmpty); XCTAssertNil(first.livePreview)
+        let continued = try await context.redact(.init(segments: [rows[1]]))
+        XCTAssertTrue(continued.livePreview?.text.contains("Амоксициллин 500 мг") == true)
+        let final = try await context.finish()
+        XCTAssertEqual(final?.segments.map(\.id), rows.map(\.id))
+        XCTAssertEqual(final?.segments.map(\.text), rows.map(\.text))
+        try await privacy.unload()
+    }
+
+    func testNativeKnownNonPersonNERKeepsStrictPreviewAdvancingAcrossWindows() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await store.isInstalled() else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let context = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let track = UUID()
+        var previousVisible = ""
+        let texts = [
+            "Здравствуйте! Сегодня мы обсудим инструкции и посмотрим раздел с документами. После встречи запишем вопросы, которые нужно уточнить. Сайте, у вас есть.",
+            "Запишем вопросы, которые нужно уточнить. Здравствуйте!",
+            "Сегодня мы обсудим инструкции и посмотрим раздел с документами. После встречи запишем вопросы, которые нужно уточнить.",
+        ]
+        for (index, text) in texts.enumerated() {
+            let start = Int64(index * 12)
+            let row = MeetingTranscriptSegment(id: UUID(), start: .init(value: start, timescale: 1),
+                end: .init(value: start + 12, timescale: 1), sourceTrackID: track, speakerID: nil,
+                text: text, revision: 0, status: .final, overlap: .none, completeness: .complete)
+            var observation = MeetingPCMTranscriptBatch(segments: [row], isComplete: false)
+            _ = try await context.previewSpeech(observation)
+            let stable = try await context.previewSpeech(observation)
+            XCTAssertNotNil(stable, "A repeated stable hypothesis must not freeze on a known ordinary greeting")
+            observation.speechObservationIsFinal = true
+            let sealed = try await context.previewSpeech(observation)
+            XCTAssertNotNil(sealed, "Sealing must preserve the approved greeting prefix")
+            let checkpoint = try await context.redact(.init(segments: [row]))
+            let visible = checkpoint.segments.map(\.text).joined(separator: " ") + " " + (checkpoint.livePreview?.text ?? "")
+            XCTAssertGreaterThan(visible.utf16.count, previousVisible.utf16.count)
+            XCTAssertFalse(visible.contains("[ИМЯ]"))
+            previousVisible = visible
+        }
+        _ = try await context.finish()
+        try await privacy.unload()
+    }
+
+    func testNativePIIDoesNotClassifyATransientASRSpellingAsAName() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        let installed = await store.isInstalled()
+        guard installed else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let id = UUID()
+        var raw = MeetingLiveTranscriptSnapshot.empty
+        let hypotheses = ["Ддавай", "Ддавай теперь", "Давай теперь сфокусируемся на других проблемах.",
+                          "Давай теперь сфокусируемся на других проблемах. Проверим запись и условия хранения.",
+                          "Давай теперь сфокусируемся на других проблемах. Проверим запись и условия хранения."]
+        for (index, hypothesis) in hypotheses.enumerated() {
+            raw = raw.settingPartial(.init(id: id, text: hypothesis, start: 0), for: .you)
+            let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
+            let text = safe.partials[.you]?.text ?? ""
+            XCTAssertFalse(text.contains("[ИМЯ]"), "A volatile spelling must not become a personal-data mask")
+            if index == hypotheses.count - 1 { XCTAssertTrue(text.contains("Давай теперь")) }
+        }
+        try await privacy.unload()
+    }
+
     func testNativeLivePIIRetagsCompletedRowsAcrossPartialUpdates() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let models = assets.appendingPathComponent("models/privacy", isDirectory: true)
@@ -34,25 +161,31 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             let partialID = UUID()
             var raw = MeetingLiveTranscriptSnapshot.empty
             raw.utterances = [utterance]; raw.availability = .available; raw.revision = 1
-            for (index, text) in partials.enumerated() {
+            let completed = partials.last! + ". Подготовим материалы к следующей встрече и проверим условия хранения."
+            let observations = partials + [completed, completed]
+            for (index, text) in observations.enumerated() {
                 raw = raw.settingPartial(.init(id: partialID, text: text, start: 1), for: .you)
                 raw.revision += 1
                 let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
-                XCTAssertEqual(safe.utterances[0].id, utterance.id)
-                XCTAssertEqual(safe.utterances[0].start, 0); XCTAssertEqual(safe.utterances[0].end, 1)
-                XCTAssertEqual(safe.partials[.you]?.id, partialID); XCTAssertEqual(safe.partials[.you]?.start, 1)
-                XCTAssertEqual(raw.utterances[0].text, initial)
-                if index == partials.count - 1 {
-                    let joined = safe.utterances.map(\.text).joined(separator: " ") + " " + (safe.partials[.you]?.text ?? "")
-                    for value in privateWords { XCTAssertFalse(joined.contains(value)) }
-                    XCTAssertTrue(joined.contains(medication))
+                for row in safe.utterances {
+                    XCTAssertEqual(row.id, utterance.id)
+                    XCTAssertEqual(row.start, 0); XCTAssertEqual(row.end, 1)
                 }
+                if let partial = safe.partials[.you] {
+                    XCTAssertEqual(partial.id, partialID); XCTAssertEqual(partial.start, 1)
+                }
+                XCTAssertEqual(raw.utterances[0].text, initial)
+                let joined = safe.utterances.map(\.text).joined(separator: " ") + " " + (safe.partials[.you]?.text ?? "")
+                for value in privateWords { XCTAssertFalse(joined.contains(value), "Every admitted observation must be protected") }
+                if index == observations.count - 1 { XCTAssertTrue(joined.contains(medication), "Case: \(initial); safe: \(joined)") }
             }
-            raw = raw.settingPartial(nil, for: .you).inserting(.init(id: partialID, speaker: .you, text: partials.last!, start: 1, end: 4))
+            raw = raw.settingPartial(nil, for: .you).inserting(.init(id: partialID, speaker: .you, text: completed, start: 1, end: 4))
             raw.revision += 1
             let final = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
-            XCTAssertEqual(final.utterances.map(\.id), [utterance.id, partialID])
-            XCTAssertEqual(final.utterances[1].start, 1); XCTAssertEqual(final.utterances[1].end, 4)
+            XCTAssertTrue(final.utterances.allSatisfy { [utterance.id, partialID].contains($0.id) })
+            if let admitted = final.utterances.first(where: { $0.id == partialID }) {
+                XCTAssertEqual(admitted.start, 1); XCTAssertEqual(admitted.end, 4)
+            }
             XCTAssertTrue(final.partials.isEmpty)
             for value in privateWords { XCTAssertFalse(final.utterances.map(\.text).joined(separator: " ").contains(value)) }
         }

@@ -52,28 +52,28 @@ extension SettingsStore {
     var commandModeReadinessIssue: String? {
         let sourceProviderID = self.commandModeLinkedToGlobal ? self.selectedProviderID : self.commandModeSelectedProviderID
         if self.isPrivateAIProviderID(sourceProviderID) {
-            return "\(PrivateAIProviderFeature.displayName) for Command Mode is coming soon. Choose a model from a verified chat provider."
+            return PichiLocalization.format("%@ for Command Mode is coming soon. Choose a model from a verified chat provider.", PrivateAIProviderFeature.displayName)
         }
 
         let providerID = self.effectiveCommandModeProviderID
         guard !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "Command Mode needs a verified chat provider."
+            return PichiLocalization.text("Command Mode needs a verified chat provider.")
         }
 
         let model = self.effectiveCommandModeSelectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !model.isEmpty else {
-            return "Command Mode needs a selected chat model."
+            return PichiLocalization.text("Command Mode needs a selected chat model.")
         }
 
         if self.isUnsupportedCommandModeModel(model) {
-            return "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint."
+            return PichiLocalization.text("Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint.")
         }
 
         guard self.isCommandModeProviderVerified(providerID) else {
             if self.commandModeLinkedToGlobal {
-                return "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers."
+                return PichiLocalization.text("Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers.")
             }
-            return "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode."
+            return PichiLocalization.text("Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode.")
         }
 
         return nil

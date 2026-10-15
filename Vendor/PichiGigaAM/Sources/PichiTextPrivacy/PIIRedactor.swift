@@ -66,15 +66,54 @@ struct PIIDetection: Sendable {
 }
 
 public enum PIIRedactor {
+    // Canonical PAN detection and provisional admission must agree on explicit
+    // amounts. A currency unit is quantity evidence, not a drug/name qualifier.
+    static let quantityUnitPattern = #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#
+    static let quantityUnitWords = Set("мг мкг мл г mg mcg ml gram grams единиц единицы ед iu".split(separator: " ").map(String.init))
+    static let unambiguousDoseUnitWords = quantityUnitWords.subtracting(["г", "ед", "единиц", "единицы"])
     private static let boundary = #"(?<![\p{L}\p{N}])"#
     private static let end = #"(?![\p{L}\p{N}])"#
     // These are precision guards also present in the Transcribe detector. They
     // are not a name dictionary or a substitute for real token classification.
     private static let nonNames = Set("аспирин инсулин витамин пенициллин анальгин метформин оземпик лизиноприл метотрексат дофамин серотонин адреналин мелатонин кофеин никотин протеин проверь проведи изучите сделай готов хорошо спасибо здравствуйте русский английский".split(separator: " ").map(String.init))
 
+    /// Reuse the existing durable precision guard at the preview boundary too.
+    /// A known ordinary word cannot become an unresolved name solely because
+    /// the same NER evaluation labels it PER in a longer meeting context.
+    static func isKnownNonPersonWord(_ word: String) -> Bool {
+        self.nonNames.contains(word.lowercased())
+    }
+
+    /// Positive grammatical evidence, not a medication dictionary: exactly one
+    /// word explicitly introduced as a drug and immediately qualified by a dose.
+    /// Bare quantities and recipient/patient constructions grant no exclusion.
+    static func medicationQualifiedWords(in text: String, personRanges: [NSRange]) throws -> Set<NSRange> {
+        let source = text as NSString
+        let pattern = #"(?<![\p{L}\p{N}])(?:препарат(?:а|у|ом|е|ы|ов|ам|ами|ах)?|лекарств(?:о|а|у|ом|е)|drug|medication|medicine)\s*[:=]?\s+([\p{L}][\p{L}\p{M}'-]{2,63})\s+(\d{1,4}(?:[.,]\d{1,3})?)(?![\d.,])"#
+        let medication = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        let quantityUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
+        var qualified: Set<NSRange> = []
+        for match in medication.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            let wordRange = match.range(at: 1)
+            let word = source.substring(with: wordRange)
+            guard !PIIRussianNameHeuristics.hasGivenNameEvidence(word),
+                  !personRanges.contains(where: { NSIntersectionRange($0, wordRange).length > 0 }) else { continue }
+            let amount = source.substring(with: match.range(at: 2)).replacingOccurrences(of: ",", with: ".")
+            guard let value = Double(amount), value.isFinite, value > 0 else { continue }
+            let suffix = source.substring(from: NSMaxRange(match.range(at: 2)))
+            guard let unit = quantityUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count)),
+                  Self.unambiguousDoseUnitWords.contains((suffix as NSString).substring(with: unit.range)
+                    .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else { continue }
+            qualified.insert(wordRange)
+        }
+        return qualified
+    }
+
     public static func redact(_ text: String, ner: [PIINERSpan]) throws -> PIIRedactionResult {
         guard text.utf16.count <= PIIWordPieceTokenizer.maximumInputUTF16 else { throw TextPrivacyError.inputTooLong }
         var entities = try structured(text) + PIIRussianNameHeuristics.detect(text)
+        let medicationWords = try Self.medicationQualifiedWords(in: text,
+            personRanges: entities.filter { $0.kind == .person }.map(\.range))
         let utf16 = Array(text.utf16)
         for span in ner {
             guard span.range.location >= 0, span.range.length > 0,
@@ -84,11 +123,12 @@ public enum PIIRedactor {
             // News NER supplies persons only. Its LOC/ORG labels must not become
             // an address or drug-removal toggle via translated/UI label matching.
             guard span.label == "PER", span.score >= 0.5 else { continue }
+            if medicationWords.contains(span.range) { continue }
             let value = String(text[range])
             let letters = value.unicodeScalars.filter { CharacterSet.letters.contains($0) }
             guard letters.count >= 3 else { continue }
             let words = value.split(whereSeparator: { $0.isWhitespace }).map { $0.lowercased() }
-            guard !words.contains(where: { nonNames.contains($0) }) else { continue }
+            guard !words.contains(where: self.isKnownNonPersonWord) else { continue }
             if words.count == 1, letters.count < 4, span.score < 0.9 { continue }
             // Mixed alphabets inside one word are common ASR transliteration
             // debris. Separate RU/EN words are still valid mixed-language text.
@@ -171,7 +211,7 @@ public enum PIIRedactor {
     private static func paymentCards(in text: String) throws -> [PIIDetection] {
         let runs = try NSRegularExpression(pattern: boundary + #"\d{1,19}(?:[\s-]+\d{1,19})*"# + end)
         let groups = try NSRegularExpression(pattern: #"\d+"#)
-        let amountUnit = try NSRegularExpression(pattern: #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#, options: [.caseInsensitive])
+        let amountUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
         let source = text as NSString
         var result: [PIIDetection] = []
         for run in runs.matches(in: text, range: NSRange(location: 0, length: source.length)) {

@@ -67,6 +67,65 @@ final class MobileNavigationUITests: XCTestCase {
         capture("02-current-meeting")
     }
 
+    func testFastManualReturnToCaptionBottomRestoresFollowing() throws {
+        app.terminate()
+        app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let viewport = app.scrollViews["meeting.liveTranscript.viewport"]
+        let latest = app.buttons["meeting.liveTranscript.latest"]
+        XCTAssertTrue(viewport.waitForExistence(timeout: 10))
+        XCTAssertFalse(latest.waitForExistence(timeout: 1))
+        capture("caption-01-initial-following")
+        viewport.swipeDown(velocity: .fast)
+        XCTAssertTrue(latest.waitForExistence(timeout: 3))
+        capture("caption-02-reading-older-text")
+        for _ in 0..<12 where latest.exists {
+            viewport.swipeUp(velocity: .fast)
+        }
+        XCTAssertTrue(latest.waitForNonExistence(timeout: 3), "A fast finger crossing the bottom must resume following without tapping the button")
+        capture("caption-03-manual-bottom-resumed")
+        XCTAssertFalse(latest.waitForExistence(timeout: 2), "New captions must keep following after the rebound settles")
+        capture("caption-04-new-text-still-followed")
+    }
+
+    func testOwnerVoiceSettingsUseNativeRecordingStructureInBothLanguages() throws {
+        for (language, settingsTitle, appearance) in [("en", "Settings", "light"), ("ru", "Настройки", "dark")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            XCUIDevice.shared.orientation = .portrait
+            app.launch()
+            waitForOrientation(portrait: true)
+            openNavigation("settings", title: settingsTitle)
+            let recording = app.buttons["settings.recording"]
+            XCTAssertTrue(recording.waitForExistence(timeout: 5))
+            recording.tap()
+            let start = app.buttons["ownerVoice.start"]
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
+            for step in 0..<8 where !start.isHittable {
+                scroll.swipeUp()
+                capture("owner-\(language)-reveal-\(step)")
+            }
+            XCTAssertTrue(start.isHittable)
+            XCTAssertGreaterThanOrEqual(start.frame.height, 44)
+            XCTAssertEqual(start.label, language == "ru" ? "Настроить мой голос" : "Set up my voice")
+            XCTAssertTrue(app.staticTexts["ownerVoice.readingPrompt"].exists)
+            XCTAssertFalse(app.buttons["ownerVoice.save"].exists, "Save appears only after a valid sample is checked")
+            capture("owner-\(language)-\(appearance)-portrait")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            for step in 0..<5 where !start.isHittable {
+                scroll.swipeUp()
+                capture("owner-\(language)-landscape-reveal-\(step)")
+            }
+            XCTAssertTrue(start.isHittable)
+            capture("owner-\(language)-\(appearance)-landscape")
+            openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+            capture("owner-\(language)-left-settings")
+        }
+    }
+
     func testSectionNavigationSwitchesImmediatelyFromSettingsDetails() throws {
         let destinations = ["general", "recording", "models", "privacy"]
         for detail in destinations {
@@ -181,6 +240,57 @@ final class MobileNavigationUITests: XCTestCase {
         }
         XCTAssertTrue(app.staticTexts["Whisper Tiny"].waitForExistence(timeout: 5))
         capture("02-russian-dark-models")
+    }
+
+    func testWordTimedHistoryFlowsAndParticipantsWrapInBothOrientationsAndThemes() throws {
+        let fixtureID = "C2A6906B-356C-4D80-B963-E125DF244703"
+        let sentence = "Здравствуйте, давайте обсудим инструкцию. После встречи я пришлю документ."
+        for appearance in ["light", "dark"] {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            app.launchArguments = ["-PichiInterfaceLanguage", "ru", "-ThemePreference", appearance]
+            app.launch()
+            waitForOrientation(portrait: true)
+            openNavigation("history", title: "История")
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            guard meeting.waitForExistence(timeout: 5) else {
+                throw XCTSkip("Stage the synthetic WordTimingMeeting.json in the simulator meeting store")
+            }
+            meeting.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+            let first = app.buttons["transcript.speaker.00000000-0000-0000-0000-000000000065"]
+            let second = app.buttons["transcript.speaker.00000000-0000-0000-0000-000000000066"]
+            XCTAssertTrue(first.waitForExistence(timeout: 5) && second.exists)
+            XCTAssertEqual(first.frame.minY, second.frame.minY, accuracy: 2,
+                           "Participants must occupy the available width instead of one full row each")
+            capture("word-timing-\(appearance)-portrait-participants")
+            let body = app.staticTexts[sentence].firstMatch
+            XCTAssertTrue(body.waitForExistence(timeout: 5), "Canonical words must appear in one readable paragraph")
+            XCTAssertFalse(app.staticTexts["обсудим"].exists, "Each word must not become a separate display row")
+            try revealParagraphAboveNavigation(body, step: "word-timing-\(appearance)-portrait-reading")
+            capture("word-timing-\(appearance)-portrait-paragraph")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            XCTAssertTrue(body.waitForExistence(timeout: 5))
+            try revealParagraphAboveNavigation(body, step: "word-timing-\(appearance)-landscape-reading")
+            capture("word-timing-\(appearance)-landscape-paragraph")
+        }
+    }
+
+    private func revealParagraphAboveNavigation(_ paragraph: XCUIElement, step: String) throws {
+        let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
+        XCTAssertTrue(scroll.exists)
+        for attempt in 0..<6 {
+            let top = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : app.windows.firstMatch.frame.minY
+            let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.windows.firstMatch.frame.maxY
+            if paragraph.isHittable && paragraph.frame.minY >= top && paragraph.frame.maxY <= bottom { return }
+            let upwards = paragraph.frame.maxY > bottom
+            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.65 : 0.35))
+            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: upwards ? 0.35 : 0.65))
+            from.press(forDuration: 0.05, thenDragTo: to)
+            capture("\(step)-scroll-\(attempt)")
+        }
+        XCTFail("The full paragraph must be readable above the navigation controls")
     }
 
 

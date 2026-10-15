@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 @testable import FluidVoice_Debug
 import Foundation
 import XCTest
@@ -431,6 +432,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         var isReady = false
         var prepareCalls = 0
         var timedSampleCounts: [Int] = []
+        var growingPrefixFixture = false
         var releaseCalls = 0
         func releaseResidency() async { releaseCalls += 1; isReady = false }
         func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
@@ -443,14 +445,167 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
         func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
             self.timedSampleCounts.append(samples.count)
-            return (
-                ASRTranscriptionResult(text: "Scoped provider", confidence: 1),
-                [.init(text: "Scoped", start: 0.1, end: 0.4), .init(text: "provider", start: 0.4, end: 0.8)]
-            )
+            var words: [ASRWordTiming] = [.init(text: "Scoped", start: 0.1, end: 0.4), .init(text: "provider", start: 0.4, end: 0.8)]
+            if growingPrefixFixture && samples.count >= 96_000 {
+                words.append(.init(text: "grows", start: 0.8, end: 1.1))
+            }
+            return (ASRTranscriptionResult(text: words.map(\.text).joined(separator: " "), confidence: 1), words)
         }
     }
 
-    @MainActor private final class PCMPreviewObservation { var batch: MeetingPCMTranscriptBatch? }
+    @MainActor private final class PCMPreviewObservation {
+        var batch: MeetingPCMTranscriptBatch?
+        var batches: [MeetingPCMTranscriptBatch] = []
+        var checkpoints: [MeetingPCMTranscriptBatch] = []
+        var operation: Task<MeetingPCMTranscriptBatch, Error>?
+    }
+
+    private func progressiveSample(frames: Int, start: Int64) throws -> CMSampleBuffer {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000, channels: 1, interleaved: false))
+        let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)))
+        pcm.frameLength = AVAudioFrameCount(frames)
+        let data = try XCTUnwrap(pcm.floatChannelData?[0])
+        for index in 0..<frames { data[index] = 0.1 }
+        return try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm,
+            presentationTime: CMTime(value: start, timescale: 16_000))
+    }
+
+    func testProgressiveNativeScopePublishesGrowingPrefixesAndReusesFinalSealedHypothesis() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        fixture.provider.growingPrefixFixture = true
+        let attempt = UUID(); let track = UUID(); let observed = PCMPreviewObservation()
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let first = expectation(description: "First growing prefix")
+        let second = expectation(description: "Second growing prefix")
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, _ in
+                try await fixture.runtime.recognizePCM(window: window, offset: 8, trackID: track,
+                    attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                        await MainActor.run {
+                            XCTAssertTrue(fixture.owner.isClaimed, "Growing observations share one live prepared ASR scope")
+                            XCTAssertEqual(fixture.provider.releaseCalls, 0)
+                            observed.batches.append(batch)
+                            if observed.batches.count == 1 { first.fulfill() }
+                            if observed.batches.count == 2 { second.fulfill() }
+                        }
+                    })
+            }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+            failure: { _ in XCTFail("Synthetic progressive inference cannot fail") })
+        addTeardownBlock { try? await consumer.finish() }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        await fulfillment(of: [first], timeout: 3)
+        XCTAssertTrue(observed.checkpoints.isEmpty, "An unsealed observation cannot enter canonical storage")
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+        await fulfillment(of: [second], timeout: 3)
+        try await consumer.finish()
+        let final = try XCTUnwrap(observed.checkpoints.first)
+        XCTAssertEqual(observed.checkpoints.count, 1)
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [48_000, 96_000], "Empty final seal must reuse the latest inference")
+        XCTAssertEqual(fixture.provider.prepareCalls, 1)
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
+        XCTAssertFalse(fixture.owner.isClaimed)
+        XCTAssertEqual(observed.batches.count, 2)
+        XCTAssertTrue(observed.batches.allSatisfy { !$0.isComplete && $0.speakers.isEmpty })
+        XCTAssertTrue(observed.batches.flatMap(\.segments).allSatisfy { $0.status == .provisional && $0.speakerID == nil })
+        XCTAssertEqual(final.segments.map(\.id), observed.batches.last?.segments.map(\.id))
+        XCTAssertEqual(observed.batches.first?.segments.map(\.text), ["Scoped", "provider"])
+        XCTAssertEqual(observed.batches.last?.segments.map(\.text), ["Scoped", "provider", "grows"])
+        XCTAssertEqual(final.segments.map(\.text), ["Scoped", "provider", "grows"])
+        XCTAssertEqual(final.segments.map { $0.start.seconds }, [8.1, 8.4, 8.8])
+        XCTAssertTrue(final.isComplete)
+        XCTAssertTrue(final.segments.allSatisfy { $0.status == .final })
+    }
+
+    func testProgressiveNativeObserverRefusalDrainsScopeWithoutCanonicalCheckpoint() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        let attempt = UUID(); let marker = CocoaError(.userCancelled)
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, offset in
+                try await fixture.runtime.recognizePCM(window: window, offset: offset, trackID: UUID(),
+                    attemptID: attempt, configuration: fixture.configuration, preview: { _ in throw marker })
+            }, checkpoint: { _ in XCTFail("Refused preview cannot publish a canonical checkpoint") }, failure: { _ in })
+        addTeardownBlock { try? await consumer.finish() }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        do { try await consumer.finish(); XCTFail("Observer failure must terminate the consumer") }
+        catch { XCTAssertEqual(error as? CocoaError, marker) }
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [48_000])
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
+        XCTAssertFalse(fixture.owner.isClaimed)
+    }
+
+    func testProgressiveNativeCancellationJoinsObserverAndRejectsConcurrentWindow() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        let attempt = UUID(); let track = UUID(); let latch = Latch(); let observed = PCMPreviewObservation()
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let entered = expectation(description: "Cancellation-deaf observer entered")
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, offset in
+                let operation = Task {
+                    try await fixture.runtime.recognizePCM(window: window, offset: offset, trackID: track,
+                        attemptID: attempt, configuration: fixture.configuration,
+                        preview: { _ in entered.fulfill(); await latch.wait() })
+                }
+                await MainActor.run { observed.operation = operation }
+                return try await operation.value
+            }, checkpoint: { _ in XCTFail("Cancelled progressive window cannot publish") }, failure: { _ in })
+        addTeardownBlock {
+            await latch.open()
+            await MainActor.run { observed.operation?.cancel() }
+            try? await consumer.finish()
+        }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        await fulfillment(of: [entered], timeout: 3)
+        try XCTUnwrap(observed.operation).cancel()
+        XCTAssertTrue(fixture.owner.isClaimed)
+        XCTAssertEqual(fixture.provider.releaseCalls, 0, "Cancellation cannot unload while the observer is still running")
+        do {
+            _ = try await fixture.runtime.recognizePCM(samples: [0.1], offset: 1, trackID: track,
+                attemptID: attempt, configuration: fixture.configuration)
+            XCTFail("Cancelled progressive callback still owns the inference window")
+        } catch { XCTAssertEqual(error as? MeetingParakeetNemotronRuntimeError, .concurrentPCMWindow) }
+        await latch.open()
+        do { try await consumer.finish(); XCTFail("Joined cancellation cannot publish") }
+        catch is CancellationError { }
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [48_000])
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
+        XCTAssertFalse(fixture.owner.isClaimed)
+        _ = try await fixture.runtime.recognizePCM(samples: [Float](repeating: 0.1, count: 16_000), offset: 1, trackID: track,
+            attemptID: attempt, configuration: fixture.configuration)
+        XCTAssertEqual(fixture.provider.prepareCalls, 2, "A fresh window is admitted only after cancellation joins")
+    }
+
+    func testProgressiveNativePreparedScopeKeepsArtifactPinWhilePrefixesGrow() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        let attempt = UUID(); let entered = expectation(description: "Pinned scope entered")
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, offset in
+                try await fixture.runtime.recognizePCM(window: window, offset: offset, trackID: UUID(),
+                    attemptID: attempt, configuration: fixture.configuration, preview: { _ in entered.fulfill() })
+            }, checkpoint: { _ in }, failure: { _ in XCTFail("Pinned original configuration remains valid") })
+        addTeardownBlock { try? await consumer.finish() }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        await fulfillment(of: [entered], timeout: 3)
+        let changed = MeetingFinalProcessingConfiguration(asrModel: fixture.configuration.asrModel,
+            asrArtifactFingerprint: "replacement-not-admitted", languageCode: fixture.configuration.languageCode,
+            speakerLabelsEnabled: fixture.configuration.speakerLabelsEnabled)
+        do {
+            _ = try await fixture.runtime.recognizePCM(samples: [0.1], offset: 1, trackID: UUID(),
+                attemptID: attempt, configuration: changed)
+            XCTFail("A mutable artifact selection cannot enter the owned window")
+        } catch MeetingModelResidencyError.staleGrant { }
+        try await consumer.finish()
+        XCTAssertEqual(fixture.provider.prepareCalls, 1)
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [48_000])
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
+    }
+
 
     private func makeNativePCMPreviewFixture() throws -> (service: ASRService, lease: ASRActivityLease,
         provider: NativeScopeProvider, owner: MeetingASRPreparationOwner,
@@ -1321,6 +1476,37 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(bundle.evidence.units.map(\.text), ["pcm"])
     }
 
+    func testRecordedEpochPreservesNativeUtteranceTimesAndSpeakerTransition() async throws {
+        let chunk = self.makeChunk(sequence: 0, start: 100, end: 104)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track])
+        let runtime = FakeRuntime()
+        let backend = self.makeBackend(runtime: runtime)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 4)
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        runtime.diarizerFactory.segmentsByEpoch[epoch.id] = [
+            .init(slotIndex: 0, start: 0, end: 2), .init(slotIndex: 1, start: 2, end: 4)
+        ]
+        runtime.asrSession.responses = [.init(text: "Первая фраза. Second phrase.", words: [], segmentTimings: [
+            .init(text: "Первая фраза.", start: 0.2, end: 1.8), .init(text: " Second phrase.", start: 2.1, end: 3.8)
+        ])]
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["Первая фраза.", "Second phrase."])
+        XCTAssertEqual(bundle.evidence.units.map(\.precision), [.utterance, .utterance])
+        XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), [epoch.analysisInterval.start + 0.2, epoch.analysisInterval.start + 2.1])
+        XCTAssertEqual(bundle.evidence.units.map(\.analysisEnd), [epoch.analysisInterval.start + 1.8, epoch.analysisInterval.start + 3.8])
+        XCTAssertEqual(bundle.evidence.units.map(\.speaker), [
+            .assigned(.init(analysisEpochID: epoch.id, label: "slot-0")),
+            .assigned(.init(analysisEpochID: epoch.id, label: "slot-1"))
+        ])
+        XCTAssertTrue(bundle.evidence.units.allSatisfy { !$0.analysisSpanIDs.isEmpty })
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+    }
+
     func testWordSlotAmbiguityAndUnassigned() async throws {
         let chunk = self.makeChunk(sequence: 0, start: 100, end: 104)
         let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
@@ -1865,6 +2051,7 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
     struct Response {
         let text: String
         let words: [ASRWordTiming]
+        var segmentTimings: [ASRSegmentTiming] = []
     }
 
     var responses: [Response] = []
@@ -1886,7 +2073,7 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
             throw MeetingEpochMaterializationError.unreadable(spanID: "fake-asr-failure")
         }
         let response = index < self.responses.count ? self.responses[index] : Response(text: "", words: [])
-        return (await ASRTranscriptionResult(text: response.text), response.words)
+        return (ASRTranscriptionResult(text: response.text, segmentTimings: response.segmentTimings), response.words)
     }
 }
 

@@ -269,9 +269,19 @@ struct StatsHighlightsView: View {
                         AxisValueLabel {
                             if let hour = value.as(Int.self) { Text(String(format: "%02d:00", hour)) }
                         }
+                        .font(self.theme.typography.captionSmall)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                     }
                 }
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                        AxisGridLine().foregroundStyle(self.theme.palette.cardBorder)
+                        AxisTick().foregroundStyle(self.theme.palette.cardBorder)
+                        AxisValueLabel()
+                            .font(self.theme.typography.captionSmall)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                    }
+                }
                 .frame(height: 140)
                 Divider().opacity(0.4)
                 HStack(alignment: .top, spacing: 20) {

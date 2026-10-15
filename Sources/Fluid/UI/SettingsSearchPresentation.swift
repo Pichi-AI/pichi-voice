@@ -266,6 +266,7 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
         scrollView.verticalScroller?.alphaValue = 1
         scrollView.verticalScrollElasticity = .allowed
         scrollView.horizontalScrollElasticity = .none
+        self.updateNativeAppearance(for: scrollView)
 
         let hostingView = SettingsDocumentHostingView(rootView: self.hostedContent)
         hostingView.translatesAutoresizingMaskIntoConstraints = false
@@ -295,7 +296,19 @@ struct SettingsPersistentScrollView<Content: View>: NSViewRepresentable {
         }
         scrollView.verticalScroller?.isHidden = false
         scrollView.verticalScroller?.alphaValue = 1
+        self.updateNativeAppearance(for: scrollView)
         self.updateSearchScrolling(for: scrollView)
+    }
+
+    private func updateNativeAppearance(for scrollView: NSScrollView) {
+        // This AppKit viewport sits outside its hosted content's SwiftUI
+        // environment. Pair native track/knob painting with the actual palette,
+        // including live updates and portable variants with inverted surfaces.
+        let scheme = self.theme.palette.nativeColorScheme(fallback: self.theme.variant ?? self.colorScheme)
+        let appearance = BrandAppearanceController.nativeAppearance(for: scheme)
+        if scrollView.appearance?.name != appearance?.name {
+            scrollView.appearance = appearance
+        }
     }
 
     private func updateSearchScrolling(for scrollView: NSScrollView) {

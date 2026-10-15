@@ -63,6 +63,10 @@ enum PIIRussianNameHeuristics {
         word.count >= 4 && !blocked.contains(word) && matching(surname, word) && !matching(adjective, word)
     }
 
+    static func hasGivenNameEvidence(_ word: String) -> Bool {
+        self.nameLemma(word.lowercased()) != nil
+    }
+
     static func detect(_ text: String) -> [PIIDetection] {
         let source = text as NSString
         let words = token.matches(in: text, range: NSRange(location: 0, length: source.length)).map { match in
@@ -125,16 +129,32 @@ enum PIIRussianNameHeuristics {
         let words = matches.map { source.substring(with: $0.range).lowercased() }
         let shortGrammar = Set("на по за от до из со во не ни но он мы вы ты ее её я и а у о в к с".split(separator: " ").map(String.init))
         let splitEndings = Set("ву ва ве вым вых вич вичу вича вна вну вной ович евич овна евна".split(separator: " ").map(String.init))
+        let partialNamePrefixes = words.map { word in
+            word.count >= 2 && firstNames.contains(where: { $0.hasPrefix(word) })
+        }
+        let nameShapes = words.enumerated().map { index, word in
+            !blocked.contains(word) && (nameLemma(word) != nil
+                || (surnameLike(word) && !doseQualifiedWords.contains(matches[index].range))
+                || matching(patronymic, word) || splitEndings.contains(word))
+        }
         var result: [NSRange] = []
         for index in words.indices {
             let word = words[index]
             guard !blocked.contains(word), !shortGrammar.contains(word) else { continue }
-            let partialFirstName = word.count >= 2 && firstNames.contains(where: { $0.hasPrefix(word) })
+            // A dictionary prefix is unfinished evidence at the lexical edge or
+            // beside another name fragment. Once it is an isolated whole word
+            // with an ordinary continuation, it must not freeze every later
+            // sentence merely because a longer name starts with those letters.
+            let adjacentNameEvidence = [index - 1, index + 1].contains { neighbor in
+                words.indices.contains(neighbor) && (nameShapes[neighbor] || partialNamePrefixes[neighbor])
+            }
+            let personContext = index > 0 && (personTitles.contains(words[index - 1]) || nameTriggers.contains(words[index - 1]))
+            let capitalizedCandidate = source.substring(with: matches[index].range).first?.isUppercase == true
+            let partialFirstName = partialNamePrefixes[index]
+                && (index == words.count - 1 || adjacentNameEvidence || personContext || capitalizedCandidate)
             // An explicit numeric dose and unit can disambiguate surname-shaped
             // medication words. First-name and patronymic evidence still wins.
-            let candidate = nameLemma(word) != nil || partialFirstName
-                || (surnameLike(word) && !doseQualifiedWords.contains(matches[index].range))
-                || matching(patronymic, word) || splitEndings.contains(word)
+            let candidate = nameShapes[index] || partialFirstName
             guard candidate else { continue }
             var range = matches[index].range
             if splitEndings.contains(word), index > 0, !blocked.contains(words[index - 1]),

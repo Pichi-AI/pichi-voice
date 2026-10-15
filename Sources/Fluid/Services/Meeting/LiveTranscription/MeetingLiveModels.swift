@@ -23,6 +23,9 @@ nonisolated struct MeetingLiveUtterance: Identifiable, Sendable, Equatable {
     /// Session-relative seconds, derived from capture PTS — never from arrival order.
     var start: TimeInterval
     var end: TimeInterval
+    /// A contextual privacy preview can expose only part of this finalized turn.
+    /// Its original end then cannot retire the audio still waiting for safe text.
+    var hasIncompleteTextCoverage = false
 }
 
 /// `id` is minted at the turn's first partial and reused as the `MeetingLiveUtterance.id` at EOU,
@@ -31,6 +34,29 @@ nonisolated struct MeetingLivePartial: Sendable, Equatable, Identifiable {
     var id: UUID
     var text: String
     var start: TimeInterval
+    /// Upper capture bound for actually visible speech. Nil when publication cannot
+    /// safely map its text prefix back to a complete audio fragment.
+    var end: TimeInterval? = nil
+    /// Whole-word prefix repeated in consecutive observations of this same turn.
+    /// This is recognition evidence, not permission to publish unredacted text.
+    var stableUTF16Count: Int? = nil
+}
+
+/// Batch recognizers revise a growing audio prefix. Only words repeated across
+/// observations are eligible for contextual privacy inference before the turn ends.
+nonisolated enum MeetingSpeechHypothesisStability {
+    static func stableUTF16Count(previous: String, current: String) -> Int {
+        guard previous.utf16.count <= 32_768, current.utf16.count <= 32_768 else { return 0 }
+        let common = String(zip(previous, current).prefix { $0.0 == $0.1 }.map(\.0))
+        var boundary = common.startIndex
+        for index in common.indices where common[index].isWhitespace {
+            boundary = common.index(after: index)
+        }
+        // A repeated sentence terminator closes its preceding word. An open last
+        // token remains tentative even if two short hypotheses happened to match.
+        if let last = common.last, ".!?…".contains(last) { boundary = common.endIndex }
+        return common[..<boundary].utf16.count
+    }
 }
 
 /// In-memory only. Never written into `MeetingSession.transcriptSegments`, so it can never reach
@@ -68,8 +94,12 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
     /// Replaces, never appends — and drops a partial whose turn already finalized.
     func settingPartial(_ partial: MeetingLivePartial?, for speaker: MeetingLiveSpeaker) -> MeetingLiveTranscriptSnapshot {
         var copy = self
-        if let partial, !partial.text.isEmpty {
+        if var partial, !partial.text.isEmpty {
             guard !copy.finalizedTurnIDs.contains(partial.id) else { return copy }
+            if partial.stableUTF16Count == nil, let previous = copy.partials[speaker], previous.id == partial.id {
+                partial.stableUTF16Count = MeetingSpeechHypothesisStability.stableUTF16Count(
+                    previous: previous.text, current: partial.text)
+            }
             copy.partials[speaker] = partial
         } else {
             copy.partials.removeValue(forKey: speaker)
@@ -289,5 +319,383 @@ nonisolated enum MeetingLiveSampleCopy {
         }
         mono.frameLength = source.frameLength
         return mono
+    }
+}
+
+
+// MARK: - Pending capture presentation
+
+/// Visual capture progress only. These estimates are neither recognized words nor speaker
+/// evidence and never enter a MeetingSession, privacy payload, Copy or Export.
+nonisolated struct MeetingPendingSpeechToken: Identifiable, Sendable, Equatable {
+    var id: UInt64
+    var source: MeetingLiveSpeaker
+    var start: TimeInterval
+    var end: TimeInterval
+    /// Relative word-shaped width, independent of any transcript contents.
+    var widthHint: Double
+    var level: Float
+}
+
+nonisolated struct MeetingPendingSpeechSnapshot: Sendable, Equatable {
+    var tokens: [MeetingPendingSpeechToken] = []
+    var isCapturing = false
+    /// Separate from live-transcript revisions: capture progress cannot invalidate an async
+    /// privacy-filtered recognition update.
+    var revision: UInt64 = 0
+    static let empty = MeetingPendingSpeechSnapshot()
+}
+
+/// A small signal heuristic for capture animation, not a calibrated VAD. The existing Silero
+/// detector is an offline model with its own residency; this path must not load a second model.
+/// Silence, steady background and impulses do not create progress. Modulated non-speech can
+/// still resemble speech, so the UI must describe audio capture, never recognized words.
+nonisolated struct MeetingPendingSpeechProjection {
+    static let maximumTokens = 64
+    static let minimumActivityRMS: Float = 0.0042
+    static let quietWaitingSeconds: TimeInterval = 5
+    private static let cadenceResetSeconds: TimeInterval = 0.24
+
+    /// Bounded scalar evidence for the existing debug logger. No audio or transcript
+    /// content crosses this callback, including when publication is held by privacy.
+    nonisolated struct DiagnosticEvent: Sendable {
+        enum Kind: String, Sendable {
+            case created, replaced, trimmed, stopped
+            case quietWaiting = "quiet_waiting"
+            case capacityReached = "capacity_reached"
+            case reconciled, staleTranscript = "stale_transcript", capturePublished = "capture_published"
+        }
+        let kind: Kind
+        let uptime: TimeInterval
+        let source: MeetingLiveSpeaker?
+        let tokens: [MeetingPendingSpeechToken]
+        let remainingIDs: [UInt64]
+        let pendingRevision: UInt64
+        let transcriptRevision: UInt64?
+        let captionID: UUID?
+        let visibleUTF16: Int
+        let start: TimeInterval?
+        let end: TimeInterval?
+
+        var logFields: String {
+            func time(_ value: TimeInterval?) -> String {
+                value.map { String(format: "%.6f", $0) } ?? "none"
+            }
+            func tag(_ source: MeetingLiveSpeaker?) -> String {
+                switch source { case .you: "microphone"; case .them: "meeting_audio"; case nil: "all" }
+            }
+            let intervals = tokens.map { "\($0.id):\(tag($0.source)):\(time($0.start))-\(time($0.end))" }.joined(separator: ",")
+            return "event=\(kind.rawValue) eventUptime=\(time(uptime)) source=\(tag(source)) "
+                + "pendingRevision=\(pendingRevision) transcriptRevision=\(transcriptRevision.map(String.init) ?? "none") "
+                + "captionID=\(captionID?.uuidString ?? "none") visibleUTF16=\(visibleUTF16) "
+                + "coverageStart=\(time(start)) coverageEnd=\(time(end)) "
+                + "tokens=[\(intervals)] remainingIDs=[\(remainingIDs.map(String.init).joined(separator: ","))]"
+        }
+    }
+
+    private struct Track {
+        var energies: [Float] = []
+        var consecutiveActivity = 0
+        var pendingDuration: Double = 0
+        var lastEnd: Double?
+        var lastActivityEnd: Double?
+        var lastProgressEnd: Double?
+        var reportedQuietWaiting = false
+    }
+    private var tracks: [MeetingLiveSpeaker: Track] = [:]
+    private var nextID: UInt64 = 0
+    private var visibleRevision: UInt64 = 0
+    private var reportedCapacity = false
+    private let onDiagnostic: (@Sendable (DiagnosticEvent) -> Void)?
+    private(set) var snapshot = MeetingPendingSpeechSnapshot(isCapturing: true)
+
+    init(diagnostics: (@Sendable (DiagnosticEvent) -> Void)? = nil) {
+        self.onDiagnostic = diagnostics
+    }
+
+    /// Exactly one short scalar frame from admitted PCM, using its capture PTS timeline.
+    mutating func observe(source: MeetingLiveSpeaker, start: Double, end: Double,
+                          rms: Float, peak: Float, zeroCrossingRate: Float) {
+        guard self.snapshot.isCapturing, start.isFinite, end.isFinite, start >= 0,
+              end > start, end - start <= 0.05, rms.isFinite, peak.isFinite,
+              zeroCrossingRate.isFinite, rms >= 0, peak >= rms,
+              (0...1).contains(zeroCrossingRate) else { return }
+        var track = self.tracks[source] ?? Track()
+        if let lastEnd = track.lastEnd {
+            // Duplicate and late frames never mint another visual word. A capture gap resets
+            // only activity hysteresis; it does not erase audio already awaiting recognition.
+            guard start >= lastEnd - 0.000_001 else { return }
+            if start - lastEnd > 0.06 {
+                track.energies.removeAll(keepingCapacity: true)
+                track.consecutiveActivity = 0
+                track.pendingDuration = 0
+            }
+        }
+        track.lastEnd = end
+        track.energies.append(rms)
+        if track.energies.count > 12 { track.energies.removeFirst() }
+        let mean = track.energies.reduce(Float(0), +) / Float(track.energies.count)
+        let variance = track.energies.reduce(Float(0)) { $0 + ($1 - mean) * ($1 - mean) } / Float(track.energies.count)
+        let modulation = mean > 0 ? sqrt(variance) / mean : 0
+        // 40ms onset keeps ordinary quiet syllables; modulation rejects a constant fan/tone; high ZCR
+        // rejects broadband hiss. These thresholds classify an animation candidate only.
+        let candidate = rms >= Self.minimumActivityRMS && modulation >= 0.12 && zeroCrossingRate < 0.34 && peak <= max(0.02, rms * 9)
+        track.consecutiveActivity = candidate ? min(2, track.consecutiveActivity + 1) : 0
+        if track.consecutiveActivity >= 2 {
+            track.lastActivityEnd = end
+            track.pendingDuration += end - start
+            // Baseline presentation cadence: 150 words/minute, not a claim about actual words.
+            if track.pendingDuration >= 0.4 - 0.000_001 {
+                track.pendingDuration -= 0.4
+                // A short accepted bump must not keep old waves alive forever.
+                // Only sustained activity that earns a visual fragment extends its lifetime.
+                track.lastProgressEnd = end
+                track.reportedQuietWaiting = false
+                if self.snapshot.tokens.count < Self.maximumTokens {
+                    let widths: [Double] = [0.72, 1.02, 0.56, 0.88, 0.64, 1.10, 0.80]
+                    self.nextID &+= 1
+                    self.snapshot.tokens.append(MeetingPendingSpeechToken(
+                        id: self.nextID, source: source, start: max(0, end - 0.4), end: end,
+                        widthHint: widths[Int((self.nextID - 1) % UInt64(widths.count))],
+                        level: min(1, max(0.08, sqrt(rms / 0.08)))))
+                    self.snapshot.revision &+= 1
+                    self.reportedCapacity = false
+                    self.emit(.created, source: source, tokens: [self.snapshot.tokens.last!])
+                } else if !self.reportedCapacity {
+                    self.reportedCapacity = true
+                    self.emit(.capacityReached, source: source, start: start, end: end)
+                }
+            }
+        }
+        if let lastActivityEnd = track.lastActivityEnd {
+            // Unminted cadence must not accumulate across separate background bumps.
+            if end - lastActivityEnd >= Self.cadenceResetSeconds { track.pendingDuration = 0 }
+        }
+        if let lastProgressEnd = track.lastProgressEnd, end - lastProgressEnd >= Self.quietWaitingSeconds,
+           !track.reportedQuietWaiting {
+            // Silence stops minting. It does not prove the preceding speech has
+            // been recognized, rejected as noise, or admitted by privacy yet.
+            track.reportedQuietWaiting = true
+            self.emit(.quietWaiting, source: source,
+                tokens: self.snapshot.tokens.filter { $0.source == source }, start: lastProgressEnd, end: end)
+        }
+        self.tracks[source] = track
+    }
+
+    /// Recognition-based retirement uses only caller-approved, actually visible captions. PII-held words and
+    /// unavailable/empty hypotheses cannot clear captured progress. Timed closed turns remove
+    /// their own coverage. Untimed prefixes retain progress until coverage is known.
+    mutating func reconcile(visible: MeetingLiveTranscriptSnapshot) {
+        guard visible.revision > self.visibleRevision else {
+            self.emit(.staleTranscript, transcriptRevision: visible.revision)
+            return
+        }
+        self.visibleRevision = visible.revision
+        for utterance in visible.utterances where !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard !utterance.hasIncompleteTextCoverage,
+                  utterance.start.isFinite, utterance.start >= 0,
+                  utterance.end.isFinite, utterance.end > utterance.start else { continue }
+            self.applyCoverage(source: utterance.speaker, start: utterance.start, end: utterance.end,
+                captionID: utterance.id, visibleUTF16: utterance.text.utf16.count)
+        }
+        for (source, partial) in visible.partials {
+            guard partial.start.isFinite, partial.start >= 0,
+                  let end = partial.end, end.isFinite, end > partial.start,
+                  !partial.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !visible.finalizedTurnIDs.contains(partial.id),
+                  !visible.utterances.contains(where: { $0.id == partial.id }) else { continue }
+            self.applyCoverage(source: source, start: partial.start, end: end,
+                captionID: partial.id, visibleUTF16: partial.text.utf16.count)
+        }
+        let visibleUTF16 = visible.utterances.reduce(0) { $0 + $1.text.utf16.count }
+            + visible.partials.values.reduce(0) { $0 + $1.text.utf16.count }
+        self.emit(.reconciled, transcriptRevision: visible.revision, visibleUTF16: visibleUTF16)
+    }
+
+    private mutating func applyCoverage(source: MeetingLiveSpeaker, start: TimeInterval, end: TimeInterval,
+                                       captionID: UUID, visibleUTF16: Int) {
+        var removed: [MeetingPendingSpeechToken] = []
+        var trimmed: [MeetingPendingSpeechToken] = []
+        self.snapshot.tokens = self.snapshot.tokens.compactMap { token in
+            guard token.source == source, token.end > start, token.start < end else { return token }
+            if token.start + 0.000_001 >= start, token.end <= end + 0.000_001 {
+                removed.append(token)
+                return nil
+            }
+            // A word-shaped estimate can straddle a recognized boundary. Keep its
+            // uncovered part and stable identity instead of deleting other audio.
+            var retained = token
+            if start <= token.start { retained.start = min(end, token.end) }
+            else if end >= token.end { retained.end = max(start, token.start) }
+            // Coverage strictly inside an estimate cannot justify erasing either
+            // outside edge. Conservatively retain it until more text covers it.
+            if retained != token { trimmed.append(token) }
+            return retained
+        }
+        guard !removed.isEmpty || !trimmed.isEmpty else { return }
+        self.snapshot.revision &+= 1
+        self.reportedCapacity = false
+        if !removed.isEmpty {
+            self.emit(.replaced, source: source, tokens: removed, transcriptRevision: self.visibleRevision,
+                captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
+        }
+        if !trimmed.isEmpty {
+            self.emit(.trimmed, source: source, tokens: trimmed, transcriptRevision: self.visibleRevision,
+                captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end)
+        }
+    }
+
+    private func emit(_ kind: DiagnosticEvent.Kind, source: MeetingLiveSpeaker? = nil,
+                      tokens: [MeetingPendingSpeechToken] = [], transcriptRevision: UInt64? = nil,
+                      captionID: UUID? = nil, visibleUTF16: Int = 0, start: TimeInterval? = nil, end: TimeInterval? = nil) {
+        guard let onDiagnostic else { return }
+        onDiagnostic(DiagnosticEvent(kind: kind, uptime: ProcessInfo.processInfo.systemUptime,
+            source: source, tokens: tokens, remainingIDs: self.snapshot.tokens.map(\.id),
+            pendingRevision: self.snapshot.revision, transcriptRevision: transcriptRevision,
+            captionID: captionID, visibleUTF16: visibleUTF16, start: start, end: end))
+    }
+
+    mutating func stop() {
+        let removed = self.snapshot.tokens
+        self.tracks.removeAll()
+        self.snapshot.tokens.removeAll()
+        self.snapshot.isCapturing = false
+        self.snapshot.revision &+= 1
+        self.emit(.stopped, tokens: removed)
+    }
+
+}
+
+/// Synchronous metadata tee. Reads the caller-owned PCM once without retaining or copying
+/// an audio buffer, retains fixed-size scalar statistics, and coalesces main-runloop delivery.
+final nonisolated class MeetingPendingSpeechCapture: @unchecked Sendable {
+    private struct Meter {
+        var count = 0
+        var squares: Double = 0
+        var peak: Float = 0
+        var crossings = 0
+        var previous: Float = 0
+        var start: Double = 0
+        var lastEnd: Double?
+    }
+    private let lock = NSLock()
+    private let originBox: MeetingLiveOriginBox
+    private let onUpdate: @Sendable (MeetingPendingSpeechSnapshot) -> Void
+    private var projection: MeetingPendingSpeechProjection
+    private let onDiagnostic: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)?
+    private var meters: [MeetingLiveSpeaker: Meter] = [:]
+    private var publicationScheduled = false
+    private var lastPublishedRevision: UInt64 = 0
+
+    init(originBox: MeetingLiveOriginBox,
+         diagnostics: (@Sendable (MeetingPendingSpeechProjection.DiagnosticEvent) -> Void)? = nil,
+         onUpdate: @escaping @Sendable (MeetingPendingSpeechSnapshot) -> Void) {
+        self.originBox = originBox
+        self.onUpdate = onUpdate
+        self.onDiagnostic = diagnostics
+        self.projection = MeetingPendingSpeechProjection(diagnostics: diagnostics)
+    }
+
+    func offer(kind: MeetingAudioTrackKind, sampleBuffer: CMSampleBuffer) {
+        guard CMSampleBufferIsValid(sampleBuffer), CMSampleBufferDataIsReady(sampleBuffer),
+              let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee,
+              let _ = try? MeetingPCMFormatContract(formatDescription: description),
+              asbd.mFormatID == kAudioFormatLinearPCM,
+              asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0, asbd.mBitsPerChannel == 32,
+              asbd.mSampleRate.isFinite, (8_000...192_000).contains(asbd.mSampleRate),
+              (1...8).contains(asbd.mChannelsPerFrame) else { return }
+        let count = CMSampleBufferGetNumSamples(sampleBuffer)
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard count > 0, count <= 65_536, pts.isNumeric else { return }
+        let origin = self.originBox.establish(pts)
+        let start = MeetingLiveTimeConversion.sessionSeconds(pts: pts, origin: origin)
+        var needed = 0
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
+            bufferListSizeNeededOut: &needed, bufferListOut: nil, bufferListSize: 0,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil) == noErr,
+            needed > 0, needed <= 1024 else { return }
+        let allocation = UnsafeMutableRawPointer.allocate(byteCount: needed, alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { allocation.deallocate() }
+        let list = allocation.bindMemory(to: AudioBufferList.self, capacity: 1)
+        var retained: CMBlockBuffer?
+        guard CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sampleBuffer,
+            bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: needed,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: &retained) == noErr else { return }
+        let buffers = UnsafeMutableAudioBufferListPointer(list)
+        let channels = Int(asbd.mChannelsPerFrame)
+        let interleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0
+        guard buffers.count == (interleaved ? 1 : channels),
+              buffers.allSatisfy({ $0.mData != nil && Int($0.mDataByteSize) >= count * MemoryLayout<Float>.stride * (interleaved ? channels : 1) }) else { return }
+        let source: MeetingLiveSpeaker = kind == .microphone ? .you : .them
+        let schedule = self.lock.withLock { () -> Bool in
+            guard self.projection.snapshot.isCapturing else { return false }
+            var meter = self.meters[source] ?? Meter()
+            if let lastEnd = meter.lastEnd {
+                guard start >= lastEnd - 0.000_01 else { return false }
+                if start - lastEnd > 0.01 { meter = Meter() }
+            }
+            let stride = max(1, Int(asbd.mSampleRate / 8_000))
+            let bufferEnd = start + Double(count) / asbd.mSampleRate
+            for frame in Swift.stride(from: 0, to: count, by: stride) {
+                var value: Float = 0
+                for channel in 0..<channels {
+                    let data = buffers[interleaved ? 0 : channel].mData!.assumingMemoryBound(to: Float.self)
+                    value += data[interleaved ? frame * channels + channel : frame] / Float(channels)
+                }
+                guard value.isFinite else { self.meters[source] = Meter(); return false }
+                if meter.count == 0 { meter.start = start + Double(frame) / asbd.mSampleRate }
+                if meter.count > 0, (value < 0) != (meter.previous < 0) { meter.crossings += 1 }
+                meter.previous = value
+                meter.count += 1; meter.squares += Double(value) * Double(value)
+                meter.peak = max(meter.peak, abs(value))
+                let measuredEnd = min(bufferEnd, start + Double(frame + stride) / asbd.mSampleRate)
+                if measuredEnd - meter.start >= 0.02 - 0.000_001 {
+                    self.projection.observe(source: source, start: meter.start,
+                        end: measuredEnd,
+                        rms: Float(sqrt(meter.squares / Double(meter.count))), peak: meter.peak,
+                        zeroCrossingRate: Float(meter.crossings) / Float(meter.count))
+                    meter.count = 0; meter.squares = 0; meter.peak = 0; meter.crossings = 0
+                }
+            }
+            meter.lastEnd = start + Double(count) / asbd.mSampleRate
+            self.meters[source] = meter
+            return self.reservePublication()
+        }
+        if schedule { self.schedulePublication() }
+    }
+
+    func reconcile(visible: MeetingLiveTranscriptSnapshot) -> MeetingPendingSpeechSnapshot {
+        self.lock.withLock {
+            self.projection.reconcile(visible: visible)
+            return self.projection.snapshot
+        }
+    }
+
+    func stop() {
+        self.lock.withLock { self.projection.stop(); self.meters.removeAll() }
+    }
+
+    private func reservePublication() -> Bool {
+        guard !self.publicationScheduled, self.projection.snapshot.revision > self.lastPublishedRevision else { return false }
+        self.publicationScheduled = true
+        return true
+    }
+
+    private func schedulePublication() {
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) { [weak self] in
+            guard let self else { return }
+            let snapshot = self.lock.withLock {
+                self.publicationScheduled = false
+                let snapshot = self.projection.snapshot
+                self.lastPublishedRevision = snapshot.revision
+                return snapshot
+            }
+            self.onDiagnostic?(.init(kind: .capturePublished, uptime: ProcessInfo.processInfo.systemUptime,
+                source: nil, tokens: [], remainingIDs: snapshot.tokens.map(\.id), pendingRevision: snapshot.revision,
+                transcriptRevision: nil, captionID: nil, visibleUTF16: 0, start: nil, end: nil))
+            self.onUpdate(snapshot)
+        }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
     }
 }
