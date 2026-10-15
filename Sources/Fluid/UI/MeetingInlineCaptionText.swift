@@ -168,7 +168,7 @@ private final class InlineCaptionAttachment: NSTextAttachment {
     init(tokenID: UInt64) {
         self.tokenID = tokenID
         _ = Self.registerProvider
-        super.init(data: Data(), ofType: Self.contentType)
+        super.init(data: Data([0]), ofType: Self.contentType)
         allowsTextAttachmentView = true
     }
 
@@ -244,7 +244,9 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView(usingTextLayoutManager: true)
         view.isEditable = false
-        view.isSelectable = false
+        // UIKit's rich text path needs selection support for attachment views. Interaction
+        // stays disabled, so gestures continue to the enclosing SwiftUI scroll view.
+        view.isSelectable = true
         view.isScrollEnabled = false
         view.isUserInteractionEnabled = false
         view.backgroundColor = .clear

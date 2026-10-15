@@ -518,6 +518,15 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         print("[NATIVE_CAPTION] timeout=\(reason) geometry=\(String(describing: previous))")
+        for native in descendants(in: host.controller.view).compactMap({ $0 as? UITextView }) {
+            var kinds: [String] = []
+            native.attributedText.enumerateAttribute(.attachment, in: NSRange(location: 0, length: native.attributedText.length)) { value, _, _ in
+                if let attachment = value as? NSTextAttachment {
+                    kinds.append("\(type(of: attachment)) views=\(attachment.usesTextAttachmentView) type=\(attachment.fileType ?? "nil") bytes=\(attachment.contents?.count ?? -1)")
+                }
+            }
+            print("[INLINE_NATIVE] textKit2=\(native.textLayoutManager != nil) attachments=\(kinds)")
+        }
         capture(host, step: "timeout", scheme: host.controller.overrideUserInterfaceStyle == .dark ? .dark : .light)
         XCTFail(reason)
         throw CaptionNativeHost.LayoutTimeout()
