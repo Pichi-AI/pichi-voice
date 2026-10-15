@@ -180,7 +180,10 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
             host.model.width = wideWidth
             host.model.rows[0].text = "Русский и English 👩🏽‍⚕️\n"
             try await settle(host, "Explicit newline starts the next waveform at the next line") {
-                first.convert(first.bounds, to: native).minX < 3
+                guard let current = self.descendants(in: host.controller.view).first(where: {
+                    $0.accessibilityIdentifier == "meeting.inlineWave.1" && $0.window === host.window
+                }) else { return false }
+                return current.convert(current.bounds, to: native).minX < 3
             }
             capture(host, step: "inline-03-explicit-newline", scheme: scheme)
             XCTAssertFalse(host.model.rows.contains { $0.text.contains("\u{FFFC}") },
