@@ -34,21 +34,25 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
             let partialID = UUID()
             var raw = MeetingLiveTranscriptSnapshot.empty
             raw.utterances = [utterance]; raw.availability = .available; raw.revision = 1
-            for (index, text) in partials.enumerated() {
+            let completed = partials.last! + ". Подготовим материалы к следующей встрече и проверим условия хранения."
+            let observations = partials + [completed, completed]
+            for (index, text) in observations.enumerated() {
                 raw = raw.settingPartial(.init(id: partialID, text: text, start: 1), for: .you)
                 raw.revision += 1
                 let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
-                XCTAssertEqual(safe.utterances[0].id, utterance.id)
-                XCTAssertEqual(safe.utterances[0].start, 0); XCTAssertEqual(safe.utterances[0].end, 1)
-                XCTAssertEqual(safe.partials[.you]?.id, partialID); XCTAssertEqual(safe.partials[.you]?.start, 1)
-                XCTAssertEqual(raw.utterances[0].text, initial)
-                if index == partials.count - 1 {
-                    let joined = safe.utterances.map(\.text).joined(separator: " ") + " " + (safe.partials[.you]?.text ?? "")
-                    for value in privateWords { XCTAssertFalse(joined.contains(value)) }
-                    XCTAssertTrue(joined.contains(medication))
+                for row in safe.utterances {
+                    XCTAssertEqual(row.id, utterance.id)
+                    XCTAssertEqual(row.start, 0); XCTAssertEqual(row.end, 1)
                 }
+                if let partial = safe.partials[.you] {
+                    XCTAssertEqual(partial.id, partialID); XCTAssertEqual(partial.start, 1)
+                }
+                XCTAssertEqual(raw.utterances[0].text, initial)
+                let joined = safe.utterances.map(\.text).joined(separator: " ") + " " + (safe.partials[.you]?.text ?? "")
+                for value in privateWords { XCTAssertFalse(joined.contains(value), "Every admitted observation must be protected") }
+                if index == observations.count - 1 { XCTAssertTrue(joined.contains(medication)) }
             }
-            raw = raw.settingPartial(nil, for: .you).inserting(.init(id: partialID, speaker: .you, text: partials.last!, start: 1, end: 4))
+            raw = raw.settingPartial(nil, for: .you).inserting(.init(id: partialID, speaker: .you, text: completed, start: 1, end: 4))
             raw.revision += 1
             let final = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
             XCTAssertEqual(final.utterances.map(\.id), [utterance.id, partialID])
