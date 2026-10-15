@@ -193,8 +193,13 @@ extension MeetingProcessingPipeline {
                                            ?? PichiLocalization.text("In-memory transcription stopped. Completed text was preserved.")))
         }
         let consumer: any MeetingMemoryAudioConsuming
+        // Amortize sequential model preparation and voice matching without accumulating a
+        // meeting's audio. The registered runtime accepts at most 20 seconds of mono PCM.
+        // Physical strict GigaAM measured ~10.7s work per 20s, versus ~8.9s per 12s.
+        let windowSeconds: Double = 20
         if let policy = attempt.descriptor.pcmObservationPolicy, runtime.supportsProgressivePCMInput {
             consumer = try Self.makeProgressiveMemoryAudioConsumer(
+                chunkSeconds: windowSeconds,
                 initialPreviewSeconds: policy.initialSeconds, previewIntervalSeconds: policy.intervalSeconds,
                 recognize: { window, offset in
                     try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
@@ -210,7 +215,7 @@ extension MeetingProcessingPipeline {
         } else {
             // Existing injected runtimes retain their sealed input contract. A scheduling
             // preference does not falsely grant an unimplemented runtime capability.
-            consumer = try Self.makeMemoryAudioConsumer(initialChunkSeconds: 3,
+            consumer = try Self.makeMemoryAudioConsumer(chunkSeconds: windowSeconds, initialChunkSeconds: 3,
                 recognize: { samples, offset in
                     try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
                         let started = ProcessInfo.processInfo.systemUptime

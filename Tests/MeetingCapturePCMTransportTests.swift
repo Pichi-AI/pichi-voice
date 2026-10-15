@@ -350,15 +350,16 @@ struct MeetingCapturePCMTransportTests {
     static func longMeetingTransport() async throws {
         let probe = LongRunProbe()
         let consumer = try MeetingProcessingPipeline.makeMemoryAudioConsumer(
+            chunkSeconds: 20,
             recognize: { samples, start in
                 probe.recognized(samples.count, start: start)
                 return MeetingPCMTranscriptBatch(segments: [], speakers: [])
             }, checkpoint: { _ in probe.checkpointed() }, failure: { _ in probe.failed() })
-        let prototype = try sample(frames: 48_000)
+        let prototype = try sample(frames: 16_000)
         let totalFrames = 8 * 60 * 60 * 16_000
         var position = 0
-        for window in 0..<2_400 {
-            for _ in 0..<4 {
+        for window in 0..<1_440 {
+            for _ in 0..<20 {
                 var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 16_000),
                     presentationTimeStamp: CMTime(value: 1_600_000 + Int64(position), timescale: 16_000),
                     decodeTimeStamp: .invalid)
@@ -368,7 +369,7 @@ struct MeetingCapturePCMTransportTests {
                     sampleBufferOut: &copy)
                 try require(status == noErr && copy != nil, "stress PCM timing copy")
                 try require(consumer.enqueue(copy!), "eight-hour transport accepts contiguous PCM")
-                position += 48_000
+                position += 16_000
             }
             let deadline = ProcessInfo.processInfo.systemUptime + 5
             while probe.snapshot.saved <= window && ProcessInfo.processInfo.systemUptime < deadline {
@@ -378,10 +379,10 @@ struct MeetingCapturePCMTransportTests {
         }
         try await consumer.finish()
         let result = probe.snapshot
-        try require(result.frames == totalFrames && result.windows == 2_400 && result.saved == 2_400,
+        try require(result.frames == totalFrames && result.windows == 1_440 && result.saved == 1_440,
                     "eight simulated hours are consumed and checkpointed exactly once")
         try require(!result.rejected && result.contiguous, "duration does not grow the audio queue or change its timeline")
-        print("Eight-hour accelerated transport: 460800000 frames, 2400 windows, no discarded audio or queue overflow. This is synthetic transport, not an eight-hour model/device run.")
+        print("Eight-hour accelerated transport: 460800000 frames, 1440 twenty-second windows, no discarded audio or queue overflow. This is synthetic transport, not an eight-hour model/device run.")
     }
 
     static func progressiveTransport() async throws {
