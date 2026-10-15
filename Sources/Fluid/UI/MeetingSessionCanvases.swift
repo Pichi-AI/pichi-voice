@@ -400,7 +400,9 @@ struct MeetingResultCanvas: View {
     }
 
     private var speakerNames: [SessionSpeakerID: String] {
-        Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0.displayName) })
+        Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map {
+            ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
+        })
     }
 
     private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {
@@ -760,7 +762,7 @@ struct MeetingResultCanvas: View {
             if !eligibleTargets.isEmpty {
                 Menu("Merge into") {
                     ForEach(eligibleTargets) { target in
-                        Button(target.displayName) {
+                        Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
                             self.onMergeSpeakers(speaker.id, target.id)
                         }
                     }
@@ -771,12 +773,7 @@ struct MeetingResultCanvas: View {
     }
 
     private func displayName(for speaker: MeetingSessionSpeaker) -> String {
-        guard speaker.isLocalUser,
-              speaker.displayName.caseInsensitiveCompare("You") != .orderedSame
-        else {
-            return speaker.displayName
-        }
-        return PichiLocalization.format("%@ (You)", speaker.displayName)
+        MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language)
     }
 
     // Only explicitly persisted legacy ownership metadata receives the local-user treatment.
@@ -1162,7 +1159,7 @@ private struct MeetingTranscriptSegmentRow: View {
         .contextMenu {
             Menu("Reassign to") {
                 ForEach(self.reassignTargets) { target in
-                    Button(target.displayName) {
+                    Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
                         self.onReassign(target.id)
                     }
                 }

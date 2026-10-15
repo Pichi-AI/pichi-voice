@@ -1,0 +1,249 @@
+import Combine
+import SwiftUI
+
+/// The two platform Settings screens share this transaction. Only the microphone
+/// identity and existing application audio arbiter are supplied by their hosts.
+struct MeetingOwnerVoiceSettingsContent: View {
+    let microphone: MeetingMicrophoneIdentity?
+    @Environment(\.theme) private var theme
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var model: MeetingOwnerVoiceEnrollmentModel
+
+    init(audioArbiter: any MeetingAudioActivityArbitrating, microphone: MeetingMicrophoneIdentity?) {
+        self.microphone = microphone
+        self._model = StateObject(wrappedValue: MeetingOwnerVoiceEnrollmentModel(audioArbiter: audioArbiter))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
+            Label(PichiLocalization.text(self.model.hasProfile ? "Your voice is saved" : "Your voice is not set up"),
+                  systemImage: self.model.hasProfile ? "person.crop.circle.badge.checkmark" : "person.wave.2")
+                .font(self.theme.typography.bodyStrong)
+                .foregroundStyle(self.theme.palette.primaryText)
+                .accessibilityIdentifier("ownerVoice.status")
+            Text(PichiLocalization.text("Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."))
+                .font(self.theme.typography.bodySmall)
+                .foregroundStyle(self.theme.palette.secondaryText)
+            if self.model.phase == .recording || self.model.phase == .ready || !self.model.hasProfile {
+                Text(PichiLocalization.text("Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile."))
+                    .font(self.theme.typography.caption)
+                    .foregroundStyle(self.theme.palette.secondaryText)
+                Text(PichiLocalization.text("Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."))
+                    .font(self.theme.typography.body)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(self.theme.metrics.spacing.md)
+                    .background(self.theme.palette.secondaryText.opacity(0.06), in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
+                    .accessibilityIdentifier("ownerVoice.readingPrompt")
+            }
+            if self.model.phase == .recording {
+                ProgressView(value: self.model.seconds, total: MeetingOwnerVoiceEnrollmentCapture.maximumSeconds)
+                    .accessibilityLabel(PichiLocalization.text("Voice sample duration"))
+                Text(Duration.seconds(self.model.seconds).formatted(.time(pattern: .minuteSecond)))
+                    .font(self.theme.typography.caption).monospacedDigit()
+                    .accessibilityIdentifier("ownerVoice.duration")
+            } else if self.model.phase == .preparing || self.model.phase == .checking || self.model.phase == .saving {
+                ProgressView(PichiLocalization.text(self.model.phase == .checking ? "Checking voice sample…" : self.model.phase == .saving ? "Saving…" : "Preparing microphone…"))
+            } else if self.model.phase == .ready {
+                Label(PichiLocalization.text("Voice sample is ready. Save to use it in future meetings."), systemImage: "checkmark.circle")
+                    .font(self.theme.typography.bodySmall)
+            }
+            if let error = self.model.error {
+                Text(error).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.warning)
+                    .accessibilityIdentifier("ownerVoice.error")
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: self.theme.metrics.spacing.md) { self.actions }
+                VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) { self.actions }
+            }
+            .buttonStyle(.bordered)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("settings.ownerVoice")
+        .task { await self.model.refresh() }
+        .onDisappear { self.model.cancel() }
+        .onChange(of: self.scenePhase) { _, phase in
+            // System permission prompts temporarily make the scene inactive.
+            if phase == .background { self.model.cancel() }
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        if self.model.phase == .recording {
+            Button(PichiLocalization.text("Stop")) { self.model.finishRecording() }
+                .accessibilityIdentifier("ownerVoice.stop")
+            Button(PichiLocalization.text("Cancel")) { self.model.cancel() }
+                .accessibilityIdentifier("ownerVoice.cancel")
+        } else if self.model.isBusy {
+            Button(PichiLocalization.text("Cancel")) { self.model.cancel() }
+                .accessibilityIdentifier("ownerVoice.cancel")
+        } else {
+            Button(PichiLocalization.text(self.model.phase == .ready || self.model.hasProfile ? "Record again" : "Set up my voice")) {
+                self.model.start(microphone: self.microphone)
+            }.accessibilityIdentifier("ownerVoice.start")
+            if self.model.phase == .ready {
+                Button(PichiLocalization.text("Save")) { self.model.save() }
+                    .buttonStyle(.borderedProminent).accessibilityIdentifier("ownerVoice.save")
+                Button(PichiLocalization.text("Cancel")) { self.model.discardDraft() }
+                    .accessibilityIdentifier("ownerVoice.cancel")
+            }
+            if self.model.hasProfile {
+                Button(PichiLocalization.text("Delete voice profile"), role: .destructive) { self.model.showDeleteConfirmation = true }
+                    .accessibilityIdentifier("ownerVoice.delete")
+                    .confirmationDialog(PichiLocalization.text("Delete your voice profile?"), isPresented: self.$model.showDeleteConfirmation, titleVisibility: .visible) {
+                        Button(PichiLocalization.text("Delete"), role: .destructive) { self.model.delete() }
+                        Button(PichiLocalization.text("Cancel"), role: .cancel) {}
+                    } message: {
+                        Text(PichiLocalization.text("Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged."))
+                    }
+            }
+        }
+    }
+}
+
+@MainActor
+final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
+    enum Phase: Equatable { case idle, preparing, recording, checking, ready, saving }
+    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var hasProfile = false
+    @Published private(set) var seconds: Double = 0
+    @Published private(set) var error: String?
+    @Published var showDeleteConfirmation = false
+    private let audioArbiter: any MeetingAudioActivityArbitrating
+    private let service: MeetingOwnerVoiceProfileService
+    private var draft: MeetingOwnerVoiceProfileDraft?
+    private var operation: Task<Void, Never>?
+    private var stopRequested = false
+    var isBusy: Bool { self.phase != .idle && self.phase != .ready }
+
+    init(audioArbiter: any MeetingAudioActivityArbitrating, service: MeetingOwnerVoiceProfileService = .shared) {
+        self.audioArbiter = audioArbiter
+        self.service = service
+    }
+
+    func refresh() async {
+        do { self.hasProfile = try await self.service.metadata() != nil }
+        catch { self.error = Self.message(for: error) }
+    }
+
+    func start(microphone: MeetingMicrophoneIdentity?) {
+        guard self.operation == nil else { return }
+        self.error = nil; self.draft = nil; self.seconds = 0; self.stopRequested = false
+        self.phase = .preparing
+        self.operation = Task {
+            var lease: MeetingAudioActivityLease?
+            var capture: MeetingOwnerVoiceEnrollmentCapture?
+            do {
+                let acquired = try await self.audioArbiter.acquireMeetingCapture()
+                lease = acquired
+                try Task.checkCancellation()
+                let selected: MeetingMicrophoneIdentity
+                if let microphone { selected = microphone }
+                else {
+                    #if os(iOS)
+                    selected = try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
+                    #else
+                    selected = try await MeetingCaptureEngine.defaultMicrophone(preferredCoreAudioUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
+                    #endif
+                }
+                try Task.checkCancellation()
+                let active = try MeetingOwnerVoiceEnrollmentCapture()
+                capture = active
+                try await active.start(microphone: selected)
+                self.phase = .recording
+                let deadline = ContinuousClock.now.advanced(by: .seconds(25))
+                while !self.stopRequested, active.capturedSeconds < MeetingOwnerVoiceEnrollmentCapture.maximumSeconds, ContinuousClock.now < deadline {
+                    try active.checkFailure()
+                    self.seconds = active.capturedSeconds
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                self.seconds = active.capturedSeconds
+                self.phase = .checking
+                var pcm = try await active.stop(discard: false)
+                capture = nil
+                do {
+                    try Task.checkCancellation()
+                    self.draft = try await self.service.prepare(samples: pcm, sampleRate: 16_000)
+                    pcm = []
+                    try Task.checkCancellation()
+                } catch { pcm = []; throw error }
+            } catch {
+                if let capture { _ = try? await capture.stop(discard: true) }
+                self.draft = nil
+                if !(error is CancellationError) { self.error = Self.message(for: error) }
+            }
+            if let lease { await self.audioArbiter.release(lease) }
+            if Task.isCancelled { self.draft = nil; self.error = nil }
+            self.phase = self.draft == nil ? .idle : .ready
+            self.operation = nil
+        }
+    }
+
+    func finishRecording() { self.stopRequested = true }
+
+    /// The operation owns its cleanup and keeps itself alive until microphone,
+    /// PCM conversion and embedding are joined, then releases the audio lease.
+    func cancel() {
+        self.operation?.cancel()
+        if self.operation == nil { self.discardDraft() }
+    }
+
+    func discardDraft() { self.draft = nil; self.phase = .idle; self.error = nil }
+
+    func save() {
+        guard self.operation == nil, let draft = self.draft else { return }
+        self.phase = .saving
+        self.operation = Task {
+            do {
+                _ = try await self.service.save(draft)
+                self.hasProfile = true
+                self.draft = nil
+            } catch { if !(error is CancellationError) { self.error = Self.message(for: error) } }
+            self.phase = self.draft == nil ? .idle : .ready
+            self.operation = nil
+        }
+    }
+
+    func delete() {
+        guard self.operation == nil else { return }
+        self.phase = .saving
+        self.operation = Task {
+            do { try await self.service.delete(); self.hasProfile = false; self.draft = nil }
+            catch { if !(error is CancellationError) { self.error = Self.message(for: error) } }
+            self.phase = .idle
+            self.operation = nil
+        }
+    }
+
+    static func message(for error: Error) -> String {
+        if let error = error as? MeetingOwnerVoiceProfileError {
+            switch error {
+            case .invalidAudio:
+                return PichiLocalization.text("The voice sample could not be read. Please record it again.")
+            case .insufficientSpeech:
+                return PichiLocalization.text("Not enough clear speech. Read the text aloud for 15 to 20 seconds, then try again.")
+            case .inconsistentVoice:
+                return PichiLocalization.text("The sample contains different voices or too much noise. Record your voice alone in a quiet room.")
+            case .invalidProfile:
+                return PichiLocalization.text("The saved voice profile could not be read. Please set up your voice again.")
+            case .staleDraft:
+                return PichiLocalization.text("The voice profile changed while this sample was being checked. Please record it again.")
+            case .busy:
+                return PichiLocalization.text("Voice setup is already in progress. Wait for it to finish.")
+            }
+        }
+        if error is ASRActivityError || error is MeetingCoordinatorError {
+            return PichiLocalization.text("Finish the current recording or transcription before setting up your voice.")
+        }
+        if let error = error as? MeetingCaptureError {
+            switch error {
+            case .microphonePermissionDenied:
+                return PichiLocalization.text("Allow microphone access in system Settings, then try again.")
+            case .microphoneUnavailable:
+                return PichiLocalization.text("The selected microphone is unavailable. Choose an available microphone, then try again.")
+            default: break
+            }
+        }
+        return PichiLocalization.text("Voice setup could not finish. Check your microphone and connection, then try again.")
+    }
+}

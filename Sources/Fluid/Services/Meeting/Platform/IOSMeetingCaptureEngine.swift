@@ -249,7 +249,8 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     }
 }
 
-private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
+/// Shared microphone runtime, also used for explicit RAM-only voice enrollment.
+final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
     private struct OwnedInput: @unchecked Sendable {
         let buffer: AVAudioPCMBuffer
         let pts: CMTime

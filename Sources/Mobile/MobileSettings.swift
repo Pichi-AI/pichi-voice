@@ -145,6 +145,10 @@ struct MobileRecordingSettings: View {
                     Text(PichiLocalization.text("Speaker labels are added after recording."))
                 }
             }
+            Section(PichiLocalization.text("My voice")) {
+                MeetingOwnerVoiceSettingsContent(audioArbiter: AppServices.shared.meetingAudioActivityArbiter,
+                    microphone: microphones.first { $0.coreAudioUID == settings.meetingRecordingDefaults.microphoneCoreAudioUID })
+            }
             if let error { Section { Text(error).foregroundStyle(.red) } }
         }.navigationTitle(PichiLocalization.text("Recording"))
             .toolbar {

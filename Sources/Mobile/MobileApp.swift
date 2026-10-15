@@ -10,6 +10,7 @@ final class AppServices: ObservableObject {
     let meetingSessionCoordinator: MeetingSessionCoordinator
     let meetingProcessingPipeline: MeetingProcessingPipeline
     let meetingStore: any MeetingSessionStoring
+    let meetingAudioActivityArbiter: AudioActivityArbiter
     let transcriptPrivacy: PichiTranscriptPrivacyService
     @Published private(set) var isUIReady = false
     private static var didCleanExportStaging = false
@@ -40,6 +41,7 @@ final class AppServices: ObservableObject {
             try await pipeline.memoryConsumer(for: session.id, track: track, eventHandler: event)
         })
         let arbiter = AudioActivityArbiter { asr }
+        self.meetingAudioActivityArbiter = arbiter
         self.meetingSessionCoordinator = MeetingSessionCoordinator(
             store: store, capture: capture, processing: pipeline, audioArbiter: arbiter,
             preferredMicrophoneUID: { settings.meetingRecordingDefaults.microphoneCoreAudioUID },

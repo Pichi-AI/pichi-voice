@@ -425,7 +425,9 @@ struct MobileMeetingRoot: View {
     }
 
     private func transcript(_ session: MeetingSession) -> some View {
-        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map {
+            ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
+        })
         let segments = session.transcriptSegments.filter { !$0.isEcho }.enumerated().sorted {
             ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
         }.map(\.element)
@@ -514,7 +516,7 @@ struct MobileMeetingRoot: View {
         Button {
             edit = MeetingEditDraft(session: session, kind: .speaker(speaker), text: speaker.displayName)
         } label: {
-            Label(speaker.displayName, systemImage: "person.crop.circle")
+            Label(MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language), systemImage: "person.crop.circle")
                 .font(theme.typography.captionStrong)
                 .frame(maxWidth: expands ? .infinity : nil, minHeight: 44, alignment: .leading)
         }.disabled(!coordinator.isQuiescent)
