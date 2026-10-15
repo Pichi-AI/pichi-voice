@@ -34,6 +34,26 @@ nonisolated struct MeetingLivePartial: Sendable, Equatable, Identifiable {
     /// Upper capture bound for actually visible speech. Nil when publication cannot
     /// safely map its text prefix back to a complete audio fragment.
     var end: TimeInterval? = nil
+    /// Whole-word prefix repeated in consecutive observations of this same turn.
+    /// This is recognition evidence, not permission to publish unredacted text.
+    var stableUTF16Count: Int? = nil
+}
+
+/// Batch recognizers revise a growing audio prefix. Only words repeated across
+/// observations are eligible for contextual privacy inference before the turn ends.
+nonisolated enum MeetingSpeechHypothesisStability {
+    static func stableUTF16Count(previous: String, current: String) -> Int {
+        guard previous.utf16.count <= 32_768, current.utf16.count <= 32_768 else { return 0 }
+        let common = String(zip(previous, current).prefix { $0.0 == $0.1 }.map(\.0))
+        var boundary = common.startIndex
+        for index in common.indices where common[index].isWhitespace {
+            boundary = common.index(after: index)
+        }
+        // A repeated sentence terminator closes its preceding word. An open last
+        // token remains tentative even if two short hypotheses happened to match.
+        if let last = common.last, ".!?…".contains(last) { boundary = common.endIndex }
+        return common[..<boundary].utf16.count
+    }
 }
 
 /// In-memory only. Never written into `MeetingSession.transcriptSegments`, so it can never reach
@@ -71,8 +91,12 @@ nonisolated struct MeetingLiveTranscriptSnapshot: Sendable, Equatable {
     /// Replaces, never appends — and drops a partial whose turn already finalized.
     func settingPartial(_ partial: MeetingLivePartial?, for speaker: MeetingLiveSpeaker) -> MeetingLiveTranscriptSnapshot {
         var copy = self
-        if let partial, !partial.text.isEmpty {
+        if var partial, !partial.text.isEmpty {
             guard !copy.finalizedTurnIDs.contains(partial.id) else { return copy }
+            if partial.stableUTF16Count == nil, let previous = copy.partials[speaker], previous.id == partial.id {
+                partial.stableUTF16Count = MeetingSpeechHypothesisStability.stableUTF16Count(
+                    previous: previous.text, current: partial.text)
+            }
             copy.partials[speaker] = partial
         } else {
             copy.partials.removeValue(forKey: speaker)
