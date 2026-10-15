@@ -3,6 +3,7 @@
 #endif
 import CryptoKit
 import Foundation
+import NativeTextInference
 import XCTest
 
 final nonisolated class S1MiniProviderTests: XCTestCase {
@@ -241,6 +242,146 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         XCTAssertFalse(store.isInstalled())
     }
 
+    func testLongMultilingualDictationUsesExactBudgetAndPreservesEveryChunk() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine()
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let input = Array(repeating: "Распознавание длинной диктовки. Ёжик, ёлка и 🦔.\n\n漢字仮名交じり文", count: 180).joined(separator: " ")
+        #if !S1_MINI_STANDALONE_TESTS
+        XCTAssertFalse(SettingsStore.privateAIDictationTokenBudget(forInputText: input, contextTokenLimit: 4096).hasSufficientHeadroom)
+        let service = PrivateAIIntegrationService(testingProvider: provider)
+        let result = try await service.enhanceDictation(input, runtime: fixture.runtime(), context: fixture.context)
+        #else
+        let result = try await provider.enhanceDictation(input, runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095)
+        #endif
+        XCTAssertEqual(result.outputText, input)
+        let state = await engine.snapshot()
+        XCTAssertGreaterThan(state.generations, 1)
+        XCTAssertEqual(state.loads, 1)
+        XCTAssertEqual(state.context, 4096)
+        XCTAssertEqual(state.paths, [store.modelURL.path])
+        await provider.shutdownForTermination()
+    }
+
+    func testUnspacedUnicodeAndIdentifiersSurviveOutputLimitRetries() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine(outputCharacterLimit: 80)
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        for input in [String(repeating: "漢🦔е\u{301}Ё", count: 150), String(repeating: "abc123", count: 200)] {
+            let stream = ChunkStreamCapture()
+            let result = try await provider.enhanceDictation(input, runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { stream.append($0) })
+            XCTAssertEqual(result.outputText, input)
+            XCTAssertEqual(stream.fragments, [input], "Failed attempts must never stream partial or duplicated output")
+        }
+        let state = await engine.snapshot()
+        XCTAssertGreaterThan(state.outputFailures, 0)
+        await provider.shutdownForTermination()
+    }
+
+    func testLaterChunkFailurePublishesNothingAndRetiresRuntime() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine(failAt: 2)
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let stream = ChunkStreamCapture()
+        do {
+            _ = try await provider.enhanceDictation(String(repeating: "long dictation ", count: 500), runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { stream.append($0) })
+            XCTFail("A later failure must reject the entire enhancement")
+        } catch S1MiniError.verification {}
+        XCTAssertEqual(stream.fragments, [])
+        let state = await engine.snapshot()
+        XCTAssertEqual(state.generations, 2)
+        XCTAssertFalse(state.loaded)
+        let loaded = await provider.loadedModelState()
+        XCTAssertNil(loaded)
+    }
+
+    func testCancellationBetweenChunksJoinsCleanupAndQueuedUnload() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine(pauseAt: 2)
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let stream = ChunkStreamCapture()
+        let task = Task {
+            try await provider.enhanceDictation(String(repeating: "long dictation ", count: 500), runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { stream.append($0) })
+        }
+        await engine.waitUntilPaused()
+        let unload = Task { await provider.unloadCachedRuntime(reason: "queued test") }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch is CancellationError {}
+        await unload.value
+        XCTAssertEqual(stream.fragments, [])
+        let state = await engine.snapshot()
+        XCTAssertFalse(state.loaded)
+        XCTAssertFalse(state.unloadedWhileGenerating)
+        XCTAssertEqual(state.loads, 1)
+    }
+
+    func testUnsplittableOversizedGraphemeAndInputByteLimitFailWithoutPartialOutput() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine()
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let stream = ChunkStreamCapture()
+        // One grapheme cannot be split safely, even though it contains many Unicode scalars.
+        let grapheme = "е" + String(repeating: "\u{301}", count: 5000)
+        for input in [grapheme, String(repeating: "Ё", count: 4 * 1024 * 1024 + 1)] {
+            do {
+                _ = try await provider.enhanceDictation(input, runtime: fixture.runtime(context: 512), context: fixture.context, maxOutputTokens: 511, streamHandler: { stream.append($0) })
+                XCTFail("Expected bounded input failure")
+            } catch AIProcessingError.dictationExceedsAIContextWindow {}
+        }
+        XCTAssertTrue(stream.fragments.isEmpty)
+        let state = await engine.snapshot()
+        XCTAssertEqual(state.generations, 0)
+        XCTAssertFalse(state.loaded)
+    }
+
+    func testRealS1MiniLongRussianDictationThroughService() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty else {
+            throw XCTSkip("Set PICHI_S1_MINI_MODEL_PATH for real long-dictation inference.")
+        }
+        let provider = S1MiniIntegrationProvider()
+        let model = S1MiniProviderFeature.modelDescriptor
+        let runtime = PrivateAIIntegrationService.RuntimeConfiguration(
+            selectedProviderID: "s1-mini", providerKey: "s1-mini", baseURL: "", model: model.id, apiKey: "",
+            localModelPath: path, usesStablePromptPrefixKVCache: false, usesFluid1Boost: false, contextTokenLimit: 4096
+        )
+        let context = PrivateAIIntegrationService.AppContext(appName: "Synthetic long test", bundleID: "test.s1-mini", windowTitle: "", appVersion: nil)
+        let sentence = "Распознавание длинной записи продолжается. Проверяем обработку текста, сохранение предложений и правильную пунктуацию. "
+        let input = String(repeating: sentence, count: 65) + "Последняя фраза: фиолетовый самолёт."
+        do {
+            #if !S1_MINI_STANDALONE_TESTS
+            XCTAssertFalse(SettingsStore.privateAIDictationTokenBudget(forInputText: input, contextTokenLimit: 4096).hasSufficientHeadroom)
+            let service = PrivateAIIntegrationService(testingProvider: provider)
+            let result = try await service.enhanceDictation(input, runtime: runtime, context: context)
+            #else
+            let result = try await provider.enhanceDictation(input, runtime: runtime, context: context, maxOutputTokens: 4095)
+            #endif
+            XCTAssertTrue(result.outputText.contains("Распознавание"))
+            XCTAssertTrue(result.outputText.lowercased().contains("фиолетовый самолёт"), "The end of a long dictation must survive")
+            XCTAssertGreaterThan(result.outputText.count, input.count / 2)
+            XCTAssertFalse(result.outputText.contains("<think>"))
+        } catch {
+            await provider.unloadCachedRuntime(reason: "long synthetic test failure")
+            throw error
+        }
+        await provider.unloadCachedRuntime(reason: "long synthetic test complete")
+    }
+
     func testRealS1MiniEnglishAndRussianCleanup() async throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty else {
             throw XCTSkip("Set PICHI_S1_MINI_MODEL_PATH to the pinned official GGUF for native inference.")
@@ -319,6 +460,68 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         func ended() { self.didEnd = true }
     }
 
+    private final class ChunkStreamCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String] = []
+        func append(_ text: String) { self.lock.withLock { self.values.append(text) } }
+        var fragments: [String] { self.lock.withLock { self.values } }
+    }
+
+    /// Character-based fake vocabulary exercises partitioning without relying on a language heuristic.
+    private actor ChunkEngine: S1MiniInferenceEngine {
+        private(set) var isLoaded = false
+        private var loads = 0
+        private var generations = 0
+        private var context = 0
+        private var paths: [String] = []
+        private var outputFailures = 0
+        private var generating = false
+        private var unloadedWhileGenerating = false
+        private var paused = false
+        private var waiter: CheckedContinuation<Void, Never>?
+        let outputCharacterLimit: Int
+        let failAt: Int?
+        let pauseAt: Int?
+        init(outputCharacterLimit: Int = Int.max, failAt: Int? = nil, pauseAt: Int? = nil) {
+            self.outputCharacterLimit = outputCharacterLimit; self.failAt = failAt; self.pauseAt = pauseAt
+        }
+        func load(modelURL: URL, contextTokenLimit: Int) async throws {
+            self.loads += 1; self.isLoaded = true; self.context = contextTokenLimit; self.paths.append(modelURL.path)
+        }
+        func tokenCount(in text: String) async throws -> Int { max(1, text.unicodeScalars.count / 4) }
+        func generate(prompt: String, maxOutputTokens: Int, streamHandler: PrivateAIStreamHandler?) async throws -> String {
+            self.generations += 1; self.generating = true
+            defer { self.generating = false }
+            XCTAssertNil(streamHandler, "Chunk output must be staged until complete success")
+            let promptTokens = try await self.tokenCount(in: prompt)
+            XCTAssertLessThanOrEqual(promptTokens + maxOutputTokens, self.context)
+            if self.generations == self.failAt { throw S1MiniError.verification }
+            if self.generations == self.pauseAt {
+                self.paused = true; self.waiter?.resume(); self.waiter = nil
+                try await Task.sleep(for: .seconds(30))
+            }
+            let prefix = "<|im_start|>user\n" + S1MiniPrompt.controls
+            let start = prompt.range(of: prefix)!.upperBound
+            let end = prompt.range(of: "<|im_end|>", range: start..<prompt.endIndex)!.lowerBound
+            let text = String(prompt[start..<end])
+            if text.count > self.outputCharacterLimit {
+                self.outputFailures += 1
+                throw NativeTextInferenceError.outputLimitExceeded
+            }
+            return text
+        }
+        func unload() async {
+            self.unloadedWhileGenerating = self.unloadedWhileGenerating || self.generating
+            self.isLoaded = false
+        }
+        func waitUntilPaused() async {
+            if !self.paused { await withCheckedContinuation { self.waiter = $0 } }
+        }
+        func snapshot() -> (loads: Int, generations: Int, context: Int, paths: [String], outputFailures: Int, loaded: Bool, unloadedWhileGenerating: Bool) {
+            (self.loads, self.generations, self.context, self.paths, self.outputFailures, self.isLoaded, self.unloadedWhileGenerating)
+        }
+    }
+
     private actor TestEngine: S1MiniInferenceEngine {
         private(set) var isLoaded = false
         private(set) var loads = 0
@@ -341,6 +544,7 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         func load(modelURL: URL, contextTokenLimit: Int) async throws {
             self.loads += 1; self.isLoaded = true; self.lastContext = contextTokenLimit; self.lastPath = modelURL.path
         }
+        func tokenCount(in _: String) async throws -> Int { 128 }
         func generate(prompt _: String, maxOutputTokens _: Int, streamHandler: PrivateAIStreamHandler?) async throws -> String {
             self.generations += 1; self.generating = true
             self.waiter?.resume(); self.waiter = nil
