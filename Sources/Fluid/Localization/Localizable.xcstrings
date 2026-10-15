@@ -21338,23 +21338,6 @@
         }
       }
     },
-    "Local model on this Mac": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local model on this Mac"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Локальная модель на этом Mac"
-          }
-        }
-      }
-    },
     "Local models run on Mac": {
       "extractionState": "manual",
       "localizations": {
@@ -38999,19 +38982,19 @@
         }
       }
     },
-    "Transcript stays on this Mac · %@": {
+    "This local server may forward the transcript to a cloud service. Check the model and server configuration.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Transcript stays on this Mac · %@"
+            "value": "This local server may forward the transcript to a cloud service. Check the model and server configuration."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Расшифровка остаётся на этом Mac · %@"
+            "value": "Этот локальный сервер может отправлять расшифровку в облачный сервис. Проверьте настройки модели и сервера."
           }
         }
       }

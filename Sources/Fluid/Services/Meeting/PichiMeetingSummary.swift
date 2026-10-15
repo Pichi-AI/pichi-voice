@@ -331,7 +331,18 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
     var modelArtifactID: String? = nil
     var inferenceModelID: String? = nil
 
-    var isOnDevice: Bool { Self.isLoopback(self.baseURL) }
+    // A loopback address identifies the first server, not where inference runs.
+    var usesLoopbackEndpoint: Bool { Self.isLoopback(self.baseURL) }
+
+    func transcriptDestinationText(language: PichiInterfaceLanguage = PichiLocalization.language,
+                                   bundle: Bundle = .main) -> String {
+        let destination = PichiLocalization.format("Transcript will be sent to %@ · %@", language: language,
+                                                  bundle: bundle, arguments: [self.baseURL, self.modelID])
+        guard self.usesLoopbackEndpoint else { return destination }
+        return destination + "\n" + PichiLocalization.text(
+            "This local server may forward the transcript to a cloud service. Check the model and server configuration.",
+            language: language, bundle: bundle)
+    }
     var baseCacheIdentity: String {
         // Hash a canonical payload rather than delimiter-joining user-controlled values.
         // Credentials and the temporary inference alias never become persisted metadata.
@@ -359,7 +370,7 @@ nonisolated struct PichiMeetingSummaryConfiguration: Sendable {
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
               !self.modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { throw PichiMeetingSummaryError.notConfigured }
-        if !self.isOnDevice, scheme != "https" { throw PichiMeetingSummaryError.insecureEndpoint }
+        if !self.usesLoopbackEndpoint, scheme != "https" { throw PichiMeetingSummaryError.insecureEndpoint }
     }
 }
 
