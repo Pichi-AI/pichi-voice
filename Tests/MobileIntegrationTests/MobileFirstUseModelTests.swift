@@ -39,6 +39,48 @@ final class MobileFirstUseModelTests: XCTestCase {
         #endif
     }
 
+    /// Restore only the preference snapshot explicitly supplied by the physical test owner.
+    func testAuthorizedPhysicalRestoreTestPreferences() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the explicitly authorized physical device")
+        #else
+        guard let raw = ProcessInfo.processInfo.environment["PICHI_RESTORE_DEVICE_PREFERENCES"] else {
+            throw XCTSkip("Restoring real device preferences requires an explicit snapshot")
+        }
+        struct Preferences: Decodable {
+            let speechModel: String
+            let saveAudio: Bool
+            let pii: Bool
+            let speakerLabels: Bool
+        }
+        let data = Data(raw.utf8)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let expectedKeys: Set<String> = ["speechModel", "saveAudio", "pii", "speakerLabels"]
+        XCTAssertEqual(Set(object.keys), expectedKeys)
+        guard Set(object.keys) == expectedKeys else { return }
+        let preferences = try JSONDecoder().decode(Preferences.self, from: data)
+        let model = try XCTUnwrap(SettingsStore.SpeechModel(rawValue: preferences.speechModel))
+        let asr = AppServices.shared.asr
+        _ = try XCTUnwrap(asr.availableMeetingModels.first { $0 == model }, "Unsupported mobile speech model")
+        let backend = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue))
+        let installed = try await asr.modelIsInstalled(model)
+        XCTAssertTrue(installed, "Preference restoration must use an already installed model")
+        guard installed else { return }
+
+        try await asr.activateModel(model)
+        let settings = SettingsStore.shared
+        settings.meetingSaveAudio = preferences.saveAudio
+        settings.meetingPIIRedactionEnabled = preferences.pii
+        settings.meetingSpeakerLabelsEnabled = preferences.speakerLabels
+        XCTAssertEqual(settings.selectedSpeechModel, model)
+        XCTAssertEqual(settings.meetingTranscriptionBackendID, backend.id)
+        XCTAssertEqual(settings.meetingSaveAudio, preferences.saveAudio)
+        XCTAssertEqual(settings.meetingPIIRedactionEnabled, preferences.pii)
+        XCTAssertEqual(settings.meetingSpeakerLabelsEnabled, preferences.speakerLabels)
+        XCTAssertTrue(UserDefaults.standard.synchronize())
+        #endif
+    }
+
     private func settings() throws -> (SettingsStore, UserDefaults, String) {
         let name = "MobileFirstUseModelTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
