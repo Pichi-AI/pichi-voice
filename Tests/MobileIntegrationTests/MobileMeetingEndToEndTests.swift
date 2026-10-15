@@ -345,12 +345,15 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(saved?.transcriptSegments, completed.transcriptSegments)
             let payload = try MeetingSharePayload.transcript(data: MeetingTranscriptExporter.json(for: completed), title: completed.title, fileExtension: "json")
             payload.cleanup()
-            await services.asr.shutdownForTermination()
+            // Disposing one test composition must not terminate the process-shared
+            // model residency used by subsequent physical meeting probes.
+            XCTAssertNil(services.asr.activeExclusiveActivity)
+            XCTAssertFalse(services.asr.hasActiveModelPreparation)
+            await services.meetingSessionCoordinator.shutdownForTermination()
             try await privacy.unload()
         } catch {
             player.stop()
             await services.meetingSessionCoordinator.shutdownForTermination()
-            await services.asr.shutdownForTermination()
             try? await privacy.unload()
             throw error
         }
@@ -403,11 +406,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     XCTAssertEqual(file.pathExtension, "json", file.lastPathComponent)
                 }
             }
-            await microphone.shutdownForTermination()
-            await services.asr.shutdownForTermination()
+            XCTAssertNil(services.asr.activeExclusiveActivity)
+            XCTAssertFalse(services.asr.hasActiveModelPreparation)
+            await services.meetingSessionCoordinator.shutdownForTermination()
+            try await services.transcriptPrivacy.unload()
         } catch {
-            await microphone.shutdownForTermination()
-            await services.asr.shutdownForTermination()
+            await services.meetingSessionCoordinator.shutdownForTermination()
+            try? await services.transcriptPrivacy.unload()
             throw error
         }
     }
