@@ -290,6 +290,9 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func unloadCachedRuntime(reason: String) async
     func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws
     func shutdownForTermination() async
+    /// Providers with a native tokenizer or chunking own their admission budget.
+    /// The default retains the conservative single-request budget for bridge runtimes.
+    nonisolated func dictationOutputTokenLimit(for inputText: String, contextTokenLimit: Int) throws -> Int
     nonisolated func enhanceDictation(
         _ inputText: String,
         runtime: PrivateAIIntegrationService.RuntimeConfiguration,
@@ -316,6 +319,16 @@ protocol PrivateAIIntegrationProviding: Sendable {
 }
 
 extension PrivateAIIntegrationProviding {
+    nonisolated func dictationOutputTokenLimit(for inputText: String, contextTokenLimit: Int) throws -> Int {
+        let budget = SettingsStore.privateAIDictationTokenBudget(
+            forInputText: inputText, contextTokenLimit: contextTokenLimit
+        )
+        guard budget.hasSufficientHeadroom else {
+            throw AIProcessingError.dictationExceedsAIContextWindow
+        }
+        return budget.maxOutputTokens
+    }
+
     /// Providers with concurrent inference must hold their ownership gate through file mutation.
     func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws {
         await self.unloadCachedRuntime(reason: reason)
