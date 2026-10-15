@@ -20,7 +20,9 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-1")
         let timings = [ASRSegmentTiming(text: "Здравствуйте, обсудим документ.", start: 0.2, end: 3),
                        .init(text: "Я уточню результаты.", start: 3.2, end: 5.5),
-                       .init(text: "Хорошо, я вас слушаю.", start: 6, end: 9)]
+                       // Both real voice turns must meet the existing 5-second evidence
+                       // policy; a 3-second secondary response is correctly kept unknown.
+                       .init(text: "Хорошо, я вас слушаю.", start: 6, end: 11)]
         let result = ASRTranscriptionResult(text: timings.map(\.text).joined(separator: " "), segmentTimings: timings)
         let activity = [MeetingBackendSpeakerActivity(token: first, start: 0, end: 5.8),
                         .init(token: second, start: 5.8, end: 12)]
@@ -32,7 +34,7 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
             epoch: epoch, duration: 12, activity: activity, identityTokens: [first, second])
         XCTAssertEqual(units.map(\.precision), [.utterance, .utterance, .utterance])
         XCTAssertEqual(units.map(\.analysisStart), [0.2, 3.2, 6])
-        XCTAssertEqual(units.map(\.analysisEnd), [3, 5.5, 9])
+        XCTAssertEqual(units.map(\.analysisEnd), [3, 5.5, 11])
         XCTAssertEqual(units.map(\.speaker), [.assigned(first), .assigned(first), .assigned(second)])
         let batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt,
             epoch: epoch, offset: 10, duration: 12, units: units)
@@ -45,8 +47,10 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
         session.speakers = batch.speakers
         let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: batch.segments, in: session)
         XCTAssertEqual(paragraphs.count, 2, "Multiple native intervals from the same speaker remain one readable turn")
-        XCTAssertEqual(paragraphs[0].text, "Здравствуйте, обсудим документ. Я уточню результаты.")
-        XCTAssertEqual(paragraphs[1].text, "Хорошо, я вас слушаю.")
+        let firstParagraph = try XCTUnwrap(paragraphs.first)
+        let secondParagraph = try XCTUnwrap(paragraphs.dropFirst().first)
+        XCTAssertEqual(firstParagraph.text, "Здравствуйте, обсудим документ. Я уточню результаты.")
+        XCTAssertEqual(secondParagraph.text, "Хорошо, я вас слушаю.")
         XCTAssertEqual(paragraphs.flatMap(\.segments), batch.segments, "Presentation must retain canonical boundaries")
         let noIdentity = MeetingParakeetNemotronBackend.pcmUnits(result: result, words: [], epoch: epoch,
             duration: 12, activity: activity, identityTokens: [])
