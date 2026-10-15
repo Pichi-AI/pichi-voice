@@ -43,7 +43,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try tap(app.buttons["settings.recording"], "Open the ordinary recording settings")
         let start = app.buttons["ownerVoice.start"]
         try reveal(start, in: app, revision: revision)
-        let status = app.staticTexts["ownerVoice.status"]
+        let status = app.descendants(matching: .any)["ownerVoice.status"].firstMatch
         try require(status.waitForExistence(timeout: 5), "The existing owner profile status must be visible")
         // Allow the Settings transaction's asynchronous metadata refresh to settle.
         // A human profile is never deleted, replaced, or used as a synthetic test draft.
