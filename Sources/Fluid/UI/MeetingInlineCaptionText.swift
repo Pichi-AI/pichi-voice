@@ -158,13 +158,17 @@ private final class InlineCaptionContent {
 
 @MainActor
 private final class InlineCaptionAttachment: NSTextAttachment {
+    private static let contentType = "local.inline-pending-audio"
+    private static let registerProvider: Void = NSTextAttachment.registerViewProviderClass(
+        InlineCaptionAttachmentProvider.self, forFileType: contentType)
     let tokenID: UInt64
     private var root = AnyView(EmptyView())
     private weak var activeProvider: InlineCaptionAttachmentProvider?
 
     init(tokenID: UInt64) {
         self.tokenID = tokenID
-        super.init(data: nil, ofType: nil)
+        _ = Self.registerProvider
+        super.init(data: Data(), ofType: Self.contentType)
         allowsTextAttachmentView = true
     }
 
