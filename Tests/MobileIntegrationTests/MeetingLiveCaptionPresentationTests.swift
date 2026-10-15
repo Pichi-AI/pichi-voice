@@ -167,6 +167,20 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
                        "Layout compensation alone must not opt the reader back into following")
     }
 
+    func testBottomCrossingCoalescedWithNewCaptionsStillResumes() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let older = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 900, contentOffset: 450)
+        let crossed = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 950, contentOffset: 650)
+        XCTAssertTrue(crossed.followPreference(after: older, currentlyFollowing: false, userIsScrolling: true))
+        XCTAssertTrue(crossed.followPreference(after: older, currentlyFollowing: false, userIsScrolling: false),
+                      "The same genuine travel can arrive after the kinetic phase ends")
+        let overshoot = Geometry(contentBottom: 280, viewportHeight: 300, contentHeight: 950, contentOffset: 670)
+        XCTAssertTrue(crossed.followPreference(after: overshoot, currentlyFollowing: true, userIsScrolling: true))
+        let compensated = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 950, contentOffset: 500)
+        XCTAssertFalse(compensated.followPreference(after: older, currentlyFollowing: false, userIsScrolling: true),
+                       "Height compensation is not genuine finger travel toward the bottom")
+    }
+
     func testUpwardDragPausesOnlyScrollableTextAndLatestMotionKeepsFollowing() {
         typealias Geometry = MeetingCaptionScrollTracking.Geometry
         let short = Geometry(contentBottom: 100, viewportHeight: 300, contentHeight: 100, contentOffset: 0)
