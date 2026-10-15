@@ -3,11 +3,13 @@ import SwiftUI
 import UIKit
 private typealias InlineCaptionFont = UIFont
 private typealias InlineCaptionColor = UIColor
+private typealias InlineCaptionImage = UIImage
 private typealias InlineCaptionNativeView = UIView
 #else
 import AppKit
 private typealias InlineCaptionFont = NSFont
 private typealias InlineCaptionColor = NSColor
+private typealias InlineCaptionImage = NSImage
 private typealias InlineCaptionNativeView = NSView
 #endif
 
@@ -156,101 +158,103 @@ private final class InlineCaptionContent {
     }
 }
 
+/// TextKit owns word placement. The noninteractive caption view mounts the existing
+/// waveform hosts at its attachment rectangles; no animation rasterizes the paragraph.
 @MainActor
 private final class InlineCaptionAttachment: NSTextAttachment {
-    private static let contentType = "local.inline-pending-audio"
-    private static let registerProvider: Void = NSTextAttachment.registerViewProviderClass(
-        InlineCaptionAttachmentProvider.self, forFileType: contentType)
     let tokenID: UInt64
-    private var root = AnyView(EmptyView())
-    private weak var activeProvider: InlineCaptionAttachmentProvider?
-
-    init(tokenID: UInt64) {
-        self.tokenID = tokenID
-        _ = Self.registerProvider
-        super.init(data: Data([0]), ofType: Self.contentType)
-        // An unknown in-memory content type may be discarded by UIKit's data initializer.
-        // Keep the registered type explicit so TextKit asks for our live view provider.
-        fileType = Self.contentType
-        allowsTextAttachmentView = true
-    }
-
-    required init?(coder: NSCoder) { nil }
-    override var usesTextAttachmentView: Bool { true }
-    override var fileType: String? {
-        get { Self.contentType }
-        set { }
-    }
-
-    var waveformContent: AnyView { root }
-
-    func update(_ root: AnyView) {
-        self.root = root
-        activeProvider?.update(root)
-    }
-
-    override func viewProvider(for parentView: InlineCaptionNativeView?, location: any NSTextLocation,
-                               textContainer: NSTextContainer?) -> NSTextAttachmentViewProvider? {
-        let manager = textContainer?.textLayoutManager
-        // A provider's location is immutable. Retain it only while TextKit still asks for the
-        // same location; the attachment identity itself survives preceding text corrections.
-        if let activeProvider, activeProvider.parent === parentView,
-           activeProvider.textLayoutManager === manager,
-           activeProvider.location.compare(location) == .orderedSame {
-            return activeProvider
-        }
-        let provider = InlineCaptionAttachmentProvider(textAttachment: self,
-            parentView: parentView, textLayoutManager: manager, location: location)
-        provider.tracksTextAttachmentViewBounds = true
-        provider.parent = parentView
-        provider.update(root)
-        activeProvider = provider
-        return provider
-    }
-}
-
-@MainActor
-private final class InlineCaptionAttachmentProvider: NSTextAttachmentViewProvider {
-    weak var parent: InlineCaptionNativeView?
-    private var root = AnyView(EmptyView())
     #if os(iOS)
     private var host: UIHostingController<AnyView>?
     #else
     private var host: NSHostingView<AnyView>?
     #endif
+    private var root = AnyView(EmptyView())
+
+    init(tokenID: UInt64) {
+        self.tokenID = tokenID
+        super.init(data: nil, ofType: nil)
+        allowsTextAttachmentView = false
+    }
+
+    required init?(coder: NSCoder) { nil }
 
     func update(_ root: AnyView) {
         self.root = root
         host?.rootView = root
     }
 
-    override func loadView() {
-        if let attachment = textAttachment as? InlineCaptionAttachment { root = attachment.waveformContent }
+    var waveformView: InlineCaptionNativeView {
         #if os(iOS)
+        if let host { return host.view }
         let host = UIHostingController(rootView: root)
         host.view.backgroundColor = .clear
         host.view.isUserInteractionEnabled = false
         host.view.isAccessibilityElement = false
-        host.view.accessibilityIdentifier = (textAttachment as? InlineCaptionAttachment)
-            .map { "meeting.inlineWave.\($0.tokenID)" }
+        host.view.accessibilityIdentifier = "meeting.inlineWave.\(tokenID)"
         self.host = host
-        view = host.view
+        return host.view
         #else
+        if let host { return host }
         let host = NSHostingView(rootView: root)
         host.setAccessibilityElement(false)
-        host.setAccessibilityIdentifier((textAttachment as? InlineCaptionAttachment)
-            .map { "meeting.inlineWave.\($0.tokenID)" })
+        host.setAccessibilityIdentifier("meeting.inlineWave.\(tokenID)")
         self.host = host
-        view = host
+        return host
         #endif
     }
 
-    override func attachmentBounds(for attributes: [NSAttributedString.Key: Any],
-                                   location: any NSTextLocation, textContainer: NSTextContainer?,
-                                   proposedLineFragment: CGRect, position: CGPoint) -> CGRect {
-        textAttachment?.bounds ?? .zero
+    override func image(forBounds bounds: CGRect, attributes: [NSAttributedString.Key: Any],
+                        location: any NSTextLocation, textContainer: NSTextContainer?) ->
+        InlineCaptionImage? { nil }
+}
+
+@MainActor
+private final class InlineCaptionWavePlacement {
+    private var displayed: [UInt64: InlineCaptionAttachment] = [:]
+
+    func layout(in view: InlineCaptionNativeView, manager: NSTextLayoutManager?, text: NSAttributedString) {
+        guard let manager, let content = manager.textContentManager else { return }
+        manager.ensureLayout(for: content.documentRange)
+        var retained: [UInt64: InlineCaptionAttachment] = [:]
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            guard let attachment = value as? InlineCaptionAttachment,
+                  let location = content.location(content.documentRange.location, offsetBy: range.location),
+                  let fragment = manager.textLayoutFragment(for: location) else { return }
+            let local = fragment.frameForTextAttachment(at: location)
+            guard local.width > 0, local.height > 0 else { return }
+            let rect = local.offsetBy(dx: fragment.layoutFragmentFrame.minX,
+                                      dy: fragment.layoutFragmentFrame.minY)
+            let waveform = attachment.waveformView
+            if waveform.superview !== view { view.addSubview(waveform) }
+            if waveform.frame != rect { waveform.frame = rect }
+            retained[attachment.tokenID] = attachment
+        }
+        for (id, attachment) in displayed where retained[id] == nil {
+            attachment.waveformView.removeFromSuperview()
+        }
+        displayed = retained
     }
 }
+
+#if os(iOS)
+@MainActor
+private final class InlineCaptionTextView: UITextView {
+    private let waves = InlineCaptionWavePlacement()
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        waves.layout(in: self, manager: textLayoutManager, text: attributedText)
+    }
+}
+#else
+@MainActor
+private final class InlineCaptionTextView: NSTextView {
+    private let waves = InlineCaptionWavePlacement()
+    override func layout() {
+        super.layout()
+        waves.layout(in: self, manager: textLayoutManager, text: attributedString())
+    }
+}
+#endif
 
 #if os(iOS)
 private struct InlineCaptionNativeText: UIViewRepresentable {
@@ -258,11 +262,11 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
     func makeCoordinator() -> InlineCaptionContent { InlineCaptionContent() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView(usingTextLayoutManager: true)
+        let view = InlineCaptionTextView(usingTextLayoutManager: true)
         view.isEditable = false
         view.isSelectable = false
         view.isScrollEnabled = false
-        view.isUserInteractionEnabled = true
+        view.isUserInteractionEnabled = false
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
@@ -276,6 +280,7 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         if let text = context.coordinator.attributedText(configuration) { view.attributedText = text }
+        view.setNeedsLayout()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView view: UITextView, context: Context) -> CGSize? {
@@ -292,7 +297,7 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
     func makeCoordinator() -> InlineCaptionContent { InlineCaptionContent() }
 
     func makeNSView(context: Context) -> NSTextView {
-        let view = NSTextView(usingTextLayoutManager: true)
+        let view = InlineCaptionTextView(usingTextLayoutManager: true)
         view.isEditable = false
         view.isSelectable = false
         view.isRichText = true
@@ -311,6 +316,7 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
 
     func updateNSView(_ view: NSTextView, context: Context) {
         if let text = context.coordinator.attributedText(configuration) { view.textStorage?.setAttributedString(text) }
+        view.needsLayout = true
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: NSTextView, context: Context) -> CGSize? {
