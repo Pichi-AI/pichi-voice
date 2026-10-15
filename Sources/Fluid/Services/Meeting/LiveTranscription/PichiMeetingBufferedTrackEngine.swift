@@ -20,7 +20,8 @@ nonisolated struct PichiMeetingCaptionRecognition: Sendable {
     /// A growing input buffer is not word coverage. Preserve actual provider
     /// intervals when present; otherwise show the hypothesis without retiring waves.
     func nativeCoverage(sampleCount: Int, sampleRate: Double) -> Range<TimeInterval>? {
-        guard sampleCount > 0, sampleRate.isFinite, sampleRate > 0 else { return nil }
+        guard sampleCount > 0, sampleRate.isFinite, sampleRate > 0,
+              self.words.count <= 8192, self.segmentTimings.count <= 8192 else { return nil }
         let duration = Double(sampleCount) / sampleRate
         let wordSegments = self.words.map { ASRSegmentTiming(text: $0.text, start: $0.start, end: $0.end) }
         let words = ASRSegmentTiming.validated(wordSegments, text: self.text, duration: duration)
