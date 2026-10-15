@@ -272,14 +272,27 @@ private final class InlineCaptionWavePlacement {
     func layout(in view: InlineCaptionNativeView, manager: NSTextLayoutManager?, text: NSAttributedString?,
                 receipt: InlineCaptionRenderReceipt?) {
         guard let text, let manager, let content = manager.textContentManager else {
+            var removedIDs: [UInt64] = []
+            if let text {
+                var present: [UInt64: InlineCaptionAttachment] = [:]
+                text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+                    guard let attachment = value as? InlineCaptionAttachment,
+                          displayed[attachment.tokenID] === attachment else { return }
+                    present[attachment.tokenID] = attachment
+                }
+                removedIDs = displayed.keys.filter { present[$0] == nil }.sorted()
+                for id in removedIDs { displayed[id]?.waveformView.removeFromSuperview() }
+                displayed = present
+            }
             if let receipt {
-                // An unavailable layout keeps its existing hosts. Report those actual
-                // mounted views rather than implying they disappeared from the screen.
+                // An unavailable layout keeps only still-present hosts. Report those
+                // mounted views separately from attachment removal and missing geometry.
                 let mounted = displayed.sorted { $0.key < $1.key }
                     .prefix(MeetingPendingSpeechProjection.maximumTokens)
                     .map { Placement(id: $0.key, bounds: $0.value.waveformView.frame) }
                 logLayout(receipt: receipt, ready: false, bounds: view.bounds, placements: mounted,
-                    missingIDs: receipt.pendingIDs.filter { displayed[$0] == nil })
+                    missingIDs: receipt.pendingIDs.filter { displayed[$0] == nil },
+                    removedIDs: Array(removedIDs.prefix(MeetingPendingSpeechProjection.maximumTokens)))
             }
             return
         }
@@ -288,6 +301,16 @@ private final class InlineCaptionWavePlacement {
         var placements: [Placement] = []
         var missingIDs: [UInt64] = []
         let captureDiagnostics = receipt != nil
+        func retainExistingPlacement(_ attachment: InlineCaptionAttachment) {
+            // A transient TextKit miss is not text replacement. Preserve only the
+            // exact host still represented by this attachment, never a reused ID.
+            guard displayed[attachment.tokenID] === attachment,
+                  attachment.waveformView.superview === view else { return }
+            retained[attachment.tokenID] = attachment
+            if captureDiagnostics, placements.count < MeetingPendingSpeechProjection.maximumTokens {
+                placements.append(Placement(id: attachment.tokenID, bounds: attachment.waveformView.frame))
+            }
+        }
         text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, range, _ in
             guard let attachment = value as? InlineCaptionAttachment else { return }
             guard let location = content.location(content.documentRange.location, offsetBy: range.location),
@@ -295,6 +318,7 @@ private final class InlineCaptionWavePlacement {
                 if captureDiagnostics, missingIDs.count < MeetingPendingSpeechProjection.maximumTokens {
                     missingIDs.append(attachment.tokenID)
                 }
+                retainExistingPlacement(attachment)
                 return
             }
             let local = fragment.frameForTextAttachment(at: location)
@@ -302,6 +326,7 @@ private final class InlineCaptionWavePlacement {
                 if captureDiagnostics, missingIDs.count < MeetingPendingSpeechProjection.maximumTokens {
                     missingIDs.append(attachment.tokenID)
                 }
+                retainExistingPlacement(attachment)
                 return
             }
             let rect = local.offsetBy(dx: fragment.layoutFragmentFrame.minX,
@@ -314,25 +339,31 @@ private final class InlineCaptionWavePlacement {
                 placements.append(Placement(id: attachment.tokenID, bounds: rect))
             }
         }
-        for (id, attachment) in displayed where retained[id] == nil {
+        let removedIDs = displayed.compactMap { id, attachment in
+            retained[id] !== attachment ? id : nil
+        }.sorted()
+        for id in removedIDs {
+            guard let attachment = displayed[id] else { continue }
             attachment.waveformView.removeFromSuperview()
         }
         displayed = retained
-        logLayout(receipt: receipt, ready: true, bounds: view.bounds, placements: placements, missingIDs: missingIDs)
+        logLayout(receipt: receipt, ready: true, bounds: view.bounds, placements: placements,
+            missingIDs: missingIDs, removedIDs: Array(removedIDs.prefix(MeetingPendingSpeechProjection.maximumTokens)))
     }
 
     private func logLayout(receipt: InlineCaptionRenderReceipt?, ready: Bool, bounds: CGRect,
-                           placements: [Placement], missingIDs: [UInt64]) {
+                           placements: [Placement], missingIDs: [UInt64], removedIDs: [UInt64] = []) {
         guard let receipt else { return }
         let current = LayoutReceipt(input: receipt, ready: ready, bounds: bounds,
             placements: placements, missingIDs: missingIDs)
-        guard current != lastLayoutReceipt else { return }
+        guard current != lastLayoutReceipt || !removedIDs.isEmpty else { return }
         lastLayoutReceipt = current
         let eventTime = ProcessInfo.processInfo.systemUptime
         DebugLogger.shared.logLazy(level: .debug, source: "MeetingPendingSpeech") {
             let mounted = placements.map { "\($0.id):\($0.bounds)" }.joined(separator: ",")
             return "inline_layout.changed t=\(eventTime) \(receipt.fields) layoutReady=\(ready) " +
-                "viewBounds=\(bounds) mountedIDs=\(placements.map(\.id)) mountedBounds=[\(mounted)] missingIDs=\(missingIDs)"
+                "viewBounds=\(bounds) mountedIDs=\(placements.map(\.id)) mountedBounds=[\(mounted)] " +
+                "missingIDs=\(missingIDs) removedIDs=\(removedIDs)"
         }
     }
 }
