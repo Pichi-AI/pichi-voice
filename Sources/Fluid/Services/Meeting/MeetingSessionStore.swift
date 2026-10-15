@@ -58,7 +58,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // This canonical manifest is also the strict capture checkpoint. Formatting every
+        // growing transcript adds sorting, whitespace and temporary allocations to each audio
+        // window's critical path; readers only depend on its schema, never JSON key order.
         self.encoder = encoder
 
         let decoder = JSONDecoder()
@@ -560,9 +562,10 @@ actor MeetingSessionStore: MeetingSessionStoring {
             sessionIDs: [],
             updatedAt: Date()
         )
-        if !index.sessionIDs.contains(id) {
-            index.sessionIDs.append(id)
-        }
+        // Membership does not change during a recording. Keep the on-disk read so a removed or
+        // damaged index is repaired, without another atomic replacement on every checkpoint.
+        guard !index.sessionIDs.contains(id) else { return }
+        index.sessionIDs.append(id)
         index.updatedAt = Date()
         let data = try self.encoder.encode(index)
         try self.atomicPrivateWrite(
