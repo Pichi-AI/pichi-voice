@@ -214,6 +214,38 @@ final class WhisperDiagnosticsTests: XCTestCase {
         XCTAssertTrue(options.timestamps == .segment, "Retaining metadata must not force costly word alignment")
     }
 
+    func testNativeTerminalTimestampTickIsClippedOnlyToTheActualPCMEnd() {
+        // Exact public RU fixture trace: 76777 frames, native final tick 4800ms.
+        // Normal and attenuated speech return respectively one and two segments.
+        let count = 76_777
+        let duration = Double(count) / 16_000
+        for segments: [ASRSegmentTiming] in [
+            [.init(text: "First phrase. Second phrase.", start: 0, end: 4.8)],
+            [.init(text: "First phrase.", start: 0, end: 2.76), .init(text: "Second phrase.", start: 2.76, end: 4.8)]
+        ] {
+            let text = segments.map(\.text).joined(separator: " ")
+            let result = WhisperProvider.transcriptionResult(text: text, segmentTimings: segments, sampleCount: count)
+            XCTAssertEqual(result.segmentTimings.count, segments.count)
+            XCTAssertEqual(result.segmentTimings.last?.end, duration)
+            XCTAssertEqual(result.segmentTimings.map(\.start), segments.map(\.start))
+            XCTAssertEqual(result.segmentTimings.map(\.text), segments.map(\.text))
+            XCTAssertTrue(result.segmentTimings.allSatisfy { $0.end <= duration })
+            XCTAssertEqual(ASRSegmentTiming.validated(result.segmentTimings, text: text, duration: duration), result.segmentTimings)
+        }
+        let aligned = ASRSegmentTiming(text: "Aligned phrase.", start: 0, end: 4.8)
+        XCTAssertEqual(WhisperProvider.transcriptionResult(text: aligned.text,
+            segmentTimings: [aligned], sampleCount: 76_800).segmentTimings, [aligned])
+        for invalid in [ASRSegmentTiming(text: "Invalid phrase.", start: 0, end: 4.82),
+                        .init(text: "Invalid phrase.", start: 0, end: 4.799),
+                        .init(text: "Invalid phrase.", start: 4.8, end: 4.8)] {
+            let result = WhisperProvider.transcriptionResult(text: invalid.text,
+                segmentTimings: [invalid], sampleCount: count)
+            XCTAssertEqual(result.text, invalid.text)
+            XCTAssertTrue(result.segmentTimings.isEmpty,
+                "Arbitrary overrun, extra native ticks and nonphysical starts still use the complete untimed fallback")
+        }
+    }
+
     func testMalformedOrPartialNativeSegmentationRetainsFullWordingWithoutInventedTimes() {
         let text = "Keep the complete phrase."
         let invalid: [[ASRSegmentTiming]] = [

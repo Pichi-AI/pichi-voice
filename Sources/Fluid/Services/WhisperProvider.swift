@@ -672,8 +672,22 @@ final class WhisperProvider: TranscriptionProvider {
     nonisolated static func transcriptionResult(text: String, segmentTimings: [ASRSegmentTiming],
                                                 sampleCount: Int) -> ASRTranscriptionResult {
         let fullText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let duration = Double(sampleCount) / 16_000
+        var physicalSegments = segmentTimings
+        if sampleCount > 0, let last = physicalSegments.last {
+            // Whisper timestamp tokens span 320 mono 16kHz frames (20ms), see
+            // openai/whisper transcribe.py's time_precision. Only the immediately
+            // enclosing terminal tick may extend past the actual PCM by <20ms.
+            // Clip that tick to physical audio, never a wider or padded interval.
+            let enclosingTicks = sampleCount / 320 + (sampleCount % 320 == 0 ? 0 : 1)
+            let enclosingEnd = Double(enclosingTicks * 20) / 1_000
+            if last.end > duration, last.end == enclosingEnd {
+                physicalSegments[physicalSegments.count - 1] = ASRSegmentTiming(
+                    text: last.text, start: last.start, end: duration)
+            }
+        }
         return ASRTranscriptionResult(text: fullText, segmentTimings: ASRSegmentTiming.validated(
-            segmentTimings, text: fullText, duration: Double(sampleCount) / 16_000))
+            physicalSegments, text: fullText, duration: duration))
     }
 
     static func runOptions(languageCode: String?, timestamps: TimestampKind = .segment,
