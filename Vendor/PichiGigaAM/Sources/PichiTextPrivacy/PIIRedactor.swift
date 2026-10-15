@@ -66,6 +66,9 @@ struct PIIDetection: Sendable {
 }
 
 public enum PIIRedactor {
+    // Canonical PAN detection and provisional admission must agree on explicit
+    // amounts. A currency unit is quantity evidence, not a drug/name qualifier.
+    static let quantityUnitPattern = #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#
     private static let boundary = #"(?<![\p{L}\p{N}])"#
     private static let end = #"(?![\p{L}\p{N}])"#
     // These are precision guards also present in the Transcribe detector. They
@@ -171,7 +174,7 @@ public enum PIIRedactor {
     private static func paymentCards(in text: String) throws -> [PIIDetection] {
         let runs = try NSRegularExpression(pattern: boundary + #"\d{1,19}(?:[\s-]+\d{1,19})*"# + end)
         let groups = try NSRegularExpression(pattern: #"\d+"#)
-        let amountUnit = try NSRegularExpression(pattern: #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#, options: [.caseInsensitive])
+        let amountUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
         let source = text as NSString
         var result: [PIIDetection] = []
         for run in runs.matches(in: text, range: NSRange(location: 0, length: source.length)) {

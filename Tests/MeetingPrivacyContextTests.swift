@@ -586,6 +586,15 @@ struct MeetingPrivacyContextTests {
         let decimalLimit = try PIIRedactor.provisionalSafePrefix(in: decimalDose, ner: [], redactedSpans: [])
         try check((decimalLimit ?? 0) > (decimalDose as NSString).range(of: "мг").location,
                   "decimal dose punctuation was mistaken for a private email fragment")
+        for amount in ["508 рублей", "508 USD", "0.50 руб", "1008 мг"] {
+            let text = "карта 4111 1111 1111 1111 \(amount) оземпик. Подготовим материалы к следующей встрече и проверим условия хранения."
+            let redacted = try PIIRedactor.redact(text, ner: [])
+            let limit = try PIIRedactor.provisionalSafePrefix(in: text, ner: [], redactedSpans: redacted.spans)
+            try check((limit ?? 0) > (text as NSString).range(of: amount).upperBound,
+                      "a confirmed quantity after a masked PAN withheld the whole live transcript")
+            try check(redacted.text.contains("[КАРТА]") && !redacted.text.contains("4111"),
+                      "quantity admission weakened canonical card masking")
+        }
     }
 
     static func suite(using redactor: any TranscriptTextRedacting) async throws {

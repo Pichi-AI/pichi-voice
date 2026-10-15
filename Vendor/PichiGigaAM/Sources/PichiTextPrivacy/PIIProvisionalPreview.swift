@@ -19,6 +19,7 @@ extension PIIRedactor {
         let words = try NSRegularExpression(pattern: #"[\p{L}]+|\p{N}+(?:[.,]\p{N}+)?"#).matches(in: text, range: full)
         guard !words.isEmpty else { return 0 }
         let units = Set("мг мкг мл г mg mcg ml gram grams единиц единицы ед iu".split(separator: " ").map(String.init))
+        let quantityUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
         // Ambiguous year/count abbreviations are not positive drug evidence.
         let doseUnits = units.subtracting(["г", "ед", "единиц", "единицы"])
         var doseQualifiedWords: Set<NSRange> = []
@@ -130,7 +131,9 @@ extension PIIRedactor {
                 retreat(words[index].range.location)
             }
             if word.first?.isNumber == true {
-                let quantity = index + 1 < words.count && units.contains(source.substring(with: words[index + 1].range).lowercased())
+                let suffix = source.substring(from: NSMaxRange(words[index].range))
+                let quantity = (index + 1 < words.count && units.contains(source.substring(with: words[index + 1].range).lowercased()))
+                    || quantityUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count)) != nil
                 if !quantity {
                     // A preceding street/month/local-part word may already be
                     // private before a numeric continuation supplies its syntax.
