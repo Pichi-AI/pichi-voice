@@ -60,6 +60,7 @@ run_public_build() {
     local development_team
     local signing_identity_hash
     local app_path
+    local build_settings
     local ctranscribe_framework
     local ctranscribe_versions
     local ctranscribe_version_a
@@ -120,11 +121,47 @@ EOF
         exit 1
     fi
 
+    if ! build_settings="$(xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}" -showBuildSettings -json)"; then
+        echo "Unable to read signed build settings from Xcode." >&2
+        exit 1
+    fi
+    if ! app_path="$(printf '%s\n' "${build_settings}" | python3 -c '
+import json
+import os
+import sys
+
+try:
+    entries = json.load(sys.stdin)
+    if not isinstance(entries, list):
+        raise ValueError("Xcode build settings must be a list")
+    # The scheme builds the upstream target named fluid; its product is configurable.
+    targets = [entry for entry in entries if isinstance(entry, dict) and entry.get("target") == "fluid"]
+    if len(targets) != 1:
+        raise ValueError(f"Expected one build settings entry for target fluid; found {len(targets)}")
+    settings = targets[0].get("buildSettings")
+    if not isinstance(settings, dict):
+        raise ValueError("Target fluid has no build settings")
+    build_dir = settings.get("TARGET_BUILD_DIR")
+    product_name = settings.get("FULL_PRODUCT_NAME")
+    for key, value in (("TARGET_BUILD_DIR", build_dir), ("FULL_PRODUCT_NAME", product_name)):
+        if not isinstance(value, str) or not value or any(token in value for token in ("$(", "${", "\n", "\r", "\0")):
+            raise ValueError(f"Target fluid has an unavailable or unresolved {key}")
+    if not os.path.isabs(build_dir):
+        raise ValueError("Target fluid TARGET_BUILD_DIR must be absolute")
+    if os.path.basename(product_name) != product_name or not product_name.endswith(".app") or product_name == ".app":
+        raise ValueError("Target fluid FULL_PRODUCT_NAME must name an app bundle")
+    print(os.path.join(build_dir, product_name))
+except (ValueError, OSError) as error:
+    print(f"Unable to resolve signed build product: {error}", file=sys.stderr)
+    sys.exit(1)
+')"; then
+        exit 1
+    fi
+
     echo "Running signed public FluidVoice build..."
-    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
+    echo "Build product: ${app_path}"
     xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}"
 
-    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
     ctranscribe_framework="${app_path}/Contents/Frameworks/CTranscribe.framework"
     if [ ! -d "${app_path}" ]; then
         echo "Signed build product is missing: ${app_path}" >&2

@@ -39,5 +39,6 @@ python3 -S scripts/dev/check-localization.py
 python3 -S Tests/test_localization_catalog.py
 python3 -S scripts/dev/check-xcode-build-settings.py
 python3 -S Tests/test_xcode_build_settings.py
+python3 -S Tests/test_signed_build_product.py
 bash Tests/run_upstream_sync_tests.sh
 printf '%s\n' 'Portable checks passed. macOS build and audio checks are separate.'
