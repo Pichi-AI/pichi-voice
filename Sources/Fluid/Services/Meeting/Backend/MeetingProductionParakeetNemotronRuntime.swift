@@ -328,11 +328,20 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                             }
                             if let preview, hasSpeech || output?.sampleCount == observed.sampleCount {
                                 try await preview(self.pcmSpeechObservation(output: observed, epoch: epoch,
-                                    offset: offset, duration: Double(samples.count) / 16_000, attemptID: attemptID))
+                                    offset: offset, duration: Double(samples.count) / 16_000,
+                                    attemptID: attemptID, isFinal: update.isFinal))
                             }
                             DebugLogger.shared.info("progressive_speech offset=\(offset) frames=\(samples.count) sealed=\(update.isFinal)", source: "MeetingPCMRuntime")
                         }
-                        if update.isFinal { sealed = true; break }
+                        if update.isFinal {
+                            if !hasNewPCM, let output, let preview {
+                                try await preview(self.pcmSpeechObservation(output: output, epoch: epoch,
+                                    offset: offset, duration: Double(output.sampleCount) / 16_000,
+                                    attemptID: attemptID, isFinal: true))
+                            }
+                            sealed = true
+                            break
+                        }
                     }
                     guard sealed, let output, output.sampleCount > 0, output.sampleCount <= samples.count else {
                         throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
@@ -370,13 +379,14 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
 
     private func pcmSpeechObservation(output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID,
                                       offset: TimeInterval, duration: TimeInterval,
-                                      attemptID: UUID) throws -> MeetingPCMTranscriptBatch {
+                                      attemptID: UUID, isFinal: Bool = true) throws -> MeetingPCMTranscriptBatch {
         let units = MeetingParakeetNemotronBackend.pcmUnits(result: ASRTranscriptionResult(text: output.text),
             words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [])
         var observation = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat)
             .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: offset, duration: duration,
                 units: units, identityLinks: [], priorSpeakers: [])
         observation.isComplete = false
+        observation.speechObservationIsFinal = isFinal
         for index in observation.segments.indices { observation.segments[index].status = .provisional }
         return observation
     }
