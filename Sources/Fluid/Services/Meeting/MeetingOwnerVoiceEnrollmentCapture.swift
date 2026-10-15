@@ -79,13 +79,16 @@ final nonisolated class MeetingOwnerVoiceSampleBuffer: MeetingMemoryAudioConsumi
     private let producers = DispatchGroup()
     private let gate = MeetingPCMIntakeGate()
     private let converter: MeetingCapturePCMConverter
+    // Optional observation point for deterministic admission/drain concurrency tests.
+    private let afterAdmission: (@Sendable () -> Void)?
     private var accepting = true
     private var samples: [Float] = []
     private var failure: Error?
     static let maximumSamples = 320_000
 
-    init() throws {
+    init(afterAdmission: (@Sendable () -> Void)? = nil) throws {
         self.converter = try MeetingCapturePCMConverter()
+        self.afterAdmission = afterAdmission
         self.samples.reserveCapacity(Self.maximumSamples)
     }
 
@@ -100,6 +103,7 @@ final nonisolated class MeetingOwnerVoiceSampleBuffer: MeetingMemoryAudioConsumi
         // A completed 20s sample deliberately ignores remaining microphone callbacks.
         guard admitted else { return true }
         defer { self.producers.leave() }
+        self.afterAdmission?()
         let frames = CMSampleBufferGetNumSamples(sampleBuffer)
         guard let description = CMSampleBufferGetFormatDescription(sampleBuffer),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(description),
@@ -132,12 +136,19 @@ final nonisolated class MeetingOwnerVoiceSampleBuffer: MeetingMemoryAudioConsumi
         if let failure = self.lock.withLock({ self.failure }) { throw failure }
     }
 
-    func close() { self.lock.withLock { self.accepting = false }; self.gate.close() }
+    // An admitted callback may not have reserved its bounded PCM copy yet. Normal Stop
+    // rejects new callbacks here, while preserving those already owned by the group.
+    func close() { self.lock.withLock { self.accepting = false } }
 
     func finish() async throws {
         self.close()
         await withCheckedContinuation { continuation in
-            self.producers.notify(queue: self.queue) { continuation.resume() }
+            self.producers.notify(queue: self.queue) {
+                // Every admitted producer has scheduled its conversion before leaving.
+                // This serial-queue barrier therefore joins both copies and conversion.
+                self.gate.close()
+                continuation.resume()
+            }
         }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             self.queue.async {
