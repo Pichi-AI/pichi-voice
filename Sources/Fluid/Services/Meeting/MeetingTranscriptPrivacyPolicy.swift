@@ -67,8 +67,8 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
         return copy
     }
 
-    /// Live text uses the same bounded span projection as durable publication. A finalized
-    /// phrase supplies context to the next partial without changing row identity or timing.
+    /// NER sees finalized turns and explicitly stable whole words only. An open turn's
+    /// lexical edge remains behind capture progress until the same detector admits it.
     static func redactedLiveSnapshot(_ snapshot: MeetingLiveTranscriptSnapshot,
                                      using redactor: any TranscriptTextRedacting) async throws -> MeetingLiveTranscriptSnapshot {
         var copy = self.boundedLiveInput(snapshot)
@@ -77,15 +77,53 @@ nonisolated enum MeetingTranscriptPrivacyPolicy {
                 .sorted { a, b in copy.utterances[a].start == copy.utterances[b].start ? a < b : copy.utterances[a].start < copy.utterances[b].start }
             var fragments = indices.map { TextFragment(key: $0, text: copy.utterances[$0].text) }
             let partialKey = copy.utterances.count
-            if let partial = copy.partials[source] { fragments.append(.init(key: partialKey, text: partial.text)) }
-            let safe = try await self.projectedTexts(fragments, prefix: "", using: redactor).canonical
-            for index in indices { copy.utterances[index].text = safe[index] ?? copy.utterances[index].text }
-            if var partial = copy.partials[source] {
-                partial.text = safe[partialKey] ?? partial.text
-                copy.partials[source] = partial
+            let partial = copy.partials[source]
+            if let partial, let text = try self.stablePrefix(of: partial), !text.isEmpty {
+                fragments.append(.init(key: partialKey, text: text))
+            }
+            let projection = try await self.projectedTexts(fragments, prefix: "", using: redactor)
+            // A decoder's EOU can be an arbitrary audio-window boundary, not the
+            // conversation's end. Keep lexical admission consistent across turns;
+            // the final processing pipeline performs the full canonical flush.
+            for index in indices {
+                copy.utterances[index].text = projection.provisional?[index] ?? ""
+                copy.utterances[index].hasIncompleteTextCoverage = !projection.provisionalCompleteKeys.contains(index)
+            }
+            if var safePartial = partial, let text = projection.provisional?[partialKey], !text.isEmpty {
+                let wholeInputAdmitted = projection.provisionalCompleteKeys.contains(partialKey)
+                    && safePartial.stableUTF16Count == safePartial.text.utf16.count
+                safePartial.text = text
+                if !wholeInputAdmitted { safePartial.end = nil }
+                // Stable offsets refer to raw text and do not describe replacements.
+                safePartial.stableUTF16Count = nil
+                copy.partials[source] = safePartial
+            } else { copy.partials.removeValue(forKey: source) }
+        }
+        copy.utterances.removeAll { $0.text.isEmpty }
+        return copy
+    }
+
+    private static func stablePrefix(of partial: MeetingLivePartial) throws -> String? {
+        guard let count = partial.stableUTF16Count else { return nil }
+        return try self.stablePrefix(in: partial.text, utf16Count: count).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    fileprivate static func stablePrefix(in text: String, utf16Count count: Int) throws -> String {
+        let units = Array(text.utf16)
+        guard count >= 0, count <= units.count,
+              count == units.count || !(0xDC00...0xDFFF).contains(units[count]),
+              let boundary = String.Index(utf16Offset: count, in: text).samePosition(in: text) else {
+            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+        }
+        // A stability claim cannot bisect a lexical word. Punctuation is itself a boundary.
+        if boundary != text.startIndex, boundary != text.endIndex {
+            let before = text[text.index(before: boundary)]
+            let after = text[boundary]
+            if (before.isLetter || before.isNumber), (after.isLetter || after.isNumber) {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
             }
         }
-        return copy
+        return String(text[..<boundary])
     }
 
     /// The UI projects at most 100 completed rows. Apply the same bound before
@@ -372,6 +410,14 @@ actor MeetingTranscriptPrivacyContext {
     private var isProcessing = false
     private let provisionalPreviewID = UUID()
     private var lastSafePreview: MeetingLivePartial?
+    private struct SpeechObservation {
+        let trackID: MeetingAudioTrackID
+        let firstSegmentID: UUID
+        let text: String
+    }
+    /// One bounded raw hypothesis belongs to one growing PCM window. It never
+    /// enters NER until words agree with the next observation or the window seals.
+    private var previousSpeechObservation: SpeechObservation?
     init(redactor: any TranscriptTextRedacting) { self.redactor = redactor }
 
     /// Speech can be displayed before expensive attribution, but cannot enter the durable
@@ -380,7 +426,10 @@ actor MeetingTranscriptPrivacyContext {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         isProcessing = true
         var completed = false
-        defer { if !completed { lastSafePreview = nil }; isProcessing = false }
+        defer {
+            if !completed { lastSafePreview = nil; previousSpeechObservation = nil }
+            isProcessing = false
+        }
         try Task.checkCancellation()
         let tracks = Set(batch.segments.map(\.sourceTrackID))
         guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
@@ -408,13 +457,50 @@ actor MeetingTranscriptPrivacyContext {
             guard count <= remaining else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
             remaining -= count
         }
+        let rawText = ordered.map(\.text).joined(separator: " ")
+        let stableCount: Int
+        if batch.speechObservationIsFinal {
+            stableCount = rawText.utf16.count
+        } else if let previous = previousSpeechObservation,
+                  previous.trackID == currentTrack, previous.firstSegmentID == ordered.first?.id {
+            stableCount = MeetingSpeechHypothesisStability.stableUTF16Count(previous: previous.text, current: rawText)
+        } else { stableCount = 0 }
+        if let currentTrack, let first = ordered.first {
+            previousSpeechObservation = SpeechObservation(trackID: currentTrack, firstSegmentID: first.id, text: rawText)
+        }
+        guard stableCount > 0 else {
+            completed = true
+            return continues ? lastSafePreview : nil
+        }
+        _ = try MeetingTranscriptPrivacyPolicy.stablePrefix(in: rawText, utf16Count: stableCount)
+        var admitted: [MeetingTranscriptSegment] = []
+        var position = 0
+        var clippedAudioCoverage = false
+        for segment in ordered {
+            let count = segment.text.utf16.count
+            if position < stableCount {
+                var copy = segment
+                let admittedCount = min(count, stableCount - position)
+                copy.text = try MeetingTranscriptPrivacyPolicy.stablePrefix(in: copy.text, utf16Count: admittedCount)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                copy.originalText = nil
+                if !copy.text.isEmpty { admitted.append(copy) }
+                if admittedCount < count { clippedAudioCoverage = true }
+            }
+            position += count + 1
+        }
+        combined.segments = pending + admitted
         let safe = try await MeetingTranscriptPrivacyPolicy.redactedBatch(combined, using: redactor,
             contextPrefixes: currentTrack.map { [$0: continues ? prefix : ""] } ?? [:],
             provisionalPreviewID: provisionalPreviewID, provisionalSegmentIDs: Set(combined.segments.map(\.id)))
         try Task.checkCancellation()
-        lastSafePreview = safe.livePreview
+        var preview = safe.livePreview
+        // A clipped utterance has no word-level audio endpoint. It cannot retire
+        // all of the source segment's captured waveform progress.
+        if clippedAudioCoverage { preview?.end = nil }
+        lastSafePreview = preview
         completed = true
-        return safe.livePreview
+        return preview
     }
 
     func redact(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingPCMTranscriptBatch {
@@ -481,6 +567,7 @@ actor MeetingTranscriptPrivacyContext {
     func finish() async throws -> MeetingPCMTranscriptBatch? {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         lastSafePreview = nil
+        previousSpeechObservation = nil
         try Task.checkCancellation()
         guard !pending.isEmpty else { return nil }
         isProcessing = true

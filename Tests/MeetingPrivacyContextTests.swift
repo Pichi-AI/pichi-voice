@@ -46,6 +46,14 @@ private struct MissingOffsetsRedactor: TranscriptTextRedacting {
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction { .init(text: "[ИМЯ]", spans: []) }
 }
 
+private actor RecordingPrivacyRedactor: TranscriptTextRedacting {
+    private(set) var inputs: [String] = []
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        inputs.append(text)
+        return try await StructuredPrivacyRedactor().redactWithSpans(text)
+    }
+}
+
 private actor CancellablePrivacyRedactor: TranscriptTextRedacting {
     let started: AsyncStream<Void>.Continuation
     init(started: AsyncStream<Void>.Continuation) { self.started = started }
@@ -112,6 +120,8 @@ struct MeetingPrivacyContextTests {
         }
         #endif
         try await liveDeliverySuite()
+        try await stableLiveHypothesisSuite()
+        try await stablePCMHypothesisSuite()
         let track = UUID()
         let invalid = MeetingPCMTranscriptBatch(segments: [segment("🙂 Иван", track: track, start: 0)])
         do {
@@ -157,33 +167,156 @@ struct MeetingPrivacyContextTests {
             raw.availability = .available
             raw.revision = 1
             for (index, text) in partials.enumerated() {
-                raw = raw.settingPartial(.init(id: partialID, text: text, start: 1), for: .you)
+                raw = raw.settingPartial(.init(id: partialID, text: text, start: 1, stableUTF16Count: text.utf16.count), for: .you)
                 raw.revision += 1
                 let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: redactor)
-                try check(safe.utterances[0].id == first.id && safe.utterances[0].start == 0 && safe.utterances[0].end == 1, "live completed row identity/timing changed")
-                try check(safe.partials[.you]?.id == partialID && safe.partials[.you]?.start == 1, "live partial identity changed")
+                if let retained = safe.utterances.first {
+                    try check(retained.id == first.id && retained.start == 0 && retained.end == 1, "live completed row identity/timing changed")
+                }
+                if let retained = safe.partials[.you] {
+                    try check(retained.id == partialID && retained.start == 1, "live partial identity changed")
+                }
                 try check(raw.utterances[0].text == initial && raw.partials[.you]?.text == text, "filtered strings replaced canonical raw input")
                 if index == partials.count - 1 {
                     let joined = safe.utterances.map(\.text).joined(separator: " ") + " " + (safe.partials[.you]?.text ?? "")
                     for value in privatePieces { try check(!joined.contains(value), "earlier completed live row was not corrected: \(value)") }
-                    try check(joined.contains(medication), "live privacy changed a neighboring medication/dose")
                 }
             }
             raw = raw.settingPartial(nil, for: .you).inserting(.init(id: partialID, speaker: .you, text: partials.last!, start: 1, end: 4))
             raw.revision += 1
             let completed = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: redactor)
-            try check(completed.utterances.map(\.id) == [first.id, partialID], "EOU changed continuous row identities")
-            try check(completed.utterances[1].start == 1 && completed.utterances[1].end == 4 && completed.partials.isEmpty, "EOU timing/state changed")
+            try check(completed.utterances.allSatisfy { $0.id == first.id || $0.id == partialID }, "EOU changed continuous row identities")
+            if let retained = completed.utterances.first(where: { $0.id == partialID }) {
+                try check(retained.start == 1 && retained.end == 4, "EOU timing changed")
+            }
+            try check(completed.partials.isEmpty, "EOU retained an open hypothesis")
             let joined = completed.utterances.map(\.text).joined(separator: " ")
             for value in privatePieces { try check(!joined.contains(value), "completed rows restored recognized PII") }
-            try check(joined.contains(medication), "EOU privacy changed a medication/dose")
+            // Final export uses canonical projection; live EOU keeps the same lexical hold.
+            let canonical = try await redactor.redact((raw.utterances.map(\.text)).joined(separator: " "))
+            try check(canonical.contains(medication), "canonical privacy changed a medication/dose")
         }
         // Separate source tags remain source tags, not diarization identities.
         var sources = MeetingLiveTranscriptSnapshot.empty
         sources.utterances = [.init(id: UUID(), speaker: .you, text: "дата рождения", start: 0, end: 1),
                               .init(id: UUID(), speaker: .them, text: "12 мая 1980", start: 1, end: 2)]
-        let separate = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(sources, using: redactor)
-        try check(separate.utterances[1].text == "12 мая 1980", "microphone context contaminated another audio source")
+        let recorder = RecordingPrivacyRedactor()
+        _ = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(sources, using: recorder)
+        let sourceInputs = await recorder.inputs
+        try check(sourceInputs == ["дата рождения", "12 мая 1980"], "microphone context contaminated another audio source")
+    }
+
+    static func stableLiveHypothesisSuite() async throws {
+        let recorder = RecordingPrivacyRedactor()
+        let partialID = UUID()
+        var raw = MeetingLiveTranscriptSnapshot.empty
+        raw.revision = 1
+        // A temporary name hypothesis must not be classified, displayed or retained as a mask.
+        raw.partials[.you] = .init(id: partialID, text: "Анна", start: 1, end: 2)
+        let unstable = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: recorder)
+        try check(unstable.partials.isEmpty && unstable.utterances.isEmpty, "volatile raw hypothesis escaped privacy admission")
+        let unstableInputs = await recorder.inputs
+        try check(unstableInputs.isEmpty, "NER evaluated a volatile name hypothesis")
+
+        let stable = "Сегодня обсуждаем планы дальнейшего тестирования распознавания."
+        raw.partials[.you] = .init(id: partialID, text: stable + " Анна", start: 1, end: 5,
+                                 stableUTF16Count: stable.utf16.count)
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: recorder)
+        let inputs = await recorder.inputs
+        try check(inputs == [stable], "NER input included the unstable tail or omitted stable context")
+        try check(safe.partials[.you]?.text.contains("Сегодня обсуждаем планы") == true,
+                  "admitted stable words did not reach display")
+        try check(safe.partials[.you]?.text.contains("Анна") == false && safe.partials[.you]?.text.contains("[ИМЯ]") == false,
+                  "temporary name hypothesis changed stable display")
+        try check(safe.partials[.you]?.end == nil && safe.partials[.you]?.stableUTF16Count == nil,
+                  "trimmed privacy text claimed full raw audio or retained raw offsets")
+        try check(raw.partials[.you]?.text == stable + " Анна", "privacy replaced its raw source with display text")
+
+        raw.partials = [:]
+        raw.utterances = [.init(id: partialID, speaker: .you, text: stable, start: 1, end: 5)]
+        let final = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: recorder)
+        let finalDisplayed = final.utterances.map(\.text).joined(separator: " ")
+        try check(finalDisplayed == safe.partials[.you]?.text && final.partials.isEmpty,
+                  "EOU changed lexical admission before the final pipeline flush")
+        try check(final.utterances.first?.hasIncompleteTextCoverage == true,
+                  "a privacy-held finalized tail claimed full audio coverage")
+        raw.partials[.you] = .init(id: UUID(), text: "Новая неподтверждённая гипотеза", start: 5)
+        let nextTurn = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: recorder)
+        try check(nextTurn.utterances.map(\.text).joined(separator: " ") == finalDisplayed,
+                  "a new volatile turn removed previously approved text")
+
+        // A possible entity ending one finalized turn waits for adjacent stable context.
+        raw.utterances = [.init(id: UUID(), speaker: .you, text: "Передали документ сидорову", start: 0, end: 1)]
+        raw.partials[.you] = .init(id: partialID, text: "ивану петровичу сегодня обсуждаем планы лечения.", start: 1,
+                                 stableUTF16Count: "ивану петровичу сегодня обсуждаем планы лечения.".utf16.count)
+        let joined = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: recorder)
+        let displayed = joined.utterances.map(\.text).joined(separator: " ") + " " + (joined.partials[.you]?.text ?? "")
+        for privatePiece in ["сидорову", "ивану", "петровичу"] {
+            try check(!displayed.contains(privatePiece), "adjacent stable name context exposed a source fragment")
+        }
+
+        for invalid in [-1, 1, 3, 10_000] {
+            raw.utterances = []
+            raw.partials[.you] = .init(id: partialID, text: "🙂слово продолжение", start: 0, stableUTF16Count: invalid)
+            do {
+                _ = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: recorder)
+                throw Failure.assertion("invalid stability offset reached NER")
+            } catch is MeetingPrivacyPublicationError { }
+        }
+    }
+
+    static func stablePCMHypothesisSuite() async throws {
+        let recorder = RecordingPrivacyRedactor()
+        let context = MeetingTranscriptPrivacyContext(redactor: recorder)
+        let track = UUID()
+        let id = UUID()
+        func observation(_ text: String, final: Bool = false, rowID: UUID? = nil) -> MeetingPCMTranscriptBatch {
+            var row = segment(text, track: track, start: 0)
+            row.id = rowID ?? id
+            row.status = .provisional
+            var batch = MeetingPCMTranscriptBatch(segments: [row], isComplete: false)
+            batch.speechObservationIsFinal = final
+            return batch
+        }
+        let initial = try await context.previewSpeech(observation("Анна"))
+        try check(initial == nil, "first PCM hypothesis was displayed before stability")
+        let initialInputs = await recorder.inputs
+        try check(initialInputs.isEmpty, "NER classified an unconfirmed PCM name hypothesis")
+        let stable = "Сегодня обсуждаем планы дальнейшего тестирования распознавания речи"
+        _ = try await context.previewSpeech(observation(stable + " Анна"))
+        let preview = try await context.previewSpeech(observation(stable + " после исправления"))
+        let inputs = await recorder.inputs
+        try check(inputs == [stable], "PCM NER input included a changed lexical edge: \(inputs)")
+        try check(preview?.text.hasPrefix("Сегодня обсуждаем планы") == true && preview?.end == nil,
+                  "stable clipped PCM text did not display with conservative audio coverage")
+        try check(preview?.text.contains("Анна") == false && preview?.text.contains("[ИМЯ]") == false,
+                  "temporary PCM name classification reached display")
+        let beforeNewWindow = inputs.count
+        _ = try await context.previewSpeech(observation(stable, rowID: UUID()))
+        let afterNewWindow = await recorder.inputs
+        try check(afterNewWindow.count == beforeNewWindow, "another PCM window inherited hypothesis stability")
+        let sealed = try await context.previewSpeech(observation(stable + ".", final: true))
+        let sealedInputs = await recorder.inputs
+        try check(sealedInputs.last == stable + "." && sealed != nil, "sealed PCM text waited for another inference")
+        let durable = try await context.finish()
+        try check(durable == nil, "speech observations entered the canonical tail")
+        _ = try await context.previewSpeech(observation(stable + "."))
+        let afterFinish = await recorder.inputs
+        try check(afterFinish.count == sealedInputs.count, "finished context retained raw hypothesis stability")
+
+        let wordRecorder = RecordingPrivacyRedactor()
+        let words = MeetingTranscriptPrivacyContext(redactor: wordRecorder)
+        var wordRows = ["Сегодня", "обсуждаем", "планы", "дальнейшего", "тестирования", "распознавания", "Анна"]
+            .enumerated().map { segment($0.element, track: track, start: $0.offset) }
+        _ = try await words.previewSpeech(.init(segments: wordRows, isComplete: false))
+        wordRows[wordRows.count - 1].text = "после"
+        let wordPreview = try await words.previewSpeech(.init(segments: wordRows, isComplete: false))
+        let wordInputs = await wordRecorder.inputs
+        try check(wordInputs == ["Сегодня обсуждаем планы дальнейшего тестирования распознавания"],
+                  "word-level stability included an unconfirmed fragment")
+        try check(wordPreview?.text == "Сегодня обсуждаем" && wordPreview?.end == 2,
+                  "fully admitted word fragments lost their exact approved audio coverage")
+        _ = try await words.finish()
     }
 
     static func liveDeliverySuite() async throws {
@@ -239,10 +372,12 @@ struct MeetingPrivacyContextTests {
         await publisher.stop()
         var large = MeetingLiveTranscriptSnapshot.empty
         large.revision = 1
-        large.utterances = (0..<200).map { index in .init(id: UUID(), speaker: .you, text: "строка \(index)", start: Double(index), end: Double(index + 1)) }
+        large.utterances = (0..<200).map { index in .init(id: UUID(), speaker: .you,
+            text: "документ инструкция терапия схема применение переносимость", start: Double(index), end: Double(index + 1)) }
         submit(large, UUID())
         let boundedInput = await starts.next()
-        try check(boundedInput?.contains("строка 99 ") == false && boundedInput?.hasPrefix("строка 100 ") == true, "pending raw snapshot retained rows outside the display bound")
+        try check(boundedInput?.components(separatedBy: "документ").count == 101,
+                  "pending raw snapshot retained rows outside the display bound")
         await redactor.release()
         let boundedOutput = await updates.next()
         try check(boundedOutput?.0.utterances.count == 100 && boundedOutput?.0.utterances.first?.id == large.utterances[100].id, "bounded live rows changed identity")
@@ -253,8 +388,10 @@ struct MeetingPrivacyContextTests {
         let track = UUID()
         let benign = "Сегодня обсуждаем применение амоксициллина и переносимость назначенной терапии."
         let original = segment(benign, track: track, start: 0)
+        var originalObservation = MeetingPCMTranscriptBatch(segments: [original])
+        originalObservation.speechObservationIsFinal = true
         let speechOnly = MeetingTranscriptPrivacyContext(redactor: redactor)
-        let immediate = try await speechOnly.previewSpeech(.init(segments: [original]))
+        let immediate = try await speechOnly.previewSpeech(originalObservation)
         try check(immediate?.text.hasPrefix("Сегодня обсуждаем применение") == true,
                   "protected ASR text did not appear before attribution")
         let noCheckpoint = try await speechOnly.finish()
@@ -267,7 +404,7 @@ struct MeetingPrivacyContextTests {
         let oversizedTail = try await oversized.finish()
         try check(oversizedTail == nil, "rejected ASR observation advanced durable state")
         let staged = MeetingTranscriptPrivacyContext(redactor: redactor)
-        let early = try await staged.previewSpeech(.init(segments: [original]))
+        let early = try await staged.previewSpeech(originalObservation)
         let canonical = try await staged.redact(.init(segments: [original]))
         try check(canonical.segments.isEmpty && canonical.livePreview?.id == early?.id,
                   "early observation changed durable holdback or preview identity")
