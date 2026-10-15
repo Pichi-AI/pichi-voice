@@ -142,6 +142,25 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testShortInlineBubbleKeepsItsIntrinsicWidth() async throws {
+        let host = try CaptionNativeHost(rows: [row("Привет.")], scheme: .light, documentStyle: false)
+        defer { host.close() }
+        try await settle(host, "A short active bubble keeps its word-sized width") {
+            self.descendants(in: host.controller.view).compactMap { $0 as? UITextView }.contains {
+                $0.accessibilityIdentifier == "meeting.inlineCaption.text"
+                    && $0.bounds.width > 20 && $0.bounds.width < host.model.width / 2
+            }
+        }
+        capture(host, step: "bubble-01-intrinsic-width", scheme: .light)
+        host.model.pending = pending(count: 2)
+        try await settle(host, "Inline pending words expand the bubble only as needed") {
+            self.descendants(in: host.controller.view).contains {
+                $0.accessibilityIdentifier == "meeting.inlineWave.2" && $0.bounds.width > 0
+            }
+        }
+        capture(host, step: "bubble-02-inline-words", scheme: .light)
+    }
+
     func testPendingWordsStartAfterTheLastWordAndWrapNatively() async throws {
         for scheme in [ColorScheme.light, .dark] {
             let text = "Ёжик идёт."
@@ -585,12 +604,13 @@ private final class CaptionNativeRows: ObservableObject {
 private struct CaptionNativeDocument: View {
     @ObservedObject var model: CaptionNativeRows
     let scheme: ColorScheme
+    let documentStyle: Bool
 
     var body: some View {
         let theme = AppTheme.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme)
         ZStack {
             theme.palette.windowBackground
-            MeetingLiveBubbleScrollList(rows: model.rows, pending: model.pending, documentStyle: true)
+            MeetingLiveBubbleScrollList(rows: model.rows, pending: model.pending, documentStyle: documentStyle)
                 .frame(width: model.width, height: model.height)
                 .background(theme.palette.contentBackground)
         }
@@ -608,7 +628,7 @@ private final class CaptionNativeHost {
     let controller: UIHostingController<CaptionNativeDocument>
     private weak var previousKeyWindow: UIWindow?
 
-    init(rows: [MeetingLiveBubbleComposer.Row], scheme: ColorScheme) throws {
+    init(rows: [MeetingLiveBubbleComposer.Row], scheme: ColorScheme, documentStyle: Bool = true) throws {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: {
             $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive
         }) else { throw XCTSkip("Requires the hosted iOS test app's foreground UIWindowScene") }
@@ -617,7 +637,8 @@ private final class CaptionNativeHost {
         self.window.frame = scene.coordinateSpace.bounds
         self.model = CaptionNativeRows(rows: rows, width: min(520, scene.coordinateSpace.bounds.width - 48),
                                        height: max(160, min(320, scene.coordinateSpace.bounds.height - 96)))
-        self.controller = UIHostingController(rootView: CaptionNativeDocument(model: model, scheme: scheme))
+        self.controller = UIHostingController(rootView: CaptionNativeDocument(model: model, scheme: scheme,
+            documentStyle: documentStyle))
         self.controller.overrideUserInterfaceStyle = scheme == .dark ? .dark : .light
         self.window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1)
         self.window.rootViewController = controller
