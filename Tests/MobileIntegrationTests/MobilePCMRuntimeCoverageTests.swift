@@ -49,6 +49,7 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         var batches: [MeetingPCMTranscriptBatch] = []
         var checkpoints: [MeetingPCMTranscriptBatch] = []
         var safePreviews: [MeetingLivePartial?] = []
+        var unfilteredPreviews: [MeetingLivePartial?] = []
         var operation: Task<MeetingPCMTranscriptBatch, Error>?
     }
 
@@ -67,6 +68,77 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         for index in 0..<frames { data[index] = 0.1 }
         return try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm,
             presentationTime: CMTime(value: start, timescale: 16_000))
+    }
+
+    func testProgressivePreviewCoverageDistinguishesNativeTimingFromCoarseWindows() async throws {
+        for timing in ["coarse", "words", "segments", "invalid-segments"] {
+            let fixture = try self.makeNativePCMPreviewFixture()
+            addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+            let text = "Сегодня обсуждаем подробную инструкцию и проверяем запись разговора."
+            let words: [ASRWordTiming] = timing == "words"
+                ? [.init(text: text, start: 0.2, end: 1.7)] : []
+            fixture.provider.timedResponses = [48_000: (text, words), 96_000: (text, words), 144_000: (text, words)]
+            if timing == "segments" || timing == "invalid-segments" {
+                let end = timing == "segments" ? 2.7 : 30
+                for count in [48_000, 96_000, 144_000] {
+                    fixture.provider.segmentResponses[count] = [.init(text: text, start: 0.3, end: end)]
+                }
+            }
+            let attempt = UUID(), track = UUID(), observed = PCMPreviewObservation()
+            let privacy = MeetingTranscriptPrivacyContext(redactor: BenignPrivacyFixture())
+            try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+            let first = expectation(description: "First \(timing) observation")
+            let second = expectation(description: "Repeated \(timing) observation")
+            let previewID = UUID()
+            let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+                recognize: { window, _ in
+                    try await fixture.runtime.recognizePCM(window: window, offset: 10, trackID: track,
+                        attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                            let direct = batch.speechPreview(id: previewID)
+                            let safe = try await privacy.previewSpeech(batch)
+                            await MainActor.run {
+                                observed.batches.append(batch)
+                                observed.unfilteredPreviews.append(direct)
+                                observed.safePreviews.append(safe)
+                                if observed.batches.count == 1 { first.fulfill() }
+                                if observed.batches.count == 2 { second.fulfill() }
+                            }
+                        })
+                }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+                failure: { _ in XCTFail("Coverage metadata must not interrupt capture") })
+            addTeardownBlock { try? await consumer.finish() }
+            XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+            await fulfillment(of: [first], timeout: 3)
+            XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+            await fulfillment(of: [second], timeout: 3)
+            XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 96_000)))
+            try await consumer.finish()
+            XCTAssertGreaterThanOrEqual(observed.batches.count, 3)
+            guard observed.batches.count >= 3 else { continue }
+            let native = timing == "words" || timing == "segments"
+            XCTAssertTrue(observed.batches.allSatisfy { $0.speechObservationHasNativeTiming == native })
+            let firstDirect = try XCTUnwrap(observed.unfilteredPreviews[0])
+            let secondDirect = try XCTUnwrap(observed.unfilteredPreviews[1])
+            XCTAssertEqual(firstDirect.text, text)
+            XCTAssertEqual(secondDirect.text, text, "Repeating the same words cannot imply new word coverage")
+            XCTAssertNil(observed.safePreviews[0], "The first unconfirmed hypothesis must still wait for agreement")
+            let secondSafe = try XCTUnwrap(observed.safePreviews[1])
+            if native {
+                let nativeEnd = timing == "words" ? 11.7 : 12.7
+                XCTAssertEqual(firstDirect.end ?? -1, nativeEnd, accuracy: 0.001)
+                XCTAssertEqual(secondDirect.end ?? -1, nativeEnd, accuracy: 0.001)
+                XCTAssertEqual(secondSafe.end ?? -1, nativeEnd, accuracy: 0.001)
+            } else {
+                XCTAssertNil(firstDirect.end)
+                XCTAssertNil(secondDirect.end)
+                XCTAssertNil(secondSafe.end, "Whole sampled windows cannot retire waves during an unchanged hypothesis")
+                XCTAssertEqual(observed.unfilteredPreviews.last.flatMap { $0 }?.end, 19)
+                XCTAssertEqual(observed.safePreviews.last.flatMap { $0 }?.end, 19)
+            }
+            XCTAssertTrue(observed.batches.last?.speechObservationIsFinal == true)
+            XCTAssertEqual(fixture.provider.releaseCalls, 1)
+            XCTAssertFalse(fixture.owner.isClaimed)
+        }
     }
 
     func testNativeSegmentOnlyResultSurvivesBothPreparedRuntimePaths() async throws {
@@ -109,6 +181,47 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         XCTAssertTrue(final.isComplete)
         XCTAssertEqual(fixture.provider.timedSampleCounts, [96_000, 48_000, 96_000])
         XCTAssertEqual(fixture.provider.releaseCalls, 2)
+        XCTAssertFalse(fixture.owner.isClaimed)
+    }
+
+    func testSealedCoarsePreviewCoversAcceptedPrefixWithoutRejectedPhysicalTail() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        let text = "Сегодня обсуждаем подробную инструкцию и проверяем запись разговора."
+        fixture.provider.timedResponses = [48_000: (text, []), 96_000: ("", [])]
+        let attempt = UUID(), track = UUID(), previewID = UUID(), observed = PCMPreviewObservation()
+        let privacy = MeetingTranscriptPrivacyContext(redactor: BenignPrivacyFixture())
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let first = expectation(description: "Coarse prefix accepted before a rejected tail")
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, _ in
+                try await fixture.runtime.recognizePCM(window: window, offset: 10, trackID: track,
+                    attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                        let direct = batch.speechPreview(id: previewID)
+                        let safe = try await privacy.previewSpeech(batch)
+                        await MainActor.run {
+                            observed.batches.append(batch)
+                            observed.unfilteredPreviews.append(direct)
+                            observed.safePreviews.append(safe)
+                            if observed.batches.count == 1 { first.fulfill() }
+                        }
+                    })
+            }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+            failure: { _ in XCTFail("A rejected longer observation cannot erase accepted prefix coverage") })
+        addTeardownBlock { try? await consumer.finish() }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        await fulfillment(of: [first], timeout: 3)
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+        try await consumer.finish()
+        XCTAssertNil(observed.unfilteredPreviews.first.flatMap { $0 }?.end)
+        XCTAssertEqual(observed.unfilteredPreviews.last.flatMap { $0 }?.end, 13)
+        XCTAssertEqual(observed.safePreviews.last.flatMap { $0 }?.end, 13)
+        XCTAssertTrue(observed.batches.last?.speechObservationIsFinal == true)
+        XCTAssertTrue(observed.batches.allSatisfy { $0.speechObservationHasNativeTiming == false })
+        let final = try XCTUnwrap(observed.checkpoints.first)
+        XCTAssertEqual(final.segments.first?.end.seconds, 13)
+        XCTAssertFalse(final.isComplete, "The rejected physical tail at 16 seconds cannot become accepted text coverage")
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
         XCTAssertFalse(fixture.owner.isClaimed)
     }
 

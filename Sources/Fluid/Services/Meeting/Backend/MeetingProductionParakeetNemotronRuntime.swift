@@ -335,7 +335,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                             DebugLogger.shared.info("progressive_speech offset=\(offset) frames=\(samples.count) sealed=\(update.isFinal)", source: "MeetingPCMRuntime")
                         }
                         if update.isFinal {
-                            if !hasNewPCM, let output, let preview {
+                            // A final longer observation may reject its tail. Seal
+                            // the retained accepted prefix at its own sample count,
+                            // even when the final update brought additional PCM.
+                            if let output, let preview,
+                               !hasNewPCM || output.sampleCount != samples.count {
                                 try await preview(self.pcmSpeechObservation(output: output, epoch: epoch,
                                     offset: offset, duration: Double(output.sampleCount) / 16_000,
                                     attemptID: attemptID, isFinal: true))
@@ -390,6 +394,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         observation.isComplete = false
         observation.speechObservationIsFinal = isFinal
         observation.speechObservationIdentity = .init(attemptID: attemptID, epochID: epoch)
+        observation.speechObservationHasNativeTiming = !units.isEmpty && (
+            units.allSatisfy { $0.precision == .word }
+                || !ASRSegmentTiming.validated(output.segmentTimings, text: output.text, duration: duration).isEmpty)
         for index in observation.segments.indices { observation.segments[index].status = .provisional }
         return observation
     }

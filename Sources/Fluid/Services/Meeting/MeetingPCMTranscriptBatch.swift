@@ -21,6 +21,28 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     var speechObservationIsFinal = false
     /// Ephemeral only. Neither this identity nor unfiltered speech enters a session.
     var speechObservationIdentity: SpeechObservationIdentity? = nil
+    /// Whether the provider supplied genuine word/segment bounds for this observation.
+    /// False distinguishes the coarse whole-window placeholder from speech timing.
+    /// Nil preserves the existing contract for callers without typed runtime metadata.
+    var speechObservationHasNativeTiming: Bool? = nil
+
+    /// A sealed observation can account for its accepted physical prefix. While
+    /// it is growing, a coarse window end does not locate the displayed words.
+    var permitsSpeechPreviewCoverage: Bool {
+        speechObservationHasNativeTiming != false || speechObservationIsFinal
+    }
+
+    /// The no-redaction publication path uses the same coverage admission as
+    /// contextual privacy. This preview remains ephemeral and never becomes a segment.
+    func speechPreview(id: UUID) -> MeetingLivePartial? {
+        let ordered = segments.sorted { $0.start < $1.start }
+        return ordered.first.map {
+            MeetingLivePartial(id: id, text: ordered.map(\.text).joined(separator: " "),
+                start: $0.start.seconds,
+                end: permitsSpeechPreviewCoverage ? ordered.map { $0.end.seconds }.max() : nil)
+        }
+    }
+
     init(segments: [MeetingTranscriptSegment], speakers: [MeetingSessionSpeaker] = [], isComplete: Bool = true) {
         self.segments = segments
         self.speakers = speakers

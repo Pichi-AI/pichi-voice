@@ -550,6 +550,10 @@ actor MeetingTranscriptPrivacyContext {
                 completeSourceEnd.map { min(approvedEnd, $0) }
             }
         }
+        // A complete admitted text fragment can still be a coarse window-wide
+        // placeholder. Until that physical window seals, its sampled end is not
+        // evidence that the displayed words cover newly captured audio.
+        if !batch.permitsSpeechPreviewCoverage { preview?.end = nil }
         diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
         lastSafePreview = preview
         lastSafePreviewIdentity = preview == nil ? nil : batch.speechObservationIdentity

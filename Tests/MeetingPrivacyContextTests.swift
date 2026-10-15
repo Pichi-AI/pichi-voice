@@ -147,6 +147,7 @@ struct MeetingPrivacyContextTests {
         try await liveDeliverySuite()
         try await stableLiveHypothesisSuite()
         try await stablePCMHypothesisSuite()
+        try await coarsePCMPreviewCoverageSuite()
         try await stablePCMObservationIdentitySuite()
         try await emptyPCMObservationIdentitySuite()
         try await knownNonPersonPCMContextSuite(using: KnownNonPersonNERPrivacyRedactor())
@@ -458,6 +459,61 @@ struct MeetingPrivacyContextTests {
         try check(wordPreview?.text == "Сегодня обсуждаем" && wordPreview?.end == 2,
                   "fully admitted word fragments lost their exact approved audio coverage")
         _ = try await words.finish()
+    }
+
+    static func coarsePCMPreviewCoverageSuite() async throws {
+        struct FullyAdmittedPreview: TranscriptTextRedacting {
+            func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+                .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+            }
+        }
+        let track = UUID(), attempt = UUID(), rowID = UUID(), previewID = UUID()
+        let text = "Сегодня обсуждаем подробную инструкцию и проверяем запись разговора."
+        let identity = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: attempt,
+            epochID: .init(trackID: track, ordinal: 0))
+        func observation(end: Int, native: Bool?, final: Bool = false) -> MeetingPCMTranscriptBatch {
+            var row = segment(text, track: track, start: 10)
+            row.id = rowID
+            row.end = .init(value: Int64(end), timescale: 1)
+            var batch = MeetingPCMTranscriptBatch(segments: [row], isComplete: false)
+            batch.speechObservationIdentity = identity
+            batch.speechObservationHasNativeTiming = native
+            batch.speechObservationIsFinal = final
+            return batch
+        }
+        for native in [false, true] {
+            let context = MeetingTranscriptPrivacyContext(redactor: FullyAdmittedPreview())
+            let first = observation(end: 13, native: native)
+            let next = observation(end: 16, native: native)
+            let firstProtected = try await context.previewSpeech(first)
+            try check(firstProtected == nil, "coverage evidence bypassed hypothesis agreement")
+            let protected = try await context.previewSpeech(next)
+            try check(protected?.text == text, "coarse timing suppressed the approved words themselves")
+            try check(first.speechPreview(id: previewID)?.end == (native ? 13 : nil),
+                      "no-privacy preview treated a sampled window as native speech coverage")
+            try check(protected?.end == (native ? 16 : nil),
+                      "unchanged coarse hypotheses retired newly captured audio")
+            let sealed = observation(end: 16, native: native, final: true)
+            let finalProtected = try await context.previewSpeech(sealed)
+            try check(finalProtected?.end == 16 && sealed.speechPreview(id: previewID)?.end == 16,
+                      "sealed accepted audio lost its known physical endpoint")
+        }
+        let legacy = observation(end: 13, native: nil)
+        try check(legacy.speechPreview(id: previewID)?.end == 13,
+                  "metadata-free callers lost their existing coverage contract")
+        let legacyContext = MeetingTranscriptPrivacyContext(redactor: FullyAdmittedPreview())
+        _ = try await legacyContext.previewSpeech(legacy)
+        let legacyProtected = try await legacyContext.previewSpeech(legacy)
+        try check(legacyProtected?.end == 13, "legacy contextual publication changed its timing contract")
+
+        let held = MeetingTranscriptPrivacyContext(redactor: InvalidPreviewRedactor(limit: 8))
+        var nativeRows = MeetingPCMTranscriptBatch(segments: [segment("Сегодня", track: track, start: 0),
+            segment("обсуждаем подробную инструкцию.", track: track, start: 1)], isComplete: false)
+        nativeRows.speechObservationHasNativeTiming = true
+        nativeRows.speechObservationIsFinal = true
+        let heldPreview = try await held.previewSpeech(nativeRows)
+        try check(heldPreview?.end == 1, "native timing bypassed the privacy-approved prefix endpoint")
+        print("PASS coarse/native PCM preview coverage, sealed bounds, legacy callers and privacy holdback")
     }
 
     static func stablePCMObservationIdentitySuite() async throws {

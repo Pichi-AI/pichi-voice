@@ -155,16 +155,14 @@ extension MeetingProcessingPipeline {
                     admission = await privacyContext.speechAdmissionDiagnosticFields
                 } else {
                     admission = "privacy=false"
-                    let ordered = speech.segments.sorted { $0.start < $1.start }
-                    partial = ordered.first.map {
-                        MeetingLivePartial(id: speechPreviewID, text: ordered.map(\.text).joined(separator: " "),
-                            start: $0.start.seconds, end: ordered.map { $0.end.seconds }.max())
-                    }
+                    partial = speech.speechPreview(id: speechPreviewID)
                 }
                 try Task.checkCancellation()
                 try await publishPreview(partial)
                 DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
-                    DebugLogger.shared.info("speech_preview visible=\(partial != nil) sourceSegments=\(speech.segments.count) \(admission)", source: "MeetingMemoryAudio")
+                    let nativeTiming = speech.speechObservationHasNativeTiming.map { String($0) } ?? "legacy"
+                    let coverageEnd = partial?.end.map { String($0) } ?? "none"
+                    DebugLogger.shared.info("speech_preview visible=\(partial != nil) sourceSegments=\(speech.segments.count) nativeTiming=\(nativeTiming) sealed=\(speech.speechObservationIsFinal) coverageEnd=\(coverageEnd) \(admission)", source: "MeetingMemoryAudio")
                 }
             }
         } else { observeSpeech = nil }
