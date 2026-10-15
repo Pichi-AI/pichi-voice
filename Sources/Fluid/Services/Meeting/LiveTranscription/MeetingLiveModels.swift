@@ -23,6 +23,9 @@ nonisolated struct MeetingLiveUtterance: Identifiable, Sendable, Equatable {
     /// Session-relative seconds, derived from capture PTS — never from arrival order.
     var start: TimeInterval
     var end: TimeInterval
+    /// A contextual privacy preview can expose only part of this finalized turn.
+    /// Its original end then cannot retire the audio still waiting for safe text.
+    var hasIncompleteTextCoverage = false
 }
 
 /// `id` is minted at the turn's first partial and reused as the `MeetingLiveUtterance.id` at EOU,
@@ -433,7 +436,8 @@ nonisolated struct MeetingPendingSpeechProjection {
         self.visibleRevision = visible.revision
         let before = self.snapshot.tokens
         for utterance in visible.utterances where !utterance.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard utterance.start.isFinite, utterance.end.isFinite, utterance.end > utterance.start else { continue }
+            guard !utterance.hasIncompleteTextCoverage,
+                  utterance.start.isFinite, utterance.end.isFinite, utterance.end > utterance.start else { continue }
             self.snapshot.tokens.removeAll {
                 $0.source == utterance.speaker && $0.end <= utterance.end + 0.000_001 && $0.end > utterance.start
             }
