@@ -262,7 +262,7 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
         view.isEditable = false
         view.isSelectable = false
         view.isScrollEnabled = false
-        view.isUserInteractionEnabled = false
+        view.isUserInteractionEnabled = true
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
