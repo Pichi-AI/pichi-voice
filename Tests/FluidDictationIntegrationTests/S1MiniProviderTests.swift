@@ -404,6 +404,66 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         await provider.unloadCachedRuntime(reason: "long synthetic test complete")
     }
 
+    /// Opt-in replay keeps consented personal text in local files, outside test bundles and logs.
+    func testOptInPrivateDictationsThroughService() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty,
+              let fixturePath = environment["PICHI_PRIVATE_DICTATION_FIXTURES"], fixturePath.hasPrefix("/") else {
+            throw XCTSkip("Set model and private local fixture paths for consented dictation replay.")
+        }
+        struct Input: Decodable { let name: String; let inputText: String }
+        struct Output: Encodable {
+            let name: String
+            let inputCharacters: Int
+            let outputCharacters: Int
+            let promptTokens: Int
+            let legacyWouldReject: Bool
+            let latencyMilliseconds: Int?
+            let outputText: String
+        }
+        let fixtureURL = URL(fileURLWithPath: fixturePath)
+        let data = try Data(contentsOf: fixtureURL)
+        guard data.count <= 8 * 1024 * 1024 else { return XCTFail("Private fixture file is too large") }
+        let inputs = try JSONDecoder().decode([Input].self, from: data)
+        guard !inputs.isEmpty, inputs.count <= 5 else { return XCTFail("Replay requires one to five local fixtures") }
+        let engine = NativeTextInference()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("S1MiniPrivateReplay-" + UUID().uuidString)
+        let provider = S1MiniIntegrationProvider(store: S1MiniModelStore(directoryURL: directory), engine: engine)
+        let runtime = PrivateAIIntegrationService.RuntimeConfiguration(
+            selectedProviderID: "s1-mini", providerKey: "s1-mini", baseURL: "", model: S1MiniProviderFeature.modelDescriptor.id, apiKey: "",
+            localModelPath: path, usesStablePromptPrefixKVCache: false, usesFluid1Boost: false, contextTokenLimit: 4096
+        )
+        let context = PrivateAIIntegrationService.AppContext(appName: "Local replay", bundleID: "test.s1-mini", windowTitle: "", appVersion: nil)
+        var outputs: [Output] = []
+        do {
+            for input in inputs {
+                #if !S1_MINI_STANDALONE_TESTS
+                let budget = SettingsStore.privateAIDictationTokenBudget(forInputText: input.inputText, contextTokenLimit: 4096)
+                let service = PrivateAIIntegrationService(testingProvider: provider)
+                let result = try await service.enhanceDictation(input.inputText, runtime: runtime, context: context)
+                let legacyWouldReject = !budget.hasSufficientHeadroom
+                #else
+                let result = try await provider.enhanceDictation(input.inputText, runtime: runtime, context: context, maxOutputTokens: 4095)
+                let legacyWouldReject = false
+                #endif
+                let tokens = try await engine.tokenCount(in: S1MiniPrompt.make(transcript: input.inputText))
+                XCTAssertFalse(result.outputText.isEmpty)
+                XCTAssertGreaterThan(result.outputText.count, input.inputText.count / 2)
+                outputs.append(Output(name: input.name, inputCharacters: input.inputText.count, outputCharacters: result.outputText.count,
+                                      promptTokens: tokens, legacyWouldReject: legacyWouldReject,
+                                      latencyMilliseconds: result.latencyMilliseconds, outputText: result.outputText))
+                print("Private dictation replay case=\(outputs.count) inputChars=\(input.inputText.count) outputChars=\(result.outputText.count) promptTokens=\(tokens) legacyRejected=\(legacyWouldReject)")
+            }
+            let resultURL = fixtureURL.deletingLastPathComponent().appendingPathComponent("results.json")
+            try JSONEncoder().encode(outputs).write(to: resultURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: resultURL.path)
+        } catch {
+            await provider.unloadCachedRuntime(reason: "private replay failure")
+            throw error
+        }
+        await provider.unloadCachedRuntime(reason: "private replay complete")
+    }
+
     func testRealS1MiniEnglishAndRussianCleanup() async throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty else {
             throw XCTSkip("Set PICHI_S1_MINI_MODEL_PATH to the pinned official GGUF for native inference.")
