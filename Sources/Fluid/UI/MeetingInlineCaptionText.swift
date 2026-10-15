@@ -212,8 +212,8 @@ private final class InlineCaptionAttachment: NSTextAttachment {
 private final class InlineCaptionWavePlacement {
     private var displayed: [UInt64: InlineCaptionAttachment] = [:]
 
-    func layout(in view: InlineCaptionNativeView, manager: NSTextLayoutManager?, text: NSAttributedString) {
-        guard let manager, let content = manager.textContentManager else { return }
+    func layout(in view: InlineCaptionNativeView, manager: NSTextLayoutManager?, text: NSAttributedString?) {
+        guard let text, let manager, let content = manager.textContentManager else { return }
         manager.ensureLayout(for: content.documentRange)
         var retained: [UInt64: InlineCaptionAttachment] = [:]
         text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, range, _ in
