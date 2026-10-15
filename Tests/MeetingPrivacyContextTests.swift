@@ -148,6 +148,7 @@ struct MeetingPrivacyContextTests {
         try await stableLiveHypothesisSuite()
         try await stablePCMHypothesisSuite()
         try await stablePCMObservationIdentitySuite()
+        try await emptyPCMObservationIdentitySuite()
         try await knownNonPersonPCMContextSuite(using: KnownNonPersonNERPrivacyRedactor())
         try await partialUtteranceCoverageSuite()
         try await clinicalMedicationContextSuite(using: ClinicalNERFixtureRedactor())
@@ -531,6 +532,63 @@ struct MeetingPrivacyContextTests {
         let stable = try await correcting.previewSpeech(observation(["и вам завтра нужно проверить инструкцию. Потом обсудим результат."], identity: identity))
         try check(stable?.text.contains("Иван") == false && stable?.text.contains("[ИМЯ]") == false,
                   "corrected transient name reached protected display")
+    }
+
+    static func emptyPCMObservationIdentitySuite() async throws {
+        let recorder = RecordingPrivacyRedactor()
+        let context = MeetingTranscriptPrivacyContext(redactor: recorder)
+        let track = UUID(), attempt = UUID()
+        let identity = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: attempt,
+            epochID: .init(trackID: track, ordinal: 0))
+        func empty(_ identity: MeetingPCMTranscriptBatch.SpeechObservationIdentity, sealed: Bool = false) -> MeetingPCMTranscriptBatch {
+            var batch = MeetingPCMTranscriptBatch(segments: [], isComplete: false)
+            batch.speechObservationIdentity = identity; batch.speechObservationIsFinal = sealed
+            return batch
+        }
+        let firstEmpty = empty(identity)
+        let first = try await context.previewSpeech(firstEmpty)
+        let beforeSpeech = await recorder.inputs
+        try check(first == nil && beforeSpeech.isEmpty && firstEmpty.sourceTrack == nil,
+                  "a genuine first empty observation failed or invented source/word evidence")
+        let old = segment("Сегодня обсуждаем подробную инструкцию и условия хранения препарата.", track: track, start: 0)
+        _ = try await context.redact(.init(segments: [old]))
+        let next = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: attempt,
+            epochID: .init(trackID: track, ordinal: 192_000))
+        let pendingEmpty = try await context.previewSpeech(empty(next))
+        try check(pendingEmpty == nil, "an empty next window inherited an earlier pending preview")
+        var speech = MeetingPCMTranscriptBatch(segments: [segment(
+            "Затем проверим результат распознавания и обсудим планы следующей встречи.", track: track, start: 12)], isComplete: false)
+        speech.speechObservationIdentity = next
+        let beforeFirstWords = await recorder.inputs.count
+        _ = try await context.previewSpeech(speech)
+        let afterFirstWords = await recorder.inputs.count
+        try check(beforeFirstWords == afterFirstWords, "an empty observation confirmed the first text hypothesis")
+        let stillUnconfirmed = try await context.previewSpeech(empty(next))
+        try check(stillUnconfirmed == nil, "empty current speech retagged a safe prefix from an earlier window")
+        let approved = try await context.previewSpeech(speech)
+        try check(approved != nil, "a later repeated hypothesis failed after a valid empty observation")
+        let beforeSeal = await recorder.inputs.count
+        let sealed = try await context.previewSpeech(empty(next, sealed: true))
+        let afterSeal = await recorder.inputs.count
+        try check(sealed == approved && beforeSeal == afterSeal, "an empty seal confirmed words or erased its own approved preview")
+        let otherAttempt = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: UUID(), epochID: next.epochID)
+        let different = try await context.previewSpeech(empty(otherAttempt, sealed: true))
+        try check(different == nil, "an empty observation inherited another attempt's approved preview")
+        let tail = try await context.finish()
+        try check(tail?.segments.map(\.id) == [old.id], "empty/provisional speech entered the durable tail")
+
+        let explicitOtherSource = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
+            sourceDisplayName: "Synthetic microphone", format: nil,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil),
+            health: .waiting, chunks: [])
+        for var mismatched in [empty(identity), speech] {
+            mismatched.sourceTrack = explicitOtherSource
+            let rejecting = MeetingTranscriptPrivacyContext(redactor: recorder)
+            do {
+                _ = try await rejecting.previewSpeech(mismatched)
+                throw Failure.assertion("typed metadata overrode an explicitly contradictory track")
+            } catch is MeetingPrivacyPublicationError { }
+        }
     }
 
     static func liveDeliverySuite() async throws {

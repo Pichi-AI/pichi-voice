@@ -410,6 +410,7 @@ actor MeetingTranscriptPrivacyContext {
     private var isProcessing = false
     private let provisionalPreviewID = UUID()
     private var lastSafePreview: MeetingLivePartial?
+    private var lastSafePreviewIdentity: MeetingPCMTranscriptBatch.SpeechObservationIdentity?
     private struct SpeechObservation {
         let trackID: MeetingAudioTrackID
         let firstSegmentID: UUID
@@ -441,7 +442,7 @@ actor MeetingTranscriptPrivacyContext {
         var diagnosticStableUTF16 = 0
         var diagnosticPreviewUTF16 = 0
         defer {
-            if !completed { lastSafePreview = nil; previousSpeechObservation = nil }
+            if !completed { lastSafePreview = nil; lastSafePreviewIdentity = nil; previousSpeechObservation = nil }
             isProcessing = false
             // Scalar publication evidence only. Raw hypotheses, detected values,
             // names and model outputs never enter the support logger.
@@ -451,7 +452,14 @@ actor MeetingTranscriptPrivacyContext {
         let tracks = Set(batch.segments.map(\.sourceTrackID))
         guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         let ordered = batch.segments.sorted { $0.start < $1.start }
-        let currentTrack = ordered.first?.sourceTrackID ?? batch.sourceTrack?.id
+        let segmentTrack = ordered.first?.sourceTrackID
+        let declaredTrack = batch.sourceTrack?.id
+        guard segmentTrack == nil || declaredTrack == nil || segmentTrack == declaredTrack else {
+            throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+        }
+        // An empty native observation has no segment or fabricated track record.
+        // Its typed physical-window provenance still identifies the source clock.
+        let currentTrack = segmentTrack ?? declaredTrack ?? batch.speechObservationIdentity?.epochID.trackID
         if let identity = batch.speechObservationIdentity {
             guard identity.epochID.trackID == currentTrack,
                   identity.epochID.ordinal >= 0, identity.epochID.generation >= 0 else {
@@ -467,7 +475,11 @@ actor MeetingTranscriptPrivacyContext {
         }
         if ordered.isEmpty {
             completed = true
-            let preview = currentTrack == nil || continues ? lastSafePreview : nil
+            let preview: MeetingLivePartial?
+            if let identity = batch.speechObservationIdentity {
+                if previousSpeechObservation?.identity != identity { previousSpeechObservation = nil }
+                preview = lastSafePreviewIdentity == identity ? lastSafePreview : nil
+            } else { preview = currentTrack == nil || continues ? lastSafePreview : nil }
             diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
             return preview
         }
@@ -540,6 +552,7 @@ actor MeetingTranscriptPrivacyContext {
         }
         diagnosticPreviewUTF16 = preview?.text.utf16.count ?? 0
         lastSafePreview = preview
+        lastSafePreviewIdentity = preview == nil ? nil : batch.speechObservationIdentity
         completed = true
         return preview
     }
@@ -548,7 +561,7 @@ actor MeetingTranscriptPrivacyContext {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         isProcessing = true
         var completed = false
-        defer { if !completed { lastSafePreview = nil }; isProcessing = false }
+        defer { if !completed { lastSafePreview = nil; lastSafePreviewIdentity = nil }; isProcessing = false }
         try Task.checkCancellation()
         let tracks = Set(batch.segments.map(\.sourceTrackID))
         guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
@@ -566,6 +579,7 @@ actor MeetingTranscriptPrivacyContext {
             // already approved display. No-source silence belongs to this owned
             // attempt; an explicitly different source never inherits its preview.
             if !pending.isEmpty, currentTrack == nil || continues { safe.livePreview = lastSafePreview }
+            if safe.livePreview != lastSafePreview { lastSafePreviewIdentity = nil }
             lastSafePreview = safe.livePreview
             completed = true
             return safe
@@ -600,6 +614,7 @@ actor MeetingTranscriptPrivacyContext {
         pending = tail.map { segment in var copy = segment; copy.originalText = nil; return copy }
         pendingIsComplete = combined.isComplete
         trackID = currentTrack; lastEnd = last.end
+        if safe.livePreview != lastSafePreview { lastSafePreviewIdentity = nil }
         lastSafePreview = safe.livePreview
         completed = true
         return safe
@@ -608,6 +623,7 @@ actor MeetingTranscriptPrivacyContext {
     func finish() async throws -> MeetingPCMTranscriptBatch? {
         guard !isProcessing else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         lastSafePreview = nil
+        lastSafePreviewIdentity = nil
         previousSpeechObservation = nil
         try Task.checkCancellation()
         guard !pending.isEmpty else { return nil }

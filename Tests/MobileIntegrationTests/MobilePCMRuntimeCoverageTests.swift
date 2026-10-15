@@ -48,7 +48,14 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         var batch: MeetingPCMTranscriptBatch?
         var batches: [MeetingPCMTranscriptBatch] = []
         var checkpoints: [MeetingPCMTranscriptBatch] = []
+        var safePreviews: [MeetingLivePartial?] = []
         var operation: Task<MeetingPCMTranscriptBatch, Error>?
+    }
+
+    private struct BenignPrivacyFixture: TranscriptTextRedacting {
+        func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+            .init(text: text, spans: [], provisionalSafeUTF16: text.utf16.count)
+        }
     }
 
     private func progressiveSample(frames: Int, start: Int64) throws -> CMSampleBuffer {
@@ -102,6 +109,90 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         XCTAssertTrue(final.isComplete)
         XCTAssertEqual(fixture.provider.timedSampleCounts, [96_000, 48_000, 96_000])
         XCTAssertEqual(fixture.provider.releaseCalls, 2)
+        XCTAssertFalse(fixture.owner.isClaimed)
+    }
+
+    func testRuntimeEmptyFirstThenSpeechPassesTypedPrivacyWithoutInventingATrack() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        let text = "Сегодня обсуждаем подробную инструкцию и проверяем запись разговора."
+        fixture.provider.timedResponses = [48_000: ("", []), 96_000: (text, []),
+            144_000: (text + " Потом сохраним результат.", [])]
+        let attempt = UUID(), track = UUID(), observed = PCMPreviewObservation()
+        let privacy = MeetingTranscriptPrivacyContext(redactor: BenignPrivacyFixture())
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let first = expectation(description: "Empty native observation crossed privacy")
+        let second = expectation(description: "First text remains unconfirmed")
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, offset in
+                try await fixture.runtime.recognizePCM(window: window, offset: offset, trackID: track,
+                    attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                        let safe = try await privacy.previewSpeech(batch)
+                        await MainActor.run {
+                            observed.batches.append(batch); observed.safePreviews.append(safe)
+                            if observed.batches.count == 1 { first.fulfill() }
+                            if observed.batches.count == 2 { second.fulfill() }
+                        }
+                    })
+            }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+            failure: { _ in XCTFail("A genuine empty native observation cannot interrupt capture") })
+        addTeardownBlock { try? await consumer.finish() }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        await fulfillment(of: [first], timeout: 3)
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+        await fulfillment(of: [second], timeout: 3)
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 96_000)))
+        try await consumer.finish()
+        XCTAssertTrue(observed.batches.first?.segments.isEmpty == true)
+        XCTAssertTrue(observed.batches.allSatisfy { $0.sourceTrack == nil })
+        XCTAssertTrue(observed.batches.allSatisfy { $0.speechObservationIdentity?.epochID.trackID == track })
+        XCTAssertGreaterThanOrEqual(observed.safePreviews.count, 3)
+        guard observed.safePreviews.count >= 3 else { return }
+        XCTAssertNil(observed.safePreviews[0]); XCTAssertNil(observed.safePreviews[1])
+        let finalPreview = try XCTUnwrap(observed.safePreviews.last.flatMap { $0 })
+        XCTAssertTrue(finalPreview.text.contains("Сегодня обсуждаем"))
+        XCTAssertEqual(observed.checkpoints.count, 1)
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
+        XCTAssertFalse(fixture.owner.isClaimed)
+    }
+
+    func testRuntimeEmptySealedWindowDoesNotInheritPendingPrivacyPreview() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        fixture.provider.timedResponses = [48_000: ("", []), 96_000: ("", [])]
+        let attempt = UUID(), track = UUID(), observed = PCMPreviewObservation()
+        let privacy = MeetingTranscriptPrivacyContext(redactor: BenignPrivacyFixture())
+        let prior = MeetingTranscriptSegment(id: UUID(), start: .init(value: 0, timescale: 1),
+            end: .init(value: 3, timescale: 1), sourceTrackID: track, speakerID: nil,
+            text: "Earlier approved speech remains in the bounded context.", revision: 0,
+            status: .final, overlap: .none, completeness: .complete)
+        let held = try await privacy.redact(.init(segments: [prior]))
+        XCTAssertNotNil(held.livePreview); XCTAssertTrue(held.segments.isEmpty)
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let first = expectation(description: "Empty next window")
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, _ in
+                try await fixture.runtime.recognizePCM(window: window, offset: 6, trackID: track,
+                    attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                        let safe = try await privacy.previewSpeech(batch)
+                        await MainActor.run {
+                            observed.batches.append(batch); observed.safePreviews.append(safe)
+                            if observed.batches.count == 1 { first.fulfill() }
+                        }
+                    })
+            }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+            failure: { _ in XCTFail("An empty sealed next window must safely drain") })
+        addTeardownBlock { try? await consumer.finish() }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        await fulfillment(of: [first], timeout: 3)
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+        try await consumer.finish()
+        XCTAssertTrue(observed.batches.allSatisfy { $0.segments.isEmpty && $0.sourceTrack == nil })
+        XCTAssertTrue(observed.batches.last?.speechObservationIsFinal == true)
+        XCTAssertTrue(observed.safePreviews.allSatisfy { $0 == nil })
+        let tail = try await privacy.finish()
+        XCTAssertEqual(tail?.segments.map(\.id), [prior.id])
+        XCTAssertEqual(fixture.provider.releaseCalls, 1)
         XCTAssertFalse(fixture.owner.isClaimed)
     }
 
