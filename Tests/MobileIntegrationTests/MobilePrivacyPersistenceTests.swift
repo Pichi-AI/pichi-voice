@@ -16,6 +16,28 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativePIIDoesNotClassifyATransientASRSpellingAsAName() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        let installed = await store.isInstalled()
+        guard installed else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let id = UUID()
+        var raw = MeetingLiveTranscriptSnapshot.empty
+        let hypotheses = ["Ддавай", "Ддавай теперь", "Давай теперь сфокусируемся на других проблемах.",
+                          "Давай теперь сфокусируемся на других проблемах. Проверим запись и условия хранения.",
+                          "Давай теперь сфокусируемся на других проблемах. Проверим запись и условия хранения."]
+        for (index, hypothesis) in hypotheses.enumerated() {
+            raw = raw.settingPartial(.init(id: id, text: hypothesis, start: 0), for: .you)
+            let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(raw, using: privacy)
+            let text = safe.partials[.you]?.text ?? ""
+            XCTAssertFalse(text.contains("[ИМЯ]"), "A volatile spelling must not become a personal-data mask")
+            if index == hypotheses.count - 1 { XCTAssertTrue(text.contains("Давай теперь")) }
+        }
+        try await privacy.unload()
+    }
+
     func testNativeLivePIIRetagsCompletedRowsAcrossPartialUpdates() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let models = assets.appendingPathComponent("models/privacy", isDirectory: true)

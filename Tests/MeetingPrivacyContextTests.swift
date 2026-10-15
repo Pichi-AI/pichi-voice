@@ -591,7 +591,7 @@ struct MeetingPrivacyContextTests {
             let redacted = try PIIRedactor.redact(text, ner: [])
             let limit = try PIIRedactor.provisionalSafePrefix(in: text, ner: [], redactedSpans: redacted.spans)
             try check((limit ?? 0) > (text as NSString).range(of: amount).upperBound,
-                      "a confirmed quantity after a masked PAN withheld the whole live transcript")
+                      "a confirmed quantity after a masked PAN withheld the whole live transcript: \(amount), limit=\(String(describing: limit))")
             try check(redacted.text.contains("[КАРТА]") && !redacted.text.contains("4111"),
                       "quantity admission weakened canonical card masking")
         }
