@@ -262,7 +262,12 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
     func makeCoordinator() -> InlineCaptionContent { InlineCaptionContent() }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = InlineCaptionTextView(usingTextLayoutManager: true)
+        let storage = NSTextContentStorage()
+        let manager = NSTextLayoutManager()
+        let container = NSTextContainer(size: .zero)
+        manager.textContainer = container
+        storage.addTextLayoutManager(manager)
+        let view = InlineCaptionTextView(frame: .zero, textContainer: container)
         view.isEditable = false
         view.isSelectable = false
         view.isScrollEnabled = false
@@ -288,7 +293,9 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
         view.textContainer.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         guard let manager = view.textLayoutManager, let content = manager.textContentManager else { return nil }
         manager.ensureLayout(for: content.documentRange)
-        return CGSize(width: width, height: ceil(max(configuration.font.lineHeight, manager.usageBoundsForTextContainer.maxY)))
+        let used = manager.usageBoundsForTextContainer
+        let fittedWidth = configuration.documentStyle ? width : min(width, ceil(max(1, used.maxX)))
+        return CGSize(width: fittedWidth, height: ceil(max(configuration.font.lineHeight, used.maxY)))
     }
 }
 #else
@@ -297,7 +304,12 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
     func makeCoordinator() -> InlineCaptionContent { InlineCaptionContent() }
 
     func makeNSView(context: Context) -> NSTextView {
-        let view = InlineCaptionTextView(usingTextLayoutManager: true)
+        let storage = NSTextContentStorage()
+        let manager = NSTextLayoutManager()
+        let container = NSTextContainer(size: .zero)
+        manager.textContainer = container
+        storage.addTextLayoutManager(manager)
+        let view = InlineCaptionTextView(frame: .zero, textContainer: container)
         view.isEditable = false
         view.isSelectable = false
         view.isRichText = true
@@ -325,8 +337,9 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
         guard let manager = view.textLayoutManager, let content = manager.textContentManager else { return nil }
         manager.ensureLayout(for: content.documentRange)
         let font = configuration.font
-        return CGSize(width: width, height: ceil(max(font.ascender - font.descender + font.leading,
-            manager.usageBoundsForTextContainer.maxY)))
+        let used = manager.usageBoundsForTextContainer
+        let fittedWidth = configuration.documentStyle ? width : min(width, ceil(max(1, used.maxX)))
+        return CGSize(width: fittedWidth, height: ceil(max(font.ascender - font.descender + font.leading, used.maxY)))
     }
 }
 #endif
