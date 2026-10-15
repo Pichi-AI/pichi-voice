@@ -266,6 +266,7 @@ final class MobilePCMAdmissionTests: XCTestCase {
             timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
         session.recordingBackendID = descriptor.id.rawValue
         session.recordingASRArtifactFingerprint = "synthetic-frozen-public-export"
+        session.piiRedactionEnabled = false // This test injects a runtime refusal, not a privacy model.
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("UncreatedAdmission.\(UUID().uuidString)")
         do {
             try await pipeline.prepareMemoryAudio(session: session, sessionDirectory: directory,

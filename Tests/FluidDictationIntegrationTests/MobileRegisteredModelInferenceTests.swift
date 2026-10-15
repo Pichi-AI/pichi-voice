@@ -508,7 +508,11 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                 try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
             }
             let archive = try MeetingMemoryAudioArchive()
-            try samples.withUnsafeBufferPointer { try archive.append($0) }
+            for start in stride(from: 0, to: samples.count, by: 48_000) {
+                try samples.withUnsafeBufferPointer {
+                    try archive.append(UnsafeBufferPointer(rebasing: $0[start..<min(samples.count, start + 48_000)]))
+                }
+            }
             try archive.seal()
             defer { archive.clear() }
             let live = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
@@ -588,7 +592,11 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                     try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
                 }
                 let archive = try MeetingMemoryAudioArchive()
-                try samples.withUnsafeBufferPointer { try archive.append($0) }
+                for start in stride(from: 0, to: samples.count, by: 48_000) {
+                    try samples.withUnsafeBufferPointer {
+                        try archive.append(UnsafeBufferPointer(rebasing: $0[start..<min(samples.count, start + 48_000)]))
+                    }
+                }
                 try archive.seal()
                 defer { archive.clear() }
                 var speech = MeetingPCMTranscriptBatch(segments: [])
