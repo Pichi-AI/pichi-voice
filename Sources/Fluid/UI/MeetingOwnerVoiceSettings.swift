@@ -146,7 +146,7 @@ final class MeetingOwnerVoiceEnrollmentModel: ObservableObject {
                     #if os(iOS)
                     selected = try await IOSMeetingCaptureEngine.defaultMicrophone(preferredUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
                     #else
-                    selected = try await MeetingCaptureEngine.defaultMicrophone(preferredCoreAudioUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
+                    selected = try await MeetingCaptureSourceCatalog.defaultMicrophone(preferredCoreAudioUID: SettingsStore.shared.meetingRecordingDefaults.microphoneCoreAudioUID)
                     #endif
                 }
                 try Task.checkCancellation()
