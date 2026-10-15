@@ -6,6 +6,151 @@ import UIKit
 /// only public synthetic playback; it does not import the app or inject capture/services.
 final class MobilePhysicalReleaseUITests: XCTestCase {
     @MainActor
+    func testPhysicalOwnerVoiceSampleCanBeCheckedAndDiscardedWithoutSaving() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires an explicitly authorized physical-device audio lease")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_OWNER_VOICE_UI"] == "1",
+              environment["PICHI_PHYSICAL_RELEASE_UI_AUDIO"] == "1" else {
+            throw XCTSkip("Enable physical owner voice checking and audible playback explicitly")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        try require(!revision.isEmpty && revision != "working-tree", "A concrete AUT revision is required")
+        let runnerID = try XCTUnwrap(Bundle.main.bundleIdentifier)
+        try require(runnerID.hasSuffix(".xctrunner"), "Playback must be owned by the UI test runner")
+        let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+        try require(backgroundModes.contains("audio"), "The frozen signed UI runner must declare background audio")
+        let assets = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                appropriateFor: nil, create: false)
+        let fixture = assets.appendingPathComponent("PhysicalReleaseUI/audio/owner-enrollment.wav")
+        try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved synthetic owner voice WAV in the runner")
+        let player = try AVAudioPlayer(contentsOf: fixture)
+        try require(player.duration.isFinite && player.duration >= 15, "Owner checking requires a valid single-voice speech fixture")
+        player.numberOfLoops = -1
+        player.volume = 0.8
+        try require(player.prepareToPlay(), "The runner must prepare actual synthetic speech playback")
+
+        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        app.activate()
+        try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
+        try require(!app.buttons["meeting.stop"].exists
+                    && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                    "An existing meeting or transcription is not owned by this test")
+        try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
+        try tap(app.buttons["settings.recording"], "Open the ordinary recording settings")
+        let start = app.buttons["ownerVoice.start"]
+        try reveal(start, in: app, revision: revision)
+        let status = app.staticTexts["ownerVoice.status"]
+        try require(status.waitForExistence(timeout: 5), "The existing owner profile status must be visible")
+        // Allow the Settings transaction's asynchronous metadata refresh to settle.
+        // A human profile is never deleted, replaced, or used as a synthetic test draft.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        if app.buttons["ownerVoice.delete"].exists
+            || ["Your voice is saved", "Ваш голос сохранён"].contains(status.label) {
+            throw XCTSkip("A pre-existing owner profile is preserved; this test requires an unset profile")
+        }
+        try require(["Your voice is not set up", "Ваш голос ещё не настроен"].contains(status.label),
+                    "The app must confirm that no owner profile is configured")
+        try require(!app.buttons["ownerVoice.save"].exists && !app.buttons["ownerVoice.cancel"].exists,
+                    "An existing enrollment transaction is not owned by this test")
+        try require(app.alerts.count == 0 && !app.staticTexts["ownerVoice.error"].exists,
+                    "Permissions and owner profile readiness must be resolved before the audio lease")
+        capture("owner-01-profile-unset", revision: revision)
+
+        let audioSession = AVAudioSession.sharedInstance()
+        try require(audioSession.outputVolume > 0.05, "Device output must be audible before playback")
+        let originalCategory = audioSession.category
+        let originalMode = audioSession.mode
+        let originalOptions = audioSession.categoryOptions
+        var changedPlaybackCategory = false
+        var ownsPlaybackSession = false
+        var ownsEnrollment = false
+        defer {
+            player.stop()
+            if ownsPlaybackSession { try? audioSession.setActive(false, options: .notifyOthersOnDeactivation) }
+            if changedPlaybackCategory {
+                try? audioSession.setCategory(originalCategory, mode: originalMode, options: originalOptions)
+            }
+        }
+        do {
+            let runner = XCUIApplication(bundleIdentifier: runnerID)
+            runner.activate()
+            try require(runner.state == .runningForeground, "The runner must initiate foreground playback")
+            try audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
+            changedPlaybackCategory = true
+            try audioSession.setActive(true)
+            ownsPlaybackSession = true
+            try require(player.play(), "The runner must start synthetic owner speech")
+            app.activate()
+            try tap(start, "Start the ordinary owner voice microphone capture")
+            ownsEnrollment = true
+            let stop = app.buttons["ownerVoice.stop"]
+            try require(stop.waitForExistence(timeout: 30), "Owner voice setup must start actual microphone capture")
+            capture("owner-02-microphone-recording", revision: revision)
+            let began = ProcessInfo.processInfo.systemUptime
+            for second in 1...18 {
+                let remaining = began + Double(second) - ProcessInfo.processInfo.systemUptime
+                if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
+                try require(player.isPlaying, "Synthetic owner speech playback must continue during capture")
+                if !stop.exists { break } // The production capture may reach its bounded duration itself.
+            }
+            if stop.exists { try tap(stop, "Finish the bounded owner voice sample") }
+            try require(stop.waitForNonExistence(timeout: 10), "Microphone capture must join before checking the sample")
+            player.stop()
+            capture("owner-03-sample-checking", revision: revision)
+            let save = app.buttons["ownerVoice.save"]
+            let deadline = ProcessInfo.processInfo.systemUptime + 120
+            while !save.exists && ProcessInfo.processInfo.systemUptime < deadline {
+                try require(!app.staticTexts["ownerVoice.error"].exists, "The actual single-voice microphone sample must pass checking")
+                try await Task.sleep(nanoseconds: 500_000_000)
+            }
+            try reveal(save, in: app, revision: revision)
+            try require(save.exists && save.isEnabled, "A checked draft must expose the explicit Save action")
+            try require(!app.buttons["ownerVoice.delete"].exists, "Checking alone must not persist a voice profile")
+            capture("owner-04-checked-draft-unsaved", revision: revision)
+            try tap(app.buttons["ownerVoice.cancel"], "Discard the synthetic draft without saving it")
+            try require(save.waitForNonExistence(timeout: 5), "Discard must remove the ready draft")
+            ownsEnrollment = false
+            try require(!app.buttons["ownerVoice.delete"].exists, "Discard must leave no persistent owner profile")
+            try require(["Your voice is not set up", "Ваш голос ещё не настроен"].contains(status.label),
+                        "The owner profile must remain unset after discarding the draft")
+            capture("owner-05-draft-discarded", revision: revision)
+            try openNavigation(app, "history", titles: ["History", "История"], revision: revision)
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
+            try require(!app.buttons["meeting.stop"].exists, "Owner checking must release capture without starting a meeting")
+            try openNavigation(app, "settings", titles: ["Settings", "Настройки"], revision: revision)
+            try tap(app.buttons["settings.recording"], "Reopen recording settings after capture cleanup")
+            try reveal(start, in: app, revision: revision)
+            try require(start.isEnabled && !app.buttons["ownerVoice.delete"].exists && !save.exists,
+                        "Navigation must remain responsive and the discarded draft must not return")
+            capture("owner-06-clean-settings-reopened", revision: revision)
+        } catch {
+            player.stop()
+            if ownsEnrollment {
+                let cleanup = Task { @MainActor in
+                    app.activate()
+                    let cancel = app.buttons["ownerVoice.cancel"]
+                    if cancel.exists && cancel.isEnabled { cancel.tap() }
+                    let deadline = ProcessInfo.processInfo.systemUptime + 120
+                    while app.buttons["ownerVoice.cancel"].exists && ProcessInfo.processInfo.systemUptime < deadline {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                    self.capture("owner-failure-draft-cleanup", revision: revision)
+                    if app.buttons["ownerVoice.cancel"].exists {
+                        print("[PHYSICAL_OWNER_UI] cleanup_requires_parent_inspection revision=\(revision)")
+                    }
+                }
+                await cleanup.value
+            }
+            throw error
+        }
+        #endif
+    }
+
+    @MainActor
     func testReleaseTinyFiveMinuteBackgroundRecordingAndJSONShare() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Requires an explicitly authorized physical-device audio lease")
