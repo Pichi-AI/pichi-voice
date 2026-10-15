@@ -776,3 +776,68 @@ nonisolated struct MeetingTranscriptAssembler {
         ))
     }
 }
+
+/// Speaker-only reconciliation after whole-recording analysis. Reuses canonical speaker
+/// identity and coverage rules while retaining accepted text, redaction and segment provenance.
+nonisolated enum MeetingPCMRecordingAttribution {
+    static func assemble(
+        transcript: MeetingPCMTranscriptBatch, activity: [MeetingBackendSpeakerActivity],
+        epoch: MeetingAnalysisEpochID, attemptID: UUID, duration: TimeInterval,
+        speakerNameFormat: String, confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
+    ) throws -> MeetingPCMTranscriptBatch {
+        guard duration.isFinite, duration > 0,
+              transcript.segments.allSatisfy({ $0.sourceTrackID == epoch.trackID
+                  && $0.start.seconds.isFinite && $0.end.seconds.isFinite
+                  && $0.start.seconds >= 0 && $0.end.seconds > $0.start.seconds
+                  && $0.end.seconds <= duration + 0.001 }),
+              activity.allSatisfy({ $0.token.analysisEpochID == epoch && $0.start.isFinite && $0.end.isFinite
+                  && $0.start >= 0 && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+        let orderedActivity = activity.sorted { $0.start < $1.start }
+        var cursor = 0
+        var active: [MeetingBackendSpeakerActivity] = []
+        var assignments: [Int: MeetingBackendSpeakerAssignment] = [:]
+        // Long meetings must not compare every word with the entire recording timeline.
+        // Keep only intervals that can overlap the current accepted text unit.
+        for index in transcript.segments.indices.sorted(by: {
+            transcript.segments[$0].start < transcript.segments[$1].start
+        }) {
+            try Task.checkCancellation()
+            let segment = transcript.segments[index]
+            let start = segment.start.seconds, end = segment.end.seconds
+            active.removeAll { $0.end <= start }
+            while cursor < orderedActivity.count, orderedActivity[cursor].start < end {
+                if orderedActivity[cursor].end > start { active.append(orderedActivity[cursor]) }
+                cursor += 1
+            }
+            // Persisted native segment timings do not imply word precision. Preserve real
+            // overlap conservatively rather than inferring a dominant voice in a coarse turn.
+            assignments[index] = MeetingParakeetNemotronBackend.assignment(
+                start: start, end: end, activity: active, allowDominance: false)
+        }
+        let units = transcript.segments.enumerated().map { index, segment in
+            MeetingFinalTextUnit(id: "post-stop:\(segment.id)", trackID: epoch.trackID,
+                analysisEpochID: epoch, precision: .utterance, text: segment.text,
+                analysisStart: segment.start.seconds, analysisEnd: segment.end.seconds,
+                speaker: assignments[index] ?? .unassigned, analysisSpanIDs: [], confidence: nil)
+        }
+        // Canonical media times round to milliseconds. The last accepted boundary can
+        // exceed the physical frame duration by at most that rounding quantum.
+        let assemblyDuration = max(duration, transcript.segments.map { $0.end.seconds }.max() ?? duration)
+        let attributed = try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat)
+            .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: 0, duration: assemblyDuration,
+                units: units, priorSpeakers: transcript.speakers, confirmedLocalUserTokens: confirmedLocalUserTokens)
+        guard attributed.segments.count == transcript.segments.count else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+        var result = transcript
+        result.speakers = attributed.speakers
+        for index in result.segments.indices {
+            result.segments[index].speakerID = attributed.segments[index].speakerID
+            result.segments[index].overlap = attributed.segments[index].overlap
+            result.segments[index].attributionState = attributed.segments[index].attributionState
+        }
+        return result
+    }
+}

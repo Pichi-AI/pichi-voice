@@ -519,6 +519,106 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         XCTAssertEqual(fixture.provider.prepareCalls, 2)
     }
 
+    func testLiveSpeakerEnabledSpeechNeverOpensDiarizerOrVoiceEncoder() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        defer { fixture.service.releaseExclusiveActivity(fixture.lease) }
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let output = MeetingParakeetEpochOutput(epochID: epoch, text: "Защищённый <PERSON> текст.",
+            words: [.init(text: "Защищённый", start: 0.1, end: 0.4),
+                    .init(text: "<PERSON>", start: 0.4, end: 0.7),
+                    .init(text: "текст.", start: 0.7, end: 0.9)],
+            sampleRate: 16_000, sampleCount: 16_000, spanSamples: [])
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: fixture.configuration.asrModel,
+            languageCode: "ru", speakerLabelsEnabled: true)
+        // No speaker artifact is pinned and no weights exist in this fixture. The former
+        // live speaker phase threw staleGrant here; every live result must now be text only.
+        let result = try await fixture.runtime.attributePCMSpeech(samples: [Float](repeating: 0.1, count: 16_000),
+            output: output, epoch: epoch, offset: 0, attemptID: UUID(), configuration: configuration,
+            priorProfiles: [], priorSpeakers: [])
+        XCTAssertEqual(result.segments.map(\.text), ["Защищённый", "<PERSON>", "текст."])
+        XCTAssertTrue(result.speakers.isEmpty)
+        XCTAssertTrue(result.segments.allSatisfy { $0.speakerID == nil && $0.attributionState == .unassigned })
+        XCTAssertEqual(fixture.provider.prepareCalls, 0)
+    }
+
+    func testPostStopGlobalAttributionPreservesProtectedTextIDsAndOriginalProvenance() throws {
+        let track = UUID(), attempt = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-3")
+        let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        var original: [MeetingTranscriptSegment] = []
+        for (index, start) in [0.0, 10.0, 28_790.0, 28_795.0].enumerated() {
+            original.append(.init(id: UUID(), start: .init(value: Int64(start * 1_000), timescale: 1_000),
+                end: .init(value: Int64((start + 1) * 1_000), timescale: 1_000), sourceTrackID: track,
+                speakerID: nil, text: "Фраза \(index) <PERSON>", originalText: "Protected synthetic original",
+                revision: 2, status: .final, overlap: .none, completeness: .incompleteTrack,
+                isLikelyEcho: false, attributionState: .unassigned))
+        }
+        let input = MeetingPCMTranscriptBatch(segments: original, isComplete: false)
+        let activity: [MeetingBackendSpeakerActivity] = [
+            .init(token: first, start: 0, end: 1), .init(token: second, start: 10, end: 11),
+            .init(token: first, start: 28_790, end: 28_791), .init(token: second, start: 28_795, end: 28_796)]
+        let output = try MeetingPCMRecordingAttribution.assemble(transcript: input, activity: activity,
+            epoch: epoch, attemptID: attempt, duration: 28_800, speakerNameFormat: "Speaker %lld")
+        XCTAssertFalse(output.isComplete)
+        XCTAssertEqual(output.speakers.count, 2)
+        XCTAssertEqual(output.segments[0].speakerID, output.segments[2].speakerID)
+        XCTAssertEqual(output.segments[1].speakerID, output.segments[3].speakerID)
+        XCTAssertNotEqual(output.segments[0].speakerID, output.segments[1].speakerID)
+        for (before, after) in zip(original, output.segments) {
+            var expected = before
+            expected.speakerID = after.speakerID
+            expected.attributionState = .assigned
+            XCTAssertEqual(expected, after, "Only speaker attribution may change after privacy publication")
+        }
+        let overlapped = try MeetingPCMRecordingAttribution.assemble(transcript: input,
+            activity: activity + [.init(token: second, start: 0, end: 1)], epoch: epoch,
+            attemptID: attempt, duration: 28_800, speakerNameFormat: "Speaker %lld")
+        XCTAssertNil(overlapped.segments[0].speakerID)
+        XCTAssertEqual(overlapped.segments[0].attributionState, .overlappingSpeakers)
+        XCTAssertEqual(overlapped.segments[0].text, original[0].text)
+    }
+
+    func testStoppedRecordingReplayUsesExactBoundedRangesAndRejectsCorruptAudio() async throws {
+        let source = ReplayFixture(totalSampleCount: 32_137)
+        var counts: [Int] = []
+        try await source.replay { counts.append($0.count) }
+        XCTAssertEqual(counts, [16_000, 16_000, 137])
+        let ranges = await source.ranges
+        XCTAssertEqual(ranges, [0..<16_000, 16_000..<32_000, 32_000..<32_137])
+        let corrupt = ReplayFixture(totalSampleCount: 16_000, corrupt: true)
+        do {
+            try await corrupt.replay { _ in XCTFail("Corrupt decoded PCM must not reach native inference") }
+            XCTFail("A short decoder read must fail explicitly")
+        } catch { XCTAssertEqual(error as? MeetingParakeetNemotronRuntimeError, .invalidPCMWindow) }
+    }
+
+    func testStoppedRecordingReplayChecksCancellationBeforeConsumingDecodedAudio() async throws {
+        let source = ReplayFixture(totalSampleCount: 48_000)
+        let task = Task {
+            try await source.replay { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+        do { try await task.value; XCTFail("Cancellation must escape the joined replay") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let ranges = await source.ranges
+        XCTAssertEqual(ranges, [0..<16_000], "Cancellation cannot decode the remainder or finalize a partial recording")
+    }
+
+    private actor ReplayFixture: MeetingPCMReplaySource {
+        nonisolated let totalSampleCount: Int
+        let corrupt: Bool
+        var ranges: [Range<Int>] = []
+        init(totalSampleCount: Int, corrupt: Bool = false) {
+            self.totalSampleCount = totalSampleCount; self.corrupt = corrupt
+        }
+        func readSamples(in range: Range<Int>) async throws -> [Float] {
+            ranges.append(range)
+            return [Float](repeating: 0.1, count: max(0, range.count - (corrupt ? 1 : 0)))
+        }
+    }
+
     private func makeNativePCMPreviewFixture() throws -> (service: ASRService, lease: ASRActivityLease,
         provider: NativeScopeProvider, owner: MeetingASRPreparationOwner,
         runtime: MeetingParakeetNemotronRuntime, configuration: MeetingFinalProcessingConfiguration) {

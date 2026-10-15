@@ -52,6 +52,7 @@ final class MeetingNemotronRealModelSmokeTests: XCTestCase {
     /// segment to JSON, so the app can be compared with NVIDIA's NeMo reference on the same audio.
     /// Set FLUIDVOICE_NEMOTRON_PARITY_AUDIO (comma-separated 16 kHz mono WAVs),
     /// FLUIDVOICE_NEMOTRON_PARITY_MODEL (.mlpackage) and FLUIDVOICE_NEMOTRON_PARITY_OUT (JSON path).
+    /// Set FLUIDVOICE_NEMOTRON_PARITY_BOUNDED_REPLAY=1 to probe stopped-recording replay.
     func testProductionDiarizerSegmentsForParity() async throws {
         let environment = ProcessInfo.processInfo.environment
         guard let audioList = environment["FLUIDVOICE_NEMOTRON_PARITY_AUDIO"],
@@ -65,6 +66,7 @@ final class MeetingNemotronRealModelSmokeTests: XCTestCase {
         let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { ASRService() }, modelLocator: locator)
         let audioURLs = audioList.split(separator: ",").map { URL(fileURLWithPath: String($0)) }
         var report: [String: [[Double]]] = [:]
+        let boundedReplay = environment["FLUIDVOICE_NEMOTRON_PARITY_BOUNDED_REPLAY"] == "1"
         _ = try await runtime.withNemotronDiarization(artifact: try locator.locate()) { factory in
             for url in audioURLs {
                 let file = try AVAudioFile(forReading: url)
@@ -78,7 +80,13 @@ final class MeetingNemotronRealModelSmokeTests: XCTestCase {
                 let channel = try XCTUnwrap(buffer.floatChannelData?[0])
                 let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
                 let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
-                let segments = try await factory.makeDiarizer(epoch: epoch).diarize(samples: samples)
+                let diarizer = try await factory.makeDiarizer(epoch: epoch)
+                let segments: [MeetingNemotronSpeakerSegment]
+                if boundedReplay {
+                    segments = try await diarizer.diarize(source: ParityReplaySource(samples: samples))
+                } else {
+                    segments = try await diarizer.diarize(samples: samples)
+                }
                 report[url.lastPathComponent] = segments.map { [Double($0.slotIndex), $0.start, $0.end] }
             }
             return MeetingNemotronPhaseResult()
@@ -88,6 +96,12 @@ final class MeetingNemotronRealModelSmokeTests: XCTestCase {
         #else
         throw XCTSkip("the production runtime is Apple-Silicon only")
         #endif
+    }
+
+    private nonisolated struct ParityReplaySource: MeetingPCMReplaySource {
+        let samples: [Float]
+        var totalSampleCount: Int { samples.count }
+        func readSamples(in range: Range<Int>) async throws -> [Float] { Array(samples[range]) }
     }
 
     /// Opt-in threshold probe for the cross-epoch voice matcher: cuts each recording where the app

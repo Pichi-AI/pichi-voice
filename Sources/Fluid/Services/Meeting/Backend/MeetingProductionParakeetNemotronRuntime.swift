@@ -17,8 +17,8 @@ import FluidAudio
 // - Prepared-provider ASR: one `ASRService.withPreparedMeetingASR` scope per attempt, with the heavy body
 //   bounced off the main actor so materialization and inference never block the UI.
 // - Optional local WeSpeaker encoding in its own phase, using bounded voice excerpts.
-// - Strict PCM runs one ASR phase first, then observes provisional speech before the
-//   separate Nemotron/voice phases. File-backed orchestration retains its original order.
+// - Strict PCM runs ASR only during capture. After Stop, the replayable recording gets
+//   one global Nemotron pass followed by optional owner encoding, each in its own phase.
 //
 // Parakeet does ASR only; Nemotron does diarization only. Neither capability sees anything beyond
 // the request the host froze.
@@ -41,7 +41,7 @@ nonisolated enum MeetingParakeetNemotronRuntimeError: LocalizedError, Equatable 
 }
 
 /// Buffered providers decode each growing prefix again. Keep optional observations only
-/// while the measured whole window leaves headroom for sequential speaker inference.
+/// while the measured whole window leaves headroom for the next captured audio window.
 /// Scalar scheduling state contains no audio/text and resets with the frozen attempt identity.
 nonisolated struct MeetingPCMPreviewPacing: Sendable {
     private(set) var permitsIntermediateObservations = true
@@ -165,7 +165,11 @@ private final nonisolated class NemotronDiarizerFactory: MeetingNemotronDiarizer
 
     func makeDiarizer(epoch _: MeetingAnalysisEpochID) async throws -> any MeetingNemotronDiarizerSession {
         try Task.checkCancellation()
-        let diarizer = SortformerDiarizer(config: self.config)
+        // Retain only enough raw probabilities for post-processing context. Final speaker
+        // intervals remain available for whole-recording assignment; model cache stays fixed.
+        var timelineConfig = DiarizerTimelineConfig.sortformerDefault
+        timelineConfig.maxStoredFrames = 4_096
+        let diarizer = SortformerDiarizer(config: self.config, timelineConfig: timelineConfig)
         diarizer.initialize(models: self.models)
         self.lock.withLock { self.created.append(diarizer) }
         return NemotronDiarizerSession(diarizer: diarizer)
@@ -187,6 +191,24 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
     // The diarizer is used strictly serially: one epoch, one caller, one call.
     let diarizer: SortformerDiarizer
 
+    func diarize(source: any MeetingPCMReplaySource) async throws -> [MeetingNemotronSpeakerSegment] {
+        try Task.checkCancellation()
+        let began = MeetingPCMRuntimeDiagnostics.begin(.diarize)
+        defer { MeetingPCMRuntimeDiagnostics.completed(.diarize, since: began, samples: source.totalSampleCount) }
+        // This is a stopped recording replay, never a live diarization path. Feed bounded
+        // decoded slices to the SAME model state, drain every available result, then finalize
+        // exactly once. No processComplete call can reset speaker slots between slices.
+        try await source.replay { samples in
+            try autoreleasepool {
+                _ = try self.diarizer.process(samples: samples, sourceSampleRate: nil)
+                while try self.diarizer.process() != nil { try Task.checkCancellation() }
+            }
+        }
+        try autoreleasepool { _ = try self.diarizer.finalizeSession() }
+        try Task.checkCancellation()
+        return self.segments(from: self.diarizer.timeline, duration: Double(source.totalSampleCount) / 16_000)
+    }
+
     func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment] {
         try Task.checkCancellation()
         let began = MeetingPCMRuntimeDiagnostics.begin(.diarize)
@@ -202,7 +224,10 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
             )
         }
         try Task.checkCancellation()
-        let physicalDuration = Double(samples.count) / 16_000
+        return self.segments(from: timeline, duration: Double(samples.count) / 16_000)
+    }
+
+    private func segments(from timeline: DiarizerTimeline, duration physicalDuration: TimeInterval) -> [MeetingNemotronSpeakerSegment] {
         return timeline.speakers
             .sorted { $0.key < $1.key }
             .flatMap { index, speaker in
@@ -287,12 +312,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             artifact = located
             if self.usesDefaultVoiceModelDirectory { try MeetingSpeakerVoiceModelArtifacts.validateRootContainment() }
             try MeetingSpeakerVoiceModelArtifacts.validate(at: self.voiceModelDirectory)
-            let locator = self.modelLocator
-            _ = try await self.compiledNemotron.compiledModel(for: located) { try locator.recheck($0) }
-            // Open the actual CPU prediction plan before microphone admission. Keeping the
-            // same compiled derivative makes subsequent model loads warm, without retaining
-            // weights across ASR/voice phases or spending the PCM backlog on a cold CoreML load.
-            _ = try await self.withNemotronDiarization(artifact: located) { _ in MeetingNemotronPhaseResult() }
+            // Freeze validated selection only. Compile/open the prediction plan inside the
+            // stopped-recording diarization phase, after the live ASR owner has drained.
         } else { artifact = nil }
         try Task.checkCancellation()
         try self.pcmIdentityState.pin(attemptID: attemptID, configuration: configuration.identityFingerprint, artifact: artifact)
@@ -339,7 +360,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     var supportsProgressivePCMInput: Bool { true }
 
     /// One prepared provider consumes growing observations serially. Its final
-    /// hypothesis and the same physical PCM pass to the existing speaker phases.
+    /// hypothesis is checkpointed without running speaker models during capture.
     func recognizePCM(
         window: MeetingPCMProgressiveWindow, offset: TimeInterval, trackID: UUID,
         attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
@@ -441,7 +462,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                       output.sampleCount == phase.boundedPCMSamples.count else {
                     throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
                 }
-                // withPreparedASR has joined and released its weights before attribution.
+                // withPreparedASR has joined and released its weights. Live canonical
+                // checkpoints remain transcript-only; whole-recording speakers run after Stop.
                 var batch = try await self.attributePCMSpeech(samples: phase.boundedPCMSamples, output: output,
                     epoch: epoch, offset: offset, attemptID: attemptID, configuration: configuration,
                     priorProfiles: prior.profiles, priorSpeakers: prior.speakers)
@@ -525,80 +547,75 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                                    priorSpeakers: [MeetingSessionSpeaker]) async throws -> MeetingPCMTranscriptBatch {
         try Task.checkCancellation()
         let duration = Double(samples.count) / 16_000
-        // pcmUnits produces no units exactly when the provider text is empty.
+        // Live capture produces transcript only under every audio-save setting. Speaker
+        // assignment is a separate whole-recording phase after capture and ASR have drained.
         guard !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            // No current text units can acquire a speaker. Leave attempt-local identity
-            // evidence untouched and avoid loading attribution models for empty speech.
-            DebugLogger.shared.info("speaker_attribution_empty offset=\(offset) frames=\(samples.count)", source: "MeetingPCMRuntime")
             return MeetingPCMTranscriptBatch(segments: [])
         }
-        var activity: [MeetingBackendSpeakerActivity] = []
-        var currentProfiles: [MeetingSpeakerVoiceProfile] = []
-        var voiceExcerptCount = 0
-        var voiceEncodingFailed = false
-        if configuration.speakerLabelsEnabled {
-            guard !PichiMeetingProviderFactory.isTranscriptOnlyDiarizationFingerprint(configuration.diarizationFingerprint) else {
-                throw MeetingNemotronModelReadinessError.modelNotInstalled(path: MeetingNemotronModelLocator.defaultPackageURL().path)
-            }
-            guard let artifact = try self.pcmIdentityState.pinnedArtifact(attemptID: attemptID, configuration: configuration.identityFingerprint) else {
-                throw MeetingModelResidencyError.staleGrant
-            }
-            let phase = try await self.withNemotronDiarization(artifact: artifact) { factory in
-                let diarizer = try await factory.makeDiarizer(epoch: epoch)
-                let segments = try await diarizer.diarize(samples: samples)
-                guard segments.count <= 4_096, segments.allSatisfy({
-                    (0..<8).contains($0.slotIndex) && $0.start.isFinite && $0.end.isFinite
-                        && $0.start >= 0 && $0.end > $0.start && $0.end <= duration + 1e-6
-                }) else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
-                return MeetingNemotronPhaseResult(
-                    activity: segments.map { .init(token: .init(analysisEpochID: epoch, label: "slot-\($0.slotIndex)"),
-                                                  start: $0.start, end: $0.end) },
-                    voiceSamples: MeetingSpeakerVoiceSamples.collect(epoch: epoch, samples: samples, segments: segments)
-                )
-            }
-            activity = phase.activity
-            voiceExcerptCount = phase.voiceSamples.count
-            // Voice identity is optional evidence. Offline missing embeddings preserve the
-            // transcript and explicit uncertainty, rather than merging slots by index.
-            do { currentProfiles = try await self.speakerVoiceProfiles(samples: phase.voiceSamples) }
-            catch {
-                try Task.checkCancellation()
-                currentProfiles = []
-                voiceEncodingFailed = true
-            }
-        }
-        try Task.checkCancellation()
-        let admission = MeetingSpeakerVoiceMatcher.pcmAdmission(
-            priorProfiles: priorProfiles, currentProfiles: currentProfiles, epoch: epoch
-        )
         let units = MeetingParakeetNemotronBackend.pcmUnits(
             result: ASRTranscriptionResult(text: output.text, segmentTimings: output.segmentTimings),
-            words: output.words, epoch: epoch, duration: duration,
-            activity: activity, identityTokens: admission.identityTokens)
-        let ownerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(
-            owner: self.ownerVoiceProfileSnapshot, profiles: admission.retainedProfiles,
-            identityLinks: MeetingSpeakerVoiceMatcher.links(profiles: admission.retainedProfiles, allowedTokens: Set(admission.retainedProfiles.map(\.token)))
-        )
-        let batch = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat).assemblePCMWindow(attemptID: attemptID, epoch: epoch,
-                                                                      offset: offset, duration: duration, units: units,
-                                                                      identityLinks: admission.links, priorSpeakers: priorSpeakers, confirmedLocalUserTokens: ownerTokens)
+            words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [])
+        return try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat)
+            .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: offset,
+                duration: duration, units: units, priorSpeakers: priorSpeakers)
+    }
+
+    func diarizePCMRecording(
+        source: any MeetingPCMReplaySource, transcript: MeetingPCMTranscriptBatch,
+        trackID: MeetingAudioTrackID, attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration
+    ) async throws -> MeetingPCMTranscriptBatch {
         try Task.checkCancellation()
-        if configuration.speakerLabelsEnabled {
-            let assigned = batch.segments.filter { $0.attributionState == .assigned }.count
-            let ambiguous = batch.segments.filter { $0.attributionState == .overlappingSpeakers }.count
-            let activityCount = activity.count
-            let excerptCount = voiceExcerptCount
-            let encodingFailed = voiceEncodingFailed
-            let admissionDiagnostics = admission.diagnosticFields
-            let unassigned = batch.segments.count - assigned - ambiguous
-            DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
-                "[meeting/pcm] phase=speaker.admission activitySegments=\(activityCount) cleanVoiceExcerpts=\(excerptCount)"
-                    + " voiceEncodingFailed=\(encodingFailed) \(admissionDiagnostics)"
-                    + " assignedUnits=\(assigned) ambiguousUnits=\(ambiguous) unassignedUnits=\(unassigned)"
+        guard configuration.speakerLabelsEnabled, !transcript.segments.isEmpty else { return transcript }
+        guard source.totalSampleCount > 0 else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+        guard let artifact = try self.pcmIdentityState.pinnedArtifact(
+            attemptID: attemptID, configuration: configuration.identityFingerprint) else {
+            throw MeetingModelResidencyError.staleGrant
+        }
+        _ = try self.pcmIdentityState.begin(attemptID: attemptID)
+        defer { self.pcmIdentityState.end() }
+        let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0)
+        let pipelineID = DebugLogger.pipelineID
+        let work = Task.detached(priority: .userInitiated) {
+            try await DebugLogger.$pipelineID.withValue(pipelineID) {
+                let phase = try await self.withNemotronDiarization(artifact: artifact) { factory in
+                    let diarizer = try await factory.makeDiarizer(epoch: epoch)
+                    let segments = try await diarizer.diarize(source: source)
+                    let duration = Double(source.totalSampleCount) / 16_000
+                    guard segments.allSatisfy({ (0..<8).contains($0.slotIndex)
+                        && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+                        && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
+                        throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+                    }
+                    return MeetingNemotronPhaseResult(activity: segments.map {
+                        .init(token: .init(analysisEpochID: epoch, label: "slot-\($0.slotIndex)"), start: $0.start, end: $0.end)
+                    })
+                }
+                // Nemotron has joined and released its weights before the optional owner
+                // encoder loads. Stable global slots already establish anonymous identities.
+                try Task.checkCancellation()
+                var confirmedOwner = Set<MeetingBackendSpeakerToken>()
+                if self.ownerVoiceProfileSnapshot != nil {
+                    let segments = phase.activity.compactMap { activity -> MeetingNemotronSpeakerSegment? in
+                        guard let slot = Int(activity.token.label.dropFirst("slot-".count)) else { return nil }
+                        return .init(slotIndex: slot, start: activity.start, end: activity.end)
+                    }
+                    let excerpts = try await MeetingSpeakerVoiceSamples.collect(epoch: epoch, source: source, segments: segments)
+                    do {
+                        let profiles = try await self.speakerVoiceProfiles(samples: excerpts)
+                        confirmedOwner = MeetingOwnerVoiceVerifier.confirmedTokens(owner: self.ownerVoiceProfileSnapshot, profiles: profiles)
+                    } catch { try Task.checkCancellation() }
+                }
+                try Task.checkCancellation()
+                let batch = try MeetingPCMRecordingAttribution.assemble(transcript: transcript,
+                    activity: phase.activity, epoch: epoch, attemptID: attemptID,
+                    duration: Double(source.totalSampleCount) / 16_000,
+                    speakerNameFormat: self.pcmSpeakerNameFormat, confirmedLocalUserTokens: confirmedOwner)
+                try Task.checkCancellation()
+                return batch
             }
         }
-        self.pcmIdentityState.commit(profiles: admission.retainedProfiles, batch: batch)
-        return batch
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 
     /// Runs in its own phase, so the additional encoder never overlaps ASR or Nemotron residency.
