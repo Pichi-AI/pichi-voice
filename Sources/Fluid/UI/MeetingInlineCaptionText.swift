@@ -191,6 +191,7 @@ private final class InlineCaptionAttachment: NSTextAttachment {
 
     override func viewProvider(for parentView: InlineCaptionNativeView?, location: any NSTextLocation,
                                textContainer: NSTextContainer?) -> NSTextAttachmentViewProvider? {
+        print("[INLINE_PROVIDER] factory token=\(tokenID) parent=\(parentView != nil)")
         let manager = textContainer?.textLayoutManager
         // A provider's location is immutable. Retain it only while TextKit still asks for the
         // same location; the attachment identity itself survives preceding text corrections.
@@ -224,6 +225,7 @@ private final class InlineCaptionAttachmentProvider: NSTextAttachmentViewProvide
     }
 
     override func loadView() {
+        print("[INLINE_PROVIDER] load token=\((textAttachment as? InlineCaptionAttachment)?.tokenID ?? 0)")
         if let attachment = textAttachment as? InlineCaptionAttachment { root = attachment.waveformContent }
         #if os(iOS)
         let host = UIHostingController(rootView: root)

@@ -526,6 +526,12 @@ final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
                 }
             }
             print("[INLINE_NATIVE] textKit2=\(native.textLayoutManager != nil) attachments=\(kinds)")
+            if let manager = native.textLayoutManager {
+                manager.enumerateTextLayoutFragments(from: nil, options: [.ensuresLayout]) { fragment in
+                    print("[INLINE_FRAGMENT] state=\(fragment.state.rawValue) views=\(fragment.textAttachmentViewProviders.count)")
+                    return true
+                }
+            }
         }
         capture(host, step: "timeout", scheme: host.controller.overrideUserInterfaceStyle == .dark ? .dark : .light)
         XCTFail(reason)
