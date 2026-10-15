@@ -298,6 +298,7 @@ struct MeetingCapturePCMTransportTests {
         try await progressiveTransport()
         try await checkpointReleasesPCM()
         try await longMeetingTransport()
+        try await archivedRecordingSurvivesSlowLiveSpeech()
         print("Meeting PCM transport: admission, conversion, ownership, timeline, bounded inference, overload, joined finish and checkpoint failure passed.")
     }
 
@@ -345,6 +346,33 @@ struct MeetingCapturePCMTransportTests {
         try await buffered.finish()
         try require(burst.snapshot.0.reduce(0) { $0 + $1.1 } == 480_000 && burst.snapshot.2 == 0,
                     "burst catch-up must preserve all PCM")
+    }
+
+    static func archivedRecordingSurvivesSlowLiveSpeech() async throws {
+        let native = Latch()
+        let probe = Probe()
+        let live = try MeetingProcessingPipeline.makeMemoryAudioConsumer(maximumPendingSeconds: 24,
+            recognize: { samples, start in
+                probe.begin(samples, at: start); await native.wait()
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in probe.checkpoint() }, failure: { _ in probe.failed() })
+        let archive = MeetingMemoryAudioArchive()
+        let recording = MeetingArchivedMemoryAudioConsumer(archive: archive, speech: live)
+        for start in stride(from: 0, to: 192_000, by: 48_000) {
+            try require(recording.enqueue(try sample(frames: 48_000, startFrame: Int64(start))), "RAM recording accepts startup audio")
+        }
+        try await awaitEntered(native, "synthetic slow live recognizer owns a window")
+        for start in stride(from: 192_000, to: 1_440_000, by: 48_000) {
+            try require(recording.enqueue(try sample(frames: 48_000, startFrame: Int64(start))), "recording continues when live speech falls behind")
+        }
+        try require(recording.requiresSpeechReplay && recording.rejectionReason == nil,
+                    "live overload requests post-stop speech replay without rejecting capture")
+        try require(archive.totalSampleCount == 1_440_000, "all ninety seconds remain in the authoritative archive")
+        let finishing = Task { try await recording.finish() }
+        await native.release()
+        try await finishing.value
+        try require(probe.snapshot.2 == 1 && recording.requiresSpeechReplay,
+                    "finish joins the rejected recognizer and retains the complete replay requirement")
     }
 
     static func longMeetingTransport() async throws {

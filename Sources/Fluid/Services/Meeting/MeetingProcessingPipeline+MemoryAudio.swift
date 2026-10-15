@@ -462,3 +462,71 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         }
     }
 }
+
+/// The recording owns its RAM archive independently of optional live recognition. A slow or
+/// failed recognizer can catch up after Stop without stopping capture or losing accepted audio.
+/// Only archive/PCM errors reject capture. This does not create a file fallback.
+final nonisolated class MeetingArchivedMemoryAudioConsumer: MeetingMemoryAudioConsuming, @unchecked Sendable {
+    private let lock = NSLock()
+    private let archive: MeetingMemoryAudioArchive
+    private let speech: any MeetingMemoryAudioConsuming
+    private var accepting = true
+    private var rejectedSpeech = false
+    private var archiveFailure: Error?
+    private var expectedPTS: CMTime?
+    private var finishing: Task<Void, Error>?
+
+    init(archive: MeetingMemoryAudioArchive, speech: any MeetingMemoryAudioConsuming) {
+        self.archive = archive
+        self.speech = speech
+    }
+
+    var requiresSpeechReplay: Bool { self.lock.withLock { self.rejectedSpeech } }
+    var rejectionReason: String? { self.lock.withLock { self.archiveFailure?.localizedDescription } }
+
+    func enqueue(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        self.lock.withLock {
+            guard self.accepting, self.archiveFailure == nil else { return false }
+            do {
+                let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                guard frames > 0, frames <= 65_536, pts.isNumeric, pts >= .zero,
+                      let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+                      let contract = try? MeetingPCMFormatContract(formatDescription: description),
+                      contract.sampleRate == 16_000, contract.channelCount == 1,
+                      let copied = MeetingLiveSampleCopy.copy(sampleBuffer),
+                      let data = copied.buffer.floatChannelData?[0] else { throw MeetingMemoryAudioError.invalidPCM }
+                if let expectedPTS, abs(CMTimeGetSeconds(pts - expectedPTS)) > 1.0 / 16_000 {
+                    throw MeetingMemoryAudioError.timelineDiscontinuity
+                }
+                try self.archive.append(UnsafeBufferPointer(start: data, count: Int(copied.buffer.frameLength)))
+                self.expectedPTS = pts + CMTime(value: Int64(frames), timescale: 16_000)
+                if !self.rejectedSpeech, !self.speech.enqueue(sampleBuffer) { self.rejectedSpeech = true }
+                return true
+            } catch {
+                self.archiveFailure = error
+                self.accepting = false
+                return false
+            }
+        }
+    }
+
+    func finish() async throws {
+        let task = self.lock.withLock { () -> Task<Void, Error> in
+            if let finishing { return finishing }
+            self.accepting = false
+            let task = Task { [self] in
+                do { try self.archive.seal() }
+                catch { self.lock.withLock { self.archiveFailure = self.archiveFailure ?? error } }
+                // Join inference even when archive sealing failed. An ASR/privacy failure
+                // requests a fresh, complete replay after Stop, never raw-text publication.
+                do { try await self.speech.finish() }
+                catch { self.lock.withLock { self.rejectedSpeech = true } }
+                if let failure = self.lock.withLock({ self.archiveFailure }) { throw failure }
+            }
+            self.finishing = task
+            return task
+        }
+        try await task.value
+    }
+}

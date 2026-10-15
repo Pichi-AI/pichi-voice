@@ -44,23 +44,11 @@ enum PichiMeetingProviderFactory {
                     "GigaAM supports Russian. For English or mixed speech, select a multilingual model.",
                     "Speaker labels are automatic and can be uncertain in short or overlapping speech.",
                     "Download the speaker models in Recording settings before an offline meeting.",
-                    "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration.",
                 ],
                 analysisSampleRate: 16_000,
                 diarizationDependencies: [.speakerSeparation, .voiceMatching],
                 allowsTranscriptOnlyOnUnsupportedHardware: true,
-                supportedInputs: [.recordedChunks, .boundedMicrophonePCM],
-                pcmAdmissionRestrictions: [
-                    // The recorded iPad7,1 strict profile suffered CPU termination. Separate
-                    // installation metadata identifies this public export; the historical crash
-                    // did not record its fingerprint. Other exports/deployments remain separate
-                    // evidence; changing the inference route requires revalidation.
-                    MeetingPCMAdmissionRestriction(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10",
-                        asrArtifactFingerprint: GigaAMModelCatalog.downloadableModel.fingerprint,
-                        speakerLabelsEnabled: true, piiRedactionEnabled: true,
-                        modelDisplayName: SettingsStore.SpeechModel.gigaam.displayName,
-                        alternativeModelDisplayName: SettingsStore.SpeechModel.whisperTiny.displayName)
-                ]
+                supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
             ),
             defaultLanguageCode: "ru",
             providerFactory: { configuration in

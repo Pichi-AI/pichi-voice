@@ -507,35 +507,28 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                 try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
             }
-            let diagnostic = try await service.withMeetingModelResidency(attemptID: UUID(), acceptsCompletedCancellation: { _ in false }) {
-                try await runtime.withNemotronDiarization(artifact: locator.locate()) { factory in
-                    let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
-                    let diarizer = try await factory.makeDiarizer(epoch: epoch)
-                    let actual = try await diarizer.diarize(samples: samples)
-                    return MeetingNemotronPhaseResult(
-                        activity: actual.map { .init(token: .init(analysisEpochID: epoch, label: "slot-\($0.slotIndex)"), start: $0.start, end: $0.end) },
-                        voiceSamples: MeetingSpeakerVoiceSamples.collect(epoch: epoch, samples: samples, segments: actual)
-                    )
-                }
-            }
-            let diagnosticDirectory = root.appendingPathComponent("reports", isDirectory: true)
-            try FileManager.default.createDirectory(at: diagnosticDirectory, withIntermediateDirectories: true)
-            let diagnosticReport: [String: Any] = [
-                "activity": diagnostic.activity.map { ["slot": $0.token.label, "start": $0.start, "end": $0.end] as [String: Any] },
-                "eligibleVoiceSamples": diagnostic.voiceSamples.map { ["slot": $0.token.label, "clipLengths": $0.clips.map(\.count)] as [String: Any] },
-            ]
-            try JSONSerialization.data(withJSONObject: diagnosticReport, options: [.prettyPrinted, .sortedKeys])
-                .write(to: diagnosticDirectory.appendingPathComponent("two-voice-diarization-evidence.json"), options: .atomic)
-            let voiceProfiles = try await runtime.speakerVoiceProfiles(samples: diagnostic.voiceSamples)
-            XCTAssertEqual(voiceProfiles.count, diagnostic.voiceSamples.count)
-            let first = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+            let archive = try MeetingMemoryAudioArchive()
+            try samples.withUnsafeBufferPointer { try archive.append($0) }
+            try archive.seal()
+            defer { archive.clear() }
+            let live = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                 try await runtime.recognizePCM(samples: samples, offset: 0, trackID: track,
-                                               attemptID: attempt, configuration: configuration)
+                    attemptID: attempt, configuration: configuration)
+            }
+            XCTAssertTrue(live.speakers.isEmpty)
+            XCTAssertTrue(live.segments.allSatisfy { $0.speakerID == nil }, "Recording must not assign speakers")
+            let first = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.diarizePCMRecording(source: archive, transcript: live, trackID: track,
+                    attemptID: attempt, configuration: configuration)
             }
             let second = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
-                try await runtime.recognizePCM(samples: samples, offset: duration, trackID: track,
-                                               attemptID: attempt, configuration: configuration)
+                try await runtime.diarizePCMRecording(source: archive, transcript: live, trackID: track,
+                    attemptID: attempt, configuration: configuration)
             }
+            XCTAssertEqual(first.segments.map(\.id), live.segments.map(\.id))
+            XCTAssertEqual(first.segments.map(\.text), live.segments.map(\.text))
+            XCTAssertEqual(first.segments.map(\.start), live.segments.map(\.start))
+            XCTAssertEqual(first.segments.map(\.end), live.segments.map(\.end))
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
@@ -547,7 +540,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             XCTAssertFalse(first.segments.filter { $0.speakerID != nil }.isEmpty)
             XCTAssertTrue(Set(second.speakers.map(\.id)).isSubset(of: Set(first.speakers.map(\.id))),
                           "Explicit local embedding evidence should reconnect the repeated voices, not slot equality.")
-            XCTAssertTrue(second.segments.allSatisfy { $0.start.seconds >= duration - 0.001 })
+            XCTAssertEqual(second.segments.map(\.id), first.segments.map(\.id))
             await service.shutdownForTermination()
         } catch {
             await service.shutdownForTermination()
@@ -572,7 +565,6 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
         try FileManager.default.createDirectory(at: reportDirectory, withIntermediateDirectories: true)
         for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
-            let firstReportIndex = report.count
             let installed = try await self.installedConfiguration(model: model, assets: root)
             let configuration = MeetingFinalProcessingConfiguration(
                 asrModel: installed.asrModel, asrArtifactFingerprint: installed.asrArtifactFingerprint,
@@ -595,36 +587,41 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                 try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                     try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
                 }
+                let archive = try MeetingMemoryAudioArchive()
+                try samples.withUnsafeBufferPointer { try archive.append($0) }
+                try archive.seal()
+                defer { archive.clear() }
+                var speech = MeetingPCMTranscriptBatch(segments: [])
                 for start in stride(from: 0, to: samples.count, by: 128_000) {
                     let end = min(samples.count, start + 128_000)
                     let input = Array(samples[start..<end])
                     let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                         try await runtime.recognizePCM(samples: input, offset: Double(start) / 16_000, trackID: track,
-                                                       attemptID: attempt, configuration: configuration)
+                            attemptID: attempt, configuration: configuration)
                     }
-                    XCTAssertTrue(batch.segments.allSatisfy { $0.start.seconds >= Double(start) / 16_000 - 0.001 && $0.end.seconds <= Double(end) / 16_000 + 0.001 })
-                    report.append(["modelID": model.rawValue, "start": Double(start) / 16_000,
-                                   "end": Double(end) / 16_000, "speakerIDs": batch.speakers.map { $0.id.uuidString },
-                                   "assignedSegments": batch.segments.filter { $0.speakerID != nil }.count,
-                                   "ambiguousSegments": batch.segments.filter { $0.attributionState == .overlappingSpeakers }.count,
-                                   "unassignedSegments": batch.segments.filter { $0.attributionState == .unassigned }.count,
-                                   "text": batch.segments.map(\.text).joined(separator: " ")])
-                    try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-                        .write(to: reportDirectory.appendingPathComponent("eight-second-speaker-windows.json"), options: .atomic)
+                    XCTAssertTrue(batch.speakers.isEmpty)
+                    XCTAssertTrue(batch.segments.allSatisfy { $0.speakerID == nil })
+                    speech.segments.append(contentsOf: batch.segments)
                 }
-                XCTAssertFalse((report[firstReportIndex]["speakerIDs"] as? [String] ?? []).isEmpty,
-                               "The first single-voice window has sufficient measured identity evidence.")
-                if model != .whisperTiny {
-                    XCTAssertGreaterThan(report[firstReportIndex + 1]["assignedSegments"] as? Int ?? 0, 0,
-                                         "Word-timed adapters should label the second voice inside the transition window.")
+                let final = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                    try await runtime.diarizePCMRecording(source: archive, transcript: speech, trackID: track,
+                        attemptID: attempt, configuration: configuration)
                 }
+                XCTAssertGreaterThanOrEqual(final.speakers.count, 2)
+                XCTAssertGreaterThan(final.segments.filter { $0.speakerID != nil }.count, 0)
+                XCTAssertEqual(final.segments.map(\.id), speech.segments.map(\.id))
+                XCTAssertEqual(final.segments.map(\.text), speech.segments.map(\.text))
+                report.append(["modelID": model.rawValue, "segments": final.segments.count,
+                    "speakerCount": final.speakers.count, "stage": "after-stop"])
+                try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                    .write(to: reportDirectory.appendingPathComponent("post-stop-speaker-windows.json"), options: .atomic)
                 await service.shutdownForTermination()
             } catch {
                 await service.shutdownForTermination()
                 throw error
             }
         }
-        XCTAssertEqual(report.count, 9)
+        XCTAssertEqual(report.count, 3)
     }
 
     /// Measures the complete sequential model workload on synthetic speech. This does not

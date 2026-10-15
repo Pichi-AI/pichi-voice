@@ -12,11 +12,12 @@ nonisolated struct MeetingSpeakerVoiceSamples: Sendable {}
 nonisolated struct MeetingSpeakerVoiceProfile: Sendable {}
 nonisolated struct MeetingMaterializedSpanSamples: Sendable {}
 nonisolated struct MeetingNemotronModelArtifact: Sendable {}
-nonisolated struct MeetingFinalProcessingConfiguration: Sendable {}
+nonisolated struct MeetingFinalProcessingConfiguration: Sendable { var speakerLabelsEnabled = false }
 nonisolated struct MeetingPCMProgressiveWindow: Sendable {}
 nonisolated struct MeetingPCMTranscriptBatch: Sendable { let text: String }
 typealias MeetingAudioTrackID = UUID
 nonisolated enum MeetingModelResidencyError: Error { case unsupportedProvider }
+nonisolated enum MeetingParakeetNemotronRuntimeError: Error { case invalidPCMWindow }
 nonisolated enum PichiLocalization { static func text(_ key: String) -> String { key } }
 private enum Refusal: Error { case observer }
 private actor Counter {
