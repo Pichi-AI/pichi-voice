@@ -102,10 +102,51 @@ struct PichiVoiceMobileApp: App {
     var body: some Scene {
         WindowGroup {
             AdaptiveAppTheme(accent: settings.accentColor) {
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" {
+                    MobileCaptionScrollReview()
+                } else {
+                    meetingRoot
+                }
+                #else
+                meetingRoot
+                #endif
+            }.task {
+                #if DEBUG
+                if ProcessInfo.processInfo.environment["PICHI_UI_CAPTION_REVIEW"] == "1" { return }
+                #endif
+                await services.signalUIReady()
+            }
+        }
+    }
+
+    private var meetingRoot: some View {
                 MobileMeetingRoot(coordinator: services.meetingSessionCoordinator, asr: services.asr,
                     store: services.meetingStore, privacy: services.transcriptPrivacy,
                     microphones: { await IOSMeetingCaptureEngine.microphoneSnapshot() })
-            }.task { await services.signalUIReady() }
-        }
     }
 }
+
+#if DEBUG
+/// Isolated UI automation uses the production caption viewport without a microphone,
+/// model or stored meeting. It cannot be selected in a distributed Release app.
+private struct MobileCaptionScrollReview: View {
+    @State private var rows: [MeetingLiveBubbleComposer.Row] = (0..<100).map { index in
+        .init(id: UUID(), speaker: .you,
+              text: "Проверка \(index). Русский и English текст продолжаются в одном разговоре.",
+              isPartial: false, showsLabel: index == 0)
+    }
+
+    var body: some View {
+        MeetingLiveBubbleScrollList(rows: rows, documentStyle: true)
+            .padding(24)
+            .task {
+                while !Task.isCancelled, rows.count < 180 {
+                    do { try await Task.sleep(for: .milliseconds(800)) } catch { return }
+                    rows.append(.init(id: UUID(), speaker: .you, text: "Продолжение \(rows.count). New words keep arriving.",
+                                      isPartial: false, showsLabel: false))
+                }
+            }
+    }
+}
+#endif

@@ -165,6 +165,7 @@ struct MeetingLiveBubbleScrollList: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("meeting.liveTranscript.viewport")
                 .animation(self.documentStyle || self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
                 .modifier(MeetingCaptionScrollTracking(
                     viewport: self.scrollViewport, isPinnedToBottom: self.$isPinnedToBottom,

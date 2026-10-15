@@ -67,6 +67,28 @@ final class MobileNavigationUITests: XCTestCase {
         capture("02-current-meeting")
     }
 
+    func testFastManualReturnToCaptionBottomRestoresFollowing() throws {
+        app.terminate()
+        app.launchEnvironment["PICHI_UI_CAPTION_REVIEW"] = "1"
+        app.launch()
+        defer { app.terminate() }
+        let viewport = app.scrollViews["meeting.liveTranscript.viewport"]
+        let latest = app.buttons["meeting.liveTranscript.latest"]
+        XCTAssertTrue(viewport.waitForExistence(timeout: 10))
+        XCTAssertFalse(latest.waitForExistence(timeout: 1))
+        capture("caption-01-initial-following")
+        viewport.swipeDown(velocity: .fast)
+        XCTAssertTrue(latest.waitForExistence(timeout: 3))
+        capture("caption-02-reading-older-text")
+        for _ in 0..<12 where latest.exists {
+            viewport.swipeUp(velocity: .fast)
+        }
+        XCTAssertTrue(latest.waitForNonExistence(timeout: 3), "A fast finger crossing the bottom must resume following without tapping the button")
+        capture("caption-03-manual-bottom-resumed")
+        XCTAssertFalse(latest.waitForExistence(timeout: 2), "New captions must keep following after the rebound settles")
+        capture("caption-04-new-text-still-followed")
+    }
+
     func testSectionNavigationSwitchesImmediatelyFromSettingsDetails() throws {
         let destinations = ["general", "recording", "models", "privacy"]
         for detail in destinations {
