@@ -1811,8 +1811,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session.transcriptSegments.append(segment)
             }
         }
-        let speakers = Set(session.speakers.map(\.id))
-        session.speakers.append(contentsOf: batch.speakers.filter { !speakers.contains($0.id) })
+        session.speakers = batch.mergingSpeakers(into: session.speakers)
         session.transcriptTimeDomain = .meetingRelative
         session.transcriptIsComplete = (session.transcriptIsComplete ?? true) && batch.isComplete
         session.updatedAt = Date()

@@ -51,7 +51,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                                                             duration: 5, units: [unit]))
     }
 
-    func testConfirmedOwnerUsesExistingSpeakerIdentityAndLeavesOtherParticipantNumberingAtOne() throws {
+    func testConfirmedOwnerUsesExistingSpeakerIdentityAndKeepsStableParticipantAliases() throws {
         let track = UUID()
         let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
         let owner = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
@@ -61,12 +61,12 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                 precision: .utterance, text: "Synthetic meeting voice", analysisStart: Double(index * 6),
                 analysisEnd: Double(index * 6 + 6), speaker: .assigned(token), analysisSpanIDs: [])
         }
-        let assembler = MeetingTranscriptAssembler(localUserName: "Localized owner")
+        let assembler = MeetingTranscriptAssembler()
         let result = try assembler.assemblePCMWindow(attemptID: UUID(), epoch: epoch, offset: 0,
             duration: 12, units: units, confirmedLocalUserTokens: [owner])
         XCTAssertEqual(result.speakers.count, 2)
-        XCTAssertEqual(result.speakers.filter(\.isLocalUser).map(\.displayName), ["Localized owner"])
-        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.displayName), ["Speaker 1"])
+        XCTAssertEqual(result.speakers.filter(\.isLocalUser).map(\.displayName), ["Speaker 1"])
+        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.displayName), ["Speaker 2"])
         XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil })
     }
 

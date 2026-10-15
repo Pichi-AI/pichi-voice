@@ -40,7 +40,7 @@ nonisolated enum MeetingParakeetNemotronRuntimeError: LocalizedError, Equatable 
 /// Small attempt-local identity evidence, protected separately from model residency.
 /// No PCM or audio files are retained here. The existing matcher receives a bounded
 /// complete-link reference set; uncertain/new voices beyond that limit stay unassigned.
-private final nonisolated class MeetingPCMIdentityState: @unchecked Sendable {
+final nonisolated class MeetingPCMIdentityState: @unchecked Sendable {
     private let lock = NSLock()
     private var attemptID: UUID?
     private var busy = false
@@ -83,13 +83,10 @@ private final nonisolated class MeetingPCMIdentityState: @unchecked Sendable {
         }
     }
 
-    func commit(profiles: [MeetingSpeakerVoiceProfile], speakers: [MeetingSessionSpeaker]) {
+    func commit(profiles: [MeetingSpeakerVoiceProfile], batch: MeetingPCMTranscriptBatch) {
         self.lock.withLock {
             self.profiles = Array(profiles.prefix(MeetingSpeakerVoiceSamples.maximumProfiles))
-            for speaker in speakers where !self.speakers.contains(where: { $0.id == speaker.id }) {
-                guard self.speakers.count < MeetingSpeakerVoiceSamples.maximumProfiles else { break }
-                self.speakers.append(speaker)
-            }
+            self.speakers = batch.mergingSpeakers(into: self.speakers)
         }
     }
 
@@ -487,7 +484,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             owner: self.ownerVoiceProfileSnapshot, profiles: admission.retainedProfiles,
             identityLinks: MeetingSpeakerVoiceMatcher.links(profiles: admission.retainedProfiles, allowedTokens: Set(admission.retainedProfiles.map(\.token)))
         )
-        let batch = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat, localUserName: PichiLocalization.text("You")).assemblePCMWindow(attemptID: attemptID, epoch: epoch,
+        let batch = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat).assemblePCMWindow(attemptID: attemptID, epoch: epoch,
                                                                       offset: offset, duration: duration, units: units,
                                                                       identityLinks: admission.links, priorSpeakers: priorSpeakers, confirmedLocalUserTokens: ownerTokens)
         try Task.checkCancellation()
@@ -505,7 +502,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     + " assignedUnits=\(assigned) ambiguousUnits=\(ambiguous) unassignedUnits=\(unassigned)"
             }
         }
-        self.pcmIdentityState.commit(profiles: admission.retainedProfiles, speakers: batch.speakers)
+        self.pcmIdentityState.commit(profiles: admission.retainedProfiles, batch: batch)
         return batch
     }
 

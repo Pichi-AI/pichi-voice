@@ -158,11 +158,9 @@ nonisolated enum MeetingAssemblyError: LocalizedError, Equatable {
 nonisolated struct MeetingTranscriptAssembler {
     private let tolerance = MeetingAnalysisManifestSchema.mappingToleranceSeconds
     private let speakerNameFormat: String
-    private let localUserName: String
 
     /// The product resolves this trusted UI template before assembly; assembly remains pure.
-    init(speakerNameFormat: String = "Speaker %lld", localUserName: String = "You") {
-        self.localUserName = localUserName
+    init(speakerNameFormat: String = "Speaker %lld") {
         self.speakerNameFormat = speakerNameFormat
     }
 
@@ -667,24 +665,24 @@ nonisolated struct MeetingTranscriptAssembler {
             return isSubstantial(identity) || !tracksWithSubstantialSpeaker.contains(identity.analysisEpochID.trackID)
         }
         let localIdentities = Set(confirmedLocalUserTokens.map { canonicalByToken[$0] ?? $0 })
+        let priorIDs = Set(priorSpeakers.map(\.id))
         let ordinals = Dictionary(uniqueKeysWithValues: speakingTokens.filter {
-            canonicalByToken[$0] == nil && !localIdentities.contains($0)
-        }.enumerated().map { ($0.element, $0.offset + priorSpeakers.filter { !$0.isLocalUser }.count + 1) })
+            canonicalByToken[$0] == nil && !priorIDs.contains(Self.speakerID(attemptID: attemptID, token: $0))
+        }.enumerated().map { ($0.element, $0.offset + priorSpeakers.count + 1) })
         return speakingTokens.map { token in
             let canonical = canonicalByToken[token] ?? token
-            let normalizedLabel = canonical.label.precomposedStringWithCanonicalMapping
-            let scopedClusterID = "\(canonical.analysisEpochID):\(normalizedLabel)"
-            let speakerID = Self.stableUUID("speaker:\(attemptID.uuidString):\(scopedClusterID)")
+            let scopedClusterID = Self.scopedClusterID(for: canonical)
+            let speakerID = Self.speakerID(attemptID: attemptID, token: canonical)
             let isLocalUser = localIdentities.contains(canonical)
             if var prior = priorSpeakers.first(where: { $0.id == speakerID }) {
-                if isLocalUser { prior.isLocalUser = true }
+                prior.isLocalUser = isLocalUser
                 return (token, prior)
             }
             return (
                 token,
                 MeetingSessionSpeaker(
                     id: speakerID,
-                    displayName: isLocalUser ? self.localUserName : String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
+                    displayName: String(format: self.speakerNameFormat, Int64(ordinals[canonical] ?? 1)),
                     diarizationClusterID: scopedClusterID,
                     trackKind: trackKinds[token.analysisEpochID.trackID] ?? .microphone,
                     isLocalUser: isLocalUser,
@@ -716,8 +714,21 @@ nonisolated struct MeetingTranscriptAssembler {
         }
         let emitted = units.map { ($0, MeetingAnalysisInterval(start: offset + $0.analysisStart, end: offset + $0.analysisEnd)) }
         let visible = emitted.filter { if case .ambiguous = $0.0.speaker { return false }; return true }
+        let canonicalByToken = Dictionary(identityLinks.map { ($0.token, $0.canonicalToken) }, uniquingKeysWith: { first, _ in first })
+        let localSpeakerIDs = Set(confirmedLocalUserTokens.map {
+            Self.speakerID(attemptID: attemptID, token: canonicalByToken[$0] ?? $0)
+        })
+        // Owner verification covers the complete retained evidence for this attempt. A later
+        // ambiguous voice must revoke an earlier owner label even when that speaker is absent
+        // from this window. Keep canonical IDs and user-edited metadata unchanged.
+        let reconciledPriorSpeakers = priorSpeakers.map { prior in
+            var speaker = prior
+            speaker.isLocalUser = localSpeakerIDs.contains(speaker.id)
+            return speaker
+        }
         let speakers = self.makeSpeakers(attemptID: attemptID, trackKinds: [epoch.trackID: .microphone],
-                                         emitted: visible, identityLinks: identityLinks, priorSpeakers: priorSpeakers, confirmedLocalUserTokens: confirmedLocalUserTokens)
+                                         emitted: visible, identityLinks: identityLinks, priorSpeakers: reconciledPriorSpeakers,
+                                         confirmedLocalUserTokens: confirmedLocalUserTokens)
         let speakerIDs = Dictionary(speakers.map { ($0.token, $0.speaker.id) }, uniquingKeysWith: { first, _ in first })
         let segments = emitted.map { unit, interval in
             let speakerID: SessionSpeakerID?
@@ -735,9 +746,18 @@ nonisolated struct MeetingTranscriptAssembler {
                 attributionState: overlap == .ambiguous ? .overlappingSpeakers : (speakerID == nil ? .unassigned : .assigned)
             )
         }
-        return MeetingPCMTranscriptBatch(segments: segments,
-                                         speakers: Array(Dictionary(speakers.map { ($0.speaker.id, $0.speaker) },
-                                                                    uniquingKeysWith: { first, _ in first }).values))
+        var batch = MeetingPCMTranscriptBatch(segments: segments,
+            speakers: speakers.map(\.speaker))
+        batch.speakers = batch.mergingSpeakers(into: reconciledPriorSpeakers)
+        return batch
+    }
+
+    private static func scopedClusterID(for token: MeetingBackendSpeakerToken) -> String {
+        "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
+    }
+
+    private static func speakerID(attemptID: UUID, token: MeetingBackendSpeakerToken) -> SessionSpeakerID {
+        Self.stableUUID("speaker:\(attemptID.uuidString):\(Self.scopedClusterID(for: token))")
     }
 
     private static func mediaTime(_ seconds: TimeInterval) -> MeetingMediaTime {
