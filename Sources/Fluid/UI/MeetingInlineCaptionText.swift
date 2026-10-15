@@ -134,7 +134,7 @@ private final class InlineCaptionContent {
         let animated = Set(configuration.pending.tokens.suffix(3).map(\.id))
         var boundsChanged = false
         for token in configuration.pending.tokens {
-            let attachment = attachments[token.id] ?? InlineCaptionAttachment()
+            let attachment = attachments[token.id] ?? InlineCaptionAttachment(tokenID: token.id)
             attachments[token.id] = attachment
             let size = CGSize(width: configuration.wordSize.width * CGFloat(token.widthHint), height: configuration.wordSize.height)
             // Attachment origins are measured from the baseline. Center the waveform on the
@@ -143,7 +143,9 @@ private final class InlineCaptionContent {
             boundsChanged = boundsChanged || attachment.bounds != bounds
             attachment.bounds = bounds
             attachment.update(configuration.waveform(token, animatedIDs: animated))
-            if result.length > 0 { result.append(NSAttributedString(string: " ", attributes: attributes)) }
+            if let last = result.string.last, !last.isWhitespace {
+                result.append(NSAttributedString(string: " ", attributes: attributes))
+            }
             let run = NSMutableAttributedString(attachment: attachment)
             run.addAttributes(attributes, range: NSRange(location: 0, length: run.length))
             result.append(run)
@@ -156,10 +158,12 @@ private final class InlineCaptionContent {
 
 @MainActor
 private final class InlineCaptionAttachment: NSTextAttachment {
+    let tokenID: UInt64
     private var root = AnyView(EmptyView())
     private weak var activeProvider: InlineCaptionAttachmentProvider?
 
-    init() {
+    init(tokenID: UInt64) {
+        self.tokenID = tokenID
         super.init(data: nil, ofType: nil)
         allowsTextAttachmentView = true
     }
@@ -212,11 +216,15 @@ private final class InlineCaptionAttachmentProvider: NSTextAttachmentViewProvide
         host.view.backgroundColor = .clear
         host.view.isUserInteractionEnabled = false
         host.view.isAccessibilityElement = false
+        host.view.accessibilityIdentifier = (textAttachment as? InlineCaptionAttachment)
+            .map { "meeting.inlineWave.\($0.tokenID)" }
         self.host = host
         view = host.view
         #else
         let host = NSHostingView(rootView: root)
         host.setAccessibilityElement(false)
+        host.setAccessibilityIdentifier((textAttachment as? InlineCaptionAttachment)
+            .map { "meeting.inlineWave.\($0.tokenID)" })
         self.host = host
         view = host
         #endif
@@ -241,6 +249,7 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
         view.textContainer.widthTracksTextView = false
         view.textContainer.heightTracksTextView = false
         view.isAccessibilityElement = false
+        view.accessibilityIdentifier = "meeting.inlineCaption.text"
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
     }
@@ -275,6 +284,7 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
         view.isHorizontallyResizable = false
         view.isVerticallyResizable = false
         view.setAccessibilityElement(false)
+        view.setAccessibilityIdentifier("meeting.inlineCaption.text")
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
     }

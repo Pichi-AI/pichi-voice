@@ -135,6 +135,7 @@ Sources/Fluid/Theme/ThemeEnvironment.swift
 Sources/Fluid/UI/FlowLayout.swift
 Sources/Fluid/UI/MeetingAudioPresentation.swift
 Sources/Fluid/UI/MeetingHistorySnapshot.swift
+Sources/Fluid/UI/MeetingInlineCaptionText.swift
 Sources/Fluid/UI/MeetingLiveCaptionBubbles.swift
 Sources/Fluid/UI/MeetingPendingSpeechView.swift
 Sources/Fluid/UI/MeetingSegmentAudioPlayer.swift
