@@ -235,6 +235,7 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
             try Task.checkCancellation()
             // Publish only after every chunk succeeds, including output-limit retries.
             if !output.isEmpty { streamHandler?(output) }
+            try Task.checkCancellation()
             let elapsed = start.duration(to: .now).components
             let milliseconds = Int(elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000)
             return .init(outputText: output, backendKind: "llama.cpp", latencyMilliseconds: milliseconds)
