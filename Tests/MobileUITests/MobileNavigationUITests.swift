@@ -89,6 +89,43 @@ final class MobileNavigationUITests: XCTestCase {
         capture("caption-04-new-text-still-followed")
     }
 
+    func testOwnerVoiceSettingsUseNativeRecordingStructureInBothLanguages() throws {
+        for (language, settingsTitle, appearance) in [("en", "Settings", "light"), ("ru", "Настройки", "dark")] {
+            app.terminate()
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            XCUIDevice.shared.orientation = .portrait
+            app.launch()
+            waitForOrientation(portrait: true)
+            openNavigation("settings", title: settingsTitle)
+            let recording = app.buttons["settings.recording"]
+            XCTAssertTrue(recording.waitForExistence(timeout: 5))
+            recording.tap()
+            let start = app.buttons["ownerVoice.start"]
+            let scroll = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.scrollViews.firstMatch
+            for step in 0..<8 where !start.isHittable {
+                scroll.swipeUp()
+                capture("owner-\(language)-reveal-\(step)")
+            }
+            XCTAssertTrue(start.isHittable)
+            XCTAssertGreaterThanOrEqual(start.frame.height, 44)
+            XCTAssertEqual(start.label, language == "ru" ? "Настроить мой голос" : "Set up my voice")
+            XCTAssertTrue(app.staticTexts["ownerVoice.readingPrompt"].exists)
+            XCTAssertFalse(app.buttons["ownerVoice.save"].exists, "Save appears only after a valid sample is checked")
+            capture("owner-\(language)-\(appearance)-portrait")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            for step in 0..<5 where !start.isHittable {
+                scroll.swipeUp()
+                capture("owner-\(language)-landscape-reveal-\(step)")
+            }
+            XCTAssertTrue(start.isHittable)
+            capture("owner-\(language)-\(appearance)-landscape")
+            openNavigation("meetings", title: language == "ru" ? "Встречи" : "Meetings")
+            XCTAssertTrue(app.buttons["meeting.start"].waitForExistence(timeout: 5))
+            capture("owner-\(language)-left-settings")
+        }
+    }
+
     func testSectionNavigationSwitchesImmediatelyFromSettingsDetails() throws {
         let destinations = ["general", "recording", "models", "privacy"]
         for detail in destinations {

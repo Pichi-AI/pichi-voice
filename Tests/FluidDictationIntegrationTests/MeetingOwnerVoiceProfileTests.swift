@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 import XCTest
 #if os(iOS)
@@ -120,6 +121,50 @@ private nonisolated final class OwnerVoiceEncodingLatch: @unchecked Sendable {
 }
 
 extension MeetingOwnerVoiceProfileTests {
+    func testRealWeSpeakerEnrollmentMatchesOnlyTheEnrolledSyntheticVoice() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let package = assets.appendingPathComponent("models/speaker-resources/voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
+        let read: (String) throws -> [Float] = { name in
+            let file = try AVAudioFile(forReading: assets.appendingPathComponent("audio/\(name).wav"))
+            XCTAssertEqual(file.processingFormat.sampleRate, 16_000)
+            XCTAssertEqual(file.processingFormat.channelCount, 1)
+            XCTAssertTrue((102_400...320_000).contains(file.length))
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                                       frameCapacity: AVAudioFrameCount(file.length)))
+            try file.read(into: buffer)
+            return Array(UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
+        }
+        let first = try read("voice-a")
+        let second = try read("voice-b")
+        let store = try self.privateStore()
+        let service = MeetingOwnerVoiceProfileService(store: store,
+            prepareResources: { try MeetingSpeakerVoiceModelArtifacts.validate(at: package) },
+            encode: { try MeetingSpeakerVoiceEncoder.encode(samples: $0, directory: package, validateDefaultRoot: false) })
+        let draft = try await service.prepare(samples: first)
+        XCTAssertNil(try store.load(), "Checking must not enroll a voice without Save.")
+        _ = try await service.save(draft)
+        let saved = try XCTUnwrap(store.load())
+        XCTAssertEqual(saved.embeddings.map(\.count), [256, 256])
+        let track = UUID()
+        let ownSamples = MeetingSpeakerVoiceSamples.collect(epoch: .init(trackID: track, ordinal: 0),
+            samples: first, segments: [.init(slotIndex: 0, start: 0, end: Double(first.count) / 16_000)])
+        let otherSamples = MeetingSpeakerVoiceSamples.collect(epoch: .init(trackID: track, ordinal: 0),
+            samples: second, segments: [.init(slotIndex: 1, start: 0, end: Double(second.count) / 16_000)])
+        XCTAssertEqual(ownSamples.count, 1)
+        XCTAssertEqual(otherSamples.count, 1)
+        let profiles = try await TranscriptionExecutor().runBlocking {
+            try MeetingSpeakerVoiceEncoder.encode(samples: ownSamples + otherSamples,
+                directory: package, validateDefaultRoot: false)
+        }
+        XCTAssertEqual(profiles.count, 2)
+        let matched = MeetingOwnerVoiceVerifier.confirmedTokens(owner: saved, profiles: profiles)
+        XCTAssertEqual(matched, Set(ownSamples.map(\.token)), "A different real encoded voice must remain an ordinary participant.")
+        try await service.delete()
+        XCTAssertNil(try store.load())
+        XCTAssertEqual(MeetingOwnerVoiceVerifier.confirmedTokens(owner: saved, profiles: profiles), matched,
+                       "A running attempt keeps its immutable profile even if settings delete it.")
+    }
+
     @MainActor
     func testCancelledEnrollmentWaitsForTheActualEncoderAndDoesNotSave() async throws {
         let store = try self.privateStore()

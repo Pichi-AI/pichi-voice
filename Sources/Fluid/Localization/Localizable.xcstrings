@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "You": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вы"
+          }
+        }
+      }
+    },
     "Summary with sources": {
       "extractionState": "manual",
       "localizations": {
