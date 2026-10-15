@@ -49,9 +49,22 @@ nonisolated struct MeetingParakeetEpochOutput: Sendable {
     let epochID: MeetingAnalysisEpochID
     let text: String
     let words: [ASRWordTiming]
+    let segmentTimings: [ASRSegmentTiming]
     let sampleRate: Double
     let sampleCount: Int
     let spanSamples: [MeetingMaterializedSpanSamples]
+
+    init(epochID: MeetingAnalysisEpochID, text: String, words: [ASRWordTiming],
+         segmentTimings: [ASRSegmentTiming] = [], sampleRate: Double, sampleCount: Int,
+         spanSamples: [MeetingMaterializedSpanSamples]) {
+        self.epochID = epochID
+        self.text = text
+        self.words = words
+        self.segmentTimings = segmentTimings
+        self.sampleRate = sampleRate
+        self.sampleCount = sampleCount
+        self.spanSamples = spanSamples
+    }
 }
 
 nonisolated struct MeetingParakeetPhaseResult: Sendable {

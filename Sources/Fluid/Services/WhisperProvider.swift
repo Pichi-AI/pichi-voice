@@ -529,8 +529,9 @@ final class WhisperProvider: TranscriptionProvider {
         guard let transcript = try await self.run(samples, languageCode: languageCode, timestamps: .segment) else {
             return ASRTranscriptionResult(text: "", confidence: 0)
         }
-        let fullText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ASRTranscriptionResult(text: fullText, confidence: 1.0)
+        return Self.transcriptionResult(text: transcript.text, segmentTimings: transcript.segments.map {
+            ASRSegmentTiming(text: $0.text, start: Double($0.t0Ms) / 1000, end: Double($0.t1Ms) / 1000)
+        }, sampleCount: samples.count)
     }
 
     private func run(_ samples: [Float], languageCode: String?, timestamps: TimestampKind) async throws -> Transcript? {
@@ -661,8 +662,18 @@ final class WhisperProvider: TranscriptionProvider {
             return ASRWordTiming(text: text, start: start, end: end)
         }
         // Partial timing evidence must not lose wording from an unaligned tail.
-        return (ASRTranscriptionResult(text: transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)),
-                words.count == transcript.words.count ? words : [])
+        return (Self.transcriptionResult(text: transcript.text, segmentTimings: transcript.segments.map {
+            ASRSegmentTiming(text: $0.text, start: Double($0.t0Ms) / 1000, end: Double($0.t1Ms) / 1000)
+        }, sampleCount: samples.count), words.count == transcript.words.count ? words : [])
+    }
+
+    /// Preserve already-returned native segmentation, including the segment-only
+    /// fallback. This does not request word timestamps or run a second decode.
+    nonisolated static func transcriptionResult(text: String, segmentTimings: [ASRSegmentTiming],
+                                                sampleCount: Int) -> ASRTranscriptionResult {
+        let fullText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ASRTranscriptionResult(text: fullText, segmentTimings: ASRSegmentTiming.validated(
+            segmentTimings, text: fullText, duration: Double(sampleCount) / 16_000))
     }
 
     static func runOptions(languageCode: String?, timestamps: TimestampKind = .segment,

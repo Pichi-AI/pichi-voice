@@ -6,8 +6,8 @@ import Foundation
 // exactly-tiling coverage receipts — while the host-injected runtime owns the two model
 // capabilities. It never touches the filesystem outside the frozen request's session directory,
 // never equates speaker slots across tracks or epochs, and never invents timing: clamping happens
-// only at physical epoch bounds, and text without word timings becomes one epoch-covering
-// utterance rather than fabricated words.
+// only at physical epoch bounds. Text without word timings retains validated native segment
+// intervals as utterances, or one epoch-covering fallback, rather than fabricated words.
 
 @MainActor
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
@@ -23,7 +23,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
             "Speaker slots are epoch-scoped; conservative local voice matching can reconnect identities across epochs of the same track.",
             "Parakeet TDT v2 handles English; v3 handles the supported European languages.",
-            "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
+            "When ASR returns text without usable word timings, validated native segment intervals are retained as utterances; otherwise one epoch-covering utterance is emitted.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
         analysisSampleRate: 16_000,
@@ -367,6 +367,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                         epochID: work.epoch.id,
                         text: output.result.text,
                         words: output.words,
+                        segmentTimings: output.result.segmentTimings,
                         sampleRate: materialized.sampleRate,
                         sampleCount: materialized.samples.count,
                         spanSamples: materialized.spanSamples
@@ -532,6 +533,18 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             return assignment
         }
         guard usable else {
+            let segments = ASRSegmentTiming.validated(result.segmentTimings, text: text, duration: duration)
+            if !segments.isEmpty {
+                return segments.enumerated().map { index, segment in
+                    MeetingFinalTextUnit(id: "pcm:\(epoch):segment:\(index)", trackID: epoch.trackID,
+                        analysisEpochID: epoch, precision: .utterance,
+                        text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        analysisStart: segment.start, analysisEnd: segment.end,
+                        speaker: admitted(Self.assignment(start: segment.start, end: segment.end,
+                            activity: activity, allowDominance: false)),
+                        analysisSpanIDs: [], confidence: nil)
+                }
+            }
             return [MeetingFinalTextUnit(
                 id: "pcm:\(epoch):utterance", trackID: epoch.trackID, analysisEpochID: epoch,
                 precision: .utterance, text: text, analysisStart: 0, analysisEnd: duration,
@@ -554,10 +567,10 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         }
     }
 
-    /// Word-timed units for one successful epoch. Provider times are seconds into the epoch's
-    /// materialized buffer, so analysis time is the epoch start plus the provider time, clamped
-    /// only to the epoch's physical bounds. Words with unusable timings are dropped, never
-    /// repaired; text with no usable word timings at all becomes one epoch-covering utterance.
+    /// Timed units for one successful epoch. Provider times are seconds into the epoch's
+    /// materialized buffer and map through its verified physical span ranges. Words with
+    /// unusable timings are dropped, never repaired. Without words, valid complete native
+    /// segments retain utterance precision; otherwise the complete text covers the epoch.
     private nonisolated static func units(
         for output: MeetingParakeetEpochOutput,
         work: EpochWork,
@@ -638,6 +651,29 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
 
         let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
+        let nativeSegments = ASRSegmentTiming.validated(output.segmentTimings, text: text,
+            duration: Double(output.sampleCount) / output.sampleRate)
+        if !nativeSegments.isEmpty {
+            var segmentUnits: [MeetingFinalTextUnit] = []
+            for (index, segment) in nativeSegments.enumerated() {
+                guard let start = Self.analysisTime(forMaterializedSeconds: segment.start, boundary: .start,
+                    sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                    spanSamples: output.spanSamples, spans: work.spans),
+                    let end = Self.analysisTime(forMaterializedSeconds: segment.end, boundary: .end,
+                    sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                    spanSamples: output.spanSamples, spans: work.spans), end > start,
+                    let ids = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
+                else { segmentUnits = []; break }
+                segmentUnits.append(MeetingFinalTextUnit(
+                    id: "unit:\(attemptID.uuidString):\(work.epoch.id):segment:\(index)", trackID: work.track.id,
+                    analysisEpochID: work.epoch.id, precision: .utterance,
+                    text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    analysisStart: start, analysisEnd: end,
+                    speaker: Self.assignment(start: start, end: end, activity: activity, allowDominance: false),
+                    analysisSpanIDs: ids, confidence: nil))
+            }
+            if !segmentUnits.isEmpty { return segmentUnits }
+        }
         let spanIDs = work.spans.map(\.id)
         guard !spanIDs.isEmpty else { return [] }
         return [MeetingFinalTextUnit(

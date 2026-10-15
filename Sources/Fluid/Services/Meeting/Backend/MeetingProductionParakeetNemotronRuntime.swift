@@ -318,7 +318,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         if hasNewPCM {
                             let recognized = try await session.transcribeWithTimings(samples)
                             let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
-                                words: recognized.words, sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])
+                                words: recognized.words, segmentTimings: recognized.result.segmentTimings,
+                                sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])
                             // An empty observation can be silence or a provider's rejected
                             // hypothesis. Neither invalidates speech already accepted for
                             // a shorter prefix. Keep its original coverage and timings.
@@ -380,7 +381,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private func pcmSpeechObservation(output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID,
                                       offset: TimeInterval, duration: TimeInterval,
                                       attemptID: UUID, isFinal: Bool = true) throws -> MeetingPCMTranscriptBatch {
-        let units = MeetingParakeetNemotronBackend.pcmUnits(result: ASRTranscriptionResult(text: output.text),
+        let units = MeetingParakeetNemotronBackend.pcmUnits(
+            result: ASRTranscriptionResult(text: output.text, segmentTimings: output.segmentTimings),
             words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [])
         var observation = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat)
             .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: offset, duration: duration,
@@ -406,7 +408,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let phase = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { session in
             let output = try await session.transcribeWithTimings(samples)
             return MeetingParakeetPhaseResult(outputs: [.init(epochID: epoch, text: output.result.text,
-                                                              words: output.words, sampleRate: 16_000,
+                                                              words: output.words, segmentTimings: output.result.segmentTimings,
+                                                              sampleRate: 16_000,
                                                               sampleCount: samples.count, spanSamples: [])])
         }
         try Task.checkCancellation()
@@ -477,9 +480,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let admission = MeetingSpeakerVoiceMatcher.pcmAdmission(
             priorProfiles: priorProfiles, currentProfiles: currentProfiles, epoch: epoch
         )
-        let units = MeetingParakeetNemotronBackend.pcmUnits(result: ASRTranscriptionResult(text: output.text),
-                                                           words: output.words, epoch: epoch, duration: duration,
-                                                           activity: activity, identityTokens: admission.identityTokens)
+        let units = MeetingParakeetNemotronBackend.pcmUnits(
+            result: ASRTranscriptionResult(text: output.text, segmentTimings: output.segmentTimings),
+            words: output.words, epoch: epoch, duration: duration,
+            activity: activity, identityTokens: admission.identityTokens)
         let ownerTokens = MeetingOwnerVoiceVerifier.confirmedTokens(
             owner: self.ownerVoiceProfileSnapshot, profiles: admission.retainedProfiles,
             identityLinks: MeetingSpeakerVoiceMatcher.links(profiles: admission.retainedProfiles, allowedTokens: Set(admission.retainedProfiles.map(\.token)))

@@ -1476,6 +1476,37 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(bundle.evidence.units.map(\.text), ["pcm"])
     }
 
+    func testRecordedEpochPreservesNativeUtteranceTimesAndSpeakerTransition() async throws {
+        let chunk = self.makeChunk(sequence: 0, start: 100, end: 104)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track])
+        let runtime = FakeRuntime()
+        let backend = self.makeBackend(runtime: runtime)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            MeetingAnalysisChunkKey(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 4)
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        runtime.diarizerFactory.segmentsByEpoch[epoch.id] = [
+            .init(slotIndex: 0, start: 0, end: 2), .init(slotIndex: 1, start: 2, end: 4)
+        ]
+        runtime.asrSession.responses = [.init(text: "Первая фраза. Second phrase.", words: [], segmentTimings: [
+            .init(text: "Первая фраза.", start: 0.2, end: 1.8), .init(text: " Second phrase.", start: 2.1, end: 3.8)
+        ])]
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { return XCTFail("Expected canonical evidence") }
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["Первая фраза.", "Second phrase."])
+        XCTAssertEqual(bundle.evidence.units.map(\.precision), [.utterance, .utterance])
+        XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), [epoch.analysisInterval.start + 0.2, epoch.analysisInterval.start + 2.1])
+        XCTAssertEqual(bundle.evidence.units.map(\.analysisEnd), [epoch.analysisInterval.start + 1.8, epoch.analysisInterval.start + 3.8])
+        XCTAssertEqual(bundle.evidence.units.map(\.speaker), [
+            .assigned(.init(analysisEpochID: epoch.id, label: "slot-0")),
+            .assigned(.init(analysisEpochID: epoch.id, label: "slot-1"))
+        ])
+        XCTAssertTrue(bundle.evidence.units.allSatisfy { !$0.analysisSpanIDs.isEmpty })
+        XCTAssertTrue(bundle.coverageReceipts.allSatisfy { $0.status == .processed })
+    }
+
     func testWordSlotAmbiguityAndUnassigned() async throws {
         let chunk = self.makeChunk(sequence: 0, start: 100, end: 104)
         let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
@@ -2020,6 +2051,7 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
     struct Response {
         let text: String
         let words: [ASRWordTiming]
+        var segmentTimings: [ASRSegmentTiming] = []
     }
 
     var responses: [Response] = []
@@ -2041,7 +2073,7 @@ private final nonisolated class FakeASRSession: MeetingParakeetASRSession, @unch
             throw MeetingEpochMaterializationError.unreadable(spanID: "fake-asr-failure")
         }
         let response = index < self.responses.count ? self.responses[index] : Response(text: "", words: [])
-        return (await ASRTranscriptionResult(text: response.text), response.words)
+        return (ASRTranscriptionResult(text: response.text, segmentTimings: response.segmentTimings), response.words)
     }
 }
 

@@ -13,6 +13,76 @@ final class MobileSpeakerAdmissionTests: XCTestCase {
                      embeddings: [vector(angle), vector(secondAngle ?? angle)])
     }
 
+    func testNativeSegmentIntervalsPreserveSpeakerTransitionsAndMonologuePresentation() throws {
+        let track = UUID(), attempt = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-1")
+        let timings = [ASRSegmentTiming(text: "Здравствуйте, обсудим документ.", start: 0.2, end: 3),
+                       .init(text: "Я уточню результаты.", start: 3.2, end: 5.5),
+                       .init(text: "Хорошо, я вас слушаю.", start: 6, end: 9)]
+        let result = ASRTranscriptionResult(text: timings.map(\.text).joined(separator: " "), segmentTimings: timings)
+        let activity = [MeetingBackendSpeakerActivity(token: first, start: 0, end: 5.8),
+                        .init(token: second, start: 5.8, end: 12)]
+        let coarse = MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: result.text), words: [],
+            epoch: epoch, duration: 12, activity: activity, identityTokens: [first, second])
+        XCTAssertEqual(coarse.count, 1)
+        guard case .ambiguous = coarse[0].speaker else { return XCTFail("Whole-window timing cannot choose between two voices") }
+        let units = MeetingParakeetNemotronBackend.pcmUnits(result: result, words: [],
+            epoch: epoch, duration: 12, activity: activity, identityTokens: [first, second])
+        XCTAssertEqual(units.map(\.precision), [.utterance, .utterance, .utterance])
+        XCTAssertEqual(units.map(\.analysisStart), [0.2, 3.2, 6])
+        XCTAssertEqual(units.map(\.analysisEnd), [3, 5.5, 9])
+        XCTAssertEqual(units.map(\.speaker), [.assigned(first), .assigned(first), .assigned(second)])
+        let batch = try MeetingTranscriptAssembler().assemblePCMWindow(attemptID: attempt,
+            epoch: epoch, offset: 10, duration: 12, units: units)
+        XCTAssertEqual(batch.speakers.count, 2)
+        XCTAssertEqual(batch.segments.map { $0.start.seconds }, [10.2, 13.2, 16])
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic native segments",
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                machTimebaseDenominator: 1, firstPresentationTime: nil))
+        session.speakers = batch.speakers
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: batch.segments, in: session)
+        XCTAssertEqual(paragraphs.count, 2, "Multiple native intervals from the same speaker remain one readable turn")
+        XCTAssertEqual(paragraphs[0].text, "Здравствуйте, обсудим документ. Я уточню результаты.")
+        XCTAssertEqual(paragraphs[1].text, "Хорошо, я вас слушаю.")
+        XCTAssertEqual(paragraphs.flatMap(\.segments), batch.segments, "Presentation must retain canonical boundaries")
+        let noIdentity = MeetingParakeetNemotronBackend.pcmUnits(result: result, words: [], epoch: epoch,
+            duration: 12, activity: activity, identityTokens: [])
+        XCTAssertTrue(noIdentity.allSatisfy { $0.speaker == .unassigned }, "Timing alone cannot mint identity")
+    }
+
+    func testNativeSegmentThatCrossesTwoVoicesRemainsAmbiguous() {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-1")
+        let units = MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Mixed native segment.",
+            segmentTimings: [.init(text: "Mixed native segment.", start: 0.2, end: 9)]), words: [],
+            epoch: epoch, duration: 12, activity: [.init(token: first, start: 0, end: 6),
+                .init(token: second, start: 6, end: 12)], identityTokens: [first, second])
+        XCTAssertEqual(units.count, 1)
+        XCTAssertEqual(units[0].precision, .utterance)
+        guard case .ambiguous = units[0].speaker else { return XCTFail("Never split a native utterance at fabricated word boundaries") }
+    }
+
+    func testInvalidNativeSegmentMetadataFallsBackWithoutDroppingUnalignedText() {
+        let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
+        for segments: [ASRSegmentTiming] in [
+            [.init(text: "Keep", start: 0, end: 1)],
+            [.init(text: "Keep every word.", start: 0, end: 13)],
+            [.init(text: "Keep every", start: 0, end: 8), .init(text: "word.", start: 7, end: 9)]
+        ] {
+            let units = MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Keep every word.",
+                segmentTimings: segments), words: [], epoch: epoch, duration: 12, activity: [], identityTokens: [])
+            XCTAssertEqual(units.count, 1)
+            XCTAssertEqual(units[0].text, "Keep every word.")
+            XCTAssertEqual(units[0].analysisStart, 0)
+            XCTAssertEqual(units[0].analysisEnd, 12)
+            XCTAssertEqual(units[0].speaker, .unassigned)
+        }
+    }
+
     func testInconsistentExcerptsCannotMintANamedParticipant() throws {
         let track = UUID(), attempt = UUID()
         let invalid = profile(track: track, epoch: 0, secondAngle: .pi / 2)

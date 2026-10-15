@@ -18,6 +18,7 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         var growingPrefixFixture = false
         var timedResponses: [Int: (text: String, words: [ASRWordTiming])] = [:]
         var timedErrors: [Int: CocoaError] = [:]
+        var segmentResponses: [Int: [ASRSegmentTiming]] = [:]
         var releaseCalls = 0
         func releaseResidency() async { releaseCalls += 1; isReady = false }
         func prepare(progressHandler: ((ModelPreparationProgress) -> Void)?) async throws {
@@ -32,7 +33,8 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
             self.timedSampleCounts.append(samples.count)
             if let error = timedErrors[samples.count] { throw error }
             if let response = timedResponses[samples.count] {
-                return (ASRTranscriptionResult(text: response.text, confidence: response.text.isEmpty ? 0 : 1), response.words)
+                return (ASRTranscriptionResult(text: response.text, confidence: response.text.isEmpty ? 0 : 1,
+                    segmentTimings: segmentResponses[samples.count] ?? []), response.words)
             }
             var words: [ASRWordTiming] = [.init(text: "Scoped", start: 0.1, end: 0.4), .init(text: "provider", start: 0.4, end: 0.8)]
             if growingPrefixFixture && samples.count >= 96_000 {
@@ -58,6 +60,49 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         for index in 0..<frames { data[index] = 0.1 }
         return try MeetingCapturePCMConverter.sampleBuffer(buffer: pcm,
             presentationTime: CMTime(value: start, timescale: 16_000))
+    }
+
+    func testNativeSegmentOnlyResultSurvivesBothPreparedRuntimePaths() async throws {
+        let fixture = try self.makeNativePCMPreviewFixture()
+        addTeardownBlock { await MainActor.run { fixture.service.releaseExclusiveActivity(fixture.lease) } }
+        let first = ASRSegmentTiming(text: "Первая фраза.", start: 0.2, end: 2.5)
+        let second = ASRSegmentTiming(text: "Second phrase.", start: 3.1, end: 5.8)
+        fixture.provider.timedResponses = [48_000: (first.text, []), 96_000: (first.text + " " + second.text, [])]
+        fixture.provider.segmentResponses = [48_000: [first], 96_000: [first, second]]
+        let attempt = UUID(), track = UUID()
+        try await fixture.runtime.preparePCMResources(attemptID: attempt, configuration: fixture.configuration)
+        let direct = try await fixture.runtime.recognizePCM(samples: [Float](repeating: 0.1, count: 96_000),
+            offset: 10, trackID: track, attemptID: attempt, configuration: fixture.configuration)
+        XCTAssertEqual(direct.segments.map(\.text), [first.text, second.text])
+        XCTAssertEqual(direct.segments.map { $0.start.seconds }, [10.2, 13.1])
+        XCTAssertEqual(direct.segments.map { $0.end.seconds }, [12.5, 15.8])
+        let observed = PCMPreviewObservation()
+        let firstObserved = expectation(description: "Native segment preview")
+        let consumer = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            recognize: { window, _ in
+                try await fixture.runtime.recognizePCM(window: window, offset: 20, trackID: track,
+                    attemptID: attempt, configuration: fixture.configuration, preview: { batch in
+                        await MainActor.run {
+                            observed.batches.append(batch)
+                            if observed.batches.count == 1 { firstObserved.fulfill() }
+                        }
+                    })
+            }, checkpoint: { batch in await MainActor.run { observed.checkpoints.append(batch) } },
+            failure: { _ in XCTFail("Segment-only results must use the same prepared native scope") })
+        addTeardownBlock { try? await consumer.finish() }
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 0)))
+        await fulfillment(of: [firstObserved], timeout: 3)
+        XCTAssertTrue(consumer.enqueue(try self.progressiveSample(frames: 48_000, start: 48_000)))
+        try await consumer.finish()
+        let final = try XCTUnwrap(observed.checkpoints.first)
+        XCTAssertEqual(final.segments.map(\.text), [first.text, second.text])
+        XCTAssertEqual(final.segments.map { $0.start.seconds }, [20.2, 23.1])
+        XCTAssertEqual(final.segments.map { $0.end.seconds }, [22.5, 25.8])
+        XCTAssertEqual(final.segments.first?.id, observed.batches.first?.segments.first?.id)
+        XCTAssertTrue(final.isComplete)
+        XCTAssertEqual(fixture.provider.timedSampleCounts, [96_000, 48_000, 96_000])
+        XCTAssertEqual(fixture.provider.releaseCalls, 2)
+        XCTAssertFalse(fixture.owner.isClaimed)
     }
 
     func testProgressiveNativeEmptySealPreservesAcceptedPrefixWithIncompleteCoverage() async throws {

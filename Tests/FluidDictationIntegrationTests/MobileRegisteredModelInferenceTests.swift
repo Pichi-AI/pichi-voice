@@ -199,7 +199,12 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                             observations.append(["fixture": name, "sha256": actualHash, "amplitudeScale": scale,
                                 "inputText": expected, "outputText": result.result.text,
                                 "wordErrors": errors, "wordErrorRate": rate, "samples": input.count,
-                                "durationSeconds": Double(input.count) / 16_000, "inferenceSeconds": elapsed])
+                                "durationSeconds": Double(input.count) / 16_000, "inferenceSeconds": elapsed,
+                                "nativeSegmentCount": result.result.segmentTimings.count, "wordTimingCount": result.words.count])
+                            XCTAssertFalse(result.result.segmentTimings.isEmpty,
+                                "The segment-only native fallback must retain its actual utterance intervals")
+                            XCTAssertEqual(ASRSegmentTiming.validated(result.result.segmentTimings,
+                                text: result.result.text, duration: Double(input.count) / 16_000), result.result.segmentTimings)
                             XCTAssertLessThanOrEqual(rate, 0.10, "Tiny must recognize the known full sentence in its original language")
                             XCTAssertLessThan(elapsed, Double(input.count) / 16_000,
                                               "Native Tiny inference must keep up with the duration of this fixture")
