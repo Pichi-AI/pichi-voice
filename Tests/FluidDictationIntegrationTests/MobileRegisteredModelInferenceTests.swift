@@ -626,6 +626,60 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         }
         XCTAssertEqual(report.count, 9)
     }
+
+    /// Measures the complete sequential model workload on synthetic speech. This does not
+    /// use a microphone or change app preferences, and is not an hour-long thermal test.
+    func testStrictGigaAMWindowCadenceBenchmark() async throws {
+        guard ProcessInfo.processInfo.environment["PICHI_STRICT_CADENCE_PROBE"] == "1" else {
+            throw XCTSkip("Enable the public-model strict cadence measurement explicitly")
+        }
+        let root = try self.assets()
+        let source = try self.pcm("two-voices", in: root)
+        XCTAssertFalse(source.isEmpty)
+        let resources = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
+        let package = resources.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let voice = resources.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
+        let installed = try await self.installedConfiguration(model: .gigaam, assets: root)
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: installed.asrModel,
+            asrArtifactFingerprint: installed.asrArtifactFingerprint, asrArtifactDirectory: installed.asrArtifactDirectory,
+            languageCode: installed.languageCode, diarizationFingerprint: MeetingProcessingCheckpoint.currentDiarizationFingerprint,
+            speakerLabelsEnabled: true)
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        do {
+            #if os(macOS)
+            try await service.retireDictationASRResourcesForMeeting(lease: lease)
+            #endif
+            let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service },
+                modelLocator: MeetingNemotronModelLocator(injectedURL: package), voiceModelDirectory: voice)
+            let attempt = UUID()
+            let track = UUID()
+            try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
+            }
+            var offset: Double = 0
+            for seconds in [12, 20] {
+                let samples = (0..<(seconds * 16_000)).map { source[$0 % source.count] }
+                for repetition in 0..<3 {
+                    let began = ProcessInfo.processInfo.systemUptime
+                    let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                        try await runtime.recognizePCM(samples: samples, offset: offset, trackID: track,
+                            attemptID: attempt, configuration: configuration)
+                    }
+                    let elapsed = ProcessInfo.processInfo.systemUptime - began
+                    XCTAssertFalse(batch.segments.isEmpty)
+                    XCTAssertTrue(batch.segments.allSatisfy { $0.start.seconds >= offset - 0.001 && $0.end.seconds <= offset + Double(seconds) + 0.001 })
+                    print("[STRICT_CADENCE] audioSeconds=\(seconds) repetition=\(repetition) computeSeconds=\(elapsed) segments=\(batch.segments.count)")
+                    offset += Double(seconds)
+                }
+            }
+            await service.shutdownForTermination()
+        } catch {
+            await service.shutdownForTermination()
+            throw error
+        }
+    }
 }
 
 #if canImport(Darwin)
