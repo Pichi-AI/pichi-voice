@@ -53,6 +53,15 @@ public actor NativeTextInference {
 
     public var isLoaded: Bool { self.session != nil }
 
+    /// Counts the exact prompt tokens used by generation without decoding or changing its context.
+    public func tokenCount(in text: String) throws -> Int {
+        try Task.checkCancellation()
+        try self.beginOperation()
+        defer { self.finishOperation() }
+        guard let session else { throw NativeTextInferenceError.modelNotLoaded }
+        return try session.tokenCount(in: text)
+    }
+
     public func load(modelURL: URL, contextTokenLimit: Int) async throws {
         try Task.checkCancellation()
         guard Self.contextTokenLimits.contains(contextTokenLimit) else {
@@ -205,7 +214,6 @@ private final class NativeSession: @unchecked Sendable {
         guard maxOutputTokens > 0, maxOutputTokens < self.contextTokenLimit else {
             throw NativeTextInferenceError.invalidOutputLimit
         }
-        guard prompt.utf8.count <= Self.maximumTextBytes else { throw NativeTextInferenceError.promptTooLarge }
         var tokens = try self.tokenize(prompt, maxOutputTokens: maxOutputTokens)
         try cancellation.check()
         guard let memory = llama_get_memory(self.context) else { throw NativeTextInferenceError.contextCreationFailed }
@@ -256,21 +264,28 @@ private final class NativeSession: @unchecked Sendable {
         throw NativeTextInferenceError.outputLimitExceeded
     }
 
-    private func tokenize(_ prompt: String, maxOutputTokens: Int) throws -> [llama_token] {
-        let byteCount = prompt.utf8.count
+    func tokenCount(in text: String) throws -> Int {
+        try Task.checkCancellation()
+        let byteCount = text.utf8.count
+        guard byteCount <= Self.maximumTextBytes else { throw NativeTextInferenceError.promptTooLarge }
         guard byteCount > 0 else { throw NativeTextInferenceError.tokenizationFailed }
-        let required = prompt.withCString {
+        let required = text.withCString {
             llama_tokenize(self.vocabulary, $0, Int32(byteCount), nil, 0, true, true)
         }
+        try Task.checkCancellation()
         guard required < 0, required != Int32.min else { throw NativeTextInferenceError.tokenizationFailed }
-        let count = Int(-required)
+        return Int(-required)
+    }
+
+    private func tokenize(_ prompt: String, maxOutputTokens: Int) throws -> [llama_token] {
+        let count = try self.tokenCount(in: prompt)
         guard count + maxOutputTokens <= self.contextTokenLimit else {
             throw NativeTextInferenceError.contextLimitExceeded(promptTokens: count, outputTokens: maxOutputTokens, contextTokens: self.contextTokenLimit)
         }
         var tokens = [llama_token](repeating: 0, count: count)
         let written = prompt.withCString { text in
             tokens.withUnsafeMutableBufferPointer { buffer in
-                llama_tokenize(self.vocabulary, text, Int32(byteCount), buffer.baseAddress, Int32(buffer.count), true, true)
+                llama_tokenize(self.vocabulary, text, Int32(prompt.utf8.count), buffer.baseAddress, Int32(buffer.count), true, true)
             }
         }
         guard written == count else { throw NativeTextInferenceError.tokenizationFailed }
