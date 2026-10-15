@@ -6,13 +6,63 @@ import os
 nonisolated struct PichiMeetingCaptionRecognition: Sendable {
     let text: String
     let endOfUtteranceProbability: Float?
+    let words: [ASRWordTiming]
+
+    init(text: String, endOfUtteranceProbability: Float?, words: [ASRWordTiming] = []) {
+        self.text = text
+        self.endOfUtteranceProbability = endOfUtteranceProbability
+        self.words = words
+    }
+
+    /// A forced buffer rotation needs a closed word and real acoustic space before its
+    /// successor. Never guess a split from character counts or provider token pieces.
+    func rotation(sampleCount: Int, sampleRate: Double) -> (text: String, sample: Int)? {
+        guard sampleCount > 0, sampleRate.isFinite, sampleRate > 0,
+              self.words.count > 1, self.words.count <= 8192 else { return nil }
+        var cursor = self.text.startIndex
+        var ranges: [Range<String.Index>] = []
+        var previousEnd = 0.0
+        let duration = Double(sampleCount) / sampleRate
+        for word in self.words {
+            let body = word.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            while cursor < self.text.endIndex, self.text[cursor].isWhitespace {
+                cursor = self.text.index(after: cursor)
+            }
+            guard !body.isEmpty, word.start.isFinite, word.end.isFinite,
+                  word.start >= previousEnd, word.end > word.start, word.end <= duration,
+                  let range = self.text.range(of: body, options: .anchored, range: cursor..<self.text.endIndex)
+            else { return nil }
+            ranges.append(range)
+            cursor = range.upperBound
+            previousEnd = word.end
+        }
+        guard self.text[cursor...].allSatisfy(\.isWhitespace) else { return nil }
+        for index in (0..<(self.words.count - 1)).reversed() {
+            let word = self.words[index]
+            let successor = self.words[index + 1]
+            let separator = self.text[ranges[index].upperBound..<ranges[index + 1].lowerBound]
+            guard word.end <= duration - 1, !separator.isEmpty,
+                  separator.allSatisfy(\.isWhitespace), successor.start >= word.end else { continue }
+            let sample = Int(((word.end + successor.start) * 0.5 * sampleRate).rounded(.down))
+            guard sample >= 5600, sample < sampleCount else { continue }
+            return (String(self.text[..<ranges[index].upperBound]).trimmingCharacters(in: .whitespacesAndNewlines), sample)
+        }
+        return nil
+    }
 }
 
 /// One shared, serialized model capability; each capture track owns its own audio/turn buffers.
 nonisolated protocol PichiMeetingCaptionRecognizing: Sendable {
     func prepare() async throws
     func recognize(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition
+    func recognizeWithWordTimings(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition
     func unload() async
+}
+
+extension PichiMeetingCaptionRecognizing {
+    func recognizeWithWordTimings(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition {
+        try await self.recognize(samples)
+    }
 }
 
 /// Both online-call tracks share this provider, so loading live captions retains one set of
@@ -61,11 +111,24 @@ final class PichiMeetingCaptionRecognizer: PichiMeetingCaptionRecognizing {
     }
 
     @MainActor func recognize(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition {
+        try await self.recognize(samples, wordTimings: false)
+    }
+
+    @MainActor func recognizeWithWordTimings(_ samples: [Float]) async throws -> PichiMeetingCaptionRecognition {
+        try await self.recognize(samples, wordTimings: true)
+    }
+
+    private func recognize(_ samples: [Float], wordTimings: Bool) async throws -> PichiMeetingCaptionRecognition {
         guard !self.isStopped, let provider else { throw CancellationError() }
         let previous = self.inference
         let work = Task { @MainActor in
             _ = await previous?.result
             try Task.checkCancellation()
+            if wordTimings, provider.supportsWordTimings {
+                let output = try await provider.transcribeWithWordTimings(samples)
+                return PichiMeetingCaptionRecognition(text: output.result.text,
+                    endOfUtteranceProbability: output.result.endOfUtteranceProbability, words: output.words)
+            }
             let result = try await provider.transcribeStreaming(samples)
             return PichiMeetingCaptionRecognition(text: result.text, endOfUtteranceProbability: result.endOfUtteranceProbability)
         }
@@ -328,7 +391,7 @@ actor PichiMeetingBufferedTrackEngine {
         self.quietSamples = active ? 0 : self.quietSamples + block.count
         let shouldFinish = self.quietSamples >= Self.pauseSamples || self.samples.count >= Self.maximumTurnSamples
         if shouldFinish {
-            await self.finishTurn()
+            await self.finishTurn(rotateAtWordBoundary: self.samples.count >= Self.maximumTurnSamples)
             return
         }
         if self.samples.count >= Self.minimumTurnSamples,
@@ -370,21 +433,48 @@ actor PichiMeetingBufferedTrackEngine {
         }
     }
 
-    private func finishTurn() async {
+    private func finishTurn(rotateAtWordBoundary: Bool = false) async {
         guard let turnID, let startPTS, let endPTS else { return }
         let generation = self.generation
         do {
             let result: PichiMeetingCaptionRecognition
-            if self.lastRecognitionSampleCount == self.samples.count, let cached = self.lastRecognition {
+            if rotateAtWordBoundary {
+                // Keep Tiny's bounded fast recipe and the existing memory cap. Reserve
+                // the last second inside this input as future context, never add a 21st.
+                result = try await self.recognizer.recognizeWithWordTimings(self.samples)
+            } else if self.lastRecognitionSampleCount == self.samples.count, let cached = self.lastRecognition {
                 result = cached
             } else {
                 result = try await self.recognizer.recognize(self.samples)
             }
             guard !self.isStopped, !Task.isCancelled, self.generation == generation,
                   self.activeInputEpoch == self.inputEpoch.current else { return }
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { self.onUtterance?(self.kind, turnID, text, startPTS, endPTS) }
+            let rotation = rotateAtWordBoundary ? result.rotation(sampleCount: self.samples.count, sampleRate: Self.sampleRate) : nil
+            let retained = rotation.map { Array(self.samples[$0.sample...]) } ?? []
+            let boundary = rotation.map { startPTS + CMTime(value: Int64($0.sample), timescale: 16_000) } ?? endPTS
+            let quietSamples = self.quietSamples
+            let text = rotation?.text ?? result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if rotateAtWordBoundary {
+                let fullSamples = self.samples.count
+                let committedSamples = rotation?.sample ?? fullSamples
+                let carriedSamples = retained.count
+                let wordCount = result.words.count
+                let timedEvidenceValid = rotation != nil
+                let reason = timedEvidenceValid ? "closed_word_gap" : "unusable_word_boundary"
+                DebugLogger.shared.logLazy(source: "PichiMeetingBufferedTrackEngine") {
+                    "caption_forced_boundary reason=\(reason) full_samples=\(fullSamples) committed_samples=\(committedSamples) " +
+                        "carried_samples=\(carriedSamples) words=\(wordCount) timed_evidence_valid=\(timedEvidenceValid)"
+                }
+            }
+            if !text.isEmpty { self.onUtterance?(self.kind, turnID, text, startPTS, boundary) }
             self.clearTurn()
+            if !retained.isEmpty {
+                self.turnID = UUID()
+                self.startPTS = boundary
+                self.endPTS = endPTS
+                self.samples = retained
+                self.quietSamples = min(quietSamples, retained.count)
+            }
         } catch {
             guard !self.isStopped, !Task.isCancelled else { return }
             self.onDegraded?(self.kind, "Buffered captions hit an error and resynced.")
