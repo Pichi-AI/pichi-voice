@@ -284,6 +284,25 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         await provider.shutdownForTermination()
     }
 
+    func testCancellationFromCompletedStreamCallbackRetiresRuntime() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let provider = S1MiniIntegrationProvider(store: store, engine: ChunkEngine())
+        let task = Task {
+            try await provider.enhanceDictation("hello", runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+            })
+        }
+        do {
+            _ = try await task.value
+            XCTFail("Cancellation from the stream callback must propagate")
+        } catch is CancellationError {}
+        let loaded = await provider.loadedModelState()
+        XCTAssertNil(loaded)
+    }
+
     func testLaterChunkFailurePublishesNothingAndRetiresRuntime() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
