@@ -5,6 +5,23 @@ import UIKit
 @testable import PichiVoiceMobile
 
 final class MeetingLiveCaptionPresentationTests: XCTestCase {
+    func testRepeatedHypothesesAdmitWholeWordsWithoutFreezingAnOpenToken() {
+        XCTAssertEqual(MeetingSpeechHypothesisStability.stableUTF16Count(previous: "кот", current: "которая пишет"), 0)
+        XCTAssertEqual(MeetingSpeechHypothesisStability.stableUTF16Count(previous: "слово которого", current: "слово которое меняется"), "слово ".utf16.count)
+        XCTAssertEqual(MeetingSpeechHypothesisStability.stableUTF16Count(previous: "Иван", current: "и вам завтра"), 0)
+        XCTAssertEqual(MeetingSpeechHypothesisStability.stableUTF16Count(previous: "Ёжик 👩🏽‍⚕️ говорит", current: "Ёжик 👩🏽‍⚕️ говорит дальше"), "Ёжик 👩🏽‍⚕️ ".utf16.count)
+        XCTAssertEqual(MeetingSpeechHypothesisStability.stableUTF16Count(previous: "Готово.", current: "Готово."), "Готово.".utf16.count)
+        let id = UUID()
+        var snapshot = MeetingLiveTranscriptSnapshot.empty.settingPartial(.init(id: id, text: "кот", start: 0), for: .you)
+        XCTAssertNil(snapshot.partials[.you]?.stableUTF16Count)
+        snapshot = snapshot.settingPartial(.init(id: id, text: "которая пишет", start: 0), for: .you)
+        XCTAssertEqual(snapshot.partials[.you]?.stableUTF16Count, 0)
+        snapshot = snapshot.settingPartial(.init(id: id, text: "которая пишет слова", start: 0), for: .you)
+        XCTAssertEqual(snapshot.partials[.you]?.stableUTF16Count, "которая ".utf16.count)
+        snapshot = snapshot.settingPartial(.init(id: UUID(), text: "которая пишет слова", start: 3), for: .you)
+        XCTAssertNil(snapshot.partials[.you]?.stableUTF16Count, "A new turn has no repeated hypothesis yet")
+    }
+
     private func row(_ text: String, speaker: MeetingLiveSpeaker = .you, id: UUID = UUID(),
                      partial: Bool = false, label: Bool = false) -> MeetingLiveBubbleComposer.Row {
         .init(id: id, speaker: speaker, text: text, isPartial: partial, showsLabel: label)
