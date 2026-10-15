@@ -8,7 +8,8 @@ import XCTest
 
 /// Explicitly enabled synthetic replay evidence belongs only to a private XCTest
 /// attachment. Support logs, the app store and export paths never receive it.
-private actor SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
+@MainActor
+private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
     private struct Observation: Encodable {
         let elapsedSeconds: TimeInterval
         let input: String
