@@ -380,8 +380,11 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
             localModelPath: path, usesStablePromptPrefixKVCache: false, usesFluid1Boost: false, contextTokenLimit: 4096
         )
         let context = PrivateAIIntegrationService.AppContext(appName: "Synthetic long test", bundleID: "test.s1-mini", windowTitle: "", appVersion: nil)
-        let sentence = "Распознавание длинной записи продолжается. Проверяем обработку текста, сохранение предложений и правильную пунктуацию. "
-        let input = String(repeating: sentence, count: 65) + "Последняя фраза: фиолетовый самолёт."
+        let topics = ["обработка текста", "сохранение предложений", "правильная пунктуация", "распознавание речи", "длинные записи", "проверка результата"]
+        let paragraphs = (1...45).map { index in
+            "Пункт \(index). Тема обсуждения: \(topics[(index - 1) % topics.count]). Команда проверит результат и подготовит отчёт к следующей встрече."
+        }
+        let input = "Распознавание длинной записи.\n\n" + paragraphs.joined(separator: "\n\n") + "\n\nПоследняя фраза: фиолетовый самолёт."
         do {
             #if !S1_MINI_STANDALONE_TESTS
             XCTAssertFalse(SettingsStore.privateAIDictationTokenBudget(forInputText: input, contextTokenLimit: 4096).hasSufficientHeadroom)

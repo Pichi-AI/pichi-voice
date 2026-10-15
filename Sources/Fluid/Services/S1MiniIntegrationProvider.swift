@@ -281,15 +281,22 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
             }
             let cleaned: String
             do {
-                // Use the remaining context so harmless expansion does not force an early retry.
+                DebugLogger.shared.debug(
+                    "Native dictation chunk start inputChars=\(chunk.text.count) promptTokens=\(promptTokens) outputLimit=\(reserve) completedChunks=\(completedChunks)",
+                    source: "S1MiniIntegrationProvider"
+                )
                 cleaned = try await self.engine.generate(
                     prompt: prompt,
-                    maxOutputTokens: min(maxOutputTokens, selection.contextTokenLimit - promptTokens),
+                    maxOutputTokens: reserve,
                     streamHandler: nil
                 ).trimmingCharacters(in: .whitespacesAndNewlines)
             } catch NativeTextInferenceError.outputLimitExceeded {
                 // The failed partial output is discarded. Retry only smaller original input.
                 outputRetries += 1
+                DebugLogger.shared.info(
+                    "Native dictation chunk reached output limit; retrying smaller input inputChars=\(chunk.text.count) outputLimit=\(reserve)",
+                    source: "S1MiniIntegrationProvider"
+                )
                 try Self.split(chunk, onto: &pending, failure: S1MiniError.incompleteOutput)
                 continue
             }
