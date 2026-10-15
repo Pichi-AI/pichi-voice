@@ -51,10 +51,14 @@ public struct GigaAMModelDescriptor: Sendable, Equatable {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         var digest = SHA256()
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+        // FileHandle may hand back autoreleased NSData. Bound its lifetime per block,
+        // even when repeated model loads share a long-lived concurrency worker.
+        while try autoreleasepool(invoking: { () throws -> Bool in
             try Task.checkCancellation()
+            guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
             digest.update(data: data)
-        }
+            return true
+        }) {}
         return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 

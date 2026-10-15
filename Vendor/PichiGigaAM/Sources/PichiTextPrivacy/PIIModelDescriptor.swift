@@ -58,10 +58,12 @@ public struct PIIModelDescriptor: Sendable, Equatable {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var hash = SHA256()
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+        while try autoreleasepool(invoking: { () throws -> Bool in
             try Task.checkCancellation()
+            guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
             hash.update(data: data)
-        }
+            return true
+        }) {}
         return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

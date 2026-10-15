@@ -21,55 +21,61 @@ public actor GigaAMRuntime {
     public var isReady: Bool { self.session != nil }
 
     public func load(descriptor: GigaAMModelDescriptor, directory: URL, executionProvider: GigaAMExecutionProvider = .cpu) throws {
-        try Task.checkCancellation()
-        let modelURL = directory.appendingPathComponent(descriptor.modelFile)
-        if self.loadedURL == modelURL, self.session != nil { return }
-        // Do not retain both old and new models during a model switch.
-        self.unload()
-        try descriptor.verify(in: directory)
-        let vocabulary: GigaAMVocabulary
-        if let file = descriptor.vocabularyFile {
-            vocabulary = try GigaAMVocabulary(contents: String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8))
-        } else {
-            vocabulary = .russianCharacters
+        // Swift concurrency workers do not promise a pool per actor call. Drain native
+        // loader temporaries before another model phase claims residency.
+        try autoreleasepool {
+            try Task.checkCancellation()
+            let modelURL = directory.appendingPathComponent(descriptor.modelFile)
+            if self.loadedURL == modelURL, self.session != nil { return }
+            // Do not retain both old and new models during a model switch.
+            self.unload()
+            try descriptor.verify(in: directory)
+            let vocabulary: GigaAMVocabulary
+            if let file = descriptor.vocabularyFile {
+                vocabulary = try GigaAMVocabulary(contents: String(contentsOf: directory.appendingPathComponent(file), encoding: .utf8))
+            } else {
+                vocabulary = .russianCharacters
+            }
+            let environment = try ORTEnv(loggingLevel: .warning)
+            let options = try ORTSessionOptions()
+            #if os(iOS)
+            // Preserve measured transcription latency while avoiding active waits
+            // between operators. Freeze these options before opening the session.
+            try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
+            try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
+            try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
+            #else
+            try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
+            #endif
+            try options.setGraphOptimizationLevel(.all)
+            // Dynamic GigaAM shapes are supported by the CPU EP on both architectures.
+            // CoreML remains opt-in until a particular export/device passes parity.
+            if executionProvider == .coreML {
+                let coreML = ORTCoreMLExecutionProviderOptions()
+                coreML.createMLProgram = true
+                coreML.onlyEnableForDevicesWithANE = true
+                try options.appendCoreMLExecutionProvider(with: coreML)
+            }
+            let session = try ORTSession(env: environment, modelPath: modelURL.path, sessionOptions: options)
+            guard Set(try session.inputNames()).isSuperset(of: ["features", "feature_lengths"]),
+                  Set(try session.outputNames()).contains("log_probs") else { throw GigaAMError.incompatibleModel }
+            try Task.checkCancellation()
+            self.environment = environment
+            self.session = session
+            self.vocabulary = vocabulary
+            self.descriptor = descriptor
+            self.loadedURL = modelURL
         }
-        let environment = try ORTEnv(loggingLevel: .warning)
-        let options = try ORTSessionOptions()
-        #if os(iOS)
-        // Preserve measured transcription latency while avoiding active waits
-        // between operators. Freeze these options before opening the session.
-        try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
-        try options.addConfigEntry(withKey: "session.intra_op.allow_spinning", value: "0")
-        try options.addConfigEntry(withKey: "session.inter_op.allow_spinning", value: "0")
-        #else
-        try options.setIntraOpNumThreads(Int32(min(4, max(1, ProcessInfo.processInfo.activeProcessorCount))))
-        #endif
-        try options.setGraphOptimizationLevel(.all)
-        // Dynamic GigaAM shapes are supported by the CPU EP on both architectures.
-        // CoreML remains opt-in until a particular export/device passes parity.
-        if executionProvider == .coreML {
-            let coreML = ORTCoreMLExecutionProviderOptions()
-            coreML.createMLProgram = true
-            coreML.onlyEnableForDevicesWithANE = true
-            try options.appendCoreMLExecutionProvider(with: coreML)
-        }
-        let session = try ORTSession(env: environment, modelPath: modelURL.path, sessionOptions: options)
-        guard Set(try session.inputNames()).isSuperset(of: ["features", "feature_lengths"]),
-              Set(try session.outputNames()).contains("log_probs") else { throw GigaAMError.incompatibleModel }
-        try Task.checkCancellation()
-        self.environment = environment
-        self.session = session
-        self.vocabulary = vocabulary
-        self.descriptor = descriptor
-        self.loadedURL = modelURL
     }
 
     public func unload() {
-        self.session = nil
-        self.environment = nil
-        self.vocabulary = nil
-        self.descriptor = nil
-        self.loadedURL = nil
+        autoreleasepool {
+            self.session = nil
+            self.environment = nil
+            self.vocabulary = nil
+            self.descriptor = nil
+            self.loadedURL = nil
+        }
     }
 
     /// Audio is 16 kHz mono float PCM. Long inputs use overlapping, bounded windows.
@@ -112,35 +118,39 @@ public actor GigaAMRuntime {
     }
 
     private func infer(_ samples: [Float]) throws -> GigaAMTranscript {
-        guard let session = self.session, let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
-        let start = ProcessInfo.processInfo.systemUptime
-        let features = self.frontend.features(samples)
-        let featureData = features.values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
-        var length = Int64(features.frameCount)
-        let lengthData = NSMutableData(bytes: &length, length: MemoryLayout<Int64>.size)
-        let inputs = [
-            "features": try ORTValue(tensorData: featureData, elementType: .float, shape: [1, NSNumber(value: GigaAMFrontend.melCount), NSNumber(value: features.frameCount)]),
-            "feature_lengths": try ORTValue(tensorData: lengthData, elementType: .int64, shape: [1]),
-        ]
-        var outputNames: Set<String> = ["log_probs"]
-        if self.descriptor?.endOfUtteranceThreshold != nil { outputNames.insert("eou_prob") }
-        let outputs = try session.run(withInputs: inputs, outputNames: outputNames, runOptions: nil)
-        try Task.checkCancellation()
-        guard let logits = outputs["log_probs"] else { throw GigaAMError.invalidOutput }
-        let shape = try logits.tensorTypeAndShapeInfo().shape.map(\.intValue)
-        guard shape.count == 3, shape[0] == 1, shape[2] == vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
-        let frameCount = min(shape[1], (features.frameCount - 1) / 4 + 1)
-        let allValues = try Self.floatValues(logits)
-        let values = Array(allValues.prefix(frameCount * vocabulary.tokens.count))
-        let duration = Double(samples.count) / Double(GigaAMFrontend.sampleRate)
-        let words = try GigaAMCTC.decode(logProbabilities: values, frameCount: frameCount, vocabulary: vocabulary, audioDuration: duration)
-        var probability: Float?
-        if let output = outputs["eou_prob"], let threshold = self.descriptor?.endOfUtteranceThreshold, let raw = try Self.floatValues(output).first {
-            let clipped = min(1 - 1e-6, max(1e-6, raw))
-            let calibratedLogit = (log(clipped / (1 - clipped)) - log(threshold / (1 - threshold))) * 2
-            probability = 1 / (1 + exp(-calibratedLogit))
+        // A model call can create autoreleased Objective-C tensors and backing buffers.
+        // Only the Swift transcript escapes this bounded window.
+        try autoreleasepool {
+            guard let session = self.session, let vocabulary = self.vocabulary else { throw GigaAMError.notPrepared }
+            let start = ProcessInfo.processInfo.systemUptime
+            let features = self.frontend.features(samples)
+            let featureData = features.values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
+            var length = Int64(features.frameCount)
+            let lengthData = NSMutableData(bytes: &length, length: MemoryLayout<Int64>.size)
+            let inputs = [
+                "features": try ORTValue(tensorData: featureData, elementType: .float, shape: [1, NSNumber(value: GigaAMFrontend.melCount), NSNumber(value: features.frameCount)]),
+                "feature_lengths": try ORTValue(tensorData: lengthData, elementType: .int64, shape: [1]),
+            ]
+            var outputNames: Set<String> = ["log_probs"]
+            if self.descriptor?.endOfUtteranceThreshold != nil { outputNames.insert("eou_prob") }
+            let outputs = try session.run(withInputs: inputs, outputNames: outputNames, runOptions: nil)
+            try Task.checkCancellation()
+            guard let logits = outputs["log_probs"] else { throw GigaAMError.invalidOutput }
+            let shape = try logits.tensorTypeAndShapeInfo().shape.map(\.intValue)
+            guard shape.count == 3, shape[0] == 1, shape[2] == vocabulary.tokens.count else { throw GigaAMError.invalidOutput }
+            let frameCount = min(shape[1], (features.frameCount - 1) / 4 + 1)
+            let allValues = try Self.floatValues(logits)
+            let values = Array(allValues.prefix(frameCount * vocabulary.tokens.count))
+            let duration = Double(samples.count) / Double(GigaAMFrontend.sampleRate)
+            let words = try GigaAMCTC.decode(logProbabilities: values, frameCount: frameCount, vocabulary: vocabulary, audioDuration: duration)
+            var probability: Float?
+            if let output = outputs["eou_prob"], let threshold = self.descriptor?.endOfUtteranceThreshold, let raw = try Self.floatValues(output).first {
+                let clipped = min(1 - 1e-6, max(1e-6, raw))
+                let calibratedLogit = (log(clipped / (1 - clipped)) - log(threshold / (1 - threshold))) * 2
+                probability = 1 / (1 + exp(-calibratedLogit))
+            }
+            return GigaAMTranscript(text: words.map(\.text).joined(separator: " "), confidence: words.isEmpty ? 0 : words.map(\.confidence).reduce(0, +) / Float(words.count), words: words, endOfUtteranceProbability: probability, processingDuration: ProcessInfo.processInfo.systemUptime - start)
         }
-        return GigaAMTranscript(text: words.map(\.text).joined(separator: " "), confidence: words.isEmpty ? 0 : words.map(\.confidence).reduce(0, +) / Float(words.count), words: words, endOfUtteranceProbability: probability, processingDuration: ProcessInfo.processInfo.systemUptime - start)
     }
 
     private static func floatValues(_ value: ORTValue) throws -> [Float] {

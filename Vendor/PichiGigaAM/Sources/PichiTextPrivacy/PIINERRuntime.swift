@@ -30,36 +30,41 @@ public actor PIINERRuntime {
     public var isReady: Bool { session != nil }
 
     public func load(descriptor: PIIModelDescriptor = .russianTiny, directory: URL) throws {
-        try Task.checkCancellation()
-        // Always verify the immutable artifacts, even if this instance was used
-        // before. A mutable external folder cannot silently change an attempt.
-        try descriptor.verify(in: directory)
-        if loadedFingerprint == descriptor.fingerprint, session != nil { return }
-        unload()
-        struct Config: Decodable { let id2label: [String: String] }
-        let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: directory.appendingPathComponent("config.json")))
-        let labels = try (0..<config.id2label.count).map { i -> String in
-            guard let label = config.id2label[String(i)], label == "O" || label.hasPrefix("B-") || label.hasPrefix("I-") else {
-                throw TextPrivacyError.incompatibleModel
+        // Retire Objective-C loader temporaries before the next model phase.
+        try autoreleasepool {
+            try Task.checkCancellation()
+            // Always verify the immutable artifacts, even if this instance was used
+            // before. A mutable external folder cannot silently change an attempt.
+            try descriptor.verify(in: directory)
+            if loadedFingerprint == descriptor.fingerprint, session != nil { return }
+            unload()
+            struct Config: Decodable { let id2label: [String: String] }
+            let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: directory.appendingPathComponent("config.json")))
+            let labels = try (0..<config.id2label.count).map { i -> String in
+                guard let label = config.id2label[String(i)], label == "O" || label.hasPrefix("B-") || label.hasPrefix("I-") else {
+                    throw TextPrivacyError.incompatibleModel
+                }
+                return label
             }
-            return label
+            guard labels.contains("B-PER"), labels.contains("I-PER") else { throw TextPrivacyError.incompatibleModel }
+            let tokenizer = try PIIWordPieceTokenizer(vocabulary: String(contentsOf: directory.appendingPathComponent("vocab.txt"), encoding: .utf8))
+            let environment = try ORTEnv(loggingLevel: .error)
+            let options = try ORTSessionOptions()
+            try options.setIntraOpNumThreads(1)
+            try options.setGraphOptimizationLevel(.all)
+            let session = try ORTSession(env: environment, modelPath: directory.appendingPathComponent("model_int8.onnx").path, sessionOptions: options)
+            guard Set(try session.inputNames()) == Set(["input_ids", "attention_mask", "token_type_ids"]),
+                  Set(try session.outputNames()).contains("logits") else { throw TextPrivacyError.incompatibleModel }
+            try Task.checkCancellation()
+            self.environment = environment; self.session = session; self.tokenizer = tokenizer
+            self.labels = labels; self.loadedFingerprint = descriptor.fingerprint
         }
-        guard labels.contains("B-PER"), labels.contains("I-PER") else { throw TextPrivacyError.incompatibleModel }
-        let tokenizer = try PIIWordPieceTokenizer(vocabulary: String(contentsOf: directory.appendingPathComponent("vocab.txt"), encoding: .utf8))
-        let environment = try ORTEnv(loggingLevel: .error)
-        let options = try ORTSessionOptions()
-        try options.setIntraOpNumThreads(1)
-        try options.setGraphOptimizationLevel(.all)
-        let session = try ORTSession(env: environment, modelPath: directory.appendingPathComponent("model_int8.onnx").path, sessionOptions: options)
-        guard Set(try session.inputNames()) == Set(["input_ids", "attention_mask", "token_type_ids"]),
-              Set(try session.outputNames()).contains("logits") else { throw TextPrivacyError.incompatibleModel }
-        try Task.checkCancellation()
-        self.environment = environment; self.session = session; self.tokenizer = tokenizer
-        self.labels = labels; self.loadedFingerprint = descriptor.fingerprint
     }
 
     public func unload() {
-        session = nil; environment = nil; tokenizer = nil; labels = []; loadedFingerprint = nil
+        autoreleasepool {
+            session = nil; environment = nil; tokenizer = nil; labels = []; loadedFingerprint = nil
+        }
     }
 
     public func tag(_ text: String) throws -> [PIINERSpan] {
@@ -70,26 +75,30 @@ public actor PIINERRuntime {
         predictions.reserveCapacity(words.count)
         for window in tokenizer.windows(words) {
             try Task.checkCancellation()
-            func tensor(_ values: [Int64]) throws -> ORTValue {
-                let bytes = values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
-                return try ORTValue(tensorData: bytes, elementType: .int64, shape: [1, NSNumber(value: values.count)])
+            // Each WordPiece window owns and drains only its native tensors/logits.
+            // The bounded decoded Swift predictions escape the pool.
+            predictions += try autoreleasepool {
+                func tensor(_ values: [Int64]) throws -> ORTValue {
+                    let bytes = values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
+                    return try ORTValue(tensorData: bytes, elementType: .int64, shape: [1, NSNumber(value: values.count)])
+                }
+                let outputs = try session.run(withInputs: [
+                    "input_ids": try tensor(window.ids),
+                    "attention_mask": try tensor(Array(repeating: 1, count: window.ids.count)),
+                    "token_type_ids": try tensor(Array(repeating: 0, count: window.ids.count)),
+                ], outputNames: ["logits"], runOptions: nil)
+                // ONNX run is synchronous. Cancellation is observed after completion,
+                // so no native invocation is abandoned with live buffers or weights.
+                try Task.checkCancellation()
+                guard let output = outputs["logits"] else { throw TextPrivacyError.invalidOutput }
+                let info = try output.tensorTypeAndShapeInfo()
+                guard info.elementType == .float, info.shape.map(\.intValue) == [1, window.ids.count, labels.count] else {
+                    throw TextPrivacyError.invalidOutput
+                }
+                let bytes = try output.tensorData() as Data
+                let logits = bytes.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+                return try Self.decode(logits: logits, labels: labels, window: window)
             }
-            let outputs = try session.run(withInputs: [
-                "input_ids": try tensor(window.ids),
-                "attention_mask": try tensor(Array(repeating: 1, count: window.ids.count)),
-                "token_type_ids": try tensor(Array(repeating: 0, count: window.ids.count)),
-            ], outputNames: ["logits"], runOptions: nil)
-            // ONNX run is synchronous. Cancellation is observed after completion,
-            // so no native invocation is abandoned with live buffers or weights.
-            try Task.checkCancellation()
-            guard let output = outputs["logits"] else { throw TextPrivacyError.invalidOutput }
-            let info = try output.tensorTypeAndShapeInfo()
-            guard info.elementType == .float, info.shape.map(\.intValue) == [1, window.ids.count, labels.count] else {
-                throw TextPrivacyError.invalidOutput
-            }
-            let bytes = try output.tensorData() as Data
-            let logits = bytes.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
-            predictions += try Self.decode(logits: logits, labels: labels, window: window)
         }
         try Task.checkCancellation()
         return Self.spans(predictions)

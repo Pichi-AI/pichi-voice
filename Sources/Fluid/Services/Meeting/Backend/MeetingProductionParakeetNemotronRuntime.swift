@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 #if arch(arm64)
 import CoreML
@@ -37,6 +40,52 @@ nonisolated enum MeetingParakeetNemotronRuntimeError: LocalizedError, Equatable 
     }
 }
 
+/// Buffered providers decode each growing prefix again. Keep optional observations only
+/// while the measured whole window leaves headroom for sequential speaker inference.
+/// Scalar scheduling state contains no audio/text and resets with the frozen attempt identity.
+nonisolated struct MeetingPCMPreviewPacing: Sendable {
+    private(set) var permitsIntermediateObservations = true
+
+    static func shouldInfer(hasNewPCM: Bool, isFinal: Bool, permitsIntermediateObservations: Bool) -> Bool {
+        (hasNewPCM && permitsIntermediateObservations) || (isFinal && !permitsIntermediateObservations)
+    }
+
+    mutating func record(computeSeconds: TimeInterval, audioSeconds: TimeInterval) {
+        guard computeSeconds.isFinite, computeSeconds >= 0,
+              audioSeconds.isFinite, audioSeconds > 0 else { return }
+        if self.permitsIntermediateObservations, computeSeconds * 5 >= audioSeconds * 3 {
+            self.permitsIntermediateObservations = false
+        } else if !self.permitsIntermediateObservations, computeSeconds * 5 < audioSeconds * 2 {
+            self.permitsIntermediateObservations = true
+        }
+    }
+}
+
+/// Measures active window work across executor hops. Waiting for PCM and publication
+/// is excluded, so a slow microphone source or UI cannot incorrectly suppress previews.
+final nonisolated class MeetingPCMWindowComputeTiming: @unchecked Sendable {
+    private let lock = NSLock()
+    private let now: @Sendable () -> TimeInterval
+    private let started: TimeInterval
+    private var excluded: TimeInterval = 0
+
+    init(now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
+        self.started = now()
+    }
+
+    func beginExclusion() -> TimeInterval { self.now() }
+
+    func endExclusion(since start: TimeInterval) {
+        let interval = max(0, self.now() - start)
+        self.lock.withLock { self.excluded += interval }
+    }
+
+    var computeSeconds: TimeInterval {
+        self.lock.withLock { max(0, self.now() - self.started - self.excluded) }
+    }
+}
+
 /// Small attempt-local identity evidence, protected separately from model residency.
 /// No PCM or audio files are retained here. The existing matcher receives a bounded
 /// complete-link reference set; uncertain/new voices beyond that limit stay unassigned.
@@ -46,6 +95,7 @@ final nonisolated class MeetingPCMIdentityState: @unchecked Sendable {
     private var busy = false
     private var profiles: [MeetingSpeakerVoiceProfile] = []
     private var speakers: [MeetingSessionSpeaker] = []
+    private var previewPacing = MeetingPCMPreviewPacing()
     private var resourcePin: (attemptID: UUID, configuration: String, artifact: MeetingNemotronModelArtifact?)?
 
     func pin(attemptID: UUID, configuration: String, artifact: MeetingNemotronModelArtifact?) throws {
@@ -70,16 +120,17 @@ final nonisolated class MeetingPCMIdentityState: @unchecked Sendable {
         }
     }
 
-    func begin(attemptID: UUID) throws -> (profiles: [MeetingSpeakerVoiceProfile], speakers: [MeetingSessionSpeaker]) {
+    func begin(attemptID: UUID) throws -> (profiles: [MeetingSpeakerVoiceProfile], speakers: [MeetingSessionSpeaker], permitsIntermediateObservations: Bool) {
         try self.lock.withLock {
             guard !self.busy else { throw MeetingParakeetNemotronRuntimeError.concurrentPCMWindow }
             if self.attemptID != attemptID {
                 self.attemptID = attemptID
                 self.profiles.removeAll()
                 self.speakers.removeAll()
+                self.previewPacing = MeetingPCMPreviewPacing()
             }
             self.busy = true
-            return (self.profiles, self.speakers)
+            return (self.profiles, self.speakers, self.previewPacing.permitsIntermediateObservations)
         }
     }
 
@@ -88,6 +139,10 @@ final nonisolated class MeetingPCMIdentityState: @unchecked Sendable {
             self.profiles = Array(profiles.prefix(MeetingSpeakerVoiceSamples.maximumProfiles))
             self.speakers = batch.mergingSpeakers(into: self.speakers)
         }
+    }
+
+    func recordCompute(computeSeconds: TimeInterval, audioSeconds: TimeInterval) {
+        self.lock.withLock { self.previewPacing.record(computeSeconds: computeSeconds, audioSeconds: audioSeconds) }
     }
 
     func end() { self.lock.withLock { self.busy = false } }
@@ -136,12 +191,16 @@ private nonisolated struct NemotronDiarizerSession: MeetingNemotronDiarizerSessi
         try Task.checkCancellation()
         let began = MeetingPCMRuntimeDiagnostics.begin(.diarize)
         defer { MeetingPCMRuntimeDiagnostics.completed(.diarize, since: began, samples: samples.count) }
-        let timeline = try self.diarizer.processComplete(
-            samples,
-            sourceSampleRate: nil,
-            keepingEnrolledSpeakers: false,
-            finalizeOnCompletion: true
-        )
+        // The native prediction loop is synchronous. Drain its Objective-C tensors
+        // before this phase releases weights and another model becomes resident.
+        let timeline = try autoreleasepool {
+            try self.diarizer.processComplete(
+                samples,
+                sourceSampleRate: nil,
+                keepingEnrolledSpeakers: false,
+                finalizeOnCompletion: true
+            )
+        }
         try Task.checkCancellation()
         let physicalDuration = Double(samples.count) / 16_000
         return timeline.speakers
@@ -297,11 +356,22 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let pipelineID = DebugLogger.pipelineID
         let work = Task.detached(priority: .userInitiated) {
             try await DebugLogger.$pipelineID.withValue(pipelineID) {
+                let timing = MeetingPCMWindowComputeTiming()
                 let phase = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { session in
                     var samples: [Float] = []
                     var output: MeetingParakeetEpochOutput?
                     var sealed = false
-                    while var update = try await window.next() {
+                    while true {
+                        let waitStarted = timing.beginExclusion()
+                        let next: MeetingPCMWindowUpdate?
+                        do {
+                            next = try await window.next()
+                            timing.endExclusion(since: waitStarted)
+                        } catch {
+                            timing.endExclusion(since: waitStarted)
+                            throw error
+                        }
+                        guard var update = next else { break }
                         try Task.checkCancellation()
                         guard update.totalFrames > 0, update.totalFrames <= 320_000,
                               update.totalFrames == samples.count + update.samples.count,
@@ -315,7 +385,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                         if samples.isEmpty { samples = update.samples }
                         else { samples.append(contentsOf: update.samples) }
                         update.samples = []
-                        if hasNewPCM {
+                        // Under pressure, consume every delta but decode only the sealed
+                        // whole window. The final inference and speaker phases always run.
+                        let shouldInfer = MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM,
+                            isFinal: update.isFinal, permitsIntermediateObservations: prior.permitsIntermediateObservations)
+                        if shouldInfer {
                             let recognized = try await session.transcribeWithTimings(samples)
                             let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
                                 words: recognized.words, segmentTimings: recognized.result.segmentTimings,
@@ -328,6 +402,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                                 output = observed
                             }
                             if let preview, hasSpeech || output?.sampleCount == observed.sampleCount {
+                                let publicationStarted = timing.beginExclusion()
+                                defer { timing.endExclusion(since: publicationStarted) }
                                 try await preview(self.pcmSpeechObservation(output: observed, epoch: epoch,
                                     offset: offset, duration: Double(samples.count) / 16_000,
                                     attemptID: attemptID, isFinal: update.isFinal))
@@ -339,7 +415,9 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                             // the retained accepted prefix at its own sample count,
                             // even when the final update brought additional PCM.
                             if let output, let preview,
-                               !hasNewPCM || output.sampleCount != samples.count {
+                               (!hasNewPCM && !shouldInfer) || output.sampleCount != samples.count {
+                                let publicationStarted = timing.beginExclusion()
+                                defer { timing.endExclusion(since: publicationStarted) }
                                 try await preview(self.pcmSpeechObservation(output: output, epoch: epoch,
                                     offset: offset, duration: Double(output.sampleCount) / 16_000,
                                     attemptID: attemptID, isFinal: true))
@@ -376,6 +454,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                     for index in batch.segments.indices { batch.segments[index].completeness = .incompleteTrack }
                 }
                 DebugLogger.shared.info("progressive_coverage offset=\(offset) coveredFrames=\(output.sampleCount) physicalFrames=\(physicalSampleCount) complete=\(batch.isComplete)", source: "MeetingPCMRuntime")
+                let computeSeconds = timing.computeSeconds
+                self.pcmIdentityState.recordCompute(computeSeconds: computeSeconds,
+                    audioSeconds: Double(physicalSampleCount) / 16_000)
+                let computeMS = Int64(min(86_400, computeSeconds) * 1_000)
+                DebugLogger.shared.info("preview_headroom computeMS=\(computeMS) physicalFrames=\(physicalSampleCount) intermediate=\(prior.permitsIntermediateObservations)", source: "MeetingPCMRuntime")
                 return batch
             }
         }
@@ -623,9 +706,10 @@ private nonisolated enum MeetingPCMRuntimeDiagnostics {
     static func begin(_ phase: Phase) -> Started {
         let started = Started(wall: .now, cpu: DiagnosticProcessCPUTime.capture())
         let cpuTotal = started.cpu?.totalMilliseconds.map(String.init) ?? "unavailable"
+        let footprint = Self.physicalFootprintBytes().map(String.init) ?? "unavailable"
         let uptime = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
         DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
-            "[meeting/pcm] phase=\(phase.rawValue) event=begin uptimeMs=\(uptime) processCpuTotalMs=\(cpuTotal) cpuScope=process"
+            "[meeting/pcm] phase=\(phase.rawValue) event=begin uptimeMs=\(uptime) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint)"
         }
         return started
     }
@@ -635,11 +719,27 @@ private nonisolated enum MeetingPCMRuntimeDiagnostics {
         let milliseconds = elapsed.seconds * 1_000 + elapsed.attoseconds / 1_000_000_000_000_000
         let cpu = began.cpu.flatMap { nowCPU?.milliseconds(since: $0) }.map(String.init) ?? "unavailable"
         let cpuTotal = nowCPU?.totalMilliseconds.map(String.init) ?? "unavailable"
+        let footprint = Self.physicalFootprintBytes().map(String.init) ?? "unavailable"
         let uptime = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
         let count = max(0, min(320_000, samples))
         let bytes = max(0, min(1_000_000_000, sourceBytes))
         DebugLogger.shared.logLazy(source: "MeetingPCMRuntime") {
-            "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes) event=end uptimeMs=\(uptime) processCpuMs=\(cpu) processCpuTotalMs=\(cpuTotal) cpuScope=process"
+            "[meeting/pcm] phase=\(phase.rawValue) elapsedMs=\(milliseconds) count=\(count) sourceBytes=\(bytes) event=end uptimeMs=\(uptime) processCpuMs=\(cpu) processCpuTotalMs=\(cpuTotal) cpuScope=process physicalFootprintBytes=\(footprint)"
         }
+    }
+
+    private static func physicalFootprintBytes() -> UInt64? {
+        #if canImport(Darwin)
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return status == KERN_SUCCESS ? info.phys_footprint : nil
+        #else
+        return nil
+        #endif
     }
 }
