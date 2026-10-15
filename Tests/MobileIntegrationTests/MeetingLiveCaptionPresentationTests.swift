@@ -755,7 +755,7 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
         XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: source).map(\.segments), rows.map { [$0] })
     }
 
-    func testSourceStatusCompletenessAndPauseBoundariesRemainExplicit() {
+    func testSourceStatusAndCompletenessBoundariesRemainExplicit() {
         let track = UUID()
         var rows = [segment("Source", track: track, start: 0), segment("change", track: UUID(), start: 0.5),
                     segment("status", track: track, start: 1), segment("completeness", track: track, start: 1.5),
@@ -765,17 +765,66 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
         XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: session()).count, rows.count)
     }
 
-    func testLongWordStreamAndExplicitNewlinesStayBoundedAndLossless() {
-        let track = UUID()
-        var rows = (0..<600).map { segment("слово\($0)", track: track, start: Double($0) / 10) }
+    func testLongMonologueAndExplicitNewlinesRemainOneLosslessSpeakerTurn() {
+        let track = UUID(), speaker = UUID()
+        var rows = (0..<600).map {
+            segment("слово\($0)", track: track, start: Double($0) * 2, speaker: speaker, attribution: .assigned)
+        }
         rows[80].text += "\n"
+        rows[300].text += "."
         let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session())
-        XCTAssertGreaterThan(paragraphs.count, 5)
+        XCTAssertEqual(paragraphs.count, 1)
         XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
-        XCTAssertTrue(paragraphs.allSatisfy { $0.text.count <= 530 })
-        XCTAssertEqual(Set(paragraphs.map(\.id)).count, paragraphs.count)
+        XCTAssertTrue(paragraphs[0].text.contains("слово80\nслово81"))
+        XCTAssertTrue(paragraphs[0].text.contains("слово300. слово301"))
+        XCTAssertEqual(paragraphs[0].id, rows[0].id)
+        XCTAssertGreaterThan(paragraphs[0].text.count, 4_000)
         XCTAssertTrue(MeetingTranscriptExporter.displayParagraphs(for: [], in: session()).isEmpty)
-        XCTAssertTrue(paragraphs.contains { $0.segments.last?.id == rows[80].id })
+    }
+
+    func testReturningSpeakerStartsANewTurnAndUnknownWordsDoNotInheritIdentity() {
+        let track = UUID(), firstID = UUID(), secondID = UUID()
+        let rows = [segment("First speaker", track: track, start: 0, speaker: firstID, attribution: .assigned),
+                    segment("still speaking", track: track, start: 20, speaker: firstID, attribution: .assigned),
+                    segment("Second speaker", track: track, start: 21, speaker: secondID, attribution: .assigned),
+                    segment("First speaker returns", track: track, start: 22, speaker: firstID, attribution: .assigned),
+                    segment("to", track: track, start: 23),
+                    segment("First speaker again", track: track, start: 24, speaker: firstID, attribution: .assigned)]
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session())
+        XCTAssertEqual(paragraphs.map(\.segments), [Array(rows[0...1]), [rows[2]], [rows[3]], [rows[4]], [rows[5]]])
+        XCTAssertNil(paragraphs[3].firstSegment.speakerID)
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+    }
+
+    func testLongTurnPlaybackCoversEveryMemberAfterAPause() throws {
+        let track = UUID(), speaker = UUID()
+        let rows = (0..<300).map {
+            segment("слово\($0)", track: track, start: Double($0) * 4, speaker: speaker, attribution: .assigned)
+        }
+        var source = session(); source.transcriptSegments = rows
+        let paragraph = try XCTUnwrap(MeetingTranscriptExporter.displayParagraphs(for: rows, in: source).first)
+        let interval = try MeetingSegmentPlaybackPlan.segmentRange(in: source, segmentIDs: paragraph.segments.map(\.id))
+        XCTAssertEqual(interval.id, rows[0].id)
+        XCTAssertEqual(interval.start, rows[0].start)
+        XCTAssertEqual(interval.end, rows.last?.end)
+        XCTAssertEqual(source.transcriptSegments, rows)
+    }
+
+    func testCorrectionReprojectsOnlyTheChangedMemberAndRetainsItsEvidence() {
+        let track = UUID(), speaker = UUID()
+        let rows = [segment("First", track: track, start: 0, speaker: speaker, attribution: .assigned),
+                    segment("word.", track: track, start: 120, speaker: speaker, attribution: .assigned)]
+        var corrected = rows
+        corrected[1].text = "correction."
+        corrected[1].revision += 1
+        let paragraph = MeetingTranscriptExporter.displayParagraphs(for: corrected, in: session())[0]
+        XCTAssertEqual(paragraph.text, "First correction.")
+        XCTAssertEqual(paragraph.segments.map(\.id), rows.map(\.id))
+        XCTAssertEqual(paragraph.segments.map(\.start), rows.map(\.start))
+        XCTAssertEqual(paragraph.segments.map(\.end), rows.map(\.end))
+        XCTAssertEqual(paragraph.segments.map(\.originalText), rows.map(\.originalText))
+        XCTAssertEqual(paragraph.segments.map(\.revision), [rows[0].revision, rows[1].revision + 1])
+        XCTAssertEqual(corrected[0], rows[0])
     }
 
     func testParagraphPlaybackStartsAtFirstWordAndCoversEveryMember() throws {
