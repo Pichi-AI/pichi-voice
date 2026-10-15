@@ -177,6 +177,12 @@ private final class InlineCaptionAttachment: NSTextAttachment {
 
     required init?(coder: NSCoder) { nil }
     override var usesTextAttachmentView: Bool { true }
+    override var fileType: String? {
+        get { Self.contentType }
+        set { }
+    }
+
+    var waveformContent: AnyView { root }
 
     func update(_ root: AnyView) {
         self.root = root
@@ -218,6 +224,7 @@ private final class InlineCaptionAttachmentProvider: NSTextAttachmentViewProvide
     }
 
     override func loadView() {
+        if let attachment = textAttachment as? InlineCaptionAttachment { root = attachment.waveformContent }
         #if os(iOS)
         let host = UIHostingController(rootView: root)
         host.view.backgroundColor = .clear
