@@ -19,6 +19,19 @@ private struct KnownNonPersonNERPrivacyRedactor: TranscriptTextRedacting {
     }
 }
 
+private struct ClinicalNERFixtureRedactor: TranscriptTextRedacting {
+    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        let source = text as NSString
+        let ner = ["Амоксициллин", "Ксалендорин", "Xalendorin", "Иван", "Алиса"].compactMap { word -> PIINERSpan? in
+            let range = source.range(of: word)
+            return range.location == NSNotFound ? nil : .init(range: range, label: "PER", score: 0.99)
+        }
+        let output = try PIIRedactor.redact(text, ner: ner)
+        return .init(text: output.text, spans: output.spans.map { .init(range: $0.range, replacement: $0.replacement) },
+            provisionalSafeUTF16: try PIIRedactor.provisionalSafePrefix(in: text, ner: ner, redactedSpans: output.spans))
+    }
+}
+
 #if !PII_POLICY_STANDALONE
 private actor NativePrivacyRedactor: TranscriptTextRedacting {
     let runtime = PIINERRuntime()
@@ -128,6 +141,7 @@ struct MeetingPrivacyContextTests {
             try await liveSuite(using: native)
             try await provisionalSuite(using: native)
             try await knownNonPersonPCMContextSuite(using: native)
+            try await clinicalMedicationContextSuite(using: native)
         }
         #endif
         try await liveDeliverySuite()
@@ -135,6 +149,7 @@ struct MeetingPrivacyContextTests {
         try await stablePCMHypothesisSuite()
         try await knownNonPersonPCMContextSuite(using: KnownNonPersonNERPrivacyRedactor())
         try await partialUtteranceCoverageSuite()
+        try await clinicalMedicationContextSuite(using: ClinicalNERFixtureRedactor())
         let track = UUID()
         let invalid = MeetingPCMTranscriptBatch(segments: [segment("🙂 Иван", track: track, start: 0)])
         do {
@@ -238,6 +253,41 @@ struct MeetingPrivacyContextTests {
         coarse.text = first + " " + prefix + "детали"
         let coarsePreview = try await coarseContext.previewSpeech(.init(segments: [coarse], isComplete: false))
         try check(coarsePreview != nil && coarsePreview?.end == nil, "a coarse source utterance acquired a fabricated partial audio endpoint")
+    }
+
+    static func clinicalMedicationContextSuite(using redactor: any TranscriptTextRedacting) async throws {
+        for drug in ["Амоксициллин", "Ксалендорин", "Xalendorin"] {
+            let text = "Лекарство \(drug) 500 мг обсуждаем переносимость терапии и схему применения."
+            let output = try await redactor.redactWithSpans(text)
+            try check(output.text == text, "an explicit medication and actual dose remained a person mask")
+            try check((output.provisionalSafeUTF16 ?? 0) > (text as NSString).range(of: drug).upperBound,
+                      "canonical and provisional medication evidence disagreed")
+        }
+        let track = UUID()
+        let context = MeetingTranscriptPrivacyContext(redactor: redactor)
+        let rows = [segment("Лекарство Амоксициллин", track: track, start: 0),
+                    segment("500 мг обсуждаем переносимость терапии и схему применения.", track: track, start: 12)]
+        let initial = try await context.redact(.init(segments: [rows[0]]))
+        try check(initial.segments.isEmpty && initial.livePreview == nil, "an unresolved medication edge bypassed lexical admission")
+        let later = try await context.redact(.init(segments: [rows[1]]))
+        try check(later.livePreview?.text.contains("Амоксициллин 500 мг") == true,
+                  "a dose across the next window did not resolve an explicit medication context")
+        let tail = try await context.finish()
+        try check(tail?.segments.map(\.id) == rows.map(\.id), "medication context changed source segment identity")
+        try check(tail?.segments.map(\.text) == rows.map(\.text), "medication context mutated the drug or dose")
+        for (first, last, name) in [
+            ("пациент Иван", "500 мг обсуждает переносимость терапии и схему применения.", "Иван"),
+            ("лекарство Алиса", "500 мг обсуждаем переносимость терапии и схему применения.", "Алиса"),
+        ] {
+            let context = MeetingTranscriptPrivacyContext(redactor: redactor)
+            let initial = try await context.redact(.init(segments: [segment(first, track: track, start: 0)]))
+            let continued = try await context.redact(.init(segments: [segment(last, track: track, start: 12)]))
+            let tail = try await context.finish()
+            for batch in [initial, continued] + (tail.map { [$0] } ?? []) {
+                let visible = batch.segments.map(\.text).joined(separator: " ") + (batch.livePreview?.text ?? "")
+                try check(!visible.contains(name), "an actual person acquired a dose-only medication exemption")
+            }
+        }
     }
 
     static func liveSuite(using redactor: any TranscriptTextRedacting) async throws {
@@ -652,14 +702,16 @@ struct MeetingPrivacyContextTests {
         try check(edgeLimit != nil && edgeRedaction.spans.contains { (edgeLimit ?? Int.max) <= $0.range.location }
                   && !edgeRedaction.spans.contains { $0.range.location < (edgeLimit ?? 0) && (edgeLimit ?? 0) < NSMaxRange($0.range) },
                   "lexical edge bisected a canonical person replacement: limit=\(edgeLimit ?? -1), spans=\(edgeRedaction.spans.map(\.range))")
-        let doseText = "Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения."
+        // An explicit medication slot is positive evidence. An uncued unknown
+        // word plus a quantity remains ambiguous and is not an exemption.
+        let doseText = "Лекарство Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения."
         let doseContext = MeetingTranscriptPrivacyContext(redactor: redactor)
         let doseSegment = segment(doseText, track: track, start: 0)
         let doseUpdate = try await doseContext.redact(.init(segments: [doseSegment]))
         let evaluatedDose = try await redactor.redactWithSpans(doseText)
         try check(doseUpdate.segments.isEmpty, "dose preview released the durable hold")
         if (evaluatedDose.provisionalSafeUTF16 ?? 0) > 0 {
-            try check(doseUpdate.livePreview?.text.hasPrefix("Амоксициллин 500 мг") == true,
+            try check(doseUpdate.livePreview?.text.hasPrefix("Лекарство Амоксициллин 500 мг") == true,
                       "approved numeric dose prefix did not reach provisional display")
         } else {
             try check(doseUpdate.livePreview == nil, "withheld native person candidate reached provisional display")
@@ -667,8 +719,9 @@ struct MeetingPrivacyContextTests {
         let doseTail = try await doseContext.finish()
         let doseReference = try await MeetingTranscriptPrivacyPolicy.redactedBatch(.init(segments: [doseSegment]), using: redactor)
         try check(doseTail?.segments == doseReference.segments && doseTail?.livePreview == nil, "dose preview altered canonical text")
-        let doseRange = (doseText as NSString).range(of: "Амоксициллин")
-        let candidateDose = try PIIRedactor.provisionalSafePrefix(in: doseText,
+        let ambiguousDoseText = "Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения."
+        let doseRange = (ambiguousDoseText as NSString).range(of: "Амоксициллин")
+        let candidateDose = try PIIRedactor.provisionalSafePrefix(in: ambiguousDoseText,
             ner: [.init(range: doseRange, label: "PER", score: 0.2)], redactedSpans: [])
         try check(candidateDose == 0, "numeric dose evidence overrode an actual native person candidate")
         let decimalDose = "Амоксициллин 0.5 мг обсуждаем переносимость терапии и схему применения."

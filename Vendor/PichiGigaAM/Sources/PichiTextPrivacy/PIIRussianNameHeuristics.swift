@@ -63,6 +63,10 @@ enum PIIRussianNameHeuristics {
         word.count >= 4 && !blocked.contains(word) && matching(surname, word) && !matching(adjective, word)
     }
 
+    static func hasGivenNameEvidence(_ word: String) -> Bool {
+        self.nameLemma(word.lowercased()) != nil
+    }
+
     static func detect(_ text: String) -> [PIIDetection] {
         let source = text as NSString
         let words = token.matches(in: text, range: NSRange(location: 0, length: source.length)).map { match in

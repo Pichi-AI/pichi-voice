@@ -33,6 +33,35 @@ final class PichiTextPrivacyTests: XCTestCase {
         }
     }
 
+    func testExplicitMedicationAndDosePreserveAnUnknownDrugWithoutExemptingPeople() throws {
+        for word in ["Амоксициллин", "Ксалендорин", "Xalendorin"] {
+            let text = "Лекарство \(word) 500 мг обсуждаем переносимость терапии и схему применения."
+            let range = (text as NSString).range(of: word)
+            let ner = [PIINERSpan(range: range, label: "PER", score: 0.99)]
+            let output = try PIIRedactor.redact(text, ner: ner)
+            XCTAssertEqual(output.text, text)
+            XCTAssertGreaterThan(try XCTUnwrap(PIIRedactor.provisionalSafePrefix(in: text, ner: ner, redactedSpans: output.spans)), range.upperBound)
+        }
+        for (text, person) in [
+            ("Иван 500 мг обсуждает инструкцию и условия хранения препарата.", "Иван"),
+            ("Лекарство Алиса 500 мг обсуждаем инструкцию и условия хранения.", "Алиса"),
+            ("Пациент Зальман получает 500 мг после обсуждения инструкции.", "Зальман"),
+            ("Назначили Зальман 500 мг после обсуждения инструкции.", "Зальман"),
+            ("Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения.", "Амоксициллин"),
+        ] {
+            let range = (text as NSString).range(of: person)
+            let output = try PIIRedactor.redact(text, ner: [.init(range: range, label: "PER", score: 0.99)])
+            XCTAssertFalse(output.text.contains(person))
+        }
+        let recipient = "Пациент Иван получает препарат Амоксициллин 500 мг после обсуждения инструкции."
+        let source = recipient as NSString
+        let result = try PIIRedactor.redact(recipient, ner: [
+            .init(range: source.range(of: "Иван"), label: "PER", score: 0.99),
+            .init(range: source.range(of: "Амоксициллин"), label: "PER", score: 0.99),
+        ])
+        XCTAssertEqual(result.text, "Пациент [ИМЯ] получает препарат Амоксициллин 500 мг после обсуждения инструкции.")
+    }
+
     func testUTF16OffsetsIncludeEmojiAndYoWithoutTranslatingUserText() throws {
         let tokenizer = try PIIWordPieceTokenizer(vocabulary: "[PAD]\n[UNK]\n[CLS]\n[SEP]\nЁлкин\nИван\n\n")
         let text = "🙂 Ёлкин Иван"

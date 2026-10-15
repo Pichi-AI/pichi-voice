@@ -18,10 +18,12 @@ extension PIIRedactor {
         }
         let words = try NSRegularExpression(pattern: #"[\p{L}]+|\p{N}+(?:[.,]\p{N}+)?"#).matches(in: text, range: full)
         guard !words.isEmpty else { return 0 }
-        let units = Set("мг мкг мл г mg mcg ml gram grams единиц единицы ед iu".split(separator: " ").map(String.init))
+        let units = Self.quantityUnitWords
         let quantityUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
         // Ambiguous year/count abbreviations are not positive drug evidence.
-        let doseUnits = units.subtracting(["г", "ед", "единиц", "единицы"])
+        let doseUnits = Self.unambiguousDoseUnitWords
+        let medicationWords = try Self.medicationQualifiedWords(in: text,
+            personRanges: PIIRussianNameHeuristics.detect(text).map(\.range))
         var doseQualifiedWords: Set<NSRange> = []
         for index in words.indices where index + 2 < words.count {
             let quantity = source.substring(with: words[index + 1].range)
@@ -56,6 +58,7 @@ extension PIIRedactor {
             guard valid(span.range), span.score.isFinite, (0...1).contains(span.score) else {
                 throw TextPrivacyError.invalidSpan
             }
+            if medicationWords.contains(span.range) { continue }
             let candidate = source.substring(with: span.range)
             // Native token classification can label a sentence mark PER. It has
             // no person-name letters; initials still retain their letter below.
@@ -133,7 +136,7 @@ extension PIIRedactor {
         let englishSentenceStarts = Set("a an the this that these those i we you they he she it today now hello".split(separator: " ").map(String.init))
         var confirmedQuantityUnits: Set<NSRange> = []
         for index in words.indices {
-            if covered(words[index].range) || confirmedQuantityUnits.contains(words[index].range)
+            if covered(words[index].range) || medicationWords.contains(words[index].range) || confirmedQuantityUnits.contains(words[index].range)
                 || resolvedCues.contains(where: { contains($0, words[index].range) }) { continue }
             let word = source.substring(with: words[index].range)
             let lower = word.lowercased()

@@ -16,6 +16,40 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativeExplicitMedicationContextPreservesDrugAndRedactsRecipient() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await store.isInstalled() else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let clinical = "Лекарство Амоксициллин 500 мг обсуждаем переносимость терапии и схему применения."
+        let output = try await privacy.redactWithSpans(clinical)
+        XCTAssertEqual(output.text, clinical)
+        XCTAssertGreaterThan(output.provisionalSafeUTF16 ?? 0, (clinical as NSString).range(of: "Амоксициллин").upperBound)
+        let recipient = try await privacy.redactWithSpans("Пациент Иван Петрович Сидоров, получает препарат Амоксициллин 500 мг после обсуждения инструкции.")
+        XCTAssertFalse(recipient.text.contains("Иван")); XCTAssertFalse(recipient.text.contains("Сидоров"))
+        XCTAssertTrue(recipient.text.contains("Амоксициллин 500 мг"))
+        let ambiguous = try await privacy.redactWithSpans("Лекарство Алиса 500 мг обсуждаем переносимость терапии и схему применения.")
+        XCTAssertFalse(ambiguous.text.contains("Алиса"))
+
+        let track = UUID()
+        let rows = ["Лекарство Амоксициллин", "500 мг обсуждаем переносимость терапии и схему применения."]
+            .enumerated().map { index, text in
+                MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index * 12), timescale: 1),
+                    end: .init(value: Int64(index * 12 + 12), timescale: 1), sourceTrackID: track, speakerID: nil,
+                    text: text, revision: 0, status: .final, overlap: .none, completeness: .complete)
+            }
+        let context = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let first = try await context.redact(.init(segments: [rows[0]]))
+        XCTAssertTrue(first.segments.isEmpty); XCTAssertNil(first.livePreview)
+        let continued = try await context.redact(.init(segments: [rows[1]]))
+        XCTAssertTrue(continued.livePreview?.text.contains("Амоксициллин 500 мг") == true)
+        let final = try await context.finish()
+        XCTAssertEqual(final?.segments.map(\.id), rows.map(\.id))
+        XCTAssertEqual(final?.segments.map(\.text), rows.map(\.text))
+        try await privacy.unload()
+    }
+
     func testNativeKnownNonPersonNERKeepsStrictPreviewAdvancingAcrossWindows() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
