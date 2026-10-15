@@ -16,6 +16,41 @@ private struct FixturePersonRedactor: TranscriptTextRedacting {
 /// Synthetic text isolates data handling from probabilistic model accuracy.
 @MainActor
 final class MobilePrivacyPersistenceTests: XCTestCase {
+    func testNativeStablePCMHypothesisSurvivesNativeAndCoarseTimingPartitions() async throws {
+        let assets = try MobileInferenceTestAssets.resolve()
+        let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))
+        guard await store.isInstalled() else { throw XCTSkip("Stage the public privacy artifact") }
+        let privacy = PichiTranscriptPrivacyService(modelStore: store)
+        try await privacy.prepare()
+        let context = MeetingTranscriptPrivacyContext(redactor: privacy)
+        let track = UUID()
+        let identity = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: UUID(),
+            epochID: .init(trackID: track, ordinal: 0))
+        func batch(_ pieces: [String], identity: MeetingPCMTranscriptBatch.SpeechObservationIdentity,
+                   drift: Int64 = 0) -> MeetingPCMTranscriptBatch {
+            let rows = pieces.enumerated().map { index, text in
+                MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64(index * 2_000) + drift, timescale: 1_000),
+                    end: .init(value: Int64(index * 2_000 + 1_500) + drift, timescale: 1_000), sourceTrackID: track,
+                    speakerID: nil, text: text, revision: 0, status: .provisional, overlap: .none, completeness: .complete)
+            }
+            var batch = MeetingPCMTranscriptBatch(segments: rows, isComplete: false)
+            batch.speechObservationIdentity = identity
+            return batch
+        }
+        let first = "Сегодня обсуждаем планы дальнейшего тестирования распознавания речи."
+        _ = try await context.previewSpeech(batch([first], identity: identity))
+        let native = try await context.previewSpeech(batch(["Сегодня обсуждаем планы", "дальнейшего тестирования",
+            "распознавания речи. Проверим работу микрофона."], identity: identity, drift: 60))
+        XCTAssertTrue(native?.text.hasPrefix("Сегодня обсуждаем") == true)
+        let coarse = try await context.previewSpeech(batch([first + " Проверим работу микрофона. Потом сохраним результат."], identity: identity))
+        XCTAssertNotNil(coarse)
+        let nextAttempt = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: UUID(), epochID: identity.epochID)
+        let reset = try await context.previewSpeech(batch([first], identity: nextAttempt))
+        XCTAssertNil(reset)
+        _ = try await context.finish()
+        try await privacy.unload()
+    }
+
     func testNativeExplicitMedicationContextPreservesDrugAndRedactsRecipient() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let store = PichiTranscriptPrivacyModelStore(directory: assets.appendingPathComponent("models/privacy"))

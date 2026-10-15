@@ -413,7 +413,16 @@ actor MeetingTranscriptPrivacyContext {
     private struct SpeechObservation {
         let trackID: MeetingAudioTrackID
         let firstSegmentID: UUID
+        let identity: MeetingPCMTranscriptBatch.SpeechObservationIdentity?
         let text: String
+
+        func belongsToSameWindow(as batch: MeetingPCMTranscriptBatch, trackID: MeetingAudioTrackID?, firstSegmentID: UUID?) -> Bool {
+            guard self.trackID == trackID else { return false }
+            if let identity = batch.speechObservationIdentity { return self.identity == identity }
+            // Legacy callers have no physical-window provenance. Their original
+            // segment ID guard remains intact and never matches a typed window.
+            return self.identity == nil && self.firstSegmentID == firstSegmentID
+        }
     }
     /// One bounded raw hypothesis belongs to one growing PCM window. It never
     /// enters NER until words agree with the next observation or the window seals.
@@ -443,6 +452,12 @@ actor MeetingTranscriptPrivacyContext {
         guard tracks.count <= 1 else { throw MeetingPrivacyPublicationError.unsupportedLegacyPublication }
         let ordered = batch.segments.sorted { $0.start < $1.start }
         let currentTrack = ordered.first?.sourceTrackID ?? batch.sourceTrack?.id
+        if let identity = batch.speechObservationIdentity {
+            guard identity.epochID.trackID == currentTrack,
+                  identity.epochID.ordinal >= 0, identity.epochID.generation >= 0 else {
+                throw MeetingPrivacyPublicationError.unsupportedLegacyPublication
+            }
+        }
         let forward = ordered.first.map { first in lastEnd.map { first.start.seconds + 0.001 >= $0.seconds } ?? true } ?? true
         let continues = currentTrack != nil && currentTrack == trackID && forward
         if !pending.isEmpty, let first = ordered.first {
@@ -473,12 +488,13 @@ actor MeetingTranscriptPrivacyContext {
         if batch.speechObservationIsFinal {
             stableCount = rawText.utf16.count
         } else if let previous = previousSpeechObservation,
-                  previous.trackID == currentTrack, previous.firstSegmentID == ordered.first?.id {
+                  previous.belongsToSameWindow(as: batch, trackID: currentTrack, firstSegmentID: ordered.first?.id) {
             stableCount = MeetingSpeechHypothesisStability.stableUTF16Count(previous: previous.text, current: rawText)
         } else { stableCount = 0 }
         diagnosticStableUTF16 = stableCount
         if let currentTrack, let first = ordered.first {
-            previousSpeechObservation = SpeechObservation(trackID: currentTrack, firstSegmentID: first.id, text: rawText)
+            previousSpeechObservation = SpeechObservation(trackID: currentTrack, firstSegmentID: first.id,
+                identity: batch.speechObservationIdentity, text: rawText)
         }
         guard stableCount > 0 else {
             completed = true

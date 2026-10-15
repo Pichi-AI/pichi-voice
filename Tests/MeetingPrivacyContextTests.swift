@@ -147,6 +147,7 @@ struct MeetingPrivacyContextTests {
         try await liveDeliverySuite()
         try await stableLiveHypothesisSuite()
         try await stablePCMHypothesisSuite()
+        try await stablePCMObservationIdentitySuite()
         try await knownNonPersonPCMContextSuite(using: KnownNonPersonNERPrivacyRedactor())
         try await partialUtteranceCoverageSuite()
         try await clinicalMedicationContextSuite(using: ClinicalNERFixtureRedactor())
@@ -456,6 +457,80 @@ struct MeetingPrivacyContextTests {
         try check(wordPreview?.text == "Сегодня обсуждаем" && wordPreview?.end == 2,
                   "fully admitted word fragments lost their exact approved audio coverage")
         _ = try await words.finish()
+    }
+
+    static func stablePCMObservationIdentitySuite() async throws {
+        let recorder = RecordingPrivacyRedactor()
+        let context = MeetingTranscriptPrivacyContext(redactor: recorder)
+        let track = UUID()
+        let attempt = UUID()
+        let identity = MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: attempt,
+            epochID: .init(trackID: track, ordinal: 0))
+        let coarseID = UUID()
+        func observation(_ pieces: [String], identity: MeetingPCMTranscriptBatch.SpeechObservationIdentity,
+                         firstID: UUID = UUID(), drift: Int64 = 0) -> MeetingPCMTranscriptBatch {
+            let base = Int64(identity.epochID.ordinal / 16)
+            let rows = pieces.enumerated().map { index, text -> MeetingTranscriptSegment in
+                var row = segment(text, track: identity.epochID.trackID, start: 0)
+                row.id = index == 0 ? firstID : UUID()
+                row.start = .init(value: base + Int64(index * 2_000) + drift, timescale: 1_000)
+                row.end = .init(value: base + Int64(index * 2_000 + 1_500) + drift, timescale: 1_000)
+                return row
+            }
+            var batch = MeetingPCMTranscriptBatch(segments: rows, isComplete: false)
+            batch.speechObservationIdentity = identity
+            return batch
+        }
+        let first = "Сегодня обсуждаем планы дальнейшего тестирования распознавания речи."
+        _ = try await context.previewSpeech(observation([first], identity: identity, firstID: coarseID))
+        let native = try await context.previewSpeech(observation(["Сегодня обсуждаем планы", "дальнейшего тестирования",
+            "распознавания речи. Проверим работу микрофона."], identity: identity, drift: 60))
+        try check(native != nil, "native segment partition/start drift reset one physical hypothesis")
+        let coarse = try await context.previewSpeech(observation([first + " Проверим работу микрофона. Потом сохраним результат."],
+            identity: identity, firstID: coarseID))
+        try check(coarse != nil, "coarse fallback reset the same physical hypothesis")
+        let admittedInputs = await recorder.inputs
+        try check(admittedInputs.count == 2 && admittedInputs[0] == first,
+                  "partition changes bypassed or discarded whole-word agreement")
+
+        for other in [
+            MeetingPCMTranscriptBatch.SpeechObservationIdentity(attemptID: UUID(), epochID: identity.epochID),
+            .init(attemptID: attempt, epochID: .init(trackID: track, ordinal: 192_000)),
+            .init(attemptID: attempt, epochID: .init(trackID: track, ordinal: 0, generation: 1)),
+            .init(attemptID: attempt, epochID: .init(trackID: UUID(), ordinal: 0)),
+        ] {
+            _ = try await context.previewSpeech(observation([first], identity: identity, firstID: coarseID))
+            let before = await recorder.inputs.count
+            let value = try await context.previewSpeech(observation([first], identity: other, firstID: coarseID))
+            let after = await recorder.inputs.count
+            try check(value == nil && after == before, "a different attempt/track/window/replay inherited stability")
+        }
+        _ = try await context.previewSpeech(observation([first], identity: identity, firstID: coarseID))
+        var legacy = observation([first], identity: identity, firstID: coarseID)
+        legacy.speechObservationIdentity = nil
+        let beforeLegacy = await recorder.inputs.count
+        _ = try await context.previewSpeech(legacy)
+        let afterLegacy = await recorder.inputs.count
+        try check(beforeLegacy == afterLegacy, "legacy fallback matched a previous typed observation")
+        let repeatedLegacy = try await context.previewSpeech(legacy)
+        try check(repeatedLegacy != nil, "legacy first-segment agreement stopped working")
+
+        var wrongTrack = observation([first], identity: identity)
+        wrongTrack.segments[0].sourceTrackID = UUID()
+        do {
+            _ = try await context.previewSpeech(wrongTrack)
+            throw Failure.assertion("observation provenance accepted another source track")
+        } catch is MeetingPrivacyPublicationError { }
+
+        let corrections = RecordingPrivacyRedactor()
+        let correcting = MeetingTranscriptPrivacyContext(redactor: corrections)
+        _ = try await correcting.previewSpeech(observation(["Иван"], identity: identity))
+        _ = try await correcting.previewSpeech(observation(["и вам завтра нужно проверить инструкцию."], identity: identity))
+        let correctedInputs = await corrections.inputs
+        try check(correctedInputs.isEmpty, "typed identity allowed an unstable word correction into NER")
+        let stable = try await correcting.previewSpeech(observation(["и вам завтра нужно проверить инструкцию. Потом обсудим результат."], identity: identity))
+        try check(stable?.text.contains("Иван") == false && stable?.text.contains("[ИМЯ]") == false,
+                  "corrected transient name reached protected display")
     }
 
     static func liveDeliverySuite() async throws {

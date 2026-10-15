@@ -3,6 +3,13 @@ import Foundation
 /// A bounded PCM window's durable result. PCM ownership ends before the next checkpoint;
 /// only normal meeting transcript/speaker records leave the inference adapter.
 nonisolated struct MeetingPCMTranscriptBatch: Sendable {
+    /// Provenance of one growing physical PCM window. Native timing partitions
+    /// can change between observations without starting a different hypothesis.
+    nonisolated struct SpeechObservationIdentity: Equatable, Sendable {
+        let attemptID: UUID
+        let epochID: MeetingAnalysisEpochID
+    }
+
     var segments: [MeetingTranscriptSegment]
     var speakers: [MeetingSessionSpeaker]
     var sourceTrack: MeetingAudioTrack? = nil
@@ -12,6 +19,8 @@ nonisolated struct MeetingPCMTranscriptBatch: Sendable {
     var livePreview: MeetingLivePartial? = nil
     /// Ephemeral ASR observation metadata. True only after this audio window seals.
     var speechObservationIsFinal = false
+    /// Ephemeral only. Neither this identity nor unfiltered speech enters a session.
+    var speechObservationIdentity: SpeechObservationIdentity? = nil
     init(segments: [MeetingTranscriptSegment], speakers: [MeetingSessionSpeaker] = [], isComplete: Bool = true) {
         self.segments = segments
         self.speakers = speakers

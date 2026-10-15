@@ -389,6 +389,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 units: units, identityLinks: [], priorSpeakers: [])
         observation.isComplete = false
         observation.speechObservationIsFinal = isFinal
+        observation.speechObservationIdentity = .init(attemptID: attemptID, epochID: epoch)
         for index in observation.segments.indices { observation.segments[index].status = .provisional }
         return observation
     }
