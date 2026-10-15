@@ -106,6 +106,50 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
                       "A reflow that also adjusts the offset must retain the follow preference")
     }
 
+    func testFastBottomCrossingLatchesFollowThroughRubberBandRecoil() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let older = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 900, contentOffset: 450)
+        let overshoot = Geometry(contentBottom: 276, viewportHeight: 300, contentHeight: 900, contentOffset: 624)
+        let rebound = Geometry(contentBottom: 292, viewportHeight: 300, contentHeight: 900, contentOffset: 608)
+        let bottom = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 900, contentOffset: 600)
+        var following = overshoot.followPreference(after: older, currentlyFollowing: false, userIsScrolling: true)
+        XCTAssertTrue(following, "A fast gesture can cross the bottom without stopping on its exact offset")
+        following = rebound.followPreference(after: overshoot, currentlyFollowing: following, userIsScrolling: true)
+        XCTAssertTrue(following, "Bottom recoil must not be interpreted as scrolling up to read older text")
+        following = bottom.followPreference(after: rebound, currentlyFollowing: following, userIsScrolling: true)
+        XCTAssertTrue(following)
+        let grown = Geometry(contentBottom: 350, viewportHeight: 300, contentHeight: 950, contentOffset: 600)
+        XCTAssertTrue(grown.followPreference(after: bottom, currentlyFollowing: following, userIsScrolling: true),
+                      "New content after reaching the bottom retains follow intent")
+        let upward = Geometry(contentBottom: 322, viewportHeight: 300, contentHeight: 900, contentOffset: 578)
+        XCTAssertFalse(upward.followPreference(after: bottom, currentlyFollowing: following,
+                                              userIsScrolling: true, upwardDrag: true),
+                       "A subsequent genuine upward drag still pauses following")
+        var fallbackFollowing = overshoot.fallbackFollowPreference(after: older, currentlyFollowing: false, upwardDrag: false)
+        fallbackFollowing = rebound.fallbackFollowPreference(after: overshoot, currentlyFollowing: fallbackFollowing, upwardDrag: false)
+        XCTAssertTrue(bottom.fallbackFollowPreference(after: rebound, currentlyFollowing: fallbackFollowing, upwardDrag: false),
+                      "The iOS 17 geometry adapter must retain the same bottom-crossing latch")
+    }
+
+    func testFinalBottomGeometryCanArriveAfterScrollPhaseBecameIdle() {
+        typealias Geometry = MeetingCaptionScrollTracking.Geometry
+        let almost = Geometry(contentBottom: 322, viewportHeight: 300, contentHeight: 900, contentOffset: 578)
+        let bottom = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 900, contentOffset: 600)
+        XCTAssertTrue(bottom.followPreference(after: almost, currentlyFollowing: false, userIsScrolling: false),
+                      "The final geometry callback must resume even when the phase callback has already delivered idle")
+        let near = Geometry(contentBottom: 320, viewportHeight: 300, contentHeight: 900, contentOffset: 580)
+        XCTAssertFalse(near.followPreference(after: almost, currentlyFollowing: false, userIsScrolling: false),
+                       "Moving toward the end without reaching it must not resume following")
+        XCTAssertFalse(bottom.followPreference(after: bottom, currentlyFollowing: false, userIsScrolling: false),
+                       "An unchanged position carries no new user intent")
+        let beforeShrink = Geometry(contentBottom: 450, viewportHeight: 300, contentHeight: 1050, contentOffset: 600)
+        XCTAssertFalse(bottom.followPreference(after: beforeShrink, currentlyFollowing: false, userIsScrolling: true),
+                       "Content shrink alone must not opt an older-text reader back into following")
+        let duringGrowth = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 1050, contentOffset: 750)
+        XCTAssertFalse(duringGrowth.followPreference(after: bottom, currentlyFollowing: false, userIsScrolling: true),
+                       "Layout compensation alone must not opt the reader back into following")
+    }
+
     func testUpwardDragPausesOnlyScrollableTextAndLatestMotionKeepsFollowing() {
         typealias Geometry = MeetingCaptionScrollTracking.Geometry
         let short = Geometry(contentBottom: 100, viewportHeight: 300, contentHeight: 100, contentOffset: 0)

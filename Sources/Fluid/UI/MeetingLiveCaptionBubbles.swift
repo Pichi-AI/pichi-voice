@@ -271,8 +271,17 @@ struct MeetingCaptionScrollTracking: ViewModifier {
 
         func followPreference(after previous: Self, currentlyFollowing: Bool,
                               userIsScrolling: Bool, upwardDrag: Bool = false) -> Bool {
-            guard userIsScrolling, offsetChanged(from: previous),
-                  let nearBottom = isPinnedToBottom else { return currentlyFollowing }
+            guard let nearBottom = isPinnedToBottom else { return currentlyFollowing }
+            // Reaching the end is a position, not a scroll phase. SwiftUI may publish the
+            // final kinetic offset after the phase has already become idle. Once reached,
+            // rubber-band recoil moves toward earlier offsets while still at the end;
+            // that is not an instruction to stop following. Layout-only changes cannot
+            // opt a reader back in. Only the existing four-point rendering tolerance counts.
+            if nearBottom, offsetChanged(from: previous), !layoutChanged(from: previous),
+               currentlyFollowing || !movedTowardEarlierText(from: previous) {
+                return true
+            }
+            guard userIsScrolling, offsetChanged(from: previous) else { return currentlyFollowing }
             // Actual upward movement wins over a simultaneous caption wrap or rotation.
             // Layout changes alone cannot pause following because no user scroll is active.
             if let contentHeight, let viewportHeight, contentHeight > viewportHeight + 1,
