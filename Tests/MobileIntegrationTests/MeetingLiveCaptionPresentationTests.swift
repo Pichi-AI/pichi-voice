@@ -142,6 +142,61 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testPendingWordsStartAfterTheLastWordAndWrapNatively() async throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let text = "Ёжик идёт."
+            let host = try CaptionNativeHost(rows: [row(text, label: true)], scheme: scheme)
+            defer { host.close() }
+            host.model.pending = pending(count: 12)
+            try await settle(host, "Inline waveform views are laid out by the native text view") {
+                self.descendants(in: host.controller.view).contains {
+                    $0.accessibilityIdentifier == "meeting.inlineWave.1" && $0.bounds.width > 0
+                }
+            }
+            let native = try XCTUnwrap(descendants(in: host.controller.view).compactMap { $0 as? UITextView }
+                .first { $0.accessibilityIdentifier == "meeting.inlineCaption.text" })
+            XCTAssertNotNil(native.textLayoutManager, "Inline view providers must stay on TextKit 2")
+            XCTAssertFalse(native.isScrollEnabled, "Only the enclosing live-caption viewport scrolls")
+            func wave(_ id: Int) throws -> UIView {
+                try XCTUnwrap(self.descendants(in: host.controller.view).first {
+                    $0.accessibilityIdentifier == "meeting.inlineWave.\(id)"
+                })
+            }
+            let first = try wave(1)
+            let end = try XCTUnwrap(native.position(from: native.beginningOfDocument, offset: text.utf16.count))
+            let caret = native.caretRect(for: end)
+            let firstRect = first.convert(first.bounds, to: native)
+            XCTAssertGreaterThan(firstRect.minX, caret.minX, "A word space separates the text and waveform")
+            XCTAssertLessThan(firstRect.minX - caret.minX, 16)
+            XCTAssertLessThan(abs(firstRect.midY - caret.midY), caret.height / 2)
+            capture(host, step: "inline-01-same-last-line", scheme: scheme)
+            let wideWidth = host.model.width
+            host.model.width = ceil(caret.minX + firstRect.width / 2)
+            try await settle(host, "A waveform that cannot fit must wrap as a whole word") {
+                let rect = first.convert(first.bounds, to: native)
+                return rect.minX < 3 && rect.minY > caret.minY + caret.height / 2
+            }
+            capture(host, step: "inline-02-word-wrap", scheme: scheme)
+            host.model.width = wideWidth
+            host.model.rows[0].text = "Русский и English 👩🏽‍⚕️\n"
+            try await settle(host, "Explicit newline starts the next waveform at the next line") {
+                first.convert(first.bounds, to: native).minX < 3
+            }
+            capture(host, step: "inline-03-explicit-newline", scheme: scheme)
+            XCTAssertFalse(host.model.rows.contains { $0.text.contains("\u{FFFC}") },
+                           "Native attachment characters never enter the transcript")
+            host.model.pending = .empty
+            try await settle(host, "Recognized text replaces native attachments") {
+                !native.attributedText.string.contains("\u{FFFC}")
+            }
+            capture(host, step: "inline-04-replaced", scheme: scheme)
+        }
+    }
+
+    private func descendants(in view: UIView) -> [UIView] {
+        [view] + view.subviews.flatMap { descendants(in: $0) }
+    }
+
     func testNativeSpeechQuietAndTextPreview() async throws {
         for scheme in [ColorScheme.light, .dark] {
             let host = try CaptionNativeHost(rows: [
