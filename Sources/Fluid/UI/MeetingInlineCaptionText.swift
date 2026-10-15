@@ -239,6 +239,7 @@ private final class InlineCaptionWavePlacement {
 #if os(iOS)
 @MainActor
 private final class InlineCaptionTextView: UITextView {
+    var retainedTextContentStorage: NSTextContentStorage?
     private let waves = InlineCaptionWavePlacement()
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -248,6 +249,7 @@ private final class InlineCaptionTextView: UITextView {
 #else
 @MainActor
 private final class InlineCaptionTextView: NSTextView {
+    var retainedTextContentStorage: NSTextContentStorage?
     private let waves = InlineCaptionWavePlacement()
     override func layout() {
         super.layout()
@@ -268,6 +270,7 @@ private struct InlineCaptionNativeText: UIViewRepresentable {
         manager.textContainer = container
         storage.addTextLayoutManager(manager)
         let view = InlineCaptionTextView(frame: .zero, textContainer: container)
+        view.retainedTextContentStorage = storage
         view.isEditable = false
         view.isSelectable = false
         view.isScrollEnabled = false
@@ -310,6 +313,7 @@ private struct InlineCaptionNativeText: NSViewRepresentable {
         manager.textContainer = container
         storage.addTextLayoutManager(manager)
         let view = InlineCaptionTextView(frame: .zero, textContainer: container)
+        view.retainedTextContentStorage = storage
         view.isEditable = false
         view.isSelectable = false
         view.isRichText = true
