@@ -44,6 +44,28 @@ private final class DiagnosticProbe: @unchecked Sendable {
     var snapshot: [String] { lock.withLock { lines } }
 }
 
+/// Scalar-only observations: the stress harness must not retain the audio it checks.
+private final class LongRunProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var frames = 0
+    private var windows = 0
+    private var saved = 0
+    private var rejected = false
+    private var contiguous = true
+    func recognized(_ count: Int, start: Double) {
+        lock.withLock {
+            contiguous = contiguous && abs(start - Double(frames) / 16_000) < 0.0001
+            frames += count
+            windows += 1
+        }
+    }
+    func checkpointed() { lock.withLock { saved += 1 } }
+    func failed() { lock.withLock { rejected = true } }
+    var snapshot: (frames: Int, windows: Int, saved: Int, rejected: Bool, contiguous: Bool) {
+        lock.withLock { (frames, windows, saved, rejected, contiguous) }
+    }
+}
+
 private final class ProgressiveProbe: @unchecked Sendable {
     struct Update: Sendable, Equatable {
         let start: Double
@@ -197,6 +219,8 @@ struct MeetingCapturePCMTransportTests {
         try require(diagnostics.snapshot[0].contains("errorKind=overload")
                     && diagnostics.snapshot[0].contains("pendingFrames=8000")
                     && diagnostics.snapshot[0].contains("budgetFrames=8000"), "log the actual saturated budget before discarding pending PCM")
+        try require(overloaded.rejectionReason == MeetingMemoryAudioError.overload.localizedDescription,
+                    "capture must distinguish a saturated audio queue from unavailable RAM")
 
         let failureProbe = Probe()
         let failureDiagnostics = DiagnosticProbe()
@@ -212,6 +236,7 @@ struct MeetingCapturePCMTransportTests {
         try require(failureDiagnostics.snapshot.allSatisfy { !$0.contains("sensitive transcript") && !$0.contains("CheckpointFailure") },
                     "provider and checkpoint error contents must never enter support logs")
         try require(failureProbe.snapshot.2 == 1, "checkpoint failure closes strict intake")
+        try require(checkpointFailure.rejectionReason == nil, "untrusted checkpoint payloads never become capture errors")
         let cancelLatch = Latch()
         let cancelProbe = Probe()
         let joined = try MeetingProcessingPipeline.makeMemoryAudioConsumer(chunkSeconds: 0.25, maximumPendingSeconds: 1,
@@ -271,6 +296,8 @@ struct MeetingCapturePCMTransportTests {
         catch MeetingMemoryAudioError.invalidPCM { }
         try require(wrongFormatProbe.snapshot.2 == 1, "malformed PCM emits one terminal event")
         try await progressiveTransport()
+        try await checkpointReleasesPCM()
+        try await longMeetingTransport()
         print("Meeting PCM transport: admission, conversion, ownership, timeline, bounded inference, overload, joined finish and checkpoint failure passed.")
     }
 
@@ -281,6 +308,80 @@ struct MeetingCapturePCMTransportTests {
             try await Task.sleep(for: .milliseconds(1))
         }
         try require(false, detail)
+    }
+
+    static func checkpointReleasesPCM() async throws {
+        let saving = Latch()
+        let probe = Probe()
+        let consumer = try MeetingProcessingPipeline.makeMemoryAudioConsumer(
+            chunkSeconds: 0.25, maximumPendingSeconds: 0.5,
+            recognize: { samples, start in
+                probe.begin(samples, at: start)
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in await saving.wait(); probe.checkpoint() }, failure: { _ in probe.failed() })
+        try require(consumer.enqueue(try sample(frames: 4_000)), "checkpoint fixture accepts initial audio")
+        try await awaitEntered(saving, "checkpoint is holding text only")
+        try require(consumer.enqueue(try sample(frames: 4_000, startFrame: 4_000)), "queue accepts audio during durable save")
+        try require(consumer.enqueue(try sample(frames: 4_000, startFrame: 8_000)), "consumed PCM no longer consumes queue credit during IO")
+        try require(probe.snapshot.0.count == 1, "save remains serialized with the next inference")
+        await saving.release()
+        try await consumer.finish()
+        try require(probe.snapshot.1 == 3 && probe.snapshot.2 == 0, "save delay preserves every accepted frame without parallel inference")
+
+        // A late native operation may briefly outlast its 12-second input. The reserve is
+        // constant, and remains a hard stop if work never makes progress.
+        let native = Latch()
+        let burst = Probe()
+        let buffered = try MeetingProcessingPipeline.makeMemoryAudioConsumer(
+            recognize: { samples, start in
+                burst.begin(samples, at: start); await native.wait()
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in burst.checkpoint() }, failure: { _ in burst.failed() })
+        for start in stride(from: 0, to: 480_000, by: 48_000) {
+            try require(buffered.enqueue(try sample(frames: 48_000, startFrame: Int64(start))), "a transient 30-second native stall fits the fixed burst reserve")
+        }
+        try await awaitEntered(native, "burst inference started")
+        await native.release()
+        try await buffered.finish()
+        try require(burst.snapshot.0.reduce(0) { $0 + $1.1 } == 480_000 && burst.snapshot.2 == 0,
+                    "burst catch-up must preserve all PCM")
+    }
+
+    static func longMeetingTransport() async throws {
+        let probe = LongRunProbe()
+        let consumer = try MeetingProcessingPipeline.makeMemoryAudioConsumer(
+            recognize: { samples, start in
+                probe.recognized(samples.count, start: start)
+                return MeetingPCMTranscriptBatch(segments: [], speakers: [])
+            }, checkpoint: { _ in probe.checkpointed() }, failure: { _ in probe.failed() })
+        let prototype = try sample(frames: 48_000)
+        let totalFrames = 8 * 60 * 60 * 16_000
+        var position = 0
+        for window in 0..<2_400 {
+            for _ in 0..<4 {
+                var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 16_000),
+                    presentationTimeStamp: CMTime(value: 1_600_000 + Int64(position), timescale: 16_000),
+                    decodeTimeStamp: .invalid)
+                var copy: CMSampleBuffer?
+                let status = CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault,
+                    sampleBuffer: prototype, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+                    sampleBufferOut: &copy)
+                try require(status == noErr && copy != nil, "stress PCM timing copy")
+                try require(consumer.enqueue(copy!), "eight-hour transport accepts contiguous PCM")
+                position += 48_000
+            }
+            let deadline = ProcessInfo.processInfo.systemUptime + 5
+            while probe.snapshot.saved <= window && ProcessInfo.processInfo.systemUptime < deadline {
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            try require(probe.snapshot.saved == window + 1, "each stress window checkpoints before continuing")
+        }
+        try await consumer.finish()
+        let result = probe.snapshot
+        try require(result.frames == totalFrames && result.windows == 2_400 && result.saved == 2_400,
+                    "eight simulated hours are consumed and checkpointed exactly once")
+        try require(!result.rejected && result.contiguous, "duration does not grow the audio queue or change its timeline")
+        print("Eight-hour accelerated transport: 460800000 frames, 2400 windows, no discarded audio or queue overflow. This is synthetic transport, not an eight-hour model/device run.")
     }
 
     static func progressiveTransport() async throws {
@@ -361,6 +462,7 @@ struct MeetingCapturePCMTransportTests {
         let overloadLatch = Latch()
         let overloadDiagnostic = DiagnosticProbe()
         let bounded = try MeetingProcessingPipeline.makeProgressiveMemoryAudioConsumer(
+            maximumPendingSeconds: 24,
             recognize: { window, start in
                 overload.begin(start)
                 if let update = try await window.next() { overload.record(update, start: start) }

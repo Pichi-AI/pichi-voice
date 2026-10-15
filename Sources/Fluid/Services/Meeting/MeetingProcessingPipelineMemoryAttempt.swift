@@ -186,10 +186,11 @@ extension MeetingProcessingPipeline {
                 DebugLogger.shared.info(message, source: "MeetingMemoryAudio")
             }
         }
-        let failure: @Sendable (Error) -> Void = { _ in
+        let failure: @Sendable (Error) -> Void = { error in
             // Neither provider errors nor transcript content cross into durable diagnostics.
             eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: trackID,
-                                       detail: "In-memory transcription stopped. Completed text was preserved."))
+                                       detail: (error as? MeetingMemoryAudioError)?.localizedDescription
+                                           ?? PichiLocalization.text("In-memory transcription stopped. Completed text was preserved.")))
         }
         let consumer: any MeetingMemoryAudioConsuming
         if let policy = attempt.descriptor.pcmObservationPolicy, runtime.supportsProgressivePCMInput {

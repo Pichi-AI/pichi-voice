@@ -522,7 +522,9 @@ final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
             return
         }
         if let memoryConsumer, !memoryConsumer.enqueue(sample) {
-            self.fail(MeetingCapturePCMError.transcriptionStopped,
+            let error = memoryConsumer.rejectionReason.map(MeetingCapturePCMError.transcriptionRejected)
+                ?? .transcriptionStopped
+            self.fail(error,
                       kind: .writerBackpressure)
             return
         }

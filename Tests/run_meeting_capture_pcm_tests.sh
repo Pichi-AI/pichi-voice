@@ -18,7 +18,8 @@ root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia
     + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
 start = source.index('nonisolated enum MeetingLiveSampleCopy {')
-root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + source[start:])
+end = source.index('\n}', start) + 2
+root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + source[start:end])
 PY
 xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Localization/PichiLocalization.swift \

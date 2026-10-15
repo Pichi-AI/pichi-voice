@@ -79,8 +79,14 @@ nonisolated struct MeetingMicrophoneCatalogSnapshot: Sendable, Equatable {
 
 /// Incremental PCM ownership for the strict no-audio-file mode. The existing processing
 /// pipeline constructs this consumer with a frozen model selection and durable text checkpoints.
-/// Enqueue must be bounded; false is terminal overload, never permission to use a file fallback.
+/// Enqueue must be bounded; false is terminal rejection, never permission to use a file fallback.
 nonisolated protocol MeetingMemoryAudioConsuming: Sendable {
+    /// A safe localized reason, without provider error payloads or transcript content.
+    var rejectionReason: String? { get }
     func enqueue(_ sampleBuffer: CMSampleBuffer) -> Bool
     func finish() async throws
+}
+
+extension MeetingMemoryAudioConsuming {
+    var rejectionReason: String? { nil }
 }
