@@ -531,7 +531,7 @@ final class WhisperProvider: TranscriptionProvider {
         }
         return Self.transcriptionResult(text: transcript.text, segmentTimings: transcript.segments.map {
             ASRSegmentTiming(text: $0.text, start: Double($0.t0Ms) / 1000, end: Double($0.t1Ms) / 1000)
-        }, sampleCount: samples.count, confidence: 1.0)
+        }, sampleCount: samples.count)
     }
 
     private func run(_ samples: [Float], languageCode: String?, timestamps: TimestampKind) async throws -> Transcript? {
@@ -670,9 +670,9 @@ final class WhisperProvider: TranscriptionProvider {
     /// Preserve already-returned native segmentation, including the segment-only
     /// fallback. This does not request word timestamps or run a second decode.
     nonisolated static func transcriptionResult(text: String, segmentTimings: [ASRSegmentTiming],
-                                                sampleCount: Int, confidence: Float? = nil) -> ASRTranscriptionResult {
+                                                sampleCount: Int) -> ASRTranscriptionResult {
         let fullText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ASRTranscriptionResult(text: fullText, confidence: confidence, segmentTimings: ASRSegmentTiming.validated(
+        return ASRTranscriptionResult(text: fullText, segmentTimings: ASRSegmentTiming.validated(
             segmentTimings, text: fullText, duration: Double(sampleCount) / 16_000))
     }
 
