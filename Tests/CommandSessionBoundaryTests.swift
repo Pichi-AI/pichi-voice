@@ -22,6 +22,7 @@ final class DebugLogger {
 }
 
 struct TerminalService {}
+final class LLMClient { static let shared = LLMClient() }
 
 @MainActor final class NotchOverlayManager {
     static let shared = NotchOverlayManager()

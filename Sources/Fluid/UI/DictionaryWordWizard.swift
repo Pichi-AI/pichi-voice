@@ -165,7 +165,7 @@ struct DictionaryWordWizard: View {
         VStack(spacing: self.theme.metrics.spacing.lg) {
             Text(PichiLocalization.text(self.step == .review ? (self.pronunciationIncomplete ? "Your spellings are ready" : "Your word is ready") : "Let’s hear your word"))
                 .font(self.theme.typography.body)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
             Text("“\(self.word)”")
                 .font(self.theme.typography.title)
                 .fixedSize(horizontal: false, vertical: true)
@@ -271,9 +271,9 @@ struct DictionaryWordWizard: View {
         HStack(alignment: .top, spacing: self.theme.metrics.spacing.md) {
             Text("\(number)")
                 .font(self.theme.typography.bodyStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 28, height: 28)
-                .background(self.theme.palette.accent.opacity(0.1), in: Circle())
+                .background(self.theme.palette.elevatedCardBackground, in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                 Text(PichiLocalization.text(title)).font(self.theme.typography.sectionTitle)
@@ -427,7 +427,7 @@ struct DictionaryWordWizard: View {
                         Text(variant)
                             .font(self.theme.typography.caption)
                             .padding(.horizontal, 10).padding(.vertical, 6)
-                            .background(self.theme.palette.accent.opacity(0.08), in: Capsule())
+                            .background(self.theme.palette.elevatedCardBackground, in: Capsule())
                     }
                 }
             }
@@ -824,7 +824,7 @@ struct DictionaryWordPlayground: View {
             case .recognized:
                 Text(PichiLocalization.format("“%@” recognized", self.word) + (self.test.successes > 1 ? PichiLocalization.format(" · %lld times", self.test.successes) : ""))
                     .font(self.theme.typography.bodyStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
             case .missed:
                 Text("We didn’t catch “\(self.word)”. Try again, or add more examples.")
                     .font(self.theme.typography.body)

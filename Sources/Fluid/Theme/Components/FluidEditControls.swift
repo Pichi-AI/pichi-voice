@@ -33,12 +33,35 @@ struct FluidHoverIconButtonStyle: ButtonStyle {
 
         var body: some View {
             self.configuration.label
-                .foregroundStyle(self.isHovered && self.isEnabled ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                .foregroundStyle(self.isHovered && self.isEnabled ? self.theme.palette.accentText : self.theme.palette.secondaryText)
                 .padding(4)
-                .background(RoundedRectangle(cornerRadius: 7).fill(self.theme.palette.accent.opacity(self.isEnabled && (self.isHovered || self.configuration.isPressed) ? 0.14 : 0)))
+                .background(RoundedRectangle(cornerRadius: 7).fill(!self.isEnabled || self.isHovered || self.configuration.isPressed ? self.theme.palette.elevatedCardBackground : .clear))
                 .contentShape(Rectangle())
-                .opacity(self.isEnabled ? 1 : 0.4)
                 .onHover { self.isHovered = $0 }
         }
+    }
+}
+
+/// macOS plain TextField drops a prompt Text's foreground attributes when it
+/// bridges to AppKit. Keep the native editor and draw its empty-state hint with
+/// the same explicit palette and inherited font as the surrounding search UI.
+struct FluidSearchField: View {
+    let title: LocalizedStringKey
+    @Binding var text: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        TextField(self.title, text: self.$text, prompt: Text(verbatim: ""))
+            .textFieldStyle(.plain)
+            .overlay(alignment: .leading) {
+                if self.text.isEmpty {
+                    Text(self.title)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityLabel(Text(self.title))
     }
 }

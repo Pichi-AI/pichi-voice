@@ -13,6 +13,7 @@ enum TextDeliveryFailure: String, Equatable {
     case targetRestoreFailed = "target_restore_failed"
     case noEditableTarget = "no_editable_target"
     case pasteNotLanded = "paste_not_landed"
+    case partialInsertion = "partial_insertion"
 
     var userFacingMessage: String? {
         switch self {
@@ -20,6 +21,8 @@ enum TextDeliveryFailure: String, Equatable {
             "Enable Accessibility to insert text"
         case .noEditableTarget:
             "No text field focused"
+        case .partialInsertion:
+            "Only part of the text was inserted"
         case .pasteNotLanded, .clipboardSnapshotFailed, .clipboardWriteFailed,
              .pasteCommandFailed, .targetUnavailable, .targetRestoreFailed:
             "Oops, text wasn't inserted"
@@ -33,6 +36,8 @@ enum TextDeliveryFailure: String, Equatable {
         switch message {
         case TextDeliveryFailure.accessibilityNotTrusted.userFacingMessage:
             nil
+        case TextDeliveryFailure.partialInsertion.userFacingMessage:
+            "Check the text field before inserting the full transcript again."
         default:
             "Your transcript is saved. Copy it and paste it into a text field."
         }
@@ -645,10 +650,12 @@ final class PasteDeliveryCoordinator {
         _ text: String,
         preserveTranscriptOnClipboard: Bool,
         isOutputValid: @escaping @MainActor () -> Bool = { true },
+        targetIsReady: @escaping @MainActor () -> Bool = { true },
         onCommandPosted: ((TimeInterval) -> Void)? = nil
     ) async -> TextDeliveryResult {
         guard isOutputValid() else { return .cancelled }
         self.log("delivery_policy keepTranscript=\(preserveTranscriptOnClipboard) auditSchema=1")
+        let requestedChangeCount = self.pasteboard.changeCount
         let slotRequestedAt = ProcessInfo.processInfo.systemUptime
         await self.acquireDeliverySlot()
         let slotAcquiredAt = ProcessInfo.processInfo.systemUptime
@@ -658,6 +665,17 @@ final class PasteDeliveryCoordinator {
         }
 
         guard isOutputValid() else { return .cancelled }
+        guard targetIsReady() else {
+            // Match copyBackup admission without acquiring the slot we already own.
+            if preserveTranscriptOnClipboard, isOutputValid(),
+               self.pasteboard.changeCount == requestedChangeCount ||
+               self.pasteboard.changeCount == self.lastWrittenChangeCount
+            {
+                self.generation &+= 1
+                self.writeBackup(text)
+            }
+            return .recoverableFailure(.targetUnavailable)
+        }
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.generation &+= 1
         let generation = self.generation
@@ -689,6 +707,10 @@ final class PasteDeliveryCoordinator {
         guard isOutputValid() else {
             self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: false)
             return .cancelled
+        }
+        guard targetIsReady() else {
+            self.finishFailedDelivery(originalSnapshot, sessionID: sessionID, text: text, originalChangeCount: originalChangeCount, keepBackup: preserveTranscriptOnClipboard)
+            return .recoverableFailure(.targetUnavailable)
         }
         let commandPosted = await self.commandPoster.postGlobalPasteCommand()
         let commandPostedAt = ProcessInfo.processInfo.systemUptime

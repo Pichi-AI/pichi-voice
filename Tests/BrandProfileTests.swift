@@ -15,6 +15,12 @@ struct BrandProfileTests {
     }
 
     static func main() throws {
+        if let index = CommandLine.arguments.firstIndex(of: "--model-feed-cache-only") {
+            let expectedNamespace = CommandLine.arguments[index + 1]
+            let expectedFile = CommandLine.arguments[index + 2]
+            try self.verifyModelFeedCacheIsolation(expectedNamespace: expectedNamespace, expectedFile: expectedFile)
+            return
+        }
         let packageData = try Data(contentsOf: URL(fileURLWithPath: "Sources/Fluid/Branding/brand-package.json"))
         let packaged = try BrandPackage.decode(packageData)
         precondition(packaged.profile.appName == "Pichi Voice")
@@ -36,6 +42,8 @@ struct BrandProfileTests {
             precondition(demo.logos != nil && demo.theme != nil)
             precondition(!demo.profile.appName.contains("Pichi"))
         }
+        try self.verifyLogoVisibility(packaged)
+        try self.verifyPaletteForegroundContrast(packaged)
         try self.require(try BrandPackage.decode(packaged.encoded()) == packaged)
         let valid = try JSONEncoder().encode(packaged.profile)
         try self.require(try BrandProfile.decode(valid) == packaged.profile)
@@ -95,6 +103,17 @@ struct BrandProfileTests {
         let previousFile = try Data(contentsOf: active)
         let previousRevision = store.revision
         self.reject { _ = try store.importData(Data("{invalid".utf8)) }
+        // A structurally valid package with an invisible text accent must also
+        // fail atomically, even though its dark button label is readable.
+        let unsafeAccent = try self.invisibleAccentPackage(packaged, appearance: "light", background: "cardBackground")
+        self.reject { _ = try store.importData(unsafeAccent) }
+        for appearance in ["light", "dark"] {
+            let unsafePolarity = try self.mixedSurfacePackage(packaged, appearance: appearance)
+            self.reject { _ = try store.importData(unsafePolarity) }
+            let unsafeHueBlend = try self.mixedSurfacePackage(packaged, appearance: appearance,
+                firstBackground: "#FE0020", secondBackground: "#009A20", foreground: "#000000")
+            self.reject { _ = try store.importData(unsafeHueBlend) }
+        }
         precondition(store.current() == sizeable && store.revision == previousRevision)
         try self.require(try Data(contentsOf: active) == previousFile)
         try self.require(try BrandPackage.decode(store.exportData()) == sizeable)
@@ -155,6 +174,7 @@ struct BrandProfileTests {
         precondition(AppBrand.keychainService.hasPrefix(AppBrand.bundleIdentifier))
         precondition(AppBrand.modelsDirectory.path.contains(AppBrand.bundleIdentifier))
         try self.verifyDiagnosticLogIsolation()
+        try self.verifyModelFeedCacheIsolation(expectedNamespace: "local.voice.unbundled", expectedFile: "speech-model-feed.json")
         precondition(!AppBrand.updatesEnabled && AppBrand.feedbackEndpoint == nil)
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://github.com/a/b", updatesEnabled: true).validate() }
         self.reject { try BrandDistribution(formatVersion: 1, repository: "https://attacker.invalid/a/b").validate() }
@@ -162,6 +182,149 @@ struct BrandProfileTests {
         try signedPolicy.validate()
         precondition(!signedPolicy.updatesAllowedForCurrentSignature, "Unsigned local tools must not enable the updater")
         print("Portable brand package: validation, atomic activation, cache, legacy migration and identity isolation passed")
+    }
+
+    static func invisibleAccentPackage(_ packaged: BrandPackage, appearance: String, background: String, paletteColors: [String: String]? = nil) throws -> Data {
+        var object = try JSONSerialization.jsonObject(with: packaged.encoded()) as! [String: Any]
+        var profile = object["profile"] as! [String: Any]
+        var theme = object["theme"] as! [String: Any]
+        var palette = theme[appearance] as! [String: Any]
+        var colors = paletteColors ?? (palette["colors"] as! [String: String])
+        // Keep button ink valid so only the standalone accent contract rejects it.
+        profile[appearance == "light" ? "accentLight" : "accentDark"] = colors[background]!
+        colors["accentForeground"] = colors["primaryText"]!
+        palette["colors"] = colors
+        theme[appearance] = palette
+        object["profile"] = profile
+        object["theme"] = theme
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    static func mixedSurfacePackage(_ packaged: BrandPackage, appearance: String,
+                                    firstBackground: String = "#000000", secondBackground: String = "#FFFFFF",
+                                    foreground: String = "#767676", accentForeground: String = "#FFFFFF") throws -> Data {
+        var object = try JSONSerialization.jsonObject(with: packaged.encoded()) as! [String: Any]
+        var profile = object["profile"] as! [String: Any]
+        var theme = object["theme"] as! [String: Any]
+        var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, foreground) })
+        for (index, background) in ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"].enumerated() {
+            colors[background] = index.isMultiple(of: 2) ? firstBackground : secondBackground
+        }
+        colors["accentForeground"] = accentForeground
+        profile[appearance == "light" ? "accentLight" : "accentDark"] = foreground
+        theme[appearance] = ["colors": colors]
+        object["profile"] = profile
+        object["theme"] = theme
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    static func verifyPaletteForegroundContrast(_ packaged: BrandPackage) throws {
+        let backgrounds = ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"]
+        for (appearance, palette) in [("light", packaged.theme!.light), ("dark", packaged.theme!.dark)] {
+            let accent = appearance == "light" ? packaged.profile.accentLight : packaged.profile.accentDark
+            for background in backgrounds {
+                // Isolate one background: #767676 passes 3:1 against BOTH black
+                // and white but disappears only on that one selected surface.
+                // Primary ink and every other role remain valid there, so skipping
+                // any one of the six backgrounds would accept this fixture.
+                let base = appearance == "light" ? "#FFFFFF" : "#000000"
+                let ink = appearance == "light" ? "#000000" : "#FFFFFF"
+                var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, ink) })
+                for token in backgrounds { colors[token] = base }
+                colors[background] = "#767676"
+                colors["accentForeground"] = base
+                try BrandPalette(colors: colors).validate(accent: ink)
+                for token in ["secondaryText", "tertiaryText", "warning", "success"] {
+                    var invalid = colors
+                    invalid[token] = "#767676"
+                    self.reject { try BrandPalette(colors: invalid).validate(accent: ink) }
+                }
+                self.reject { _ = try BrandPackage.decode(self.invisibleAccentPackage(packaged, appearance: appearance, background: background, paletteColors: colors)) }
+            }
+            for token in ["primaryText", "secondaryText", "tertiaryText", "warning", "success", "accentForeground", "cardBackground"] {
+                for alphaColor in ["#FFFFFF00", "#FFFFFFFF"] {
+                    var colors = palette.colors
+                    colors[token] = alphaColor
+                    self.reject { try BrandPalette(colors: colors).validate(accent: accent) }
+                }
+            }
+        }
+        for appearance in ["light", "dark"] {
+            let data = try self.mixedSurfacePackage(packaged, appearance: appearance)
+            // Decode without validation only to establish the adversarial fixture:
+            // every opaque pairing meets the old thresholds, including button ink.
+            let unsafe = try JSONDecoder().decode(BrandPackage.self, from: data)
+            let palette = appearance == "light" ? unsafe.theme!.light : unsafe.theme!.dark
+            for token in ["primaryText", "secondaryText", "tertiaryText", "warning", "success"] {
+                for background in backgrounds {
+                    precondition(BrandPalette.contrast(palette.colors[token]!, palette.colors[background]!) >= 4.5)
+                }
+            }
+            precondition(BrandPalette.contrast(palette.colors["accentForeground"]!, "#767676") >= 4.5)
+            for background in backgrounds {
+                precondition(BrandPalette.contrast("#767676", palette.colors[background]!) >= 3)
+            }
+            // A black/white mixture can equal #767676 and erase all those roles.
+            self.reject { _ = try BrandPackage.decode(data) }
+        }
+        for appearance in ["light", "dark"] {
+            let data = try self.mixedSurfacePackage(packaged, appearance: appearance,
+                firstBackground: "#FE0020", secondBackground: "#009A20", foreground: "#000000")
+            let unsafe = try JSONDecoder().decode(BrandPackage.self, from: data)
+            let palette = appearance == "light" ? unsafe.theme!.light : unsafe.theme!.dark
+            for background in backgrounds {
+                // Endpoint contrast and consistent luminance polarity are both
+                // valid. The exact 50:50 sRGB mix nevertheless fails even 3:1.
+                precondition(BrandPalette.contrast("#000000", palette.colors[background]!) >= 4.5)
+                precondition(BrandPalette.luminance("#000000") < BrandPalette.luminance(palette.colors[background]!))
+            }
+            // Ink is outside even the RGB envelope's luminance interval;
+            // enforcing the ratio at its minimum is necessary, not only polarity.
+            precondition(BrandPalette.luminance("#000000") < BrandPalette.luminance("#000020"))
+            precondition(BrandPalette.contrast("#000000", "#000020") < 3)
+            precondition(BrandPalette.contrast("#000000", "#7F4D20") < 3)
+            precondition(BrandPalette.contrast(palette.colors["accentForeground"]!, "#000000") >= 4.5)
+            self.reject { _ = try BrandPackage.decode(data) }
+        }
+        // The new standalone-accent rule must still permit readable portable
+        // themes. Shipped and both bank packages are decoded earlier in main.
+        for (background, foreground, accent) in [("#FFFFFF", "#000000", "#0000FF"), ("#000000", "#FFFFFF", "#00FFFF")] {
+            var colors = Dictionary(uniqueKeysWithValues: BrandPalette.tokens.map { ($0, foreground) })
+            for token in backgrounds { colors[token] = background }
+            colors["accentForeground"] = background
+            try BrandPalette(colors: colors).validate(accent: accent)
+        }
+        print("Portable palette: 60 light/dark foreground rejection checks, 28 alpha rejections, 2 opposite-polarity rejections, 2 saturated-blend rejections and 2 readable palette checks passed")
+    }
+
+    static func verifyModelFeedCacheIsolation(expectedNamespace: String, expectedFile: String) throws {
+        let identities = ["ai.pichi.voice", "ai.pichi.voice.e2e-api", "ai.pichi.voice.debug", "com.FluidApp.app"]
+        precondition(Set(identities.map { AppBrand.storageNamespace(for: $0) }).count == identities.count)
+        for identifier in identities {
+            precondition(AppBrand.storageNamespace(for: identifier) == identifier)
+        }
+        for identifier in [nil, "", ".", "..", "../FluidVoice", "bad/id", "bad\\id", "bad\u{0}id", "Новая марка"] as [String?] {
+            precondition(AppBrand.storageNamespace(for: identifier) == "local.voice.unbundled")
+        }
+        let cache = CompactSpeechModelReleaseCatalog.defaultCacheURL()!
+        precondition(AppBrand.storageNamespace == expectedNamespace)
+        precondition(cache.deletingLastPathComponent() == AppBrand.applicationSupportDirectory,
+                     "The production feed cache must use the existing installation storage boundary")
+        precondition(cache.deletingLastPathComponent().lastPathComponent == expectedNamespace,
+                     "Different Release and Debug identities must never share feed state")
+        precondition(cache.lastPathComponent == expectedFile)
+        precondition(cache.appendingPathExtension("state").deletingLastPathComponent() == AppBrand.applicationSupportDirectory)
+        precondition(cache.appendingPathExtension("lock").deletingLastPathComponent() == AppBrand.applicationSupportDirectory)
+        // Imported appearance cannot provide a storage identity or feed path.
+        let packageData = try Data(contentsOf: URL(fileURLWithPath: "Configuration/BrandExamples/sber-demo.json"))
+        let object = try JSONSerialization.jsonObject(with: packageData) as! [String: Any]
+        for forbidden in ["bundleIdentifier", "storageNamespace", "applicationSupportDirectory", "cacheURL", "cacheFolderName"] {
+            var injected = object
+            injected[forbidden] = "../FluidVoice"
+            self.reject { _ = try BrandPackage.decode(JSONSerialization.data(withJSONObject: injected)) }
+        }
+        precondition(CompactSpeechModelReleaseCatalog.defaultCacheURL() == cache)
+        print("Model feed cache identity \(expectedNamespace), \(expectedFile): trusted storage and appearance isolation passed")
     }
 
     static func verifyDiagnosticLogIsolation() throws {
@@ -216,6 +379,69 @@ struct BrandProfileTests {
         try self.require(try Data(contentsOf: oldLog) == sentinel)
         print("Diagnostic log identity, isolated baseline, rotation, joined queue and direct crash writes passed")
         #endif
+    }
+
+    static func verifyLogoVisibility(_ packaged: BrandPackage) throws {
+        let whiteData = try self.logoPNG(width: 8, height: 8, pixel: [255, 255, 255, 255])
+        let blackData = try self.logoPNG(width: 8, height: 8, pixel: [0, 0, 0, 255])
+        let clearData = try self.logoPNG(width: 8, height: 8, pixel: [255, 255, 255, 0])
+        let white = try BrandLogo(data: whiteData)
+        let black = try BrandLogo(data: blackData)
+        let clear = try BrandLogo(data: clearData)
+        try self.require(try white.visibleData() == whiteData)
+        try self.require(try black.visibleData() == blackData)
+        try self.require(try clear.visibleData() == nil)
+        // No opacity threshold or downsampling: a final, minimally nonzero
+        // alpha pixel is still artwork, even on the maximum allowed width.
+        let thinData = try self.logoPNG(width: 4096, height: 1, pixel: [0, 0, 0, 0], lastAlpha: 1)
+        try self.require(try BrandLogo(data: thinData).visibleData() == thinData)
+        let variants = BrandLogos(primary: white, light: black, dark: white, menuBar: black)
+        precondition(variants.visibleData(for: .primary) == whiteData)
+        precondition(variants.visibleData(for: .light) == blackData)
+        precondition(variants.visibleData(for: .dark) == whiteData)
+        precondition(variants.visibleData(for: .menuBar) == blackData)
+        precondition(variants.visibleData(for: .menuBar, fallbackToPrimary: false) == blackData)
+        let primaryOnly = BrandLogos(primary: white)
+        // Explicit-only resolution lets the native owner check its packaged
+        // distribution asset before requesting primary artwork. Imports skip
+        // that trusted-asset branch, and still obtain their primary bytes.
+        precondition(primaryOnly.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
+        precondition(primaryOnly.visibleData(for: .primary) == whiteData)
+        precondition(primaryOnly.visibleData(for: .menuBar) == whiteData)
+        let blankVariants = BrandLogos(primary: black, light: clear, dark: clear, menuBar: clear)
+        precondition(blankVariants.visibleData(for: .menuBar, fallbackToPrimary: false) == nil)
+        for role in [BrandLogos.Role.primary, .light, .dark, .menuBar] {
+            precondition(blankVariants.visibleData(for: role) == blackData)
+            precondition(BrandLogos(primary: clear).visibleData(for: role) == nil)
+        }
+        // Keep legacy blank packages readable and preserve their product copy;
+        // source resolution must request the neutral renderer fallback instead.
+        let legacy = BrandPackage(profile: packaged.profile, logos: BrandLogos(primary: clear))
+        let decoded = try BrandPackage.decode(legacy.encoded())
+        precondition(decoded.profile == packaged.profile)
+        precondition(decoded.logos?.primary == clear)
+        precondition(decoded.logos?.visibleData(for: .menuBar) == nil)
+        var invalid = try JSONSerialization.jsonObject(with: JSONEncoder().encode(white)) as! [String: Any]
+        invalid["base64"] = "invalid"
+        let invalidLogo = try JSONDecoder().decode(BrandLogo.self, from: JSONSerialization.data(withJSONObject: invalid))
+        precondition(BrandLogos(primary: invalidLogo).visibleData(for: .menuBar) == nil)
+        print("Synthetic logo alpha, original-color bytes, appearance/menu source selection and legacy blank fallback passed")
+    }
+
+    static func logoPNG(width: Int, height: Int, pixel: [UInt8], lastAlpha: UInt8? = nil) throws -> Data {
+        precondition(pixel.count == 4)
+        var pixels = Array(repeating: pixel, count: width * height).flatMap { $0 }
+        if let lastAlpha { pixels[pixels.count - 1] = lastAlpha }
+        let provider = CGDataProvider(data: Data(pixels) as CFData)!
+        let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider,
+            decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+        let output = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, image, nil)
+        precondition(CGImageDestinationFinalize(destination))
+        return output as Data
     }
 
     static func png(width: Int, height: Int) throws -> Data {

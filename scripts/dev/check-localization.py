@@ -11,6 +11,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 CATALOGS = ROOT / 'Sources/Fluid/Localization'
 # No whitespace flag: ordinary UI copy such as '15% faster' is not a printf template.
 FORMAT = re.compile(r'%(?:(\d+)\$)?[-+#0]*(?:\d+)?(?:\.\d+)?(ll|l|h|z)?([diuoxXfFeEgGaAcCsSp@%])')
+SUBSTITUTION_NAME = re.compile(r'[^%@\s]+')
+FORMAT_SPECIFIER = re.compile(r'(?:ll|l|h|z)?[diuoxX]|l?[fFeEgGaAcs]|[CSp@]')
+# Match complete named references first. Otherwise %#@count@ looks like an
+# ordinary %@ argument and hides the actual numeric quantity contract.
+FORMAT_TOKEN = re.compile(r'%(?:(?P<position>\d+)\$)?#@(?P<name>[^%@\s]+)@|(?P<ordinary>' + FORMAT.pattern + ')')
+NAMED_PREFIX = re.compile(r'%(?:\d+\$)?#@')
 LANGUAGE = re.compile(r'^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$')
 EXPLICIT = re.compile(r'\b(?:PichiLocalization\.(?:text|format)|AppBrand\.(?:text|format)|Text|Button|Label|Toggle|Picker|Menu|TextField|SecureField|GroupBox|Section|ProgressView|Link)\(\s*("(?:[^"\\]|\\.)*")')
 
@@ -43,18 +49,34 @@ def unique_object(pairs):
     return result
 
 
-def signature(value):
+def signature(value, substitutions=None, initial_argument=1):
     arguments = {}
-    next_argument = 1
-    for match in FORMAT.finditer(value):
-        position, length, conversion = match.groups()
-        if conversion == '%':
-            continue
-        index = int(position) if position else next_argument
-        if not position:
-            next_argument += 1
+    next_argument = initial_argument
+    for token in FORMAT_TOKEN.finditer(value):
+        name = token.group('name')
+        if name is not None:
+            if substitutions is None or name not in substitutions:
+                raise ValueError(f'Missing named substitution declaration: {name!r}')
+            declaration = substitutions[name]
+            index = declaration['argNum']
+            position = token.group('position')
+            if position and int(position) != index:
+                raise ValueError(f'Named substitution {name!r} changes its argument position')
+            kind = declaration['formatSpecifier']
+            if not position:
+                next_argument += 1
+        else:
+            ordinary = token.group('ordinary')
+            if NAMED_PREFIX.match(ordinary):
+                raise ValueError(f'Malformed named substitution reference in {value!r}')
+            position, length, conversion = FORMAT.fullmatch(ordinary).groups()
+            if conversion == '%':
+                continue
+            index = int(position) if position else next_argument
+            if not position:
+                next_argument += 1
+            kind = (length or '') + conversion
         # Preserve C integer length and argument position; translated reordering must be positional.
-        kind = (length or '') + conversion
         if index in arguments and arguments[index] != kind:
             raise ValueError(f'Conflicting format types in {value!r}')
         arguments[index] = kind
@@ -80,6 +102,67 @@ def leaves(node, language):
             yield from leaves(variant, language)
 
 
+def has_plural(node):
+    variations = node.get('variations', {})
+    return ('plural' in variations
+            or any(has_plural(variant) for variants in variations.values() for variant in variants.values())
+            or any(has_plural(substitution) for substitution in node.get('substitutions', {}).values()))
+
+
+def node_contract(node, language, quantity=None):
+    """Validate each formatting scope, including quantities not printed in its leaves."""
+    substitutions = node.get('substitutions', {})
+    if not isinstance(substitutions, dict):
+        raise ValueError('Named substitutions must be an object')
+    children = []
+    for name, declaration in substitutions.items():
+        if not isinstance(name, str) or not SUBSTITUTION_NAME.fullmatch(name) or not isinstance(declaration, dict):
+            raise ValueError(f'Invalid named substitution declaration: {name!r}')
+        position = declaration.get('argNum')
+        specifier = declaration.get('formatSpecifier')
+        if type(position) is not int or position < 1:
+            raise ValueError(f'Named substitution {name!r} has no positive integer argNum')
+        if not isinstance(specifier, str) or not FORMAT_SPECIFIER.fullmatch(specifier):
+            raise ValueError(f'Named substitution {name!r} has an invalid formatSpecifier')
+        child = node_contract(declaration, language, quantity=(position, specifier))
+        if has_plural(declaration) and specifier[-1] not in 'diuoxXfFeEgGaA':
+            raise ValueError(f'Plural substitution {name!r} requires a numeric formatSpecifier')
+        children.append((position, specifier, child))
+
+    units = list(leaves(node, language))
+    if not units:
+        raise ValueError(f'Empty localization formatting scope for {language}')
+    expected = None
+    referenced = set()
+    for unit in units:
+        if language in {'en', 'ru'} and unit.get('state') != 'translated':
+            raise ValueError(f'String unit is not translated in {language}')
+        # Plural leaves may omit the quantity or refer to other global call
+        # arguments. Their implicit formatting starts at the quantity position.
+        arguments = signature(unit['value'], substitutions, initial_argument=quantity[0] if quantity else 1)
+        if quantity and quantity[0] in arguments and arguments[quantity[0]] != quantity[1]:
+            raise ValueError(f'Plural quantity changes format arguments in {language}: {unit["value"]!r}')
+        actual = tuple(sorted(arguments.items()))
+        if expected is None:
+            expected = actual
+        elif actual != expected:
+            raise ValueError(f'Variation changes format arguments in {language}: {unit["value"]!r}')
+        referenced.update(token.group('name') for token in FORMAT_TOKEN.finditer(unit['value']) if token.group('name'))
+    if referenced != substitutions.keys():
+        raise ValueError(f'Unreferenced named substitution declarations: {sorted(substitutions.keys() - referenced)}')
+    # Keep scope signatures separate for translation comparisons, while every
+    # use of a global call argument must agree throughout the substitution tree.
+    combined = dict(expected)
+    for _, _, child in children:
+        for position, kind in child[2]:
+            if position in combined and combined[position] != kind:
+                raise ValueError(f'Nested substitution changes format arguments at position {position} in {language}')
+            combined[position] = kind
+    # Names are local resource identifiers. Argument positions and types remain
+    # the contract even when a translator reorders or renames a substitution.
+    return expected, tuple(sorted(children)), tuple(sorted(combined.items()))
+
+
 def validate_catalog(path):
     data = json.loads(path.read_text(), object_pairs_hook=unique_object)
     if data.get('version') != '1.0' or data.get('sourceLanguage') != 'en':
@@ -94,22 +177,13 @@ def validate_catalog(path):
         localizations = entry.get('localizations', {})
         if not {'en', 'ru'}.issubset(localizations):
             raise ValueError(f'{key!r} is missing English or Russian')
-        english = list(leaves(localizations['en'], 'en'))
-        if not english:
-            raise ValueError(f'{key!r} has no English value')
-        expected = signature(english[0]['value'])
+        expected = node_contract(localizations['en'], 'en')
         for language, node in localizations.items():
             if not LANGUAGE.fullmatch(language):
                 raise ValueError(f'Invalid BCP 47 catalog language {language!r}')
-            units = list(leaves(node, language))
-            if not units:
-                raise ValueError(f'{key!r} has an empty localization for {language}')
-            for unit in units:
-                if language in {'en', 'ru'} and unit.get('state') != 'translated':
-                    raise ValueError(f'{key!r} is not translated in {language}')
-                if signature(unit['value']) != expected:
-                    raise ValueError(f'{key!r} changes format arguments in {language}: {unit["value"]!r}')
-        if 'plural' in localizations['ru'].get('variations', {}):
+            if node_contract(node, language) != expected:
+                raise ValueError(f'{key!r} changes format arguments in {language}')
+        if has_plural(localizations['ru']):
             plurals += 1
     return strings, plurals
 

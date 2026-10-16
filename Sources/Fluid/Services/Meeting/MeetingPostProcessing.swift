@@ -11,20 +11,6 @@ nonisolated struct MeetingPostProcessingRequest: Sendable {
     let coverageGaps: [MeetingTranscriptCoverageGap]
 }
 
-nonisolated struct MeetingPostProcessingOutput: Codable, Equatable, Sendable {
-    let summary: String
-    let sourceSegmentIDs: [UUID]
-}
-
-nonisolated struct MeetingPostProcessingArtifact: Codable, Equatable, Sendable {
-    let attemptID: UUID
-    let transcriptHash: String
-    let providerID: String
-    let modelID: String
-    let output: MeetingPostProcessingOutput?
-    let error: String?
-}
-
 /// The prepared scope owns all model resources. prepare must drain partial allocations before
 /// throwing; cancelAndUnload must return only after inference and owned helper processes exit.
 nonisolated protocol PreparedMeetingPostProcessor: Sendable {

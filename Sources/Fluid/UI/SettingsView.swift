@@ -227,7 +227,7 @@ struct SettingsView: View {
                         // Section header
                         Label("App Settings", systemImage: "power")
                             .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         VStack(spacing: 16) {
                             // Launch at startup
@@ -503,7 +503,7 @@ struct SettingsView: View {
                                 HStack(spacing: 10) {
                                     Label("Update available · \(version)", systemImage: "arrow.down.circle")
                                         .font(self.theme.typography.bodyStrong)
-                                        .foregroundStyle(self.theme.palette.accent)
+                                        .foregroundStyle(self.theme.palette.accentText)
                                         .fixedSize(horizontal: false, vertical: true)
 
                                     Spacer()
@@ -522,8 +522,7 @@ struct SettingsView: View {
                                 Button("Check for Updates") {
                                     self.updater.checkForUpdatesManually()
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .tint(self.theme.palette.accent)
+                                .buttonStyle(AccentButtonStyle(compact: true))
                                 .controlSize(.regular)
                                 .disabled(!AppBrand.updatesEnabled || self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
 
@@ -618,7 +617,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 14) {
                             Label("Microphone Permission", systemImage: "mic.fill")
                                 .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(self.theme.palette.primaryText)
 
                             VStack(alignment: .leading, spacing: 12) {
                                 HStack(spacing: 10) {
@@ -647,8 +646,7 @@ struct SettingsView: View {
                                         } label: {
                                             Label("Grant Access", systemImage: "mic.fill")
                                         }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(self.theme.palette.accent)
+                                        .buttonStyle(AccentButtonStyle(compact: true))
                                         .controlSize(.regular)
                                     } else if self.asr.micStatus == .denied {
                                         Button {
@@ -664,11 +662,11 @@ struct SettingsView: View {
                                 self.instructionsBox(
                                     title: "How to enable microphone access:",
                                     steps: self.asr.micStatus == .notDetermined
-                                        ? ["Click **Grant Access** above", "Choose **Allow** in the system dialog"]
+                                        ? [PichiLocalization.text("Click **Grant Access** above"), PichiLocalization.text("Choose **Allow** in the system dialog")]
                                         : [
-                                            "Click **Open Settings** above",
-                                            "Find **\(self.appDisplayName)** in the microphone list",
-                                            "Toggle **\(self.appDisplayName) ON** to allow access",
+                                            PichiLocalization.text("Click **Open Settings** above"),
+                                            AppBrand.format("Find **%@** in the microphone list", self.appDisplayName),
+                                            AppBrand.format("Toggle **%@ ON** to allow access", self.appDisplayName),
                                         ]
                                 )
                             }
@@ -685,7 +683,7 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Label(self.selectedSection == .shortcuts ? "Shortcuts" : "Dictation behavior", systemImage: self.selectedSection == .shortcuts ? "keyboard" : "mic")
                                 .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(self.theme.palette.primaryText)
 
                             Spacer()
 
@@ -693,7 +691,7 @@ struct SettingsView: View {
                                 if self.isRecordingAnyShortcut {
                                     Text("Recording…")
                                         .font(.fluidSystem(.caption).weight(.semibold))
-                                        .foregroundStyle(.orange)
+                                        .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                 } else if !self.hotkeyManagerInitialized {
                                     Text("Initializing…")
                                         .font(.fluidSystem(.caption).weight(.semibold))
@@ -709,10 +707,10 @@ struct SettingsView: View {
                                     if self.isRecordingAnyShortcut {
                                         HStack(spacing: 8) {
                                             Image(systemName: "hand.point.up.left.fill")
-                                                .foregroundStyle(.orange)
+                                                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                             Text("Press your new hotkey combination now…")
                                                 .font(.fluidSystem(.caption))
-                                                .foregroundStyle(.orange)
+                                                .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                         }
                                     } else if !self.hotkeyManagerInitialized {
                                         HStack(spacing: 8) {
@@ -1043,18 +1041,17 @@ struct SettingsView: View {
                                     Button("Open Accessibility Settings") {
                                         self.openAccessibilitySettings()
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(self.theme.palette.accent)
+                                    .buttonStyle(AccentButtonStyle(compact: true))
                                     .controlSize(.regular)
                                 }
 
                                 self.instructionsBox(
                                     title: "Follow these steps to enable Accessibility:",
                                     steps: [
-                                        "Click **Open Accessibility Settings** above",
-                                        "In the Accessibility window, click the **+ button**",
-                                        "Select **\(self.appDisplayName)**; use **Reveal in Finder** below if needed",
-                                        "Click **Open**, then toggle **\(self.appDisplayName) ON** in the list",
+                                        PichiLocalization.text("Click **Open Accessibility Settings** above"),
+                                        PichiLocalization.text("In the Accessibility window, click the **+ button**"),
+                                        AppBrand.format("Select **%@**; use **Reveal in Finder** below if needed", self.appDisplayName),
+                                        AppBrand.format("Click **Open**, then toggle **%@ ON** in the list", self.appDisplayName),
                                     ],
                                     warningStyle: true
                                 )
@@ -1084,7 +1081,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Text Formatting", systemImage: "textformat")
                             .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         VStack(spacing: 16) {
                             self.settingsToggleRow(
@@ -1218,7 +1215,7 @@ struct SettingsView: View {
                         HStack {
                             Label("Audio Devices", systemImage: "speaker.wave.2.fill")
                                 .font(.fluidSystem(.headline))
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(self.theme.palette.primaryText)
 
                             Spacer()
 
@@ -1259,7 +1256,7 @@ struct SettingsView: View {
                                 Spacer()
                                 FluidDropdownPicker(
                                     "Output device",
-                                    selectedTitle: self.outputDevices.first(where: { $0.uid == self.selectedOutputUID }).map { $0.name == self.cachedDefaultOutputName ? "\($0.name) (System Default)" : $0.name } ?? "Loading...",
+                                    selectedTitle: self.outputDevices.first(where: { $0.uid == self.selectedOutputUID }).map { Self.outputDeviceDisplayName($0.name, isSystemDefault: $0.name == self.cachedDefaultOutputName) } ?? PichiLocalization.text("Loading..."),
                                     selection: self.$selectedOutputUID
                                 ) {
                                     // Handle empty state gracefully
@@ -1269,7 +1266,7 @@ struct SettingsView: View {
                                         ForEach(self.outputDevices, id: \.uid) { dev in
                                             // Add "(System Default)" tag using cached name to avoid CoreAudio calls during layout
                                             let isSystemDefault = !self.cachedDefaultOutputName.isEmpty && dev.name == self.cachedDefaultOutputName
-                                            Text(isSystemDefault ? "\(dev.name) (System Default)" : dev.name).tag(dev.uid)
+                                            Text(Self.outputDeviceDisplayName(dev.name, isSystemDefault: isSystemDefault)).tag(dev.uid)
                                         }
                                     }
                                 }
@@ -1501,7 +1498,9 @@ struct SettingsView: View {
                                 Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .trailing)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(minWidth: 36, alignment: .trailing)
 
                                 Slider(value: self.$visualizerNoiseThreshold, in: 0.01...0.8, step: 0.01)
                                     .controlSize(.regular)
@@ -1509,7 +1508,9 @@ struct SettingsView: View {
                                 Text("Less")
                                     .font(.fluidSystem(.caption))
                                     .foregroundStyle(self.settingsSecondaryText)
-                                    .frame(width: 36, alignment: .leading)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .frame(minWidth: 36, alignment: .leading)
 
                                 Text(String(format: "%.2f", self.visualizerNoiseThreshold))
                                     .font(.fluidSystem(.caption, design: .monospaced))
@@ -1541,7 +1542,9 @@ struct SettingsView: View {
                                     Text("Less")
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .trailing)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .frame(minWidth: 36, alignment: .trailing)
 
                                     Slider(
                                         value: Binding(
@@ -1556,7 +1559,9 @@ struct SettingsView: View {
                                     Text(PichiLocalization.text("scale.more", defaultValue: "More"))
                                         .font(.fluidSystem(.caption))
                                         .foregroundStyle(self.settingsSecondaryText)
-                                        .frame(width: 36, alignment: .leading)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .frame(minWidth: 36, alignment: .leading)
                                 }
                             }
                             .settingsSearchTarget(.transcriptionPreviewLength)
@@ -1590,7 +1595,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 14) {
                         Label("Debug Settings", systemImage: "ladybug.fill")
                             .font(.fluidSystem(.headline))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
 
                         VStack(alignment: .leading, spacing: 8) {
                             self.settingsToggleRow(
@@ -2000,7 +2005,7 @@ struct SettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "externaldrive.fill")
                 .font(.fluidSystem(.headline))
-                .foregroundStyle(.primary)
+                .foregroundStyle(self.theme.palette.primaryText)
                 .frame(width: 24, alignment: .center)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -2010,6 +2015,8 @@ struct SettingsView: View {
                 Text("Export or import settings, prompt profiles, history, and stats. API keys excluded.")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.settingsSecondaryText)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 16)
@@ -2018,8 +2025,7 @@ struct SettingsView: View {
                 Button(action: self.exportBackup) {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(self.theme.palette.accent)
+                .buttonStyle(AccentButtonStyle(compact: true))
                 .controlSize(.regular)
 
                 Button(action: self.importBackup) {
@@ -2147,7 +2153,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "info.circle.fill")
-                    .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
+                    .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accentText)
                     .font(.fluidSystem(.caption))
                 Text(PichiLocalization.text(title))
                     .font(self.theme.typography.bodySmallStrong)
@@ -2159,12 +2165,12 @@ struct SettingsView: View {
                     HStack(alignment: .top, spacing: 8) {
                         Text("\(index + 1).")
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accent)
+                            .foregroundStyle(warningStyle ? self.theme.palette.warning : self.theme.palette.accentText)
                             .fontWeight(.semibold)
                             .frame(width: 16, alignment: .trailing)
-                        Text(.init(step))
+                        Text((try? AttributedString(markdown: step)) ?? AttributedString(step))
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(self.theme.palette.primaryText)
                     }
                 }
             }
@@ -2172,8 +2178,13 @@ struct SettingsView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill((warningStyle ? self.theme.palette.warning : self.theme.palette.accent).opacity(0.12))
+                .fill(self.theme.palette.cardBackground)
         )
+    }
+
+    /// Append owned interface copy without translating or rewriting a CoreAudio device name.
+    private static func outputDeviceDisplayName(_ name: String, isSystemDefault: Bool) -> String {
+        isSystemDefault ? PichiLocalization.format("%@ (System Default)", name) : name
     }
 
     private func primaryDictationShortcutsList() -> some View {
@@ -2245,7 +2256,7 @@ struct SettingsView: View {
 private extension SettingsView {
     private func shortcutLabel(icon: String, color: Color, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon).foregroundStyle(color).frame(width: 20).padding(.top, 2)
+            Image(systemName: icon).foregroundStyle(self.theme.palette.readableText(color)).frame(width: 20).padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong).foregroundStyle(self.settingsTitleText)
                 Text(PichiLocalization.text(description)).font(self.theme.typography.bodySmall).foregroundStyle(self.settingsSecondaryText)
@@ -2310,12 +2321,12 @@ private extension SettingsView {
     private func shortcutCapturePill() -> some View {
         Text("Press shortcut...")
             .font(.fluidSystem(.caption).weight(.medium))
-            .foregroundStyle(.orange)
+            .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(.orange.opacity(0.2))
+                    .fill(self.theme.palette.elevatedCardBackground)
             )
     }
 
@@ -2451,15 +2462,15 @@ private extension SettingsView {
     }
 
     var settingsTitleText: Color {
-        Color(nsColor: .labelColor)
+        self.theme.palette.primaryText
     }
 
     var settingsSecondaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.90) : self.theme.palette.primaryText.opacity(0.82)
+        self.theme.palette.primaryText
     }
 
     var settingsTertiaryText: Color {
-        self.colorScheme == .light ? Color(nsColor: .labelColor).opacity(0.85) : self.theme.palette.secondaryText
+        self.theme.palette.secondaryText
     }
 
     var microphonePrioritySection: some View {
@@ -2480,7 +2491,7 @@ private extension SettingsView {
                     }
                     .buttonStyle(.plain)
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .disabled(self.isMicrophonePriorityEditingDisabled)
                 }
             }
@@ -2537,7 +2548,7 @@ private extension SettingsView {
         return HStack(spacing: 10) {
             Image(systemName: "line.3.horizontal")
                 .font(.fluidSystem(size: 11, weight: .semibold))
-                .foregroundStyle(self.settingsTertiaryText.opacity(self.isMicrophonePriorityEditingDisabled ? 0.35 : 0.72))
+                .foregroundStyle(self.settingsTertiaryText)
                 .frame(width: 18, height: 30)
                 .contentShape(Rectangle())
                 .onDrag {
@@ -2581,7 +2592,7 @@ private extension SettingsView {
                 } label: {
                     Image(systemName: "trash")
                         .font(.fluidSystem(size: 11, weight: .semibold))
-                        .foregroundStyle(Color(nsColor: .systemRed).opacity(0.82))
+                        .foregroundStyle(self.theme.palette.readableText(Color(nsColor: .systemRed)))
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
@@ -2605,7 +2616,6 @@ private extension SettingsView {
         .padding(.horizontal, 12)
         .frame(minHeight: 42)
         .contentShape(Rectangle())
-        .opacity(isAvailable ? 1 : 0.62)
         .onHover { isHovering in
             let animation: Animation? = self.accessibilityReduceMotion ? nil : .easeOut(duration: 0.12)
             withAnimation(animation) {
@@ -2717,10 +2727,10 @@ private extension SettingsView {
     ) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: systemImage)
-                .foregroundStyle(color)
+                .foregroundStyle(self.theme.palette.readableText(color))
             Text(message)
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(color)
+                .foregroundStyle(self.theme.palette.readableText(color))
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -2863,7 +2873,7 @@ struct FillerWordsEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Filler words to remove:")
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
 
             // Word chips
             FlowLayout(spacing: 6) {
@@ -2892,15 +2902,13 @@ struct FillerWordsEditor: View {
             HStack(spacing: 8) {
                 TextField("Add word", text: self.$newWord)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 100)
+                    .frame(minWidth: 100, maxWidth: .infinity)
                     .onSubmit { self.addWord() }
 
                 Button("Add") { self.addWord() }
                     .fluidOutlinedButton()
                     .controlSize(.small)
                     .disabled(self.newWord.trimmingCharacters(in: .whitespaces).isEmpty)
-
-                Spacer()
 
                 Button("Reset") {
                     self.fillerWords = SettingsStore.defaultFillerWords
@@ -2926,81 +2934,6 @@ struct FillerWordsEditor: View {
     }
 }
 
-// MARK: - Flow Layout
-
-struct FlowLayout: Layout {
-    struct Cache {
-        var sizes: [CGSize] = []
-        var positions: [CGPoint] = []
-        var containerSize: CGSize = .zero
-        var lastWidth: CGFloat = 0
-    }
-
-    var spacing: CGFloat = 8
-
-    func makeCache(subviews: Subviews) -> Cache {
-        Cache(sizes: Array(repeating: .zero, count: subviews.count))
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
-        self.arrangeSubviews(proposal: proposal, subviews: subviews, cache: &cache)
-        return cache.containerSize
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        self.arrangeSubviews(proposal: proposal, subviews: subviews, cache: &cache)
-        for (index, position) in cache.positions.enumerated() {
-            subviews[index].place(
-                at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y),
-                proposal: .unspecified
-            )
-        }
-    }
-
-    private func arrangeSubviews(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout Cache
-    ) {
-        let proposedWidth = proposal.width ?? 0
-        let maxWidth = proposedWidth > 0 ? proposedWidth : 260
-        let needsLayout = cache.positions.count != subviews.count || cache.lastWidth != maxWidth
-
-        if needsLayout {
-            cache.positions = []
-            cache.positions.reserveCapacity(subviews.count)
-            cache.sizes = Array(repeating: .zero, count: subviews.count)
-        }
-
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-
-        for index in subviews.indices {
-            let size: CGSize
-            if needsLayout {
-                size = subviews[index].sizeThatFits(.unspecified)
-                cache.sizes[index] = size
-            } else {
-                size = cache.sizes[index]
-            }
-
-            if x + size.width > maxWidth, x > 0 {
-                x = 0
-                y += rowHeight + self.spacing
-                rowHeight = 0
-            }
-            if needsLayout {
-                cache.positions.append(CGPoint(x: x, y: y))
-            }
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + self.spacing
-        }
-
-        cache.containerSize = CGSize(width: maxWidth, height: y + rowHeight)
-        cache.lastWidth = maxWidth
-    }
-}
 
 private extension SettingsView {
     var spokenSendSettings: some View {
@@ -3155,7 +3088,7 @@ struct AnalyticsConfirmationView: View {
         var text = AttributedString(PichiLocalization.text("For privacy questions, contact our support team."))
         if let range = text.range(of: PichiLocalization.text("support team")) {
             text[range].link = AppBrand.supportURL
-            text[range].foregroundColor = self.theme.palette.accent
+            text[range].foregroundColor = self.theme.palette.accentText
         }
 
         return text
@@ -3168,7 +3101,7 @@ struct AnalyticsConfirmationView: View {
 
             Text("We never collect audio, transcription text, prompts, or other personal information.")
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
@@ -3183,7 +3116,7 @@ struct AnalyticsConfirmationView: View {
 
             Text(self.contactInfoText)
                 .font(self.theme.typography.bodySmall)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .textSelection(.enabled)
 
             Divider()
@@ -3204,6 +3137,8 @@ struct AnalyticsConfirmationView: View {
         }
         .padding(20)
         .frame(width: 420)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.contentBackground)
     }
 }
 

@@ -2,14 +2,25 @@ import Foundation
 
 /// Single source of truth for rendering a `MeetingSession` transcript as plain text or JSON.
 nonisolated enum MeetingTranscriptExporter {
+    /// The persisted alias stays user data. UI and text export resolve the owner marker
+    /// with their chosen interface locale without rewriting a saved participant name.
+    static func speakerDisplayName(_ speaker: MeetingSessionSpeaker,
+                                   language: PichiInterfaceLanguage = .english,
+                                   bundle: Bundle = .main) -> String {
+        speaker.isLocalUser ? PichiLocalization.text("You", language: language, bundle: bundle) : speaker.displayName
+    }
+
     static func text(for session: MeetingSession, includeEchoes: Bool = false) -> String {
         let speakerNames = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
         let segments = session.transcriptSegments
             .filter { includeEchoes || !$0.isEcho }
-            .sorted { $0.start.seconds < $1.start.seconds }
-        return segments.map { segment in
+            .enumerated().sorted {
+                ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+            }.map(\.element)
+        return self.displayParagraphs(for: segments, in: session).map { paragraph in
+            let segment = paragraph.firstSegment
             let speaker = Self.speakerLabel(for: segment, in: session, speakerNames: speakerNames)
-            return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(segment.text)"
+            return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(paragraph.text)"
         }.joined(separator: "\n\n")
     }
 
@@ -26,14 +37,14 @@ nonisolated enum MeetingTranscriptExporter {
         bundle: Bundle = .main
     ) -> String {
         guard let state = segment.attributionState else {
-            if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames) {
+            if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle) {
                 return name
             }
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         }
         switch state {
         case .assigned:
-            return Self.resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames)
+            return Self.resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle)
                 ?? PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
         case .overlappingSpeakers, .unassigned, .timingUncertain:
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
@@ -55,6 +66,69 @@ nonisolated enum MeetingTranscriptExporter {
             segment.overlap.rawValue,
             label,
         ].joined(separator: "|")
+    }
+
+    /// Shared presentation only: preserve every input segment and show its label
+    /// at a speaker/attribution change, as the original desktop transcript does.
+    static func displayRows(for segments: [MeetingTranscriptSegment], in session: MeetingSession)
+        -> [(segment: MeetingTranscriptSegment, showsLabel: Bool)] {
+        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        var previousIdentity: String?
+        return segments.map { segment in
+            let identity = self.speakerLabelIdentity(for: segment, in: session, speakerNames: names)
+            let showsLabel = identity != previousIdentity
+            previousIdentity = identity
+            return (segment, showsLabel)
+        }
+    }
+
+    /// A reading projection of timed fragments, not a replacement for canonical evidence.
+    /// Every member retains its ID, text, revision and attribution for corrections and playback.
+    struct DisplayParagraph: Identifiable, Equatable {
+        let segments: [MeetingTranscriptSegment]
+        var id: MeetingTranscriptSegmentID { segments[0].id }
+        var firstSegment: MeetingTranscriptSegment { segments[0] }
+        var text: String {
+            segments.enumerated().map { index, segment in
+                Self.separator(after: index > 0 ? segments[index - 1].text : nil, before: segment.text) + segment.text
+            }.joined()
+        }
+
+        static func separator(after previous: String?, before next: String) -> String {
+            guard let last = previous?.last, let first = next.first,
+                  !last.isWhitespace, !first.isWhitespace else { return "" }
+            if ".,;:!?…)]}»".contains(first) || "([{«".contains(last) { return "" }
+            return " "
+        }
+    }
+
+    /// Input order is retained. Callers supply chronological, non-echo segments.
+    /// Adjacent nil-speaker fragments can flow under the honest unknown-speaker label. Their
+    /// distinct uncertainty states remain on every canonical member, not an invented identity.
+    /// Identified speaker/state changes and source/evidence changes stay boundaries. Buffer size,
+    /// elapsed time, pauses and line breaks are not evidence of a new speaker turn. Explicit line
+    /// breaks remain in the text inside a turn without creating a second speaker header.
+    static func displayParagraphs(for segments: [MeetingTranscriptSegment], in session: MeetingSession) -> [DisplayParagraph] {
+        let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        var paragraphs: [DisplayParagraph] = []
+        var members: [MeetingTranscriptSegment] = []
+        for segment in segments {
+            let startsParagraph = members.last.map { previous in
+                let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
+                return (!bothUnknown && speakerLabelIdentity(for: previous, in: session, speakerNames: names)
+                    != speakerLabelIdentity(for: segment, in: session, speakerNames: names))
+                    || previous.sourceTrackID != segment.sourceTrackID
+                    || previous.status != segment.status || previous.completeness != segment.completeness
+                    || previous.isEcho != segment.isEcho
+            } ?? false
+            if startsParagraph {
+                paragraphs.append(DisplayParagraph(segments: members))
+                members = []
+            }
+            members.append(segment)
+        }
+        if !members.isEmpty { paragraphs.append(DisplayParagraph(segments: members)) }
+        return paragraphs
     }
 
     static func json(for session: MeetingSession) throws -> Data {
@@ -80,7 +154,8 @@ nonisolated enum MeetingTranscriptExporter {
                     overlap: $0.overlap.rawValue,
                     completeness: $0.completeness.rawValue,
                     isLikelyEcho: $0.isEcho,
-                    attributionState: $0.attributionState?.rawValue
+                    attributionState: $0.attributionState?.rawValue,
+                    speakerAttributionInference: $0.speakerAttributionInference
                 )
             }
         let document = ExportedTranscript(
@@ -92,6 +167,7 @@ nonisolated enum MeetingTranscriptExporter {
             durationSeconds: session.duration,
             mode: session.mode.rawValue,
             applicationDisplayName: session.capturedApplication?.displayName,
+            applicationAudioScope: session.mode == .onlineCall ? session.effectiveApplicationAudioScope : nil,
             speakers: speakers,
             segments: segments
         )
@@ -107,10 +183,14 @@ nonisolated enum MeetingTranscriptExporter {
     private static func resolvedSpeakerName(
         _ speakerID: SessionSpeakerID?,
         in session: MeetingSession,
-        speakerNames: [SessionSpeakerID: String]
+        speakerNames: [SessionSpeakerID: String],
+        language: PichiInterfaceLanguage, bundle: Bundle
     ) -> String? {
         guard let resolvedID = speakerID.map({ Self.resolvedAliasID($0, in: session) }) else {
             return nil
+        }
+        if let owner = session.activeSpeakers.first(where: { $0.id == resolvedID && $0.isLocalUser }) {
+            return self.speakerDisplayName(owner, language: language, bundle: bundle)
         }
         return speakerNames[resolvedID]
     }
@@ -166,6 +246,7 @@ private struct ExportedSegment: Codable {
     var completeness: String
     var isLikelyEcho: Bool
     var attributionState: String?
+    var speakerAttributionInference: MeetingSpeakerAttributionInference?
 }
 
 private struct ExportedTranscript: Codable {
@@ -177,6 +258,7 @@ private struct ExportedTranscript: Codable {
     var durationSeconds: TimeInterval
     var mode: String
     var applicationDisplayName: String?
+    var applicationAudioScope: MeetingApplicationAudioScope?
     var speakers: [ExportedSpeaker]
     var segments: [ExportedSegment]
 }

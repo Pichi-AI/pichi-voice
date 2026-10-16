@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// Stable per-speaker tints for the transcript. Colour is decoration on top of the name, never
@@ -22,17 +21,12 @@ nonisolated enum MeetingSpeakerPalette {
         return (value.0, value.1, value.2)
     }
 
-    static func tint(forSpeakerIndex index: Int) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            let value = Self.rgb(forSpeakerIndex: index, isDark: isDark)
-            return NSColor(
-                srgbRed: CGFloat(value.red) / 255,
-                green: CGFloat(value.green) / 255,
-                blue: CGFloat(value.blue) / 255,
-                alpha: 1
-            )
-        })
+    /// Resolve against the actual palette before contrast validation. A dynamic
+    /// platform color could otherwise be checked and drawn in different appearances.
+    static func tint(forSpeakerIndex index: Int, isDark: Bool) -> Color {
+        let value = Self.rgb(forSpeakerIndex: index, isDark: isDark)
+        return Color(.sRGB, red: Double(value.red) / 255,
+            green: Double(value.green) / 255, blue: Double(value.blue) / 255)
     }
 
     /// The unnamed catch-all bucket for mic audio that isn't confidently the local user.
@@ -51,7 +45,7 @@ nonisolated enum MeetingSpeakerPalette {
         return indices
     }
 
-    static func tints(for speakers: [MeetingSessionSpeaker]) -> [SessionSpeakerID: Color] {
-        self.tintIndices(for: speakers).mapValues { Self.tint(forSpeakerIndex: $0) }
+    static func tints(for speakers: [MeetingSessionSpeaker], isDark: Bool) -> [SessionSpeakerID: Color] {
+        self.tintIndices(for: speakers).mapValues { Self.tint(forSpeakerIndex: $0, isDark: isDark) }
     }
 }

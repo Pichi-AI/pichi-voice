@@ -67,12 +67,17 @@ actor PrivateAIIntegrationService {
     #endif
 
     /// Called only inside the meeting residency scope, after other models are suspended.
-    static func summarizeMeeting(_ transcript: String, style: String) async throws -> String {
+    static func summarizeMeeting(
+        _ transcript: String,
+        style: String,
+        instructions: String = "",
+        thinking: Bool = true
+    ) async throws -> String {
         guard await MeetingModelResidencyCoordinator.shared.phase == .summary else {
             throw MeetingModelResidencyError.staleGrant
         }
         do {
-            let output = try await provider.summarizeMeeting(transcript, style: style)
+            let output = try await provider.summarizeMeeting(transcript, style: style, instructions: instructions, thinking: thinking)
             await Task { await self.provider.unloadCachedRuntime(reason: "meeting summary complete") }.value
             return output
         } catch {
@@ -386,13 +391,14 @@ actor PrivateAIIntegrationService {
         runtime: RuntimeConfiguration,
         context: AppContext
     ) async throws -> EnhancementResult {
-        let budget = try Self.validatedDictationBudget(inputText, contextTokenLimit: runtime.contextTokenLimit)
-        return try await Self.modelActivity {
-            try await self.dictationProvider.enhanceDictation(
+        let provider = self.dictationProvider
+        let outputTokenLimit = try provider.dictationOutputTokenLimit(for: inputText, contextTokenLimit: runtime.contextTokenLimit)
+        return try await Self.modelActivity(modelID: runtime.model) {
+            try await provider.enhanceDictation(
                 inputText,
                 runtime: runtime,
                 context: context,
-                maxOutputTokens: budget.maxOutputTokens
+                maxOutputTokens: outputTokenLimit
             )
         }
     }
@@ -403,30 +409,17 @@ actor PrivateAIIntegrationService {
         context: AppContext,
         streamHandler: PrivateAIStreamHandler?
     ) async throws -> EnhancementResult {
-        let budget = try Self.validatedDictationBudget(inputText, contextTokenLimit: runtime.contextTokenLimit)
-        return try await Self.modelActivity {
-            try await self.dictationProvider.enhanceDictation(
+        let provider = self.dictationProvider
+        let outputTokenLimit = try provider.dictationOutputTokenLimit(for: inputText, contextTokenLimit: runtime.contextTokenLimit)
+        return try await Self.modelActivity(modelID: runtime.model) {
+            try await provider.enhanceDictation(
                 inputText,
                 runtime: runtime,
                 context: context,
-                maxOutputTokens: budget.maxOutputTokens,
+                maxOutputTokens: outputTokenLimit,
                 streamHandler: streamHandler
             )
         }
-    }
-
-    private nonisolated static func validatedDictationBudget(
-        _ inputText: String,
-        contextTokenLimit: Int
-    ) throws -> SettingsStore.PrivateAIDictationTokenBudget {
-        let budget = SettingsStore.privateAIDictationTokenBudget(
-            forInputText: inputText,
-            contextTokenLimit: contextTokenLimit
-        )
-        guard budget.hasSufficientHeadroom else {
-            throw AIProcessingError.dictationExceedsAIContextWindow
-        }
-        return budget
     }
 
     func rewrite(

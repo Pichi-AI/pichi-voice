@@ -4,7 +4,7 @@ import Foundation
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md` (§5): FluidVoice-side Nemotron model
 // readiness. This locator only resolves and validates a local, already-installed model package.
 // It never downloads and never accepts a symlink — `MeetingDiarizationModelStore` downloads and
-// installs the ~200 MB package, and `execute` performs no downloads.
+// installs the pinned bundle, and `execute` performs no downloads.
 //
 // Resolution order: an injected URL (tests), then the development environment override
 // `FLUIDVOICE_NEMOTRON_DIARIZATION_MODEL_PATH`, then the versioned FluidVoice cache location.
@@ -20,6 +20,18 @@ nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
     /// Stable digest of every regular entry's relative path, logical size and modification time.
     /// This makes a same-size weight replacement visible without hashing 190 MB on the main actor.
     let entryMetadataSHA256: String
+
+    var implementationFingerprint: String {
+        self.compiledModelURL == nil
+            ? "Nemotron3-sortformer@eb1e6628998e47022799d305b52c2680d3576801;model=8976c3c40a752cd6468a08f2aa08626770bc048f"
+            : MeetingNemotronModelLocator.implementationFingerprint
+    }
+
+    /// The new model is author-compiled and must never enter the legacy package compiler.
+    var compiledModelURL: URL? {
+        guard packageURL.pathExtension == "nemotronbundle" else { return nil }
+        return packageURL.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName, isDirectory: true)
+    }
 }
 
 nonisolated enum MeetingNemotronModelReadinessError: LocalizedError, Equatable {
@@ -51,8 +63,12 @@ nonisolated protocol MeetingNemotronModelLocating: Sendable {
 
 nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
     static let environmentOverrideKey = "FLUIDVOICE_NEMOTRON_DIARIZATION_MODEL_PATH"
-    static let cacheVersion = "v1"
-    static let packageFileName = "nemotron_3_diarization.mlpackage"
+    static let implementationFingerprint = "Nemotron3-fast32-split-w8a8@82eb4c1e0ab67e1c7d8de5092aa42a8f74cbd7b8;model=25a90f97f254428d4b30374b76af9c74fdee8327;weight=99e2ae43ac6a513abf99951b35a75fb6bc51d2287c3c1af48a9657d917e57aed;config=32-4-40-264"
+    static let cacheVersion = "v2-fast32-w8a8"
+    static let packageFileName = "fast32-w8a8.nemotronbundle"
+    static let compiledModelFileName = "Nemotron3Diarizer_s32_split_w8a8.mlmodelc"
+    static let remoteModelPath = "split/" + compiledModelFileName
+    static let projectionFileName = "pre_encode_proj_t.bin"
     private static let maximumFileCount = 64
     private static let maximumTotalByteCount: Int64 = 1_000_000_000
 
@@ -70,7 +86,7 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
     /// The versioned FluidVoice cache location used when nothing is injected or overridden.
     static func defaultPackageURL() -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent("Library/Application Support", isDirectory: true)
         return base
             .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
@@ -149,6 +165,7 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
             }
         }
 
+        let isCompiledBundle = url.pathExtension == "nemotronbundle"
         var totalByteCount: Int64 = 0
         var fileCount = 0
         var hasManifest = false
@@ -156,14 +173,13 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
         var manifestSHA256 = ""
         var entryMetadata: [(path: String, size: Int, modified: TimeInterval)] = []
 
-        guard let enumerator = manager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: []
-        ) else {
+        // Enumerate relative names. URL enumeration can return /private/var children for a
+        // /var root, so slicing absolute paths by the root's string length corrupts names.
+        guard let enumerator = manager.enumerator(atPath: url.path) else {
             throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packageUnreadable")
         }
-        for case let entry as URL in enumerator {
+        for case let relativePath as String in enumerator {
+            let entry = url.appendingPathComponent(relativePath)
             let values = try resourceValues(entry)
             if values.isSymbolicLink == true {
                 throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packageContainsSymlink")
@@ -178,17 +194,18 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
             guard totalByteCount <= Self.maximumTotalByteCount else {
                 throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packageTooLarge")
             }
-            let relativePath = String(entry.path.dropFirst(url.path.count + 1))
             entryMetadata.append((
                 path: relativePath,
                 size: logicalSize,
                 modified: values.contentModificationDate?.timeIntervalSince1970 ?? 0
             ))
-            if entry.lastPathComponent == "Manifest.json" {
+            if (isCompiledBundle && relativePath == Self.compiledModelFileName + "/model.mil")
+                || (!isCompiledBundle && entry.lastPathComponent == "Manifest.json") {
                 hasManifest = true
                 manifestSHA256 = try Self.sha256Hex(contentsOf: entry)
             }
-            if entry.lastPathComponent == "model.mlmodel" {
+            if (isCompiledBundle && relativePath == Self.compiledModelFileName + "/coremldata.bin")
+                || (!isCompiledBundle && entry.lastPathComponent == "model.mlmodel") {
                 hasModel = true
             }
         }

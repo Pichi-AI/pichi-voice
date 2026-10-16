@@ -3,6 +3,7 @@
 #endif
 import CryptoKit
 import Foundation
+import NativeTextInference
 import XCTest
 
 final nonisolated class S1MiniProviderTests: XCTestCase {
@@ -241,6 +242,228 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         XCTAssertFalse(store.isInstalled())
     }
 
+    func testLongMultilingualDictationUsesExactBudgetAndPreservesEveryChunk() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine()
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let input = Array(repeating: "Распознавание длинной диктовки. Ёжик, ёлка и 🦔.\n\n漢字仮名交じり文", count: 180).joined(separator: " ")
+        #if !S1_MINI_STANDALONE_TESTS
+        XCTAssertFalse(SettingsStore.privateAIDictationTokenBudget(forInputText: input, contextTokenLimit: 4096).hasSufficientHeadroom)
+        let service = PrivateAIIntegrationService(testingProvider: provider)
+        let result = try await service.enhanceDictation(input, runtime: fixture.runtime(), context: fixture.context)
+        #else
+        let result = try await provider.enhanceDictation(input, runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095)
+        #endif
+        XCTAssertEqual(result.outputText, input)
+        let state = await engine.snapshot()
+        XCTAssertGreaterThan(state.generations, 1)
+        XCTAssertEqual(state.loads, 1)
+        XCTAssertEqual(state.context, 4096)
+        XCTAssertEqual(state.paths, [store.modelURL.path])
+        await provider.shutdownForTermination()
+    }
+
+    func testUnspacedUnicodeAndIdentifiersSurviveOutputLimitRetries() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine(outputCharacterLimit: 80)
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        for input in [String(repeating: "漢🦔е\u{301}Ё", count: 150), String(repeating: "abc123", count: 200)] {
+            let stream = ChunkStreamCapture()
+            let result = try await provider.enhanceDictation(input, runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { stream.append($0) })
+            XCTAssertEqual(result.outputText, input)
+            XCTAssertEqual(stream.fragments, [input], "Failed attempts must never stream partial or duplicated output")
+        }
+        let state = await engine.snapshot()
+        XCTAssertGreaterThan(state.outputFailures, 0)
+        await provider.shutdownForTermination()
+    }
+
+    func testCancellationFromCompletedStreamCallbackRetiresRuntime() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let provider = S1MiniIntegrationProvider(store: store, engine: ChunkEngine())
+        let task = Task {
+            try await provider.enhanceDictation("hello", runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+            })
+        }
+        do {
+            _ = try await task.value
+            XCTFail("Cancellation from the stream callback must propagate")
+        } catch is CancellationError {}
+        let loaded = await provider.loadedModelState()
+        XCTAssertNil(loaded)
+    }
+
+    func testLaterChunkFailurePublishesNothingAndRetiresRuntime() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine(failAt: 2)
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let stream = ChunkStreamCapture()
+        do {
+            _ = try await provider.enhanceDictation(String(repeating: "long dictation ", count: 500), runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { stream.append($0) })
+            XCTFail("A later failure must reject the entire enhancement")
+        } catch S1MiniError.verification {}
+        XCTAssertEqual(stream.fragments, [])
+        let state = await engine.snapshot()
+        XCTAssertEqual(state.generations, 2)
+        XCTAssertFalse(state.loaded)
+        let loaded = await provider.loadedModelState()
+        XCTAssertNil(loaded)
+    }
+
+    func testCancellationBetweenChunksJoinsCleanupAndQueuedUnload() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine(pauseAt: 2)
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let stream = ChunkStreamCapture()
+        let task = Task {
+            try await provider.enhanceDictation(String(repeating: "long dictation ", count: 500), runtime: fixture.runtime(), context: fixture.context, maxOutputTokens: 4095, streamHandler: { stream.append($0) })
+        }
+        await engine.waitUntilPaused()
+        let unload = Task { await provider.unloadCachedRuntime(reason: "queued test") }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch is CancellationError {}
+        await unload.value
+        XCTAssertEqual(stream.fragments, [])
+        let state = await engine.snapshot()
+        XCTAssertFalse(state.loaded)
+        XCTAssertFalse(state.unloadedWhileGenerating)
+        XCTAssertEqual(state.loads, 1)
+    }
+
+    func testUnsplittableOversizedGraphemeAndInputByteLimitFailWithoutPartialOutput() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = fixture.store()
+        _ = try await store.prepare(progressHandler: nil)
+        let engine = ChunkEngine()
+        let provider = S1MiniIntegrationProvider(store: store, engine: engine)
+        let stream = ChunkStreamCapture()
+        // One grapheme cannot be split safely, even though it contains many Unicode scalars.
+        let grapheme = "е" + String(repeating: "\u{301}", count: 5000)
+        for input in [grapheme, String(repeating: "Ё", count: 4 * 1024 * 1024 + 1)] {
+            do {
+                _ = try await provider.enhanceDictation(input, runtime: fixture.runtime(context: 512), context: fixture.context, maxOutputTokens: 511, streamHandler: { stream.append($0) })
+                XCTFail("Expected bounded input failure")
+            } catch AIProcessingError.dictationExceedsAIContextWindow {}
+        }
+        XCTAssertTrue(stream.fragments.isEmpty)
+        let state = await engine.snapshot()
+        XCTAssertEqual(state.generations, 0)
+        XCTAssertFalse(state.loaded)
+    }
+
+    func testRealS1MiniLongRussianDictationThroughService() async throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty else {
+            throw XCTSkip("Set PICHI_S1_MINI_MODEL_PATH for real long-dictation inference.")
+        }
+        let provider = S1MiniIntegrationProvider()
+        let model = S1MiniProviderFeature.modelDescriptor
+        let runtime = PrivateAIIntegrationService.RuntimeConfiguration(
+            selectedProviderID: "s1-mini", providerKey: "s1-mini", baseURL: "", model: model.id, apiKey: "",
+            localModelPath: path, usesStablePromptPrefixKVCache: false, usesFluid1Boost: false, contextTokenLimit: 4096
+        )
+        let context = PrivateAIIntegrationService.AppContext(appName: "Synthetic long test", bundleID: "test.s1-mini", windowTitle: "", appVersion: nil)
+        let topics = ["обработка текста", "сохранение предложений", "правильная пунктуация", "распознавание речи", "длинные записи", "проверка результата"]
+        let paragraphs = (1...45).map { index in
+            "Пункт \(index). Тема обсуждения: \(topics[(index - 1) % topics.count]). Команда проверит результат и подготовит отчёт к следующей встрече."
+        }
+        let input = "Распознавание длинной записи.\n\n" + paragraphs.joined(separator: "\n\n") + "\n\nПоследняя фраза: фиолетовый самолёт."
+        do {
+            #if !S1_MINI_STANDALONE_TESTS
+            XCTAssertFalse(SettingsStore.privateAIDictationTokenBudget(forInputText: input, contextTokenLimit: 4096).hasSufficientHeadroom)
+            let service = PrivateAIIntegrationService(testingProvider: provider)
+            let result = try await service.enhanceDictation(input, runtime: runtime, context: context)
+            #else
+            let result = try await provider.enhanceDictation(input, runtime: runtime, context: context, maxOutputTokens: 4095)
+            #endif
+            XCTAssertTrue(result.outputText.contains("Распознавание"))
+            XCTAssertTrue(result.outputText.lowercased().contains("фиолетовый самолёт"), "The end of a long dictation must survive")
+            XCTAssertGreaterThan(result.outputText.count, input.count / 2)
+            XCTAssertFalse(result.outputText.contains("<think>"))
+        } catch {
+            await provider.unloadCachedRuntime(reason: "long synthetic test failure")
+            throw error
+        }
+        await provider.unloadCachedRuntime(reason: "long synthetic test complete")
+    }
+
+    /// Opt-in replay keeps consented personal text in local files, outside test bundles and logs.
+    func testOptInPrivateDictationsThroughService() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty,
+              let fixturePath = environment["PICHI_PRIVATE_DICTATION_FIXTURES"], fixturePath.hasPrefix("/") else {
+            throw XCTSkip("Set model and private local fixture paths for consented dictation replay.")
+        }
+        struct Input: Decodable { let name: String; let inputText: String }
+        struct Output: Encodable {
+            let name: String
+            let inputCharacters: Int
+            let outputCharacters: Int
+            let promptTokens: Int
+            let legacyWouldReject: Bool
+            let latencyMilliseconds: Int?
+            let outputText: String
+        }
+        let fixtureURL = URL(fileURLWithPath: fixturePath)
+        let data = try Data(contentsOf: fixtureURL)
+        guard data.count <= 8 * 1024 * 1024 else { return XCTFail("Private fixture file is too large") }
+        let inputs = try JSONDecoder().decode([Input].self, from: data)
+        guard !inputs.isEmpty, inputs.count <= 5 else { return XCTFail("Replay requires one to five local fixtures") }
+        let engine = NativeTextInference()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("S1MiniPrivateReplay-" + UUID().uuidString)
+        let provider = S1MiniIntegrationProvider(store: S1MiniModelStore(directoryURL: directory), engine: engine)
+        let runtime = PrivateAIIntegrationService.RuntimeConfiguration(
+            selectedProviderID: "s1-mini", providerKey: "s1-mini", baseURL: "", model: S1MiniProviderFeature.modelDescriptor.id, apiKey: "",
+            localModelPath: path, usesStablePromptPrefixKVCache: false, usesFluid1Boost: false, contextTokenLimit: 4096
+        )
+        let context = PrivateAIIntegrationService.AppContext(appName: "Local replay", bundleID: "test.s1-mini", windowTitle: "", appVersion: nil)
+        var outputs: [Output] = []
+        do {
+            for input in inputs {
+                #if !S1_MINI_STANDALONE_TESTS
+                let budget = SettingsStore.privateAIDictationTokenBudget(forInputText: input.inputText, contextTokenLimit: 4096)
+                let service = PrivateAIIntegrationService(testingProvider: provider)
+                let result = try await service.enhanceDictation(input.inputText, runtime: runtime, context: context)
+                let legacyWouldReject = !budget.hasSufficientHeadroom
+                #else
+                let result = try await provider.enhanceDictation(input.inputText, runtime: runtime, context: context, maxOutputTokens: 4095)
+                let legacyWouldReject = false
+                #endif
+                let tokens = try await engine.tokenCount(in: S1MiniPrompt.make(transcript: input.inputText))
+                XCTAssertFalse(result.outputText.isEmpty)
+                XCTAssertGreaterThan(result.outputText.count, input.inputText.count / 2)
+                outputs.append(Output(name: input.name, inputCharacters: input.inputText.count, outputCharacters: result.outputText.count,
+                                      promptTokens: tokens, legacyWouldReject: legacyWouldReject,
+                                      latencyMilliseconds: result.latencyMilliseconds, outputText: result.outputText))
+                print("Private dictation replay case=\(outputs.count) inputChars=\(input.inputText.count) outputChars=\(result.outputText.count) promptTokens=\(tokens) legacyRejected=\(legacyWouldReject)")
+            }
+            let resultURL = fixtureURL.deletingLastPathComponent().appendingPathComponent("results.json")
+            try JSONEncoder().encode(outputs).write(to: resultURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: resultURL.path)
+        } catch {
+            await provider.unloadCachedRuntime(reason: "private replay failure")
+            throw error
+        }
+        await provider.unloadCachedRuntime(reason: "private replay complete")
+    }
+
     func testRealS1MiniEnglishAndRussianCleanup() async throws {
         guard let path = ProcessInfo.processInfo.environment["PICHI_S1_MINI_MODEL_PATH"], !path.isEmpty else {
             throw XCTSkip("Set PICHI_S1_MINI_MODEL_PATH to the pinned official GGUF for native inference.")
@@ -252,16 +475,31 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
             localModelPath: path, usesStablePromptPrefixKVCache: false, usesFluid1Boost: false, contextTokenLimit: 4096
         )
         let context = PrivateAIIntegrationService.AppContext(appName: "Synthetic test", bundleID: "test.s1-mini", windowTitle: "", appVersion: nil)
-        let inputs = [
-            "so um i need to like send the the report by uh friday no wait make that thursday",
-            "ну эээ я хочу отправить отчёт в пятницу нет лучше в четверг Ёжик живёт у ёлки"
+        let cases: [(input: String, required: [String], forbidden: [String])] = [
+            ("so um i need to like send the the report by uh friday no wait make that thursday",
+             [#"\bthursday\b"#, #"\breport\b"#], [#"\bfriday\b"#]),
+            ("ну эээ я хочу отправить отчёт в пятницу нет лучше в четверг Ёжик живёт у ёлки",
+             ["четверг", "отч[её]т", "[её]жик", "[её]лк"], ["пятниц"]),
+            ("um do not approve invoice 48217 for 73 dollars",
+             [#"\b(?:do not|don['’]t)\b"#, #"\b48217\b"#, #"\b73\b"#], []),
+            ("ну не отправляй счёт 48217 на 73 рубля",
+             ["не отправляй", #"\b48217\b"#, #"\b73\b"#], []),
         ]
         do {
-            for input in inputs {
+            for fixture in cases {
+                let input = fixture.input
                 let result = try await provider.enhanceDictation(input, runtime: runtime, context: context, maxOutputTokens: 256)
                 XCTAssertFalse(result.outputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 XCTAssertFalse(result.outputText.contains("<think>"))
                 XCTAssertFalse(result.outputText.contains("<|im_start|>"))
+                for pattern in fixture.required {
+                    XCTAssertNotNil(result.outputText.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
+                                    "Cleanup lost required meaning or literal data: \(pattern)")
+                }
+                for pattern in fixture.forbidden {
+                    XCTAssertNil(result.outputText.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
+                                 "Cleanup retained the superseded value: \(pattern)")
+                }
                 print("S1-mini synthetic input: \(input)\nS1-mini synthetic output: \(result.outputText)")
                 #if !S1_MINI_STANDALONE_TESTS
                 let attachment = XCTAttachment(string: "INPUT:\n\(input)\nOUTPUT:\n\(result.outputText)")
@@ -319,6 +557,68 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         func ended() { self.didEnd = true }
     }
 
+    private final class ChunkStreamCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String] = []
+        func append(_ text: String) { self.lock.withLock { self.values.append(text) } }
+        var fragments: [String] { self.lock.withLock { self.values } }
+    }
+
+    /// Character-based fake vocabulary exercises partitioning without relying on a language heuristic.
+    private actor ChunkEngine: S1MiniInferenceEngine {
+        private(set) var isLoaded = false
+        private var loads = 0
+        private var generations = 0
+        private var context = 0
+        private var paths: [String] = []
+        private var outputFailures = 0
+        private var generating = false
+        private var unloadedWhileGenerating = false
+        private var paused = false
+        private var waiter: CheckedContinuation<Void, Never>?
+        let outputCharacterLimit: Int
+        let failAt: Int?
+        let pauseAt: Int?
+        init(outputCharacterLimit: Int = Int.max, failAt: Int? = nil, pauseAt: Int? = nil) {
+            self.outputCharacterLimit = outputCharacterLimit; self.failAt = failAt; self.pauseAt = pauseAt
+        }
+        func load(modelURL: URL, contextTokenLimit: Int) async throws {
+            self.loads += 1; self.isLoaded = true; self.context = contextTokenLimit; self.paths.append(modelURL.path)
+        }
+        func tokenCount(in text: String) async throws -> Int { max(1, text.unicodeScalars.count / 4) }
+        func generate(prompt: String, maxOutputTokens: Int, streamHandler: PrivateAIStreamHandler?) async throws -> String {
+            self.generations += 1; self.generating = true
+            defer { self.generating = false }
+            XCTAssertNil(streamHandler, "Chunk output must be staged until complete success")
+            let promptTokens = try await self.tokenCount(in: prompt)
+            XCTAssertLessThanOrEqual(promptTokens + maxOutputTokens, self.context)
+            if self.generations == self.failAt { throw S1MiniError.verification }
+            if self.generations == self.pauseAt {
+                self.paused = true; self.waiter?.resume(); self.waiter = nil
+                try await Task.sleep(for: .seconds(30))
+            }
+            let prefix = "<|im_start|>user\n" + S1MiniPrompt.controls
+            let start = prompt.range(of: prefix)!.upperBound
+            let end = prompt.range(of: "<|im_end|>", range: start..<prompt.endIndex)!.lowerBound
+            let text = String(prompt[start..<end])
+            if text.count > self.outputCharacterLimit {
+                self.outputFailures += 1
+                throw NativeTextInferenceError.outputLimitExceeded
+            }
+            return text
+        }
+        func unload() async {
+            self.unloadedWhileGenerating = self.unloadedWhileGenerating || self.generating
+            self.isLoaded = false
+        }
+        func waitUntilPaused() async {
+            if !self.paused { await withCheckedContinuation { self.waiter = $0 } }
+        }
+        func snapshot() -> (loads: Int, generations: Int, context: Int, paths: [String], outputFailures: Int, loaded: Bool, unloadedWhileGenerating: Bool) {
+            (self.loads, self.generations, self.context, self.paths, self.outputFailures, self.isLoaded, self.unloadedWhileGenerating)
+        }
+    }
+
     private actor TestEngine: S1MiniInferenceEngine {
         private(set) var isLoaded = false
         private(set) var loads = 0
@@ -341,6 +641,7 @@ final nonisolated class S1MiniProviderTests: XCTestCase {
         func load(modelURL: URL, contextTokenLimit: Int) async throws {
             self.loads += 1; self.isLoaded = true; self.lastContext = contextTokenLimit; self.lastPath = modelURL.path
         }
+        func tokenCount(in _: String) async throws -> Int { 128 }
         func generate(prompt _: String, maxOutputTokens _: Int, streamHandler: PrivateAIStreamHandler?) async throws -> String {
             self.generations += 1; self.generating = true
             self.waiter?.resume(); self.waiter = nil

@@ -6,12 +6,12 @@ import Foundation
 // exactly-tiling coverage receipts — while the host-injected runtime owns the two model
 // capabilities. It never touches the filesystem outside the frozen request's session directory,
 // never equates speaker slots across tracks or epochs, and never invents timing: clamping happens
-// only at physical epoch bounds, and text without word timings becomes one epoch-covering
-// utterance rather than fabricated words.
+// only at physical epoch bounds. Text without word timings retains validated native segment
+// intervals as utterances, or one epoch-covering fallback, rather than fabricated words.
 
 @MainActor
 final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
-    static let descriptor = MeetingBackendDescriptor(
+    nonisolated static let descriptor = MeetingBackendDescriptor(
         id: .parakeetNemotron,
         version: "5",
         execution: .local,
@@ -23,10 +23,12 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             "Nemotron-3 has 8 speaker slots per analysis epoch; a ninth voice is not reliably announced or separated.",
             "Speaker slots are epoch-scoped; conservative local voice matching can reconnect identities across epochs of the same track.",
             "Parakeet TDT v2 handles English; v3 handles the supported European languages.",
-            "When ASR returns text without usable word timings, one utterance covering the epoch is emitted instead of fabricated words.",
+            "When ASR returns text without usable word timings, validated native segment intervals are retained as utterances; otherwise one epoch-covering utterance is emitted.",
             "Local Nemotron model must be installed before planning. Voice matching downloads its local embedding model on first use.",
         ],
-        analysisSampleRate: 16_000
+        analysisSampleRate: 16_000,
+        diarizationDependencies: [.speakerSeparation, .voiceMatching],
+        supportedInputs: [.recordedChunks, .boundedMicrophonePCM]
     )
 
     let descriptor: MeetingBackendDescriptor
@@ -50,6 +52,17 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         self.materializer = materializer
         self.descriptor = descriptor
         self.diarizationPolicy = diarizationPolicy
+    }
+
+    func validatePCMInput(configuration: MeetingFinalProcessingConfiguration, mode: MeetingCaptureMode) throws {
+        try self.descriptor.validatePCMInput(configuration: configuration, mode: mode)
+        _ = try MeetingProviderOptions.resolve(configuration)
+    }
+
+    func makePCMRuntime(_ request: MeetingBackendRequest) throws -> any MeetingParakeetNemotronRunning {
+        try self.descriptor.validatePCMInput(request)
+        try self.validatePCMInput(configuration: request.configuration, mode: request.session.mode)
+        return try self.runtimeFactory(request)
     }
 
     func plan(_ request: MeetingBackendRequest) throws -> MeetingBackendPlan {
@@ -146,42 +159,39 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         let spans: [MeetingAnalysisSpan]
     }
 
-    /// Per-attempt cache for the PCM-first path. The cache is intentionally scoped to this
-    /// detached attempt and bounded by the materializer's conservative sample limit; a future
-    /// production implementation should replace it with a hashed immutable disk working store.
+    /// The cache owns only replay handles and small span mappings. A retained recording's
+    /// decoded PCM lives in an attempt-owned derivative and is deleted when this scope drains.
     private final nonisolated class MaterializationCache: @unchecked Sendable {
         private let lock = NSLock()
-        private var values: [MeetingAnalysisEpochID: MeetingMaterializedEpoch] = [:]
-        private var totalSampleCount = 0
+        private var values: [MeetingAnalysisEpochID: MeetingEpochAudioReplay] = [:]
 
-        func value(for epochID: MeetingAnalysisEpochID) -> MeetingMaterializedEpoch? {
-            self.lock.lock(); defer { self.lock.unlock() }
-            return self.values[epochID]
+        func value(for epochID: MeetingAnalysisEpochID) -> MeetingEpochAudioReplay? {
+            self.lock.withLock { self.values[epochID] }
         }
 
-        func insert(_ value: MeetingMaterializedEpoch, spanID: String) throws {
-            self.lock.lock(); defer { self.lock.unlock() }
-            let replacing = self.values[value.epochID]?.samples.count ?? 0
-            let proposed = self.totalSampleCount - replacing + value.samples.count
-            guard proposed <= MeetingEpochAudioMaterializer.conservativeSampleLimit else {
-                throw MeetingEpochMaterializationError.sampleLimitExceeded(
-                    spanID: spanID,
-                    sampleCount: proposed
-                )
-            }
-            self.values[value.epochID] = value
-            self.totalSampleCount = proposed
+        func insert(_ value: MeetingEpochAudioReplay, epochID: MeetingAnalysisEpochID) {
+            self.lock.withLock { self.values[epochID] = value }
         }
     }
 
-    /// Check the whole track, including separators, before allocating its combined buffer.
-    nonisolated static func validateTrackSampleCount(current: Int, incoming: Int, separator: Int, spanID: String) throws {
-        let limit = MeetingEpochAudioMaterializer.conservativeSampleLimit
-        guard current >= 0, incoming >= 0, separator >= 0,
-              current <= limit, separator <= limit - current,
-              incoming <= limit - current - separator
-        else {
-            throw MeetingEpochMaterializationError.sampleLimitExceeded(spanID: spanID, sampleCount: limit + 1)
+    private nonisolated struct TrackReplay: MeetingPCMReplaySource {
+        let pieces: [(source: any MeetingPCMReplaySource, offset: Int)]
+        let totalSampleCount: Int
+
+        func readSamples(in range: Range<Int>) async throws -> [Float] {
+            guard range.lowerBound >= 0, range.upperBound <= self.totalSampleCount,
+                  range.count <= 30 * 16_000 else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+            var output = [Float](repeating: 0, count: range.count)
+            for piece in self.pieces {
+                try Task.checkCancellation()
+                let lower = max(range.lowerBound, piece.offset)
+                let upper = min(range.upperBound, piece.offset + piece.source.totalSampleCount)
+                guard upper > lower else { continue }
+                let samples = try await piece.source.readSamples(in: (lower - piece.offset)..<(upper - piece.offset))
+                guard samples.count == upper - lower else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+                output.replaceSubrange((lower - range.lowerBound)..<(upper - range.lowerBound), with: samples)
+            }
+            return output
         }
     }
 
@@ -209,19 +219,20 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         }
 
         let pcmMaterializations = MaterializationCache()
+        let ownerProfile = runtime.ownerVoiceProfileSnapshot
 
         // Phase A: Nemotron diarization, one continuous state per track, then drained. A track's
         // epochs are diarized in order as one stream, so a voice keeps its slot across a reset;
         // each epoch still maps its own segments back through its own spans.
         if artifact != nil { await progress(.identifyingSpeakers) }
-        let phaseA = try await Self.withOptionalDiarization(runtime: runtime, artifact: artifact) { factory in
+        var phaseA = try await Self.withOptionalDiarization(runtime: runtime, artifact: artifact) { factory in
             var result = MeetingNemotronPhaseResult()
             for track in manifest.tracks {
-                var pieces: [(work: EpochWork, materialized: MeetingMaterializedEpoch, offset: Int)] = []
-                var trackSamples: [Float] = []
+                var pieces: [(work: EpochWork, materialized: MeetingEpochAudioReplay, offset: Int)] = []
+                var trackSampleCount = 0
                 for work in epochWork where work.track.id == track.id {
                     try Task.checkCancellation()
-                    let materialized: MeetingMaterializedEpoch
+                    let materialized: MeetingEpochAudioReplay
                     do {
                         materialized = try await Self.materialize(
                             work: work,
@@ -238,28 +249,30 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                         result.failures[work.epoch.id] = "epochMaterializationFailed"
                         continue
                     }
-                    let separatorSamples = trackSamples.isEmpty ? 0 : Int(Self.epochJoinSilenceSeconds * materialized.sampleRate)
-                    try Self.validateTrackSampleCount(
-                        current: trackSamples.count,
-                        incoming: materialized.samples.count,
-                        separator: separatorSamples,
-                        spanID: work.spans.last?.id ?? "unknown"
-                    )
-                    if !trackSamples.isEmpty {
-                        // Silence keeps a turn from running across the reset boundary.
-                        trackSamples += [Float](repeating: 0, count: separatorSamples)
+                    let separatorSamples = pieces.isEmpty ? 0 : Int(Self.epochJoinSilenceSeconds * materialized.sampleRate)
+                    guard materialized.source.totalSampleCount > 0,
+                          trackSampleCount <= Int.max - separatorSamples - materialized.source.totalSampleCount else {
+                        throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
                     }
-                    pieces.append((work, materialized, trackSamples.count))
-                    trackSamples += materialized.samples
+                    trackSampleCount += separatorSamples
+                    pieces.append((work, materialized, trackSampleCount))
+                    trackSampleCount += materialized.source.totalSampleCount
                 }
                 guard let first = pieces.first else { continue }
                 try Task.checkCancellation()
                 do {
                     let diarizer = try await factory.makeDiarizer(epoch: first.work.epoch.id)
-                    let segments = try await diarizer.diarize(samples: trackSamples)
+                    let source = TrackReplay(pieces: pieces.map { ($0.materialized.source, $0.offset) },
+                                             totalSampleCount: trackSampleCount)
+                    let segments = try await diarizer.diarize(source: source)
+                    if ownerProfile != nil {
+                        result.voiceSamples.append(contentsOf: try await MeetingSpeakerVoiceSamples.collect(
+                            epoch: first.work.epoch.id, source: source, segments: segments
+                        ).prefix(max(0, MeetingSpeakerVoiceSamples.maximumProfiles - result.voiceSamples.count)))
+                    }
                     for piece in pieces {
                         let pieceStart = Double(piece.offset) / piece.materialized.sampleRate
-                        let pieceEnd = pieceStart + piece.materialized.durationSeconds
+                        let pieceEnd = pieceStart + Double(piece.materialized.source.totalSampleCount) / piece.materialized.sampleRate
                         for segment in segments {
                             let localStart = max(segment.start, pieceStart) - pieceStart
                             let localEnd = min(segment.end, pieceEnd) - pieceStart
@@ -267,12 +280,16 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                                   let start = Self.analysisTime(
                                       forMaterializedSeconds: localStart,
                                       boundary: .start,
-                                      materialized: piece.materialized,
+                                      sampleRate: piece.materialized.sampleRate,
+                                      sampleCount: piece.materialized.source.totalSampleCount,
+                                      spanSamples: piece.materialized.spanSamples,
                                       spans: piece.work.spans
                                   ), let end = Self.analysisTime(
                                       forMaterializedSeconds: localEnd,
                                       boundary: .end,
-                                      materialized: piece.materialized,
+                                      sampleRate: piece.materialized.sampleRate,
+                                      sampleCount: piece.materialized.source.totalSampleCount,
+                                      spanSamples: piece.materialized.spanSamples,
                                       spans: piece.work.spans
                                   )
                             else { continue }
@@ -299,6 +316,20 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             return result
         }
         try Task.checkCancellation()
+        // Explicit owner identity is optional. The same bounded encoder runs after diarizer
+        // weights drain and before ASR loads. Only confirmed token IDs leave this phase.
+        var ownerTokens = Set<MeetingBackendSpeakerToken>()
+        if ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
+            do {
+                let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
+                let confirmed = MeetingOwnerVoiceVerifier.confirmedTokens(owner: ownerProfile, profiles: profiles)
+                let matchedSlots = Set(confirmed.map { "\($0.analysisEpochID.trackID.uuidString):\($0.label)" })
+                ownerTokens = Set(phaseA.activity.map(\.token).filter {
+                    matchedSlots.contains("\($0.analysisEpochID.trackID.uuidString):\($0.label)")
+                })
+            } catch { try Task.checkCancellation() }
+        }
+        phaseA.voiceSamples.removeAll()
 
         // Phase B: Parakeet ASR inside the attempt's single prepared-meeting scope. Epochs that
         // failed phase A are excluded from ASR as well: an epoch is one unit of work.
@@ -310,7 +341,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             var result = MeetingParakeetPhaseResult()
             for work in epochWork where phaseA.failures[work.epoch.id] == nil {
                 try Task.checkCancellation()
-                let materialized: MeetingMaterializedEpoch
+                let materialized: MeetingEpochAudioReplay
                 do {
                     materialized = try await Self.materialize(
                         work: work,
@@ -329,15 +360,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 }
                 try Task.checkCancellation()
                 do {
-                    let output = try await asr.transcribeWithTimings(materialized.samples)
-                    result.outputs.append(MeetingParakeetEpochOutput(
-                        epochID: work.epoch.id,
-                        text: output.result.text,
-                        words: output.words,
-                        sampleRate: materialized.sampleRate,
-                        sampleCount: materialized.samples.count,
-                        spanSamples: materialized.spanSamples
-                    ))
+                    result.outputs.append(try await Self.transcribeReplay(materialized, epochID: work.epoch.id, asr: asr))
                 } catch let error as CancellationError {
                     throw error
                 } catch {
@@ -355,7 +378,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             epochWork: epochWork,
             phaseA: phaseA,
             phaseB: phaseB,
-            backendID: backendID
+            backendID: backendID,
+            confirmedLocalUserTokens: ownerTokens
         )
     }
 
@@ -370,35 +394,74 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     }
 
     private nonisolated static func materialize(
-        work: EpochWork,
-        manifest: MeetingAnalysisManifest,
-        request: MeetingBackendRequest,
-        materializer: any MeetingEpochAudioMaterializing,
-        cache: MaterializationCache
-    ) async throws -> MeetingMaterializedEpoch {
-        let isPCMFirst = !work.spans.isEmpty && work.spans.allSatisfy {
-            $0.chunk.analysisEncoding == .linearPCMFloat32CAFV1
-        }
-        if isPCMFirst, let cached = cache.value(for: work.epoch.id) {
-            return cached
-        }
-        let materialized = try await materializer.materialize(
-            epoch: work.epoch,
-            track: work.track,
-            manifest: manifest,
-            sessionDirectory: request.sessionDirectory
-        )
+        work: EpochWork, manifest: MeetingAnalysisManifest, request: MeetingBackendRequest,
+        materializer: any MeetingEpochAudioMaterializing, cache: MaterializationCache
+    ) async throws -> MeetingEpochAudioReplay {
+        if let cached = cache.value(for: work.epoch.id) { return cached }
+        let value = try await materializer.makeReplay(epoch: work.epoch, track: work.track,
+            manifest: manifest, sessionDirectory: request.sessionDirectory)
         try Task.checkCancellation()
-        guard materialized.samples.count <= MeetingEpochAudioMaterializer.conservativeSampleLimit else {
-            throw MeetingEpochMaterializationError.sampleLimitExceeded(
-                spanID: work.spans.last?.id ?? "unknown",
-                sampleCount: materialized.samples.count
-            )
+        cache.insert(value, epochID: work.epoch.id)
+        return value
+    }
+
+    /// Timed providers receive overlapping context. A word belongs to the core containing its
+    /// midpoint, retaining a boundary word once with its original provider times. Providers
+    /// without word timing use contiguous cores; no textual/word alignment is manufactured.
+    private nonisolated static func transcribeReplay(_ audio: MeetingEpochAudioReplay,
+        epochID: MeetingAnalysisEpochID, asr: any MeetingParakeetASRSession) async throws -> MeetingParakeetEpochOutput {
+        let count = audio.source.totalSampleCount
+        let coreSamples = Int(20 * audio.sampleRate)
+        let contextSamples = Int(2 * audio.sampleRate)
+        var start = 0
+        var text: [String] = []
+        var words: [ASRWordTiming] = []
+        var untimedChunks: [MeetingUntimedASRChunk] = []
+        while start < count {
+            try Task.checkCancellation()
+            let end = min(count, start + coreSamples)
+            var lower = max(0, start - contextSamples)
+            var upper = min(count, end + contextSamples)
+            var output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
+            func validWords() -> [ASRWordTiming] {
+                output.words.filter { word in
+                    !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && word.start.isFinite && word.end.isFinite && word.start >= 0
+                        && word.end > word.start && word.end <= Double(upper - lower) / audio.sampleRate + 1e-6
+                }
+            }
+            var physicalWords = validWords()
+            if physicalWords.isEmpty, !output.result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               lower != start || upper != end {
+                // Word timing can be unavailable or malformed for one core. Its actual text
+                // survives a bounded core-only retry; this says nothing about later cores.
+                lower = start; upper = end
+                output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
+                physicalWords = validWords()
+            }
+            let offset = Double(lower) / audio.sampleRate
+            if !physicalWords.isEmpty {
+                let kept = physicalWords.filter { word in
+                    let midpoint = (word.start + word.end) * audio.sampleRate / 2 + Double(lower)
+                    return midpoint >= Double(start) && (midpoint < Double(end) || end == count)
+                }
+                words.append(contentsOf: kept.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) })
+                text.append(kept.map(\.text).joined(separator: " "))
+            } else {
+                let value = output.result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    text.append(value)
+                    let native = ASRSegmentTiming.validated(output.result.segmentTimings, text: value,
+                        duration: Double(upper - lower) / audio.sampleRate)
+                    untimedChunks.append(.init(sampleRange: lower..<upper, text: value,
+                        segmentTimings: native.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) }))
+                }
+            }
+            start = end
         }
-        if isPCMFirst {
-            try cache.insert(materialized, spanID: work.spans.last?.id ?? "unknown")
-        }
-        return materialized
+        return MeetingParakeetEpochOutput(epochID: epochID, text: text.filter { !$0.isEmpty }.joined(separator: " "),
+            words: words, sampleRate: audio.sampleRate, sampleCount: count, spanSamples: audio.spanSamples,
+            untimedChunks: untimedChunks)
     }
 
     // MARK: - Units, assignment and receipts
@@ -413,7 +476,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         epochWork: [EpochWork],
         phaseA: MeetingNemotronPhaseResult,
         phaseB: MeetingParakeetPhaseResult,
-        backendID: MeetingBackendID
+        backendID: MeetingBackendID,
+        confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
     ) throws -> MeetingCanonicalResultBundle {
         let outputsByEpoch = Dictionary(
             phaseB.outputs.map { ($0.epochID, $0) },
@@ -455,7 +519,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },
                 speakerSlotsContinueAcrossEpochs: true
             ),
-            coverageReceipts: receipts
+            coverageReceipts: receipts,
+            confirmedLocalUserTokens: confirmedLocalUserTokens
         )
     }
 
@@ -474,19 +539,80 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         )
     }
 
-    /// Word-timed units for one successful epoch. Provider times are seconds into the epoch's
-    /// materialized buffer, so analysis time is the epoch start plus the provider time, clamped
-    /// only to the epoch's physical bounds. Words with unusable timings are dropped, never
-    /// repaired; text with no usable word timings at all becomes one epoch-covering utterance.
+    /// A PCM window has no removed gaps or file spans. Keep the original speaker
+    /// coverage and handoff decisions while admitting only physically valid word times.
+    nonisolated static func pcmUnits(
+        result: ASRTranscriptionResult,
+        words: [ASRWordTiming],
+        epoch: MeetingAnalysisEpochID,
+        duration: TimeInterval,
+        activity: [MeetingBackendSpeakerActivity],
+        identityTokens: Set<MeetingBackendSpeakerToken>
+    ) -> [MeetingFinalTextUnit] {
+        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return [] }
+        let usable = words.count <= 8_192 && !words.isEmpty && words.allSatisfy {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+                && $0.end > $0.start && $0.end <= duration + 1e-6
+        }
+        func admitted(_ assignment: MeetingBackendSpeakerAssignment) -> MeetingBackendSpeakerAssignment {
+            if case let .assigned(token) = assignment, !identityTokens.contains(token) { return .unassigned }
+            return assignment
+        }
+        guard usable else {
+            let segments = ASRSegmentTiming.validated(result.segmentTimings, text: text, duration: duration)
+            if !segments.isEmpty {
+                return segments.enumerated().map { index, segment in
+                    MeetingFinalTextUnit(id: "pcm:\(epoch):segment:\(index)", trackID: epoch.trackID,
+                        analysisEpochID: epoch, precision: .utterance,
+                        text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        analysisStart: segment.start, analysisEnd: segment.end,
+                        speaker: admitted(Self.assignment(start: segment.start, end: segment.end,
+                            activity: activity, allowDominance: false)),
+                        analysisSpanIDs: [], confidence: nil)
+                }
+            }
+            return [MeetingFinalTextUnit(
+                id: "pcm:\(epoch):utterance", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .utterance, text: text, analysisStart: 0, analysisEnd: duration,
+                speaker: admitted(Self.assignment(start: 0, end: duration, activity: activity, allowDominance: false)),
+                analysisSpanIDs: [], confidence: nil
+            )]
+        }
+        var previous: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
+        return words.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { index, word in
+            let coverage = Self.assignment(start: word.start, end: word.end, activity: activity, allowDominance: true)
+            let assignment = admitted(Self.handoffAssignment(coverage, start: word.start, end: word.end,
+                                                            activity: activity, previousAssignedWord: previous))
+            if case let .assigned(token) = assignment { previous = (token, word.end) } else { previous = nil }
+            return MeetingFinalTextUnit(
+                id: "pcm:\(epoch):\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
+                precision: .word, text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                analysisStart: word.start, analysisEnd: word.end, speaker: assignment,
+                analysisSpanIDs: [], confidence: nil
+            )
+        }
+    }
+
+    /// Timed units for one successful epoch. Provider times are seconds into the epoch's
+    /// materialized buffer and map through its verified physical span ranges. Words with
+    /// unusable timings are dropped, never repaired. Without words, valid complete native
+    /// segments retain utterance precision; otherwise the complete text covers the epoch.
     private nonisolated static func units(
         for output: MeetingParakeetEpochOutput,
         work: EpochWork,
         activity: [MeetingBackendSpeakerActivity],
-        attemptID: UUID
+        attemptID: UUID,
+        fallbackRange: Range<Int>? = nil,
+        idSuffix: String = ""
     ) -> [MeetingFinalTextUnit] {
-        let epochStart = work.epoch.analysisInterval.start
+        let epochStart = fallbackRange.flatMap {
+            Self.analysisTime(forMaterializedSeconds: Double($0.lowerBound) / output.sampleRate, boundary: .start,
+                sampleRate: output.sampleRate, sampleCount: output.sampleCount, spanSamples: output.spanSamples, spans: work.spans)
+        } ?? work.epoch.analysisInterval.start
         let physicalEnd = Self.analysisTime(
-            forMaterializedSeconds: Double(output.sampleCount) / output.sampleRate,
+            forMaterializedSeconds: Double(fallbackRange?.upperBound ?? output.sampleCount) / output.sampleRate,
             boundary: .end,
             sampleRate: output.sampleRate,
             sampleCount: output.sampleCount,
@@ -496,6 +622,15 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         guard physicalEnd > epochStart else { return [] }
 
         var wordUnits: [MeetingFinalTextUnit] = []
+        let untimedAnalysisIntervals = output.untimedChunks.compactMap { chunk -> MeetingAnalysisInterval? in
+            guard let start = Self.analysisTime(forMaterializedSeconds: Double(chunk.sampleRange.lowerBound) / output.sampleRate,
+                boundary: .start, sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                spanSamples: output.spanSamples, spans: work.spans),
+                  let end = Self.analysisTime(forMaterializedSeconds: Double(chunk.sampleRange.upperBound) / output.sampleRate,
+                boundary: .end, sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                spanSamples: output.spanSamples, spans: work.spans) else { return nil }
+            return MeetingAnalysisInterval(start: start, end: end)
+        }
         var previousAssignedWord: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
         let sortedWords = output.words.enumerated()
             .sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
@@ -522,6 +657,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             guard end > start else { continue }
             guard let spanIDs = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
             else { continue }
+            if let previous = previousAssignedWord, untimedAnalysisIntervals.contains(where: {
+                $0.start < start && $0.end > previous.end
+            }) { previousAssignedWord = nil }
             let coverageAssignment = Self.assignment(
                 start: start,
                 end: end,
@@ -536,7 +674,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 previousAssignedWord: previousAssignedWord
             )
             wordUnits.append(MeetingFinalTextUnit(
-                id: "unit:\(attemptID.uuidString):\(work.epoch.id):\(index)",
+                id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):\(index)",
                 trackID: work.track.id,
                 analysisEpochID: work.epoch.id,
                 precision: .word,
@@ -554,14 +692,46 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 previousAssignedWord = nil
             }
         }
-        if !wordUnits.isEmpty { return wordUnits }
+        for (index, chunk) in output.untimedChunks.enumerated() {
+            let bounded = MeetingParakeetEpochOutput(epochID: output.epochID, text: chunk.text, words: [],
+                segmentTimings: chunk.segmentTimings, sampleRate: output.sampleRate,
+                sampleCount: output.sampleCount, spanSamples: output.spanSamples)
+            wordUnits.append(contentsOf: Self.units(for: bounded, work: work, activity: activity,
+                attemptID: attemptID, fallbackRange: chunk.sampleRange, idSuffix: ":chunk-\(index)"))
+        }
+        if !wordUnits.isEmpty {
+            return wordUnits.sorted { ($0.analysisStart, $0.analysisEnd, $0.id) < ($1.analysisStart, $1.analysisEnd, $1.id) }
+        }
 
         let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
-        let spanIDs = work.spans.map(\.id)
+        let nativeSegments = ASRSegmentTiming.validated(output.segmentTimings, text: text,
+            duration: Double(output.sampleCount) / output.sampleRate)
+        if !nativeSegments.isEmpty {
+            var segmentUnits: [MeetingFinalTextUnit] = []
+            for (index, segment) in nativeSegments.enumerated() {
+                guard let start = Self.analysisTime(forMaterializedSeconds: segment.start, boundary: .start,
+                    sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                    spanSamples: output.spanSamples, spans: work.spans),
+                    let end = Self.analysisTime(forMaterializedSeconds: segment.end, boundary: .end,
+                    sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                    spanSamples: output.spanSamples, spans: work.spans), end > start,
+                    let ids = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
+                else { segmentUnits = []; break }
+                segmentUnits.append(MeetingFinalTextUnit(
+                    id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):segment:\(index)", trackID: work.track.id,
+                    analysisEpochID: work.epoch.id, precision: .utterance,
+                    text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    analysisStart: start, analysisEnd: end,
+                    speaker: Self.assignment(start: start, end: end, activity: activity, allowDominance: false),
+                    analysisSpanIDs: ids, confidence: nil))
+            }
+            if !segmentUnits.isEmpty { return segmentUnits }
+        }
+        let spanIDs = Self.intersectingSpanIDs(start: epochStart, end: physicalEnd, spans: work.spans) ?? []
         guard !spanIDs.isEmpty else { return [] }
         return [MeetingFinalTextUnit(
-            id: "unit:\(attemptID.uuidString):\(work.epoch.id):utterance",
+            id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):utterance",
             trackID: work.track.id,
             analysisEpochID: work.epoch.id,
             precision: .utterance,

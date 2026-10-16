@@ -5,6 +5,7 @@ struct MeetingRecordingCanvas: View {
     let session: MeetingSession
     let trackHealth: [MeetingAudioTrackKind: MeetingTrackHealth]
     let liveTranscript: MeetingLiveTranscriptSnapshot
+    var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
     let isStopping: Bool
     let onStop: () -> Void
 
@@ -19,7 +20,7 @@ struct MeetingRecordingCanvas: View {
                         systemImage: self.isStopping ? "stop.circle.fill" : "record.circle.fill"
                     )
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.isStopping ? self.theme.palette.warning : Color(nsColor: .systemRed))
+                    .foregroundStyle(self.isStopping ? self.theme.palette.warning : self.theme.palette.readableText(Color(nsColor: .systemRed)))
                     Spacer(minLength: 0)
                     Text(Self.durationText(context.date.timeIntervalSince(self.session.startedAt)))
                         .font(self.theme.typography.codeCaption)
@@ -52,7 +53,7 @@ struct MeetingRecordingCanvas: View {
                 Divider()
             }
 
-            MeetingLiveTranscriptCard(snapshot: self.liveTranscript)
+            MeetingLiveTranscriptCard(snapshot: self.liveTranscript, pendingSpeech: self.pendingSpeech)
 
             Divider()
             FluidGlassControlGroup {
@@ -101,7 +102,7 @@ struct MeetingRecordingCanvas: View {
     @ViewBuilder
     private var sourceHealth: some View {
         if self.session.mode == .onlineCall {
-            MeetingTrackHealthRow(title: PichiLocalization.text("Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
+            MeetingTrackHealthRow(title: PichiLocalization.text(self.session.effectiveApplicationAudioScope == .systemAudio ? "System audio" : "Meeting audio"), systemImage: "macwindow", health: self.trackHealth[.applicationAudio] ?? .waiting)
         }
         MeetingTrackHealthRow(title: PichiLocalization.text("Microphone"), systemImage: "mic", health: self.trackHealth[.microphone] ?? .waiting)
     }
@@ -109,7 +110,7 @@ struct MeetingRecordingCanvas: View {
     private var sourceSummary: String {
         let microphoneName = self.session.selectedMicrophone.displayName
         guard self.session.mode == .onlineCall else { return microphoneName }
-        let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text("Meeting audio")
+        let applicationName = self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
         return "\(applicationName) · \(microphoneName)"
     }
 
@@ -129,6 +130,7 @@ struct MeetingRecordingCanvas: View {
 /// diarization pipeline replaces this view's content entirely on completion.
 private struct MeetingLiveTranscriptCard: View {
     let snapshot: MeetingLiveTranscriptSnapshot
+    var pendingSpeech: MeetingPendingSpeechSnapshot = .empty
 
     @Environment(\.theme) private var theme
 
@@ -157,7 +159,7 @@ private struct MeetingLiveTranscriptCard: View {
                     .foregroundStyle(self.theme.palette.warning)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if self.rows.isEmpty {
+            if self.rows.isEmpty && self.pendingSpeech.tokens.isEmpty {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                     Text(self.availabilityIndicator == nil ? PichiLocalization.text("Listening for conversation") : PichiLocalization.text("Waiting for captions"))
                         .font(self.theme.typography.body)
@@ -189,7 +191,7 @@ private struct MeetingLiveTranscriptCard: View {
     }
 
     private var scrollingBubbleList: some View {
-        MeetingLiveBubbleScrollList(rows: self.rows, documentStyle: true)
+        MeetingLiveBubbleScrollList(rows: self.rows, pending: self.pendingSpeech, documentStyle: true)
             .frame(minHeight: 120, maxHeight: .infinity)
     }
 }
@@ -357,10 +359,13 @@ struct MeetingResultCanvas: View {
     let onRenameSession: (String) -> Void
     let onAssignSpeakers: ([SessionSpeakerID: String]) async -> String?
     let onClose: (() -> Void)?
-
     var summaryASRService: ASRService? = nil
 
+    /// Opens FluidMeet settings on Integrations, so adding an agent is one step from any meeting.
+    var onOpenIntegrations: (() -> Void)? = nil
+
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.locale) private var locale
     @State private var pendingEditedSegment: MeetingTranscriptSegment?
     @State private var pendingRenameSpeaker: MeetingSessionSpeaker?
@@ -396,7 +401,9 @@ struct MeetingResultCanvas: View {
     }
 
     private var speakerNames: [SessionSpeakerID: String] {
-        Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map { ($0.id, $0.displayName) })
+        Dictionary(uniqueKeysWithValues: self.session.activeSpeakers.map {
+            ($0.id, MeetingTranscriptExporter.speakerDisplayName($0, language: PichiLocalization.language))
+        })
     }
 
     private func chipTint(for speaker: MeetingSessionSpeaker) -> Color? {
@@ -404,7 +411,8 @@ struct MeetingResultCanvas: View {
     }
 
     private var speakerTints: [SessionSpeakerID: Color] {
-        MeetingSpeakerPalette.tints(for: self.session.activeSpeakers)
+        let scheme = self.theme.palette.nativeColorScheme(fallback: self.colorScheme)
+        return MeetingSpeakerPalette.tints(for: self.session.activeSpeakers, isDark: scheme == .dark)
     }
 
     private var hasEchoSegments: Bool {
@@ -422,17 +430,8 @@ struct MeetingResultCanvas: View {
     private func rows(
         for visibleSegments: [MeetingTranscriptSegment]
     ) -> [(segment: MeetingTranscriptSegment, showsLabel: Bool, isLocal: Bool)] {
-        let speakerNames = self.speakerNames
-        var previousLabelIdentity: String?
-        return visibleSegments.map { segment in
-            let labelIdentity = MeetingTranscriptExporter.speakerLabelIdentity(
-                for: segment,
-                in: self.session,
-                speakerNames: speakerNames
-            )
-            let showsLabel = labelIdentity != previousLabelIdentity
-            previousLabelIdentity = labelIdentity
-            return (segment, showsLabel, self.isLocalSegment(segment))
+        MeetingTranscriptExporter.displayRows(for: visibleSegments, in: self.session).map { row in
+            (row.segment, row.showsLabel, self.isLocalSegment(row.segment))
         }
     }
 
@@ -444,7 +443,7 @@ struct MeetingResultCanvas: View {
         let activeSpeakers = self.session.activeSpeakers.filter { visibleSpeakerIDs.contains($0.id) }
         let rows = self.rows(for: visibleSegments)
         // One scroller preserves a readable document at short window heights.
-        ScrollView {
+        let document = ScrollView {
             VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xxl) {
                 VStack(alignment: .leading, spacing: self.theme.metrics.spacing.xl) {
                     self.documentHeader(hasText: !visibleSegments.isEmpty)
@@ -523,7 +522,8 @@ struct MeetingResultCanvas: View {
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
         }
-        .id(self.session.id)
+        // Separate the document and modifier chains to bound SwiftUI type checking.
+        let lifecycle = document.id(self.session.id)
         .sheet(item: self.$pendingEditedSegment) { segment in
             MeetingTranscriptTextEditor(
                 text: segment.text,
@@ -552,7 +552,7 @@ struct MeetingResultCanvas: View {
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
             self.copied = false
         }
-        .alert(
+        let speakerRenaming = lifecycle.alert(
             "Rename Speaker",
             isPresented: Binding(
                 get: { self.pendingRenameSpeaker != nil },
@@ -570,7 +570,7 @@ struct MeetingResultCanvas: View {
         } message: {
             Text("Enter a new name for this speaker.")
         }
-        .alert(
+        speakerRenaming.alert(
             "Name Unknown Speaker",
             isPresented: Binding(
                 get: { self.pendingNameUnknownSegmentID != nil },
@@ -724,6 +724,10 @@ struct MeetingResultCanvas: View {
                 Divider()
                 Toggle("Show probable echo", isOn: self.$showsProbableEchoes)
             }
+            if let onOpenIntegrations {
+                Divider()
+                Button("Integrations…", systemImage: "link", action: onOpenIntegrations)
+            }
             if let onClose {
                 Divider()
                 Button("Close transcript", systemImage: "xmark", action: onClose)
@@ -760,7 +764,7 @@ struct MeetingResultCanvas: View {
             if !eligibleTargets.isEmpty {
                 Menu("Merge into") {
                     ForEach(eligibleTargets) { target in
-                        Button(target.displayName) {
+                        Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
                             self.onMergeSpeakers(speaker.id, target.id)
                         }
                     }
@@ -771,12 +775,7 @@ struct MeetingResultCanvas: View {
     }
 
     private func displayName(for speaker: MeetingSessionSpeaker) -> String {
-        guard speaker.isLocalUser,
-              speaker.displayName.caseInsensitiveCompare("You") != .orderedSame
-        else {
-            return speaker.displayName
-        }
-        return PichiLocalization.format("%@ (You)", speaker.displayName)
+        MeetingTranscriptExporter.speakerDisplayName(speaker, language: PichiLocalization.language)
     }
 
     // Only explicitly persisted legacy ownership metadata receives the local-user treatment.
@@ -811,7 +810,7 @@ struct MeetingResultCanvas: View {
     }
 
     private var sourceName: String {
-        self.session.capturedApplication?.displayName ?? PichiLocalization.text("In-room meeting")
+        self.session.capturedApplication?.displayName ?? PichiLocalization.text(self.session.audioSourceDisplayName)
     }
 
     private var emptyTranscriptDescription: String {
@@ -1087,7 +1086,7 @@ private struct MeetingSpeakerChip: View {
                     .foregroundStyle(self.theme.palette.secondaryText)
             }
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(self.tint)
+            .foregroundStyle(self.theme.palette.readableText(self.tint))
         }
         .buttonStyle(.borderless)
         .meetingHoverFeedback()
@@ -1150,7 +1149,7 @@ private struct MeetingTranscriptSegmentRow: View {
                     .simultaneousGesture(TapGesture(count: 2).onEnded { if self.isQuiescent { self.onEditText() } })
                     .accessibilityAction(named: Text("Edit text")) { if self.isQuiescent { self.onEditText() } }
                 if self.segment.isEcho {
-                    Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text("Probable echo").font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 if self.isAudioExpanded {
                     MeetingSegmentAudioPlayer(playback: self.playback, isLoading: self.isLoadingAudio)
@@ -1159,11 +1158,10 @@ private struct MeetingTranscriptSegmentRow: View {
                 }
             }
         }
-        .opacity(self.segment.isEcho ? 0.6 : 1)
         .contextMenu {
             Menu("Reassign to") {
                 ForEach(self.reassignTargets) { target in
-                    Button(target.displayName) {
+                    Button(MeetingTranscriptExporter.speakerDisplayName(target, language: PichiLocalization.language)) {
                         self.onReassign(target.id)
                     }
                 }
@@ -1190,8 +1188,7 @@ private struct MeetingTranscriptSegmentRow: View {
                         // Always shown, not hover-only, so the affordance survives an unfocused window.
                         Image(systemName: "chevron.right")
                             .font(.fluidSystem(size: 10, weight: .semibold))
-                            .foregroundColor(self.nameColor)
-                            .opacity(0.65)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                     }
                 }
                 .buttonStyle(.plain)
@@ -1207,8 +1204,8 @@ private struct MeetingTranscriptSegmentRow: View {
     }
 
     private var nameColor: Color {
-        if self.isLocalUser { return self.theme.palette.accent }
-        return self.speakerTint ?? self.theme.palette.tertiaryText
+        if self.isLocalUser { return self.theme.palette.accentText }
+        return self.speakerTint.map(self.theme.palette.readableText) ?? self.theme.palette.tertiaryText
     }
 }
 
@@ -1272,6 +1269,7 @@ struct MeetingTranscriptTextEditor: View {
         .frame(width: 560)
         .frame(minHeight: 400)
         .background(self.theme.palette.windowBackground)
+        .appTheme(self.theme)
         .interactiveDismissDisabled(self.isSaving)
     }
 }

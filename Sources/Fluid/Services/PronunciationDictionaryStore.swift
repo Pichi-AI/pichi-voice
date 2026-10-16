@@ -77,7 +77,7 @@ actor PronunciationDictionaryStore {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support")
         let appURL = baseURL.appendingPathComponent(
             AppBrand.storageNamespace,
             isDirectory: true

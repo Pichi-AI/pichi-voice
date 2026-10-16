@@ -2,7 +2,11 @@ import Foundation
 
 @main
 struct StatsSnapshotTests {
+    @MainActor
     static func main() async throws {
+        guard CommandLine.arguments.count == 2, let bundle = Bundle(path: CommandLine.arguments[1]) else {
+            preconditionFailure("Expected compiled production catalog fixture bundle")
+        }
         var calendar = Calendar(identifier: .gregorian)
         guard let timeZone = TimeZone(identifier: "America/Los_Angeles") else {
             preconditionFailure("Missing test time zone")
@@ -61,8 +65,8 @@ struct StatsSnapshotTests {
         precondition(snapshot.timeSavedMinutes(typingWPM: 0) == 0)
         precondition(snapshot.timeSavedMinutes(typingWPM: 200) == 0)
         precondition(abs(snapshot.timeSavedMinutes(typingWPM: 40) - (8.0 / 40 - 8.0 / 150)) < 0.000001)
-        precondition(snapshot.formattedTimeSaved(typingWPM: 0) == "< 1 min")
-        precondition(snapshot.formattedTimeSaved(typingWPM: 200) == "< 1 min")
+        precondition(PichiLocalization.formattedTimeSaved(minutes: snapshot.timeSavedMinutes(typingWPM: 0), language: .english, bundle: bundle) == "< 1 min")
+        precondition(PichiLocalization.formattedTimeSaved(minutes: snapshot.timeSavedMinutes(typingWPM: 200), language: .english, bundle: bundle) == "< 1 min")
         let empty = try StatsSnapshot.build(entries: [], now: date(7), calendar: calendar)
         precondition(empty.totalWords == 0 && empty.currentStreak == 0 && empty.bestStreak == 0 && empty.peakHourFormatted == "N/A")
         precondition(empty.topAppUsage.isEmpty && empty.hourlySessions == Array(repeating: 0, count: 24))
@@ -90,6 +94,62 @@ struct StatsSnapshotTests {
         mondayCalendar.firstWeekday = 2
         let mondayPeriod = StatsActivityPeriod(activity: snapshot.activity, calendar: mondayCalendar)
         precondition(mondayPeriod.weekdays.first?.id == 1)
+        let russianUnits = [0: "дней подряд", 1: "день подряд", 2: "дня подряд", 5: "дней подряд", 11: "дней подряд", 21: "день подряд", 22: "дня подряд"]
+        for (count, expected) in russianUnits {
+            precondition(PichiLocalization.formattedStreakUnit(days: count, language: .russian, bundle: bundle) == expected)
+            precondition(PichiLocalization.formattedStreakUnit(days: count, language: .english, bundle: bundle) == (count == 1 ? "day streak" : "days in a row"))
+        }
+        let french = PichiInterfaceLanguage(rawValue: "fr")!
+        precondition(bundle.localizations.contains("fr"))
+        precondition(PichiLocalization.formattedStreakUnit(days: 2, language: french, bundle: bundle) == "days in a row", "Missing partial-language unit must use English quantity rules")
+        precondition(PichiLocalization.formattedStreakUnit(days: 0, language: french, bundle: bundle) == "days in a row", "French zero is singular, but an English fallback must retain its own plural rule")
+        let emptyBundle = Bundle(path: bundle.bundleURL.deletingLastPathComponent().appendingPathComponent("EmptyCatalog.bundle").path)!
+        precondition(PichiLocalization.formattedStreakUnit(days: 2, language: .russian, bundle: emptyBundle) == "day streak", "Missing source resource must not expose a key or repeat the prominent number")
+        for locale in [Locale(identifier: "en_US"), Locale(identifier: "ru")] {
+            for firstWeekday in [1, 2] {
+                var injected = calendar
+                injected.locale = locale
+                injected.firstWeekday = firstWeekday
+                for dates in [
+                    [DateComponents(year: 2026, month: 10, day: 12), DateComponents(year: 2026, month: 10, day: 13)],
+                    [DateComponents(year: 2026, month: 10, day: 31), DateComponents(year: 2026, month: 11, day: 1)],
+                    [DateComponents(year: 2026, month: 12, day: 31), DateComponents(year: 2027, month: 1, day: 1)],
+                ] {
+                    let activity = dates.enumerated().map { (injected.date(from: $0.element)!, $0.offset == 0 ? 210 : 69) }
+                    let period = StatsActivityPeriod(activity: activity, calendar: injected)
+                    let heatmap = StatsHeatmapView(period: period)
+                    precondition(heatmap.weekdayLabels == period.weekdays.map(\.label))
+                    for week in period.weeks {
+                        for (row, day) in week.enumerated() {
+                            guard let day else { continue }
+                            let weekday = injected.component(.weekday, from: day.date)
+                            precondition(heatmap.weekdayLabels[row] == injected.shortWeekdaySymbols[weekday - 1], "Cell and row label must describe the same day")
+                        }
+                    }
+                    precondition(period.totalWords == 279 && period.activeDays == 2)
+                    precondition(period.weeks.flatMap { $0 }.compactMap { $0 }.count == 2)
+                    for column in period.weeks.indices {
+                        let firstOfMonth = period.weeks[column].compactMap { $0 }.first { injected.component(.day, from: $0.date) == 1 }
+                        let expected = firstOfMonth.map { injected.shortMonthSymbols[injected.component(.month, from: $0.date) - 1] } ?? ""
+                        precondition(period.monthLabel(for: column) == expected)
+                    }
+                    precondition(period.monthLabel(for: -1).isEmpty && period.monthLabel(for: period.weeks.count).isEmpty)
+                }
+            }
+        }
+        var west = calendar
+        west.locale = Locale(identifier: "en_US")
+        let nearMidnightUTC = ISO8601DateFormatter().date(from: "2027-01-01T00:30:00Z")!
+        let day = StatsActivityPeriod.Day(date: nearMidnightUTC, words: 2, cumulativeWords: 2)
+        let labels = StatsHeatmapView.dayLabels(for: day, calendar: west, bundle: bundle)
+        precondition(labels.shortDate.contains("Dec") && labels.shortDate.contains("31"))
+        precondition(labels.accessible.contains("December 31, 2026") && labels.words == "2 words", "Tooltip must keep its injected time zone instead of UTC")
+        var utc = west
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        let utcLabels = StatsHeatmapView.dayLabels(for: day, calendar: utc, bundle: bundle)
+        precondition(utcLabels.shortDate.contains("Jan") && utcLabels.shortDate.contains("1"))
+        precondition(utcLabels.accessible.contains("January 1, 2027") && utcLabels.words == "2 words")
+        print("PASS: compiled native streak units, partial-language fallback, real Heatmap label consumption, Sun/Mon week starts, month/year bounds and time-zone labels")
         let oldHistory = try StatsSnapshot.build(entries: [entry(1, text: "old words", month: 1)] + entries, now: date(7), calendar: calendar)
         precondition(oldHistory.totalWords == 10 && oldHistory.dailyWordCounts(days: 180).reduce(0) { $0 + $1.words } == 8,
                      "Range truncation must not alter lifetime totals")

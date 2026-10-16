@@ -293,7 +293,7 @@ struct CustomDictionaryView: View {
                         .clipped()
                         .background {
                             Rectangle()
-                                .fill(self.theme.materials.sidebar)
+                                .fill(self.theme.palette.sidebarBackground)
                                 .ignoresSafeArea(.container, edges: [.top, .bottom])
                                 .allowsHitTesting(false)
                                 .accessibilityHidden(true)
@@ -422,7 +422,7 @@ struct CustomDictionaryView: View {
             withAnimation(self.drawerAnimation) { self.isWordDrawerPresented.toggle() }
         } label: {
             Label("Your Dictionary", systemImage: self.isWordDrawerPresented ? "rectangle.righthalf.inset.filled" : "sidebar.right")
-                .foregroundStyle(self.isWordDrawerPresented ? self.theme.palette.accent : self.theme.palette.primaryText)
+                .foregroundStyle(self.isWordDrawerPresented ? self.theme.palette.accentText : self.theme.palette.primaryText)
         }
 
         .accessibilityLabel(PichiLocalization.text(self.isWordDrawerPresented ? "Collapse your dictionary" : "Expand your dictionary"))
@@ -465,6 +465,8 @@ struct CustomDictionaryView: View {
                         }.fluidGlassAction()
                     }
                     .padding(16)
+                    .foregroundStyle(self.theme.palette.primaryText)
+                    .background(self.theme.palette.cardBackground)
                 }
             }
             HStack(spacing: 8) {
@@ -480,42 +482,17 @@ struct CustomDictionaryView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: self.theme.metrics.spacing.md) {
                     ForEach(self.drawerEntries) { entry in
-                        HStack(alignment: .center, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.replacement).font(self.theme.typography.bodyStrong)
-                                Text(entry.triggers.joined(separator: ", "))
-                                    .font(self.theme.typography.caption)
-                                    .foregroundStyle(self.theme.palette.secondaryText)
-                                    .lineLimit(3)
-                                Button("Test word") {
-                                    self.wizardSavedWord = entry.replacement
-                                    self.wizardStep = .saved
-                                    self.isWordDrawerPresented = false
-                                }.fluidGlassAction()
-                                    .disabled(self.asr.isRunning || self.isTrainingStarting || self.isTrainingProcessing)
-                                    .accessibilityLabel("Test \(entry.replacement)")
-                            }
-                            Spacer()
-                            Button { self.editingEntry = entry } label: {
-                                FluidPencilShape()
-                                    .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
-                                    .frame(width: 20, height: 20)
-                                    .frame(width: 22, height: 22)
-                                    .contentShape(Rectangle())
-                            }
-                            .fluidGlassAction(circular: true)
-                            .help("Edit word")
-                            .accessibilityLabel("Edit \(entry.replacement)")
-                            Button(role: .destructive) { self.drawerDeletion = entry } label: {
-                                Image(systemName: "trash")
-                                    .font(.fluidSystem(size: 15, weight: .regular))
-                                    .frame(width: 22, height: 22)
-                                    .contentShape(Rectangle())
-                            }
-                            .fluidGlassAction(circular: true)
-                            .help("Delete word")
-                            .accessibilityLabel("Delete \(entry.replacement)")
-                        }
+                        DictionaryDrawerEntryRow(
+                            entry: entry,
+                            isTestDisabled: self.asr.isRunning || self.isTrainingStarting || self.isTrainingProcessing,
+                            onTest: {
+                                self.wizardSavedWord = entry.replacement
+                                self.wizardStep = .saved
+                                self.isWordDrawerPresented = false
+                            },
+                            onEdit: { self.editingEntry = entry },
+                            onDelete: { self.drawerDeletion = entry }
+                        )
                         .contextMenu {
                             Button("Edit…") { self.editingEntry = entry }
                             Button("Remove word", role: .destructive) { self.drawerDeletion = entry }
@@ -557,6 +534,8 @@ struct CustomDictionaryView: View {
                 self.customWordsPopover
             }
             .padding(self.theme.metrics.spacing.md)
+            .foregroundStyle(self.theme.palette.primaryText)
+            .background(self.theme.palette.cardBackground)
         }
     }
 
@@ -579,7 +558,7 @@ struct CustomDictionaryView: View {
 
             Image(systemName: systemName)
                 .font(.fluidSystem(size: 15, weight: .semibold))
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
         }
         .frame(width: 34, height: 34)
     }
@@ -734,7 +713,6 @@ struct CustomDictionaryView: View {
             }
             .fluidButton(self.shouldEmphasizeTrainedReplacementButton ? .accent : .compact, size: .small)
             .disabled(!self.canAddTrainedReplacement)
-            .opacity(self.canAddTrainedReplacement ? 1 : 0.62)
             .overlay(self.trainedReplacementButtonReadyOutline)
             .shadow(
                 color: self.shouldEmphasizeTrainedReplacementButton
@@ -799,7 +777,7 @@ struct CustomDictionaryView: View {
 
                     Text(CustomDictionaryManualEntry.replacementDisplayText(self.sanitizedManualReplacement))
                         .font(self.theme.typography.captionStrong)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                 }
             }
 
@@ -812,7 +790,6 @@ struct CustomDictionaryView: View {
             }
             .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
             .disabled(!self.canAddManualReplacement)
-            .opacity(self.canAddManualReplacement ? 1 : 0.45)
         }
     }
 
@@ -865,7 +842,7 @@ struct CustomDictionaryView: View {
             if self.trainingAlreadyCorrectWithoutReplacement {
                 Label("\(self.trainingTargetReference) is already recognized correctly.", systemImage: "checkmark.circle.fill")
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
             } else if self.trainingFinalOutputIsReady {
                 Label(
                     self.activePronunciationMatching
@@ -874,7 +851,7 @@ struct CustomDictionaryView: View {
                     systemImage: "checkmark.circle.fill"
                 )
                 .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
             } else {
                 VStack(alignment: .leading, spacing: 7) {
                     self.trainingInstruction(
@@ -927,7 +904,6 @@ struct CustomDictionaryView: View {
                 }
                 .fluidButton(self.trainingRecorderIsStop ? .destructive : .accent, size: .small)
                 .disabled(!self.canUseTrainingRecorderButton)
-                .opacity(self.canUseTrainingRecorderButton ? 1 : 0.45)
             }
         }
         .padding(self.theme.metrics.spacing.md)
@@ -1050,7 +1026,6 @@ struct CustomDictionaryView: View {
                     }
                     .fluidButton(.compact, size: .compact)
                     .disabled(self.isTrainingRecording || self.isTrainingProcessing)
-                    .opacity(self.isTrainingRecording || self.isTrainingProcessing ? 0.45 : 1)
                 } else {
                     Spacer(minLength: 0)
                 }
@@ -1231,6 +1206,8 @@ struct CustomDictionaryView: View {
         }
         .padding(self.theme.metrics.spacing.lg)
         .frame(width: 640, alignment: .leading)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.cardBackground)
     }
 
     private var yourDictionaryHelpNote: some View {
@@ -1241,7 +1218,7 @@ struct CustomDictionaryView: View {
         } icon: {
             Image(systemName: "info.circle")
                 .font(.fluidSystem(size: 12, weight: .semibold))
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
         }
         .padding(self.theme.metrics.spacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1293,7 +1270,6 @@ struct CustomDictionaryView: View {
             }
             .fluidGlassAction()
             .disabled(!self.vocabBoostingEnabled)
-            .opacity(self.vocabBoostingEnabled ? 1 : 0.45)
             .help(PichiLocalization.text(self.vocabBoostingEnabled ? "Modify custom words" : "Turn on Boosting to modify custom words."))
             .popover(isPresented: self.$isCustomWordsPresented, arrowEdge: .top) {
                 self.customWordsPopover
@@ -1407,6 +1383,8 @@ struct CustomDictionaryView: View {
         }
         .padding(self.theme.metrics.spacing.lg)
         .frame(width: 640, alignment: .leading)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.cardBackground)
         .onDisappear {
             self.dismissBoostTermEditor()
         }
@@ -1429,12 +1407,9 @@ struct CustomDictionaryView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Word Priority")
                     .font(self.theme.typography.captionStrong)
-                Picker("Word Priority", selection: self.$boostTermStrength) {
-                    ForEach(BoostStrengthPreset.allCases) { preset in
-                        Text(PichiLocalization.text(preset.rawValue)).tag(preset)
-                    }
-                }
-                .pickerStyle(.segmented)
+                FluidSegmentedPicker(title: "Word Priority", options: BoostStrengthPreset.allCases.map {
+                    (value: $0, title: PichiLocalization.text($0.rawValue))
+                }, selection: self.$boostTermStrength)
                 Text(PichiLocalization.text(self.boostTermStrength.hint))
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
@@ -1466,7 +1441,6 @@ struct CustomDictionaryView: View {
                 }
                 .fluidGlassAction(prominent: true, tone: self.theme.palette.accent)
                 .disabled(!self.canSaveBoostTerm)
-                .opacity(self.canSaveBoostTerm ? 1 : 0.45)
             }
         }
         .padding(self.theme.metrics.spacing.md)
@@ -1572,6 +1546,8 @@ struct CustomDictionaryView: View {
             .frame(maxHeight: 650)
         }
         .frame(width: 680, alignment: .leading)
+        .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.cardBackground)
         .onDisappear {
             self.savePunctuationDictionaryPrefix()
         }
@@ -1704,7 +1680,7 @@ struct CustomDictionaryView: View {
         return HStack(spacing: self.theme.metrics.spacing.md) {
             Text(action.displaySymbol)
                 .font(.fluidSystem(size: 18, weight: .semibold, design: .rounded))
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 32, height: 32)
                 .background(
                     RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm, style: .continuous)
@@ -1837,11 +1813,11 @@ struct CustomDictionaryView: View {
         Text("When you say ")
             .foregroundStyle(self.theme.palette.secondaryText) +
             Text("\"\(spoken)\"")
-            .foregroundStyle(self.theme.palette.accent) +
+            .foregroundStyle(self.theme.palette.accentText) +
             Text(", it types ")
             .foregroundStyle(self.theme.palette.secondaryText) +
             Text("\"\(typed)\"")
-            .foregroundStyle(self.theme.palette.accent)
+            .foregroundStyle(self.theme.palette.accentText)
     }
 
     private var punctuationRuleEditor: some View {
@@ -1881,7 +1857,6 @@ struct CustomDictionaryView: View {
                 }
                 .fluidButton(.accent, size: .small)
                 .disabled(!self.canSavePunctuationRule)
-                .opacity(self.canSavePunctuationRule ? 1 : 0.45)
             }
         }
         .padding(self.theme.metrics.spacing.md)
@@ -2798,7 +2773,7 @@ private extension CustomDictionaryView {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("\(number)")
                 .font(self.theme.typography.captionStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 16, alignment: .center)
 
             Text(PichiLocalization.text(text))
@@ -2841,7 +2816,7 @@ private struct VoiceMatchingSettingsRow: View {
             if self.isEnabled {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "flask.fill")
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                     Text(AppBrand.text("Research Preview: Compares how your voice sounds instead of only the words FluidVoice hears. Results may vary."))
                         .font(self.theme.typography.caption)
                         .foregroundStyle(self.theme.palette.secondaryText)
@@ -2885,11 +2860,11 @@ private struct VoiceMatchingSettingsRow: View {
                 if isResearchPreview {
                     Text("Research Preview")
                         .font(self.theme.typography.captionSmall)
-                        .foregroundStyle(isSelected ? Color.white.opacity(0.86) : self.theme.palette.accent)
+                        .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.accentText)
                 }
             }
             .font(self.theme.typography.captionStrong)
-            .foregroundStyle(isSelected ? Color.white : self.theme.palette.primaryText)
+            .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
             .frame(maxWidth: .infinity, minHeight: 36)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -2914,7 +2889,6 @@ private struct VoiceMatchingSettingsRow: View {
         }
         .buttonStyle(.plain)
         .disabled(self.isDisabled || (enabledValue && !self.isAdvancedAvailable))
-        .opacity(self.isDisabled || (enabledValue && !self.isAdvancedAvailable) ? 0.55 : 1)
         .onHover { hovering in
             let update = { self.hoveredMethod = hovering ? enabledValue : nil }
             if self.reduceMotion {
@@ -3128,7 +3102,6 @@ private struct DictionaryComposerModeTab: View {
         }
         .buttonStyle(.plain)
         .disabled(self.isDisabled)
-        .opacity(self.isDisabled ? 0.55 : 1)
         .onHover { hovering in
             guard !self.reduceMotion else {
                 self.isHovered = hovering
@@ -3142,7 +3115,7 @@ private struct DictionaryComposerModeTab: View {
     }
 
     private var foreground: Color {
-        self.isSelected ? Color.white : self.theme.palette.primaryText
+        self.isSelected ? self.theme.palette.accentForeground : self.theme.palette.primaryText
     }
 
     private var background: some View {
@@ -3427,7 +3400,7 @@ private struct ReplacementConfirmationToast: View {
         VStack(spacing: self.theme.metrics.spacing.sm) {
             ZStack {
                 Circle()
-                    .fill(self.theme.palette.accent.opacity(0.14))
+                    .fill(self.theme.palette.elevatedCardBackground)
                     .frame(width: 58, height: 58)
 
                 Circle()
@@ -3436,7 +3409,7 @@ private struct ReplacementConfirmationToast: View {
 
                 Image(systemName: "checkmark")
                     .font(.fluidSystem(size: 25, weight: .bold))
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
             }
 
             VStack(spacing: 3) {
@@ -3505,7 +3478,7 @@ private struct DictionaryTrainingReadinessRing: View {
             VStack(spacing: 1) {
                 Text("\(self.progress)/\(self.total)")
                     .font(self.theme.typography.sectionTitle)
-                    .foregroundStyle(self.isReady ? self.theme.palette.accent : self.theme.palette.primaryText)
+                    .foregroundStyle(self.isReady ? self.theme.palette.accentText : self.theme.palette.primaryText)
                     .monospacedDigit()
 
                 Text(PichiLocalization.text(self.usesVoiceMatching ? "samples" : "covered"))
@@ -3533,7 +3506,7 @@ private struct TrainingVariantChip: View {
         HStack(spacing: 4) {
             Text("\(self.number)")
                 .font(self.theme.typography.captionSmall)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .frame(minWidth: 11)
 
             Text(self.variant)
@@ -3644,8 +3617,9 @@ struct BoostTermRow: View {
                     .font(self.theme.typography.bodySmallStrong)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
-                    .background(Capsule().fill(strength.badgeColor.opacity(0.25)))
-                    .foregroundStyle(strength.badgeColor)
+                    .background(Capsule().fill(self.theme.palette.elevatedCardBackground))
+                    .overlay(Capsule().stroke(strength.badgeColor.opacity(0.25), lineWidth: 1))
+                    .foregroundStyle(self.theme.palette.readableText(strength.badgeColor))
             }
 
             HStack(spacing: 2) {
@@ -3711,7 +3685,7 @@ struct DictionaryEntryRow: View {
 
             Text(CustomDictionaryManualEntry.replacementDisplayText(self.entry.replacement))
                 .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 2) {
@@ -3771,7 +3745,7 @@ private struct PunctuationDictionaryRuleRow: View {
 
             Text(self.rule.symbol)
                 .font(self.theme.typography.bodySmallStrong)
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .frame(width: 60, alignment: .leading)
                 .lineLimit(1)
 
@@ -3854,7 +3828,7 @@ struct AddDictionaryEntrySheet: View {
                             .font(.fluidSystem(.subheadline).weight(.medium))
                         Text("Add one version per line. Commas can be saved too.")
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                         TextEditor(text: self.$triggersText)
                             .font(.fluidSystem(.body))
                             .frame(minHeight: 54, maxHeight: 76)
@@ -3865,9 +3839,9 @@ struct AddDictionaryEntrySheet: View {
                         if !self.duplicateTriggers.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                 Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                             }
                             .font(.fluidSystem(.caption))
                         }
@@ -3879,7 +3853,7 @@ struct AddDictionaryEntrySheet: View {
                             .font(.fluidSystem(.subheadline).weight(.medium))
                         Text("This is what will appear in the final transcription.")
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                         TextField(AppBrand.text("FluidVoice"), text: self.$replacement)
                             .dictionaryInputChrome()
                             .onSubmit { self.saveIfValid() }
@@ -3975,7 +3949,7 @@ private struct DictionaryReplacementPreview: View {
                     CustomDictionaryManualEntry.sanitizedReplacement(self.replacement)
                 ))
                 .font(.fluidSystem(.body).weight(.semibold))
-                .foregroundStyle(self.theme.palette.accent)
+                .foregroundStyle(self.theme.palette.accentText)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -4034,7 +4008,7 @@ struct EditDictionaryEntrySheet: View {
                             .font(.fluidSystem(.subheadline).weight(.medium))
                         Text("Add one version per line. Commas can be saved too.")
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                         TextEditor(text: self.$triggersText)
                             .font(.fluidSystem(.body))
                             .frame(minHeight: 54, maxHeight: 76)
@@ -4045,9 +4019,9 @@ struct EditDictionaryEntrySheet: View {
                         if !self.duplicateTriggers.isEmpty {
                             HStack(spacing: 4) {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                                 Text("Duplicate triggers: \(self.duplicateTriggers.joined(separator: ", "))")
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(self.theme.palette.readableText(self.theme.palette.warning))
                             }
                             .font(.fluidSystem(.caption))
                         }
@@ -4059,7 +4033,7 @@ struct EditDictionaryEntrySheet: View {
                             .font(.fluidSystem(.subheadline).weight(.medium))
                         Text("This is what will appear in the final transcription.")
                             .font(.fluidSystem(.caption))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(self.theme.palette.secondaryText)
                         TextField(AppBrand.text("FluidVoice"), text: self.$replacement)
                             .dictionaryInputChrome()
                             .onSubmit { self.saveIfValid() }
@@ -4090,6 +4064,8 @@ struct EditDictionaryEntrySheet: View {
         .padding(20)
         .frame(minWidth: 400, idealWidth: 480, maxWidth: 560)
         .frame(minHeight: 360, idealHeight: 500, maxHeight: 600)
+        .background(self.theme.palette.windowBackground)
+        .appTheme(self.theme)
         .dismissTextFocusOnBackgroundTap()
         .onAppear {
             self.triggersText = self.entry.triggers.joined(separator: "\n")

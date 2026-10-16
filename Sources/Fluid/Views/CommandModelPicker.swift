@@ -62,6 +62,7 @@ struct CommandModelPicker: View {
         }
         .frame(width: 350)
         .foregroundStyle(self.theme.palette.primaryText)
+        .background(self.theme.palette.contentBackground)
         .onAppear {
             self.resetHighlight(preferSelected: true)
             self.searchFocused = true
@@ -187,7 +188,7 @@ struct CommandModelPicker: View {
                     Spacer(minLength: 0)
                     Image(systemName: "checkmark")
                         .font(self.theme.typography.captionStrong)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                         .opacity(self.selected ? 1 : 0)
                         .frame(width: 16)
                         .accessibilityHidden(true)

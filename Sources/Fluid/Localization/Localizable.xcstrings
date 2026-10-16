@@ -1,92 +1,652 @@
 {
   "sourceLanguage": "en",
   "strings": {
-    "Hold Space to Mute": {
+    "You": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Hold Space to Mute"
+            "value": "You"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Удерживайте пробел для отключения микрофона"
+            "value": "Вы"
           }
         }
       }
     },
-    "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority.": {
+    "Summary with sources": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority."
+            "value": "Summary with sources"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Во время диктовки удерживайте пробел, чтобы отключить микрофон. Отпустите, чтобы продолжить. Короткое нажатие вводит пробел. Другие сочетания с пробелом имеют приоритет."
+            "value": "Итоги с источниками"
           }
         }
       }
     },
-    "Muted": {
+    "Templates and custom prompt": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Muted"
+            "value": "Templates and custom prompt"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Микрофон отключён"
+            "value": "Шаблоны и свой запрос"
           }
         }
       }
     },
-    "Dictation muted. Release Space to resume.": {
+    "Summary format": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dictation muted. Release Space to resume."
+            "value": "Summary format"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Микрофон диктовки отключён. Отпустите пробел, чтобы продолжить."
+            "value": "Формат итогов"
           }
         }
       }
     },
-    "Release Space to resume dictation": {
+    "Delete summary model?": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Release Space to resume dictation"
+            "value": "Delete summary model?"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Отпустите пробел, чтобы продолжить диктовку"
+            "value": "Удалить модель для итогов?"
           }
         }
       }
-    }
-,
+    },
+    "Remove the %@download from this Mac. Your meetings and saved summaries stay. You can download it again anytime.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove the %@download from this Mac. Your meetings and saved summaries stay. You can download it again anytime."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить скачанную модель %@с этого Mac. Встречи и сохранённые итоги останутся. Модель можно скачать снова."
+          }
+        }
+      }
+    },
+    "Manage providers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage providers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Управление провайдерами"
+          }
+        }
+      }
+    },
+    "Open a completed meeting to summarize its transcript.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a completed meeting to summarize its transcript."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Откройте завершённую встречу, чтобы составить итоги по её транскрипту."
+          }
+        }
+      }
+    },
+    "Summaries use a provider from AI Providers. Add and verify one to summarize this meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summaries use a provider from AI Providers. Add and verify one to summarize this meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Итоги используют провайдер из раздела «Провайдеры ИИ». Добавьте и проверьте провайдер для этой встречи."
+          }
+        }
+      }
+    },
+    "Set up a provider": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up a provider"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить провайдер"
+          }
+        }
+      }
+    },
+    "Nothing leaves your Mac · Summaries are in English": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing leaves your Mac · Summaries are in English"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Данные остаются на этом Mac · Итоги на английском"
+          }
+        }
+      }
+    },
+    "Choose a configured provider and model to continue.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a configured provider and model to continue."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите настроенный провайдер и модель, чтобы продолжить."
+          }
+        }
+      }
+    },
+    "Transcript sent to %@ (%@) · Audio stays on your Mac": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcript sent to %@ (%@) · Audio stays on your Mac"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Транскрипт отправляется в %@ (%@) · Аудио остаётся на этом Mac"
+          }
+        }
+      }
+    },
+    "Search models on this Mac and from verified providers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search models on this Mac and from verified providers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поиск моделей на этом Mac и у проверенных провайдеров"
+          }
+        }
+      }
+    },
+    "Summary model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель для итогов"
+          }
+        }
+      }
+    },
+    "Summary type": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary type"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тип итогов"
+          }
+        }
+      }
+    },
+    "Think first": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Think first"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сначала подумать"
+          }
+        }
+      }
+    },
+    "The model reasons about the transcript before it writes. More careful, a little slower.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model reasons about the transcript before it writes. More careful, a little slower."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель анализирует транскрипт перед составлением итогов. Более тщательно, но немного медленнее."
+          }
+        }
+      }
+    },
+    "Think before summarizing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Think before summarizing"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подумать перед составлением итогов"
+          }
+        }
+      }
+    },
+    "Custom prompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom prompt"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Свой запрос"
+          }
+        }
+      }
+    },
+    "For example: Write a short recap email to the client with next steps and owners.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For example: Write a short recap email to the client with next steps and owners."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Например: Напиши клиенту короткое письмо с итогами, следующими шагами и ответственными."
+          }
+        }
+      }
+    },
+    "Custom summary prompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom summary prompt"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Свой запрос для итогов"
+          }
+        }
+      }
+    },
+    "Saved for every meeting. Replaces the summary type instructions; the transcript is still treated as source material only.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved for every meeting. Replaces the summary type instructions; the transcript is still treated as source material only."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохраняется для всех встреч. Заменяет инструкции выбранного типа итогов; транскрипт остаётся только исходным материалом."
+          }
+        }
+      }
+    },
+    "Summarizing…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summarizing…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Составление итогов…"
+          }
+        }
+      }
+    },
+    "Deleting download…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleting download…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление модели…"
+          }
+        }
+      }
+    },
+    "Download · %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download · %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачать · %@"
+          }
+        }
+      }
+    },
+    "Summary model actions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary model actions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Действия с моделью для итогов"
+          }
+        }
+      }
+    },
+    "Generated with %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generated with %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Создано с помощью %@"
+          }
+        }
+      }
+    },
+    "Executive summary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Executive summary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Краткие итоги"
+          }
+        }
+      }
+    },
+    "Detailed summary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detailed summary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подробные итоги"
+          }
+        }
+      }
+    },
+    "Key decisions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key decisions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключевые решения"
+          }
+        }
+      }
+    },
+    "Participants": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Participants"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участники"
+          }
+        }
+      }
+    },
+    "Topics discussed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Topics discussed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обсуждённые темы"
+          }
+        }
+      }
+    },
+    "Regenerate summary": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Regenerate summary"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Составить итоги заново"
+          }
+        }
+      }
+    },
+    "Legacy credentials could not be safely cleared. No credential edit was applied.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Legacy credentials could not be safely cleared. No credential edit was applied."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось безопасно очистить старые ключи. Изменение ключей не выполнено."
+          }
+        }
+      }
+    },
+    "Provider credentials are loading.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Provider credentials are loading."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загрузка ключей провайдеров."
+          }
+        }
+      }
+    },
+    "Provider credentials are unavailable. Open API key settings to retry.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Provider credentials are unavailable. Open API key settings to retry."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ключи провайдеров недоступны. Откройте настройки API-ключа, чтобы повторить попытку."
+          }
+        }
+      }
+    },
+    "Saved API keys could not be verified in Keychain.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved API keys could not be verified in Keychain."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось проверить сохранённые API-ключи в Связке ключей."
+          }
+        }
+      }
+    },
     "The model reached the output limit before completing the structured summary. Try turning off thinking or choosing the extended processing budget. The transcript and previous summary are safe.": {
       "extractionState": "manual",
       "localizations": {
@@ -1311,6 +1871,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ использует собственный локальный промпт."
+          }
+        }
+      }
+    },
+    "%@ with speaker identification and sensitive data redaction can be stopped by the system in the background on this iPad. For recording without saving audio, select %@ in Voice Engine settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ with speaker identification and sensitive data redaction can be stopped by the system in the background on this iPad. For recording without saving audio, select %@ in Voice Engine settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сочетание %@ с определением участников и удалением чувствительных данных может быть остановлено системой в фоне на этом iPad. Для записи без сохранения аудио выберите %@ в настройках распознавания речи."
           }
         }
       }
@@ -5683,6 +6260,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ответ получен позднее"
+          }
+        }
+      }
+    },
+    "Answers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ответы"
           }
         }
       }
@@ -11473,6 +12067,23 @@
         }
       }
     },
+    "Copy code": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy code"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировать код"
+          }
+        }
+      }
+    },
     "Copy dictation": {
       "extractionState": "manual",
       "localizations": {
@@ -14237,19 +14848,19 @@
         }
       }
     },
-    "Downloads once (about 200 MB) and stays on this Mac. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities.": {
+    "Downloads once and stays on this Mac. Speaker identification runs locally after recording.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Downloads once (about 200 MB) and stays on this Mac. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities."
+            "value": "Downloads once and stays on this Mac. Speaker identification runs locally after recording."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Загружается один раз (около 200 МБ) и хранится на этом Mac. Для расшифровки Parakeet нужна эта модель; GigaAM может завершить расшифровку без определения участников."
+            "value": "Загружается один раз и хранится на этом Mac. Участники определяются локально после завершения записи."
           }
         }
       }
@@ -21338,23 +21949,6 @@
         }
       }
     },
-    "Local model on this Mac": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local model on this Mac"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Локальная модель на этом Mac"
-          }
-        }
-      }
-    },
     "Local models run on Mac": {
       "extractionState": "manual",
       "localizations": {
@@ -25909,6 +26503,23 @@
         }
       }
     },
+    "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On iPad Pro 12.9-inch (2nd generation) with iPadOS 17.7.10, the public INT8 export is unavailable for recording without saving audio when speaker identification and sensitive data redaction are both enabled. Use Whisper Tiny for this configuration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На iPad Pro 12,9 дюйма (2-го поколения) с iPadOS 17.7.10 публичная INT8-версия недоступна для записи без сохранения аудио, если одновременно включены определение участников и удаление чувствительных данных. Для этого сочетания используйте Whisper Tiny."
+          }
+        }
+      }
+    },
     "On your Mac": {
       "extractionState": "manual",
       "localizations": {
@@ -29450,7 +30061,7 @@
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Записать снова"
+            "value": "Записать ещё раз"
           }
         }
       }
@@ -38999,19 +39610,19 @@
         }
       }
     },
-    "Transcript stays on this Mac · %@": {
+    "This local server may forward the transcript to a cloud service. Check the model and server configuration.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Transcript stays on this Mac · %@"
+            "value": "This local server may forward the transcript to a cloud service. Check the model and server configuration."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Расшифровка остаётся на этом Mac · %@"
+            "value": "Этот локальный сервер может отправлять расшифровку в облачный сервис. Проверьте настройки модели и сервера."
           }
         }
       }
@@ -47346,6 +47957,4076 @@
           "stringUnit": {
             "state": "translated",
             "value": "Относительные оценки библиотеки для русского языка: скорость 90%, точность 90%. Это оценки продукта, а не измеренная точность распознавания. Для этого компактного экспорта INT8 не проводилась оценка WER или тест скорости на процессоре."
+          }
+        }
+      }
+    },
+    "Hold Space to Mute": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hold Space to Mute"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отключать микрофон при удержании пробела"
+          }
+        }
+      }
+    },
+    "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "During dictation, hold Space to mute and release to resume. A quick tap types a space. Other Space shortcuts take priority."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Во время диктовки удерживайте пробел, чтобы отключить микрофон, и отпустите для продолжения. Короткое нажатие вводит пробел. Другие сочетания клавиш с пробелом имеют приоритет."
+          }
+        }
+      }
+    },
+    "Muted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон выключен"
+          }
+        }
+      }
+    },
+    "Dictation muted. Release Space to resume.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation muted. Release Space to resume."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон диктовки выключен. Отпустите пробел для продолжения."
+          }
+        }
+      }
+    },
+    "Release Space to resume dictation": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Release Space to resume dictation"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отпустите пробел, чтобы продолжить диктовку"
+          }
+        }
+      }
+    },
+    "pause microphone spacebar resume silence": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "pause microphone spacebar resume silence"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "пауза микрофон пробел продолжить тишина"
+          }
+        }
+      }
+    },
+    "What’s new in this release": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What’s new in this release"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Что нового в этом выпуске"
+          }
+        }
+      }
+    },
+    "Dictation controls, smoother meetings, and AI connection fixes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dictation controls, smoother meetings, and AI connection fixes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Управление диктовкой, работа со встречами и исправления подключений к ИИ."
+          }
+        }
+      }
+    },
+    "MEETINGS, WITH LESS WAITING": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEETINGS, WITH LESS WAITING"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ВСТРЕЧИ БЕЗ ЛИШНЕГО ОЖИДАНИЯ"
+          }
+        }
+      }
+    },
+    "Meetings without the wait": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meetings without the wait"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Встречи без ожидания"
+          }
+        }
+      }
+    },
+    "Cancel waiting model preparation promptly. Russian transcription and summaries with source references share the meeting workspace.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel waiting model preparation promptly. Russian transcription and summaries with source references share the meeting workspace."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидающую подготовку модели можно сразу отменить. Русская транскрипция и резюме со ссылками на исходный текст доступны в окне встреч."
+          }
+        }
+      }
+    },
+    "Open meetings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open meetings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть встречи"
+          }
+        }
+      }
+    },
+    "DICTATION, ON YOUR TERMS": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DICTATION, ON YOUR TERMS"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ДИКТОВКА ПОД ВАШИМ КОНТРОЛЕМ"
+          }
+        }
+      }
+    },
+    "More control while dictating": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More control while dictating"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Больше контроля при диктовке"
+          }
+        }
+      }
+    },
+    "Enable hold-Space mute to skip background speech. Button clicks now match their visible shapes.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enable hold-Space mute to skip background speech. Button clicks now match their visible shapes."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включите заглушение микрофона при удержании пробела. Область нажатия кнопок теперь совпадает с их видимой формой."
+          }
+        }
+      }
+    },
+    "Open dashboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open dashboard"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть главную"
+          }
+        }
+      }
+    },
+    "Compatible AI connections": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compatible AI connections"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Совместимые подключения к ИИ"
+          }
+        }
+      }
+    },
+    "Claude 5 requests use supported parameters. Local cleanup and Russian provider connections join your AI setup, with less duplicate diagnostic logging.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 5 requests use supported parameters. Local cleanup and Russian provider connections join your AI setup, with less duplicate diagnostic logging."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросы к Claude 5 используют поддерживаемые параметры. Доступны локальная обработка и российские провайдеры ИИ. В диагностике стало меньше повторных записей."
+          }
+        }
+      }
+    },
+    "Claude 5 requests use supported parameters. Russian provider connections join your AI setup, with less duplicate diagnostic logging.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude 5 requests use supported parameters. Russian provider connections join your AI setup, with less duplicate diagnostic logging."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запросы к Claude 5 используют поддерживаемые параметры. Доступны российские провайдеры ИИ. В диагностике стало меньше повторных записей."
+          }
+        }
+      }
+    },
+    "Command cancelled.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command cancelled."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Команда отменена."
+          }
+        }
+      }
+    },
+    "Checking prerequisites...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking prerequisites..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка необходимых условий..."
+          }
+        }
+      }
+    },
+    "Executing command...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Executing command..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выполнение команды..."
+          }
+        }
+      }
+    },
+    "Verifying the result...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifying the result..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка результата..."
+          }
+        }
+      }
+    },
+    "Click **Grant Access** above": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click **Grant Access** above"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите **Разрешить доступ** выше"
+          }
+        }
+      }
+    },
+    "Choose **Allow** in the system dialog": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose **Allow** in the system dialog"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите **Разрешить** в системном диалоге"
+          }
+        }
+      }
+    },
+    "Click **Open Settings** above": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click **Open Settings** above"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите **Открыть настройки** выше"
+          }
+        }
+      }
+    },
+    "Find **%@** in the microphone list": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find **%@** in the microphone list"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Найдите **%@** в списке доступа к микрофону"
+          }
+        }
+      }
+    },
+    "Toggle **%@ ON** to allow access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle **%@ ON** to allow access"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Включите доступ к микрофону для **%@**"
+          }
+        }
+      }
+    },
+    "Click **Open Accessibility Settings** above": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click **Open Accessibility Settings** above"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите **Открыть настройки Универсального доступа** выше"
+          }
+        }
+      }
+    },
+    "In the Accessibility window, click the **+ button**": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In the Accessibility window, click the **+ button**"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В настройках Универсального доступа нажмите кнопку **+**"
+          }
+        }
+      }
+    },
+    "Select **%@**; use **Reveal in Finder** below if needed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select **%@**; use **Reveal in Finder** below if needed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите **%@**. При необходимости нажмите ниже **Показать в Finder**"
+          }
+        }
+      }
+    },
+    "Click **Open**, then toggle **%@ ON** in the list": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Click **Open**, then toggle **%@ ON** in the list"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нажмите **Открыть** и включите **%@** в списке"
+          }
+        }
+      }
+    },
+    "Output device": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Output device"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Устройство вывода"
+          }
+        }
+      }
+    },
+    "%@ (System Default)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (System Default)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (по умолчанию)"
+          }
+        }
+      }
+    },
+    "Medium": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medium"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Средний"
+          }
+        }
+      }
+    },
+    "Bottom of Screen": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bottom of Screen"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Внизу экрана"
+          }
+        }
+      }
+    },
+    "Overlay size": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Overlay size"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Размер индикатора"
+          }
+        }
+      }
+    },
+    "Overlay position": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Overlay position"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Положение индикатора"
+          }
+        }
+      }
+    },
+    "Accepted file types: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, and more.": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accepted file types: WAV, MP3, M4A, OGG, OPUS, MP4, MOV, and more."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Допустимые типы файлов: WAV, MP3, M4A, OGG, OPUS, MP4, MOV и другие."
+          }
+        }
+      }
+    },
+    "Could not create audio buffer": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create audio buffer"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать аудиобуфер"
+          }
+        }
+      }
+    },
+    "Could not open audio file: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not open audio file: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось открыть аудиофайл: %@"
+          }
+        }
+      }
+    },
+    "Could not read audio chunk: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read audio chunk: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать фрагмент аудио: %@"
+          }
+        }
+      }
+    },
+    "Could not resample audio: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not resample audio: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось изменить частоту дискретизации аудио: %@"
+          }
+        }
+      }
+    },
+    "Failed to convert audio: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to convert audio: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудио: %@"
+          }
+        }
+      }
+    },
+    "Failed to load ASR models: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to load ASR models: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось загрузить модели распознавания речи: %@"
+          }
+        }
+      }
+    },
+    "File format not supported: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File format not supported: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат файла не поддерживается: %@"
+          }
+        }
+      }
+    },
+    "Format .%@ not supported. %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Format .%@ not supported. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат .%@ не поддерживается. %@"
+          }
+        }
+      }
+    },
+    "Invalid audio file: sample rate is 0": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Invalid audio file: sample rate is 0"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный аудиофайл: частота дискретизации равна 0"
+          }
+        }
+      }
+    },
+    "This file is already being transcribed.": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is already being transcribed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот файл уже распознаётся."
+          }
+        }
+      }
+    },
+    "Transcription failed: %@": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription failed: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось распознать речь: %@"
+          }
+        }
+      }
+    },
+    "Transcription provider not ready": {
+      "comment": "App-owned file-transcription error copy. Preserve format arguments and literal extension names; inserted OS/provider diagnostics and user data are not translation keys.",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transcription provider not ready"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модуль распознавания речи не готов"
+          }
+        }
+      }
+    },
+    "stats.streak.unit": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@streakDays@"
+          },
+          "substitutions": {
+            "streakDays": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "day streak"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "days in a row"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%#@streakDays@"
+          },
+          "substitutions": {
+            "streakDays": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "день подряд"
+                    }
+                  },
+                  "few": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "дня подряд"
+                    }
+                  },
+                  "many": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "дней подряд"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "дней подряд"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "comment": "The quantity selects a native plural unit while Stats renders the prominent number separately. Keep argNum and lld quantity metadata across languages; unit text must not repeat the number."
+    },
+    "Could not copy to the clipboard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not copy to the clipboard."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось скопировать в буфер обмена."
+          }
+        }
+      }
+    },
+    "Could not open Codex.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not open Codex."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось открыть Codex."
+          }
+        }
+      }
+    },
+    "%@: the skill file is not in the expected place. Nothing was confirmed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: the skill file is not in the expected place. Nothing was confirmed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: файл навыка не найден в ожидаемом месте. Результат не подтвержден."
+          }
+        }
+      }
+    },
+    "Coding agents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Coding agents"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Агенты для программирования"
+          }
+        }
+      }
+    },
+    "This build of FluidVoice cannot share meetings with coding agents.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This build of FluidVoice cannot share meetings with coding agents."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В этой сборке FluidVoice нельзя предоставить агентам для программирования доступ к встречам."
+          }
+        }
+      }
+    },
+    "Meetings are not reaching your agents yet. Remove the skill and add it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meetings are not reaching your agents yet. Remove the skill and add it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Агенты пока не получают доступ к встречам. Удалите навык и добавьте его снова."
+          }
+        }
+      }
+    },
+    "Add skill": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add skill"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Добавить навык"
+          }
+        }
+      }
+    },
+    "Update skill": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update skill"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обновить навык"
+          }
+        }
+      }
+    },
+    "Remove skill": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove skill"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить навык"
+          }
+        }
+      }
+    },
+    "Open Codex": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Codex"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открыть Codex"
+          }
+        }
+      }
+    },
+    "Starts a new Codex chat with a first question typed in. Nothing is sent until you send it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Starts a new Codex chat with a first question typed in. Nothing is sent until you send it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Открывает новый чат Codex с подготовленным вопросом. Отправка произойдет только после вашего действия."
+          }
+        }
+      }
+    },
+    "Other agents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other agents"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие агенты"
+          }
+        }
+      }
+    },
+    "Copied. Now paste it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied. Now paste it."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скопировано. Вставьте инструкции."
+          }
+        }
+      }
+    },
+    "Sharing is on": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sharing is on"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Доступ включен"
+          }
+        }
+      }
+    },
+    "Cursor, Gemini and others": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cursor, Gemini and others"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cursor, Gemini и другие"
+          }
+        }
+      }
+    },
+    "Copy instructions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy instructions"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Копировать инструкции"
+          }
+        }
+      }
+    },
+    "Stop sharing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop sharing"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Отключить доступ"
+          }
+        }
+      }
+    },
+    "No agent can read your meetings until you add one again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No agent can read your meetings until you add one again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Агенты не смогут читать ваши встречи, пока вы снова не подключите их."
+          }
+        }
+      }
+    },
+    "Not on this Mac": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not on this Mac"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет на этом Mac"
+          }
+        }
+      }
+    },
+    "Not added": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not added"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Навык не добавлен"
+          }
+        }
+      }
+    },
+    "Skill added": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skill added"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Навык добавлен"
+          }
+        }
+      }
+    },
+    "Needs update": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Needs update"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нужно обновить"
+          }
+        }
+      }
+    },
+    "Another fluidmeet skill is already there": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another fluidmeet skill is already there"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Здесь уже есть другой навык fluidmeet"
+          }
+        }
+      }
+    },
+    "%@ · in %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · in %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · в %@"
+          }
+        }
+      }
+    },
+    "Record this meeting? %@. Nothing is recording yet.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record this meeting? %@. Nothing is recording yet."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записать эту встречу? %@. Запись еще не началась."
+          }
+        }
+      }
+    },
+    "Keep recording": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep recording"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Продолжить запись"
+          }
+        }
+      }
+    },
+    "A meeting an agent reads is sent to that agent.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A meeting an agent reads is sent to that agent."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст встречи, который читает агент, передается этому агенту."
+          }
+        }
+      }
+    },
+    "Meeting summaries and agent integrations": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting summaries and agent integrations"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резюме встреч и интеграции с агентами"
+          }
+        }
+      }
+    },
+    "Meeting detection, model compatibility, and read-only agent access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting detection, model compatibility, and read-only agent access."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обнаружение встреч, совместимость моделей и доступ агентов только для чтения."
+          }
+        }
+      }
+    },
+    "YOUR MEETINGS, WITH SOURCES": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "YOUR MEETINGS, WITH SOURCES"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ВАШИ ВСТРЕЧИ СО ССЫЛКАМИ НА ИСТОЧНИКИ"
+          }
+        }
+      }
+    },
+    "Meeting summaries with sources": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting summaries with sources"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Резюме встреч с источниками"
+          }
+        }
+      }
+    },
+    "Generate grounded summaries with transcript source references. Existing provider connections share the meeting workspace.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Generate grounded summaries with transcript source references. Existing provider connections share the meeting workspace."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Создавайте резюме со ссылками на фрагменты транскрипта. Уже настроенные подключения к провайдерам доступны в рабочей области встреч."
+          }
+        }
+      }
+    },
+    "MEET YOUR CODING AGENTS": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MEET YOUR CODING AGENTS"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ПОДКЛЮЧИТЕ АГЕНТОВ ДЛЯ ПРОГРАММИРОВАНИЯ"
+          }
+        }
+      }
+    },
+    "Connect your coding agents": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect your coding agents"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подключите агентов для программирования"
+          }
+        }
+      }
+    },
+    "Let coding agents read completed transcripts and saved summaries after enabling read-only sharing in meeting settings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Let coding agents read completed transcripts and saved summaries after enabling read-only sharing in meeting settings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешите агентам читать готовые транскрипты и сохраненные резюме, включив доступ только для чтения в настройках встреч."
+          }
+        }
+      }
+    },
+    "AI provider compatibility": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI provider compatibility"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Совместимость ИИ-провайдеров"
+          }
+        }
+      }
+    },
+    "Sampling support follows provider metadata; local and cloud connections keep their existing configuration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sampling support follows provider metadata; local and cloud connections keep their existing configuration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддержка параметров генерации определяется метаданными провайдера. Локальные и облачные подключения сохраняют текущие настройки."
+          }
+        }
+      }
+    },
+    "A different %@ skill is already at %@. FluidVoice left it untouched.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A different %@ skill is already at %@. FluidVoice left it untouched."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другой навык %@ уже находится по адресу %@. FluidVoice не изменил его."
+          }
+        }
+      }
+    },
+    "This build of FluidVoice does not include %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This build of FluidVoice does not include %@."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта сборка FluidVoice не содержит %@."
+          }
+        }
+      }
+    },
+    "The meeting reader could not start: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting reader could not start: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось запустить средство чтения встреч: %@"
+          }
+        }
+      }
+    },
+    "The meeting reader did not answer in time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting reader did not answer in time."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Средство чтения встреч не ответило вовремя."
+          }
+        }
+      }
+    },
+    "The meeting reader stopped with code %d.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting reader stopped with code %d."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Средство чтения встреч завершилось с кодом %d."
+          }
+        }
+      }
+    },
+    "The meeting reader gave an answer FluidVoice could not read.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting reader gave an answer FluidVoice could not read."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Средство чтения встреч вернуло ответ, который FluidVoice не удалось прочитать."
+          }
+        }
+      }
+    },
+    "Choose a provider to summarize with, or add one in AI Providers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a provider to summarize with, or add one in AI Providers."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите провайдера для итогов или добавьте его в разделе «ИИ-провайдеры»."
+          }
+        }
+      }
+    },
+    "Choose a summary model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a summary model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите модель для итогов."
+          }
+        }
+      }
+    },
+    "Integrations…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Integrations…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Интеграции…"
+          }
+        }
+      }
+    },
+    "On device - %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On device - %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На устройстве - %@"
+          }
+        }
+      }
+    },
+    "Recommended only for Macs with more than %d GB of memory.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommended only for Macs with more than %d GB of memory."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Рекомендуется только для Mac с памятью более %d ГБ."
+          }
+        }
+      }
+    },
+    "The provider returned an incomplete summary. Try a shorter summary type or a model with a larger output limit. Your previous summary has been kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The provider returned an incomplete summary. Try a shorter summary type or a model with a larger output limit. Your previous summary has been kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Провайдер вернул неполные итоги. Попробуйте более короткий формат или модель с большим лимитом ответа. Предыдущие итоги сохранены."
+          }
+        }
+      }
+    },
+    "This model is unavailable or its provider needs verification. Update it in AI Providers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This model is unavailable or its provider needs verification. Update it in AI Providers."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель недоступна или ее провайдер требует проверки. Обновите его в разделе «ИИ-провайдеры»."
+          }
+        }
+      }
+    },
+    "This transcript is too large to summarize in one request. Export it in sections or use a shorter meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This transcript is too large to summarize in one request. Export it in sections or use a shorter meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта расшифровка слишком велика для итогов за один запрос. Экспортируйте ее по частям или выберите более короткую встречу."
+          }
+        }
+      }
+    },
+    "Write a custom prompt before generating.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write a custom prompt before generating."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перед генерацией напишите свой запрос."
+          }
+        }
+      }
+    },
+    "The skill folder contains too many saved entries. Review and clean up its recovery files before updating the skill.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The skill folder contains too many saved entries. Review and clean up its recovery files before updating the skill."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В папке навыка слишком много сохраненных записей. Просмотрите и очистите файлы восстановления перед обновлением навыка."
+          }
+        }
+      }
+    },
+    "Oops, text wasn't inserted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oops, text wasn't inserted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось вставить текст"
+          }
+        }
+      }
+    },
+    "Your transcript is saved. Copy it and paste it into a text field.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your transcript is saved. Copy it and paste it into a text field."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст сохранён. Скопируйте его и вставьте в текстовое поле."
+          }
+        }
+      }
+    },
+    "Only part of the text was inserted": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only part of the text was inserted"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст вставлен частично"
+          }
+        }
+      }
+    },
+    "Check the text field before inserting the full transcript again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the text field before inserting the full transcript again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверьте текстовое поле перед повторной вставкой полного текста."
+          }
+        }
+      }
+    },
+    "Hugging Face (default)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hugging Face (default)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hugging Face (по умолчанию)"
+          }
+        }
+      }
+    },
+    "Imported model folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported model folder"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортированная папка модели"
+          }
+        }
+      }
+    },
+    "Model source: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model source: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Источник модели: %@"
+          }
+        }
+      }
+    },
+    "Use %@ model (default)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use %@ model (default)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать модель с %@ (по умолчанию)"
+          }
+        }
+      }
+    },
+    "Other options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие варианты"
+          }
+        }
+      }
+    },
+    "Other model options": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other model options"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Другие варианты модели"
+          }
+        }
+      }
+    },
+    "Import model folder...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import model folder..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Импортировать папку модели..."
+          }
+        }
+      }
+    },
+    "Download the default model or import a supported local model folder.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the default model or import a supported local model folder."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скачайте модель по умолчанию или импортируйте папку с поддерживаемой локальной моделью."
+          }
+        }
+      }
+    },
+    "Changing model source...": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changing model source..."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Смена источника модели..."
+          }
+        }
+      }
+    },
+    "Model Source Change Failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model Source Change Failed"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сменить источник модели"
+          }
+        }
+      }
+    },
+    "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a folder, not an individual file. For the public model it must contain v3_e2e_ctc.int8.onnx and v3_e2e_ctc_vocab.txt. For the custom E2E model use v3_e2e_ctc_eou_v5.fp16.onnx and the same vocabulary file. Only supported exports with matching checksums can be imported."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите папку. Для публичной модели в ней должны быть файлы v3_e2e_ctc.int8.onnx и v3_e2e_ctc_vocab.txt. Для нашей модели E2E нужны v3_e2e_ctc_eou_v5.fp16.onnx и тот же файл словаря. Импортируются только поддерживаемые экспорты с соответствующими контрольными суммами."
+          }
+        }
+      }
+    },
+    "This speech model does not support changing its model source.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This speech model does not support changing its model source."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой модели распознавания нельзя сменить источник модели."
+          }
+        }
+      }
+    },
+    "No call was detected. Choose its app under Change, or choose In person for microphone-only recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No call was detected. Choose its app under Change, or choose In person for microphone-only recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Звонок не обнаружен. Выберите его приложение в меню «Изменить» или вариант «В одной комнате» для записи только микрофона."
+          }
+        }
+      }
+    },
+    "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting app is unavailable. Open it and refresh sources, or choose another app under Change."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранное приложение встречи недоступно. Откройте его и обновите источники или выберите другое приложение в меню «Изменить»."
+          }
+        }
+      }
+    },
+    "Choose the application that contains the online meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the application that contains the online meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выберите приложение, в котором проходит онлайн-встреча."
+          }
+        }
+      }
+    },
+    "System audio": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук"
+          }
+        }
+      }
+    },
+    "System audio · all apps": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio · all apps"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук · все приложения"
+          }
+        }
+      }
+    },
+    "Record audio from all apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record audio from all apps."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Записывайте звук всех приложений."
+          }
+        }
+      }
+    },
+    "System audio and your mic will be recorded, including apps opened during the meeting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio and your mic will be recorded, including apps opened during the meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Будут записаны системный звук и микрофон, включая приложения, открытые во время встречи."
+          }
+        }
+      }
+    },
+    "System audio includes apps opened during recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio includes apps opened during recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук включает приложения, открытые во время записи."
+          }
+        }
+      }
+    },
+    "System audio cannot be restricted to an application.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System audio cannot be restricted to an application."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Системный звук нельзя ограничить одним приложением."
+          }
+        }
+      }
+    },
+    "About the model": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About the model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "О модели"
+          }
+        }
+      }
+    },
+    "Another PCM window still owns the meeting inference runtime.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Another PCM window still owns the meeting inference runtime."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание предыдущего фрагмента PCM встречи ещё не завершено."
+          }
+        }
+      }
+    },
+    "Applies to past meetings too. Transcripts are always kept.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies to past meetings too. Transcripts are always kept."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Применяется и к прошлым встречам. Расшифровки сохраняются всегда."
+          }
+        }
+      }
+    },
+    "Audio recordings and transcripts are stored on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recordings and transcripts are stored on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозаписи и расшифровки хранятся на этом устройстве."
+          }
+        }
+      }
+    },
+    "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio recordings retain the original voices and sensitive information. Text redaction does not change audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В аудиозаписи остаются исходные голоса и чувствительные данные. Удаление данных из текста не изменяет аудио."
+          }
+        }
+      }
+    },
+    "Audio storage": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio storage"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранение аудио"
+          }
+        }
+      }
+    },
+    "Battery use and recognition speed depend on the device. Test longer meetings on your iPad.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Battery use and recognition speed depend on the device. Test longer meetings on your iPad."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Расход батареи и скорость распознавания зависят от устройства. Проверьте длительные встречи на своём iPad."
+          }
+        }
+      }
+    },
+    "Changes apply to new meetings. Audio retention also applies to existing recordings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes apply to new meetings. Audio retention also applies to existing recordings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Изменения применяются к новым встречам. Срок хранения аудио применяется и к существующим записям."
+          }
+        }
+      }
+    },
+    "Delete Meeting": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Meeting"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить встречу"
+          }
+        }
+      }
+    },
+    "Delete this meeting and its recordings?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this meeting and its recordings?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить эту встречу и её записи?"
+          }
+        }
+      }
+    },
+    "Download the speaker models in Recording settings before an offline meeting.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the speaker models in Recording settings before an offline meeting."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "До офлайн-встречи загрузите модели определения участников в настройках записи."
+          }
+        }
+      }
+    },
+    "Error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ошибка"
+          }
+        }
+      }
+    },
+    "Export as JSON": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export as JSON"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортировать как JSON"
+          }
+        }
+      }
+    },
+    "Export as Text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export as Text"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортировать как текст"
+          }
+        }
+      }
+    },
+    "Exported audio includes the original voices and sensitive information. It is outside app retention controls.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Exported audio includes the original voices and sensitive information. It is outside app retention controls."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Экспортированное аудио содержит исходные голоса и чувствительные данные. Приложение не управляет его сроком хранения."
+          }
+        }
+      }
+    },
+    "GigaAM supports Russian. For English or mixed speech, select a multilingual model.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM supports Russian. For English or mixed speech, select a multilingual model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GigaAM поддерживает русский язык. Для английской или смешанной речи выберите мультиязычную модель."
+          }
+        }
+      }
+    },
+    "In-memory transcription could not keep up with microphone capture.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up with microphone capture."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает обрабатывать аудио микрофона."
+          }
+        }
+      }
+    },
+    "In-memory transcription could not keep up. Recording stopped and completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription could not keep up. Recording stopped and completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание в памяти не успевает за разговором. Запись остановлена, готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "In-memory transcription is not available for this attempt.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription is not available for this attempt."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для этой попытки недоступно распознавание только из памяти."
+          }
+        }
+      }
+    },
+    "In-memory transcription requires finite mono 16 kHz PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription requires finite mono 16 kHz PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для распознавания в памяти нужен корректный одноканальный сигнал 16 кГц."
+          }
+        }
+      }
+    },
+    "In-memory transcription stopped. Completed text was preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-memory transcription stopped. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание из памяти остановлено. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live text updates in fragments. Speaker labels can be uncertain in short or overlapping speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Текст во время записи обновляется фрагментами. Участник может остаться неопределённым в коротких или одновременных репликах."
+          }
+        }
+      }
+    },
+    "Meeting backend \"%@\" does not support %@ input.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting backend \"%@\" does not support %@ input."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Обработчик встречи «%@» не поддерживает аудиовход %@."
+          }
+        }
+      }
+    },
+    "Meeting backend \"%@\" produced capabilities different from its registration.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meeting backend \"%@\" produced capabilities different from its registration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Возможности обработчика встречи «%@» отличаются от зарегистрированных."
+          }
+        }
+      }
+    },
+    "Microphone PCM conversion failed. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone PCM conversion failed. %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудио микрофона. %@"
+          }
+        }
+      }
+    },
+    "Microphone sample-buffer construction failed (%d).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Microphone sample-buffer construction failed (%d)."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось создать аудиобуфер микрофона (%d)."
+          }
+        }
+      }
+    },
+    "Minimal resource usage. Best for older devices or battery life.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Minimal resource usage. Best for older devices or battery life."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Минимальное потребление ресурсов. Подходит для старых устройств и экономии заряда."
+          }
+        }
+      }
+    },
+    "Mixed Russian and English speech may contain errors or transliteration.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mixed Russian and English speech may contain errors or transliteration."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При смешанной русской и английской речи возможны ошибки и запись слов буквами другого языка."
+          }
+        }
+      }
+    },
+    "Only in-room microphone capture is available on this platform.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only in-room microphone capture is available on this platform."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "На этом устройстве можно записывать только разговор в одной комнате через микрофон."
+          }
+        }
+      }
+    },
+    "Parakeet v3 supports 25 languages, including Russian and English.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parakeet v3 supports 25 languages, including Russian and English."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parakeet v3 поддерживает 25 языков, включая русский и английский."
+          }
+        }
+      }
+    },
+    "Prepare the local privacy model before enabling sensitive data redaction.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prepare the local privacy model before enabling sensitive data redaction."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовьте локальную модель приватности перед включением удаления чувствительных данных."
+          }
+        }
+      }
+    },
+    "Privacy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приватность"
+          }
+        }
+      }
+    },
+    "Recording settings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recording settings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки записи"
+          }
+        }
+      }
+    },
+    "Redact sensitive data": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redact sensitive data"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалять чувствительные данные"
+          }
+        }
+      }
+    },
+    "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Russian names and structured identifiers are redacted locally before saving text. Recognition may miss sensitive data. Review the result before sharing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Русские имена и структурированные идентификаторы удаляются локально до сохранения текста. Распознавание может пропустить чувствительные данные. Проверьте результат перед отправкой."
+          }
+        }
+      }
+    },
+    "Save audio recordings": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save audio recordings"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранять аудиозаписи"
+          }
+        }
+      }
+    },
+    "Sensitive data": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Чувствительные данные"
+          }
+        }
+      }
+    },
+    "Sensitive data redaction requires a compatible meeting backend.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction requires a compatible meeting backend."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для удаления чувствительных данных нужен совместимый движок встреч."
+          }
+        }
+      }
+    },
+    "Sensitive data redaction stopped. Recording was interrupted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sensitive data redaction stopped. Recording was interrupted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаление чувствительных данных остановлено. Запись прервана."
+          }
+        }
+      }
+    },
+    "Speaker labels are automatic and can be uncertain in short or overlapping speech.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker labels are automatic and can be uncertain in short or overlapping speech."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Участники определяются автоматически. Короткие или одновременные реплики могут остаться без точной метки."
+          }
+        }
+      }
+    },
+    "Stored on this device. Place the microphone where everyone can be heard.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stored on this device. Place the microphone where everyone can be heard."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хранится на этом устройстве. Расположите микрофон так, чтобы было слышно всех."
+          }
+        }
+      }
+    },
+    "System Default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System Default"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "По умолчанию в системе"
+          }
+        }
+      }
+    },
+    "The app is shutting down.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app is shutting down."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Приложение завершает работу."
+          }
+        }
+      }
+    },
+    "The audio contains invalid PCM samples.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio contains invalid PCM samples."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио содержит некорректные отсчёты PCM."
+          }
+        }
+      }
+    },
+    "The audio session was interrupted by the operating system.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The audio session was interrupted by the operating system."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Операционная система прервала запись аудио."
+          }
+        }
+      }
+    },
+    "The bounded audio writer rejected microphone PCM.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded audio writer rejected microphone PCM."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось принять аудио микрофона для сохранения."
+          }
+        }
+      }
+    },
+    "The bounded microphone queue is full.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The bounded microphone queue is full."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очередь аудио микрофона заполнена."
+          }
+        }
+      }
+    },
+    "The in-memory audio budget is invalid.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio budget is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректный лимит памяти для обработки аудио."
+          }
+        }
+      }
+    },
+    "The in-memory microphone timeline changed. Completed text was preserved.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory microphone timeline changed. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона изменились. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed Whisper artifact changed after this meeting was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель Whisper изменилась после подготовки этой встречи. Запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The installed meeting model changed after this attempt was scheduled. Start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The installed meeting model changed after this attempt was scheduled. Start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Установленная модель встречи изменилась после подготовки этой попытки. Запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The meeting PCM window is outside the bounded inference contract.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The meeting PCM window is outside the bounded inference contract."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Фрагмент PCM встречи превышает допустимые ограничения распознавания."
+          }
+        }
+      }
+    },
+    "The microphone PCM timeline changed unexpectedly.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone PCM timeline changed unexpectedly."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Временные метки аудио микрофона неожиданно изменились."
+          }
+        }
+      }
+    },
+    "The microphone audio configuration changed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone audio configuration changed."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройки аудиосигнала микрофона изменились."
+          }
+        }
+      }
+    },
+    "The microphone supplied a non-finite PCM sample.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied a non-finite PCM sample."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректное значение аудиосигнала."
+          }
+        }
+      }
+    },
+    "The microphone supplied an invalid PCM buffer.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid PCM buffer."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректный аудиобуфер."
+          }
+        }
+      }
+    },
+    "The microphone supplied an invalid presentation timestamp.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The microphone supplied an invalid presentation timestamp."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Микрофон передал некорректную временную метку."
+          }
+        }
+      }
+    },
+    "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The pinned meeting model artifacts are unavailable. Restore them or start a new processing run."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зафиксированные файлы модели для встречи недоступны. Восстановите их или запустите обработку заново."
+          }
+        }
+      }
+    },
+    "The selected meeting runtime does not support in-memory audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected meeting runtime does not support in-memory audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный движок встреч не поддерживает распознавание аудио из памяти."
+          }
+        }
+      }
+    },
+    "This Whisper artifact does not support automatic Russian and English recognition.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This Whisper artifact does not support automatic Russian and English recognition."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Эта модель Whisper не поддерживает автоматическое распознавание русского и английского языков."
+          }
+        }
+      }
+    },
+    "Unknown converter error.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown converter error."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неизвестная ошибка преобразования аудио."
+          }
+        }
+      }
+    },
+    "Unsupported source format.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported source format."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Формат аудиосигнала не поддерживается."
+          }
+        }
+      }
+    },
+    "Use Model": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Model"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Использовать модель"
+          }
+        }
+      }
+    },
+    "When different people speak in one transcript phrase, speaker labels may remain unknown.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When different people speak in one transcript phrase, speaker labels may remain unknown."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если в одной распознанной фразе говорят разные люди, участник может остаться неопределённым."
+          }
+        }
+      }
+    },
+    "When disabled, audio is never written to files, including temporary files. Only the transcript is saved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When disabled, audio is never written to files, including temporary files. Only the transcript is saved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Если выключено, аудио не записывается в файлы, даже временные. Сохраняется только расшифровка."
+          }
+        }
+      }
+    },
+    "Whisper CPU backend is unavailable on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper CPU backend is unavailable on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CPU-бэкенд Whisper недоступен на этом устройстве."
+          }
+        }
+      }
+    },
+    "Whisper Tiny is small and fast, with lower recognition accuracy.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny is small and fast, with lower recognition accuracy."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Whisper Tiny занимает мало места и работает быстро, но точность распознавания ниже."
+          }
+        }
+      }
+    },
+    "Selected for new meetings. Recognition runs during the meeting or after recording.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected for new meetings. Recognition runs during the meeting or after recording."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель выбрана для новых встреч. Распознавание выполняется во время встречи или после записи."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер."
+          }
+        }
+      }
+    },
+    "Command Mode needs a selected chat model.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a selected chat model."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужно выбрать чат-модель."
+          }
+        }
+      }
+    },
+    "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужна чат-модель. Выбранная модель не поддерживается интерфейсом chat/completions."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер. Выберите проверенную модель или проверьте провайдера в разделе «Провайдеры ИИ»."
+          }
+        }
+      }
+    },
+    "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для режима команд нужен проверенный чат-провайдер. Проверьте этого провайдера в разделе «Провайдеры ИИ», прежде чем использовать режим команд."
+          }
+        }
+      }
+    },
+    "%@ for Command Mode is coming soon. Choose a model from a verified chat provider.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ for Command Mode is coming soon. Choose a model from a verified chat provider."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поддержка %@ в режиме команд скоро появится. Выберите модель проверенного чат-провайдера."
+          }
+        }
+      }
+    },
+    "Audio captured, waiting for transcription": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Audio captured, waiting for transcription"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудио записано, ожидается распознавание"
+          }
+        }
+      }
+    },
+    "My voice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "My voice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Мой голос"
+          }
+        }
+      }
+    },
+    "Your voice is saved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your voice is saved"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш голос сохранён"
+          }
+        }
+      }
+    },
+    "Your voice is not set up": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your voice is not set up"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваш голос ещё не настроен"
+          }
+        }
+      }
+    },
+    "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up your voice so matching speech is labelled You in future meetings. The voice profile stays on this device."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройте свой голос, чтобы в следующих встречах ваша речь отмечалась как «Вы». Голосовой профиль хранится на этом устройстве."
+          }
+        }
+      }
+    },
+    "Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read aloud at a natural pace for 15 to 20 seconds. Audio stays in memory and is discarded after checking. Only Save stores the voice profile."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Читайте вслух в обычном темпе в течение 15-20 секунд. Аудио остаётся в памяти и удаляется после проверки. Голосовой профиль сохраняется только по кнопке «Сохранить»."
+          }
+        }
+      }
+    },
+    "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Today I am setting up my voice for meeting transcripts. I speak at a natural pace and keep the microphone at a comfortable distance. This sample helps the app distinguish my voice from other people. I can remove my voice profile in Settings at any time."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сегодня я настраиваю свой голос для расшифровки встреч. Я говорю в обычном темпе и держу микрофон на удобном расстоянии. Этот образец поможет приложению отличить мой голос от голосов других людей. Я могу удалить свой голосовой профиль в настройках в любое время."
+          }
+        }
+      }
+    },
+    "Voice sample duration": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice sample duration"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Длительность образца голоса"
+          }
+        }
+      }
+    },
+    "Checking voice sample…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking voice sample…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Проверка образца голоса…"
+          }
+        }
+      }
+    },
+    "Preparing microphone…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preparing microphone…"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Подготовка микрофона…"
+          }
+        }
+      }
+    },
+    "Voice sample is ready. Save to use it in future meetings.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice sample is ready. Save to use it in future meetings."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Образец голоса готов. Сохраните его, чтобы использовать в следующих встречах."
+          }
+        }
+      }
+    },
+    "Set up my voice": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up my voice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настроить мой голос"
+          }
+        }
+      }
+    },
+    "Delete voice profile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete voice profile"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить голосовой профиль"
+          }
+        }
+      }
+    },
+    "Delete your voice profile?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete your voice profile?"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удалить ваш голосовой профиль?"
+          }
+        }
+      }
+    },
+    "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Future meetings will use participant labels until you set up your voice again. Existing transcripts are unchanged."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В следующих встречах будут использоваться метки участников, пока вы снова не настроите свой голос. Существующие расшифровки не изменятся."
+          }
+        }
+      }
+    },
+    "Voice enrollment was interrupted. Please record a new sample.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice enrollment was interrupted. Please record a new sample."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройка голоса прервана. Запишите новый образец."
+          }
+        }
+      }
+    },
+    "The voice sample could not be read. Please record it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice sample could not be read. Please record it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать образец голоса. Запишите его ещё раз."
+          }
+        }
+      }
+    },
+    "Not enough clear speech. Read the text aloud for 15 to 20 seconds, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not enough clear speech. Read the text aloud for 15 to 20 seconds, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Недостаточно чёткой речи. Читайте текст вслух в течение 15-20 секунд, затем попробуйте снова."
+          }
+        }
+      }
+    },
+    "The sample contains different voices or too much noise. Record your voice alone in a quiet room.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sample contains different voices or too much noise. Record your voice alone in a quiet room."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В образце слышны разные голоса или слишком много шума. Запишите только свой голос в тихой комнате."
+          }
+        }
+      }
+    },
+    "The saved voice profile could not be read. Please set up your voice again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The saved voice profile could not be read. Please set up your voice again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось прочитать сохранённый голосовой профиль. Настройте свой голос ещё раз."
+          }
+        }
+      }
+    },
+    "The voice profile changed while this sample was being checked. Please record it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice profile changed while this sample was being checked. Please record it again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Голосовой профиль изменился во время проверки образца. Запишите его ещё раз."
+          }
+        }
+      }
+    },
+    "Voice setup is already in progress. Wait for it to finish.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice setup is already in progress. Wait for it to finish."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настройка голоса уже выполняется. Дождитесь её завершения."
+          }
+        }
+      }
+    },
+    "Finish the current recording or transcription before setting up your voice.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finish the current recording or transcription before setting up your voice."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Завершите текущую запись или распознавание перед настройкой голоса."
+          }
+        }
+      }
+    },
+    "Allow microphone access in system Settings, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow microphone access in system Settings, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разрешите доступ к микрофону в системных настройках, затем попробуйте снова."
+          }
+        }
+      }
+    },
+    "The selected microphone is unavailable. Choose an available microphone, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The selected microphone is unavailable. Choose an available microphone, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Выбранный микрофон недоступен. Выберите доступный микрофон, затем попробуйте снова."
+          }
+        }
+      }
+    },
+    "Voice setup could not finish. Check your microphone and connection, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice setup could not finish. Check your microphone and connection, then try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось завершить настройку голоса. Проверьте микрофон и подключение, затем попробуйте снова."
+          }
+        }
+      }
+    },
+    "The in-memory audio archive configuration is invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio archive configuration is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Некорректная конфигурация аудиоархива в памяти."
+          }
+        }
+      }
+    },
+    "The in-memory recording has already been released.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory recording has already been released."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Аудиозапись уже удалена из памяти."
+          }
+        }
+      }
+    },
+    "The in-memory recording must be stopped before analysis.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory recording must be stopped before analysis."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перед анализом необходимо остановить запись."
+          }
+        }
+      }
+    },
+    "The requested in-memory audio range is invalid.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The requested in-memory audio range is invalid."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запрошен некорректный фрагмент аудиозаписи в памяти."
+          }
+        }
+      }
+    },
+    "The in-memory recording reached its audio memory limit. Completed text was preserved.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory recording reached its audio memory limit. Completed text was preserved."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Достигнут лимит памяти для аудиозаписи. Готовый текст сохранён."
+          }
+        }
+      }
+    },
+    "The in-memory audio recording could not be converted.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The in-memory audio recording could not be converted."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось преобразовать аудиозапись в памяти."
+          }
+        }
+      }
+    },
+    "Live captions have not started.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live captions have not started."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание ещё не началось."
           }
         }
       }

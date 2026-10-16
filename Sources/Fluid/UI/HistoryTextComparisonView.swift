@@ -14,7 +14,7 @@ struct HistoryTextComparisonView: View {
             if self.entry.wasAIProcessed {
                 HStack {
                     if self.showChanges, let message = self.comparisonMessage {
-                        Text(PichiLocalization.text(message)).foregroundStyle(.secondary)
+                        Text(PichiLocalization.text(message)).foregroundStyle(self.theme.palette.secondaryText)
                             .lineLimit(1).help(PichiLocalization.text(message))
                     }
                     Spacer()
@@ -22,7 +22,7 @@ struct HistoryTextComparisonView: View {
                         .fixedSize()
                 }
                 .font(self.theme.typography.caption)
-                .frame(height: 24)
+                .frame(minHeight: 24)
             }
             self.section(title: "Final text", content: self.entry.clipboardText ?? "", isOriginal: false)
             if self.entry.wasAIProcessed {
@@ -48,21 +48,25 @@ struct HistoryTextComparisonView: View {
 
     private func section(title: String, content: String, isOriginal: Bool) -> some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 8) {
-                Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong)
-                if !isOriginal, self.entry.wasAIProcessed {
-                    Text("AI enhanced").font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.accent)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(self.theme.palette.accent.opacity(0.1), in: Capsule())
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    self.sectionTitle(title)
+                    self.enhancementBadge(isOriginal: isOriginal)
+                    Spacer(minLength: 8)
+                    self.copyButton(content, isOriginal: isOriginal)
                 }
-                Spacer()
-                Button { self.copy(content) } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
-                    .accessibilityLabel(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
+                .fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        self.sectionTitle(title)
+                        Spacer(minLength: 8)
+                        self.copyButton(content, isOriginal: isOriginal)
+                    }
+                    self.enhancementBadge(isOriginal: isOriginal)
+                }
             }
             self.text(content, isOriginal: isOriginal)
+                .fixedSize(horizontal: false, vertical: true)
                 .font(self.theme.typography.body).lineSpacing(5)
                 .foregroundStyle(isOriginal ? self.theme.palette.secondaryText : self.theme.palette.primaryText)
                 .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
@@ -72,6 +76,31 @@ struct HistoryTextComparisonView: View {
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(self.theme.palette.cardBorder.opacity(0.5)))
     }
 
+    private func sectionTitle(_ title: String) -> some View {
+        Text(PichiLocalization.text(title)).font(self.theme.typography.bodyStrong)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private func enhancementBadge(isOriginal: Bool) -> some View {
+        if !isOriginal, self.entry.wasAIProcessed {
+            Text("AI enhanced").font(self.theme.typography.caption)
+                .foregroundStyle(self.theme.palette.accentText)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(self.theme.palette.elevatedCardBackground, in: Capsule())
+                .overlay(Capsule().stroke(self.theme.palette.accent.opacity(0.1), lineWidth: 1))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func copyButton(_ content: String, isOriginal: Bool) -> some View {
+        Button { self.copy(content) } label: { Image(systemName: "doc.on.doc") }
+            .buttonStyle(.plain).foregroundStyle(self.theme.palette.secondaryText)
+            .help(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
+            .accessibilityLabel(PichiLocalization.text(isOriginal ? "Copy raw text" : "Copy final text"))
+            .fixedSize()
+    }
+
     private func text(_ content: String, isOriginal: Bool) -> Text {
         guard self.showChanges, let comparison else { return Text(AttributedString(content)) }
         let runs = isOriginal ? comparison.original : comparison.final
@@ -79,8 +108,8 @@ struct HistoryTextComparisonView: View {
         for run in runs {
             var part = AttributedString(run.text)
             if run.changed {
-                part.foregroundColor = isOriginal ? .red : .green
-                part.backgroundColor = (isOriginal ? Color.red : Color.green).opacity(0.1)
+                part.foregroundColor = self.theme.palette.readableText(isOriginal ? .red : .green)
+                part.backgroundColor = self.theme.palette.cardBackground
                 if isOriginal {
                     part.strikethroughStyle = .single
                 } else {

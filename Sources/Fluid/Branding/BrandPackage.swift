@@ -112,10 +112,25 @@ nonisolated struct BrandPalette: Codable, Equatable, Sendable {
             throw BrandProfile.ValidationError.invalid("Theme must define every supported color token.")
         }
         for value in self.colors.values { try BrandProfile.validateColor(value) }
-        // Validate readable text across the actual surfaces used by the shared theme.
-        for background in ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"] {
-            guard Self.contrast(self.colors["primaryText"]!, self.colors[background]!) >= 4.5,
-                  Self.contrast(self.colors["secondaryText"]!, self.colors[background]!) >= 3 else {
+        let backgrounds = ["windowBackground", "contentBackground", "sidebarBackground", "cardBackground", "elevatedCardBackground", "toolbarBackground"]
+        // Accent and status colors also appear as labels and standalone icons,
+        // so they need readable contrast independently of paired button text.
+        // Any alpha blend of the defined opaque surfaces stays inside their
+        // per-channel RGB envelope. Its luminance is bounded by these extremes,
+        // including saturated hue mixtures that darken below both endpoints.
+        // One polarity and sufficient contrast at both extremes protects all
+        // those blends. This deliberately rejects some multicolor palettes.
+        let backgroundChannels = backgrounds.map { Self.channels(self.colors[$0]!) }
+        let darkest = Self.luminance((0..<3).map { channel in backgroundChannels.map { $0[channel] }.min()! })
+        let lightest = Self.luminance((0..<3).map { channel in backgroundChannels.map { $0[channel] }.max()! })
+        let foregrounds: [(String, Double)] = ["primaryText", "secondaryText", "tertiaryText", "warning", "success"].map {
+            (self.colors[$0]!, $0 == "primaryText" ? 4.5 : 3)
+        } + [(accent, 3)]
+        for (foreground, requiredContrast) in foregrounds {
+            let luminance = Self.luminance(foreground)
+            guard (luminance < darkest || luminance > lightest),
+                  Self.contrast(luminance, darkest) >= requiredContrast,
+                  Self.contrast(luminance, lightest) >= requiredContrast else {
                 throw BrandProfile.ValidationError.invalid("Theme text needs more contrast against its backgrounds.")
             }
         }
@@ -125,15 +140,25 @@ nonisolated struct BrandPalette: Codable, Equatable, Sendable {
     }
 
     static func contrast(_ first: String, _ second: String) -> Double {
-        let values = [self.luminance(first), self.luminance(second)]
-        return (values.max()! + 0.05) / (values.min()! + 0.05)
+        self.contrast(self.luminance(first), self.luminance(second))
+    }
+
+    private static func contrast(_ first: Double, _ second: Double) -> Double {
+        (max(first, second) + 0.05) / (min(first, second) + 0.05)
     }
 
     static func luminance(_ color: String) -> Double {
-        guard let rgb = UInt32(color.dropFirst(), radix: 16) else { return 0 }
-        let channels = [Double((rgb >> 16) & 255), Double((rgb >> 8) & 255), Double(rgb & 255)].map { value -> Double in
-            let normalized = value / 255
-            return normalized <= 0.04045 ? normalized / 12.92 : pow((normalized + 0.055) / 1.055, 2.4)
+        self.luminance(self.channels(color))
+    }
+
+    private static func channels(_ color: String) -> [Double] {
+        let rgb = UInt32(color.dropFirst(), radix: 16) ?? 0
+        return [Double((rgb >> 16) & 255), Double((rgb >> 8) & 255), Double(rgb & 255)].map { $0 / 255 }
+    }
+
+    private static func luminance(_ components: [Double]) -> Double {
+        let channels = components.map { value -> Double in
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
         }
         return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
     }
@@ -162,6 +187,30 @@ nonisolated struct BrandLogo: Codable, Equatable, Sendable {
         return data
     }
 
+    /// Structural validity alone permits legacy fully transparent artwork.
+    /// Keep that data importable, but never use it as a visible app locator.
+    func visibleData() throws -> Data? {
+        let data = try self.validatedData()
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return data
+        default:
+            // Full resolution avoids missing a small nontransparent mark. The
+            // validated 4096-side limit bounds this RGBA buffer to 64 MiB.
+            guard let context = CGContext(data: nil, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue), let pixels = context.data else { return nil }
+            context.clear(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            context.setBlendMode(.copy)
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            let rgba = UnsafeBufferPointer<UInt8>(start: pixels.assumingMemoryBound(to: UInt8.self),
+                count: context.bytesPerRow * image.height)
+            return stride(from: 3, to: rgba.count, by: 4).contains(where: { rgba[$0] != 0 }) ? data : nil
+        }
+    }
+
     private static func validatedType(_ data: Data) throws -> String {
         guard data.count <= Self.maximumBytes,
               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
@@ -183,6 +232,29 @@ nonisolated struct BrandLogos: Codable, Equatable, Sendable {
     var light: BrandLogo?
     var dark: BrandLogo?
     var menuBar: BrandLogo?
+
+    enum Role: String {
+        case primary, light, dark, menuBar
+    }
+
+    /// The existing appearance/menu variants fall back to usable primary art.
+    /// Native menu selection can defer primary fallback until after checking a
+    /// trusted distribution asset. Other callers use the normal variant chain.
+    /// Nil leaves the caller free to show its neutral, theme-aware locator.
+    func visibleData(for role: Role, fallbackToPrimary: Bool = true) -> Data? {
+        let preferred: BrandLogo?
+        switch role {
+        case .primary: preferred = nil
+        case .light: preferred = self.light
+        case .dark: preferred = self.dark
+        case .menuBar: preferred = self.menuBar
+        }
+        let primary = role == .primary || fallbackToPrimary ? self.primary : nil
+        for logo in [preferred, primary].compactMap({ $0 }) {
+            if let data = try? logo.visibleData() { return data }
+        }
+        return nil
+    }
 
     func validate() throws {
         let logos = [self.primary, self.light, self.dark, self.menuBar].compactMap { $0 }
@@ -219,16 +291,26 @@ nonisolated final class BrandPackageStore: @unchecked Sendable {
         return self.generation
     }
 
-    var hasOverride: Bool {
-        _ = self.current()
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.cachedOverride
+    struct Snapshot: Sendable {
+        let package: BrandPackage
+        let hasOverride: Bool
+        let revision: Int
     }
 
-    func current() -> BrandPackage {
+    var hasOverride: Bool { self.snapshot().hasOverride }
+
+    /// Rendering must bind artwork, fallback policy and cache generation to
+    /// the same commit, including imports completed on a background task.
+    func snapshot() -> Snapshot {
         self.lock.lock()
         defer { self.lock.unlock() }
+        let package = self.currentLocked()
+        return Snapshot(package: package, hasOverride: self.cachedOverride, revision: self.generation)
+    }
+
+    func current() -> BrandPackage { self.snapshot().package }
+
+    private func currentLocked() -> BrandPackage {
         if let cachedPackage { return cachedPackage }
         let storedData: Data?
         if let storageURL = self.storageURL,

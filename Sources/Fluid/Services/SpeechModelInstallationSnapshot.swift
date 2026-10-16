@@ -260,7 +260,7 @@ final class SpeechModelInstallationSnapshot: ObservableObject {
                 let directory = storedPath.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? spec.defaultCacheDirectory
                 exists = directory.map { spec.validatesInstalledArtifacts(at: $0) } ?? false
             case let .nemotron(folder):
-                #if arch(arm64)
+                #if arch(arm64) && os(macOS)
                 exists = caches.map { NemotronProvider.artifactsAreComplete(at: $0.appendingPathComponent(folder, isDirectory: true)) } ?? false
                 #else
                 exists = false

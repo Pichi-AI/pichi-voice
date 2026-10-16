@@ -34,6 +34,29 @@ final class MeetingAPIControllerTests: XCTestCase {
         }
     }
 
+    func testSystemAudioScopeIsExposedWithoutInventingApplicationIdentity() async throws {
+        try await self.withStore { store in
+            var session = self.makeSession()
+            session.mode = .onlineCall
+            session.applicationAudioScope = .systemAudio
+            session.capturedApplication = nil
+            session.audioTracks.append(MeetingAudioTrack(
+                id: UUID(), kind: .applicationAudio, sourceIdentifier: "system-audio",
+                sourceDisplayName: "System audio", format: nil, timebase: session.timebase,
+                health: .waiting, chunks: []
+            ))
+            try await store.create(session)
+            let router = LocalAPIRouter(meetingStore: store)
+            let list = await router.route(self.request(path: "/v1/meetings"))
+            let items = try XCTUnwrap(self.json(list)["items"] as? [[String: Any]])
+            XCTAssertEqual(items.first?["applicationAudioScope"] as? String, "systemAudio")
+            let transcript = await router.route(self.request(query: ["id": session.id.uuidString]))
+            let body = try self.json(transcript)
+            XCTAssertEqual(body["applicationAudioScope"] as? String, "systemAudio")
+            XCTAssertNil(body["applicationDisplayName"])
+        }
+    }
+
     func testJSONTranscriptPreservesTextTimestampsSpeakersAndEchoFlags() async throws {
         try await self.withStore { store in
             var session = self.makeSession()

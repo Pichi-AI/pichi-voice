@@ -60,6 +60,7 @@ run_public_build() {
     local development_team
     local signing_identity_hash
     local app_path
+    local build_settings
     local ctranscribe_framework
     local ctranscribe_versions
     local ctranscribe_version_a
@@ -75,7 +76,6 @@ run_public_build() {
         -configuration Debug
         -destination 'platform=macOS'
         -derivedDataPath "${DERIVED_DATA_PATH}"
-        build
     )
 
     cd "${PROJECT_DIR}"
@@ -83,7 +83,7 @@ run_public_build() {
     if [ "${signing_mode}" = "unsigned" ]; then
         echo "Running unsigned public FluidVoice build..."
         echo "Accessibility, Screen Recording, and microphone permissions may need to be granted again after rebuilding."
-        exec xcodebuild "${build_args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+        exec xcodebuild "${build_args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
     fi
 
     signing_identity_hash="$(resolve_development_identity_hash)"
@@ -120,13 +120,55 @@ EOF
         exit 1
     fi
 
-    echo "Running signed public FluidVoice build..."
-    echo "Build product: ${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
-    xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}"
+    # Resolve the owned application before building or postprocessing any bundle.
+    # JSON is data, including configurable brand names, never shell source.
+    build_args+=(build DEVELOPMENT_TEAM="${development_team}")
+    if ! build_settings="$(xcodebuild "${build_args[@]}" -showBuildSettings -json)"; then
+        echo "Unable to read signed build settings from Xcode." >&2
+        exit 1
+    fi
+    if ! app_path="$(printf '%s\n' "${build_settings}" | python3 -c '
+import json
+import os
+import sys
 
-    app_path="${DERIVED_DATA_PATH}/Build/Products/Debug/FluidVoice Debug.app"
+try:
+    entries = json.load(sys.stdin)
+    if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+        raise ValueError("Xcode build settings must be an array of target records")
+    targets = [entry for entry in entries if entry.get("target") == "fluid"]
+    if len(targets) != 1:
+        raise ValueError(f"Expected one build settings entry for target fluid; found {len(targets)}")
+    settings = targets[0].get("buildSettings")
+    if not isinstance(settings, dict) or settings.get("PRODUCT_TYPE") != "com.apple.product-type.application":
+        raise ValueError("Target fluid must describe an application")
+    build_dir = settings.get("TARGET_BUILD_DIR")
+    product_name = settings.get("FULL_PRODUCT_NAME")
+    for key, value in (("TARGET_BUILD_DIR", build_dir), ("FULL_PRODUCT_NAME", product_name)):
+        if not isinstance(value, str) or not value or any(token in value for token in ("$(", "${", "\n", "\r", "\0")):
+            raise ValueError(f"Target fluid has an unavailable or unresolved {key}")
+    if not os.path.isabs(build_dir):
+        raise ValueError("Target fluid TARGET_BUILD_DIR must be absolute")
+    if os.path.basename(product_name) != product_name or not product_name.endswith(".app") or product_name == ".app":
+        raise ValueError("Target fluid FULL_PRODUCT_NAME must name an app bundle")
+    root = os.path.realpath(sys.argv[1])
+    path = os.path.join(build_dir, product_name)
+    if os.path.commonpath([root, os.path.realpath(path)]) != root:
+        raise ValueError("Application bundle escapes DerivedData")
+    print(path)
+except (ValueError, OSError) as error:
+    print(f"Unable to resolve signed application product: {error}", file=sys.stderr)
+    sys.exit(1)
+' "${DERIVED_DATA_PATH}")"; then
+        exit 1
+    fi
+
+    echo "Running signed public FluidVoice build..."
+    echo "Build product: ${app_path}"
+    xcodebuild "${build_args[@]}"
+
     ctranscribe_framework="${app_path}/Contents/Frameworks/CTranscribe.framework"
-    if [ ! -d "${app_path}" ]; then
+    if [ ! -d "${app_path}" ] || [ -L "${app_path}" ]; then
         echo "Signed build product is missing: ${app_path}" >&2
         exit 1
     fi
@@ -169,7 +211,7 @@ EOF
         --options runtime --timestamp=none \
         --preserve-metadata=identifier,requirements,flags "${ctranscribe_framework}"
 
-    entitlements_file="$(mktemp -t fluidvoice-entitlements)"
+    entitlements_file="$(mktemp "${TMPDIR:-/tmp}/fluidvoice-entitlements.XXXXXX")"
     if ! codesign --display --entitlements :- "${app_path}" > "${entitlements_file}" 2>/dev/null; then
         rm -f "${entitlements_file}"
         echo "Unable to read existing app entitlements: ${app_path}" >&2
@@ -196,6 +238,12 @@ EOF
         fi
     fi
     rm -f "${entitlements_file}"
+
+    # fv-serve is embedded and signed by the Xcode build; fail here rather than ship an app without it.
+    if [ ! -x "${app_path}/Contents/Helpers/fv-serve" ]; then
+        echo "fv-serve is missing from the built app: ${app_path}" >&2
+        exit 1
+    fi
 
     echo "Verifying the signed app..."
     codesign --verify --deep --strict "${app_path}"

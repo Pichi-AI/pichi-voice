@@ -65,12 +65,20 @@ nonisolated struct BrandProfile: Codable, Equatable, Sendable {
 nonisolated enum AppBrand {
     static let appearanceChanged = Notification.Name("PichiBrandAppearanceChanged")
     static let profileDefaultsKey = "PichiBrandProfile"
-    static var bundleIdentifier: String { Bundle.main.bundleIdentifier ?? "local.voice.unbundled" }
+    static var bundleIdentifier: String { self.storageNamespace(for: Bundle.main.bundleIdentifier) }
     static var releaseBundleIdentifier: String { self.releaseBundleIdentifier(from: self.bundleIdentifier) }
     static func releaseBundleIdentifier(from identifier: String) -> String {
         identifier.hasSuffix(".debug") ? String(identifier.dropLast(".debug".count)) : identifier
     }
     static var storageNamespace: String { self.bundleIdentifier }
+    // Storage identity comes from the installed bundle, never appearance data.
+    // A malformed or unbundled executable must remain one safe path component.
+    static func storageNamespace(for bundleIdentifier: String?) -> String {
+        guard let identifier = bundleIdentifier, !identifier.isEmpty, identifier != ".", identifier != "..",
+              identifier.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 46 })
+        else { return "local.voice.unbundled" }
+        return identifier
+    }
     static func logsDirectory(in libraryDirectory: URL, storageNamespace: String) -> URL {
         // The namespace is trusted bundle identity, never an imported appearance name.
         libraryDirectory.appendingPathComponent("Logs", isDirectory: true)
@@ -78,13 +86,13 @@ nonisolated enum AppBrand {
     }
     static var applicationSupportDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support", isDirectory: true)
         return base.appendingPathComponent(self.storageNamespace, isDirectory: true)
     }
     static var modelsDirectory: URL { self.applicationSupportDirectory.appendingPathComponent("Models", isDirectory: true) }
     static var cachesDirectory: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches", isDirectory: true)
+            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Caches", isDirectory: true)
         return base.appendingPathComponent(self.storageNamespace, isDirectory: true)
     }
     static var keychainService: String { self.bundleIdentifier + ".provider-api-keys" }

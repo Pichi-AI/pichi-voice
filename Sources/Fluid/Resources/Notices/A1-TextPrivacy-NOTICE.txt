@@ -1,0 +1,16 @@
+A1 Russian PII, release 0.1.0
+Prepared for Powpowpow23.
+
+This work is derived from redmadrobot-rnd/rubert-base-pii-ner,
+published by Red Mad Robot R&D under Apache License 2.0.
+Source revision: c802e8cd26f85d1cf920973ea6f83965a0618d63.
+The upstream model derives from ai-forever/ruBert-base.
+
+Modifications include train-derived vocabulary pruning, adaptation of the
+classifier to independent overlapping BIO outputs, additional PII training,
+ONNX export, INT8 quantization, and a portable inference runtime.
+
+Original upstream LICENSE is included. No third-party dataset text is
+redistributed by this repository. See DATA_PROVENANCE.md for the distinct
+training-data license questions, including unresolved NEREL provenance.
+This notice does not assert endorsement by the upstream authors.

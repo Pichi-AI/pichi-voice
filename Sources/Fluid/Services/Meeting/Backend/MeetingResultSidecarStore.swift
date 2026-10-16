@@ -18,13 +18,6 @@ nonisolated enum MeetingResultSidecarReferenceSchema {
     static let currentVersion = 1
 }
 
-nonisolated struct MeetingResultSidecarReference: Codable, Equatable {
-    let formatVersion: Int
-    let fileName: String
-    let sha256: String
-    let byteCount: Int
-}
-
 nonisolated enum MeetingResultSidecarStoreError: LocalizedError, Equatable {
     case unsupportedReferenceFormatVersion(found: Int)
     case unexpectedFileName(expected: String, actual: String)

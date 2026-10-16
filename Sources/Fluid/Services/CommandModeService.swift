@@ -12,6 +12,7 @@ final class CommandModeService: ObservableObject {
     @Published private(set) var currentChatID: String?
 
     private let terminalService = TerminalService()
+    private let llmClient: LLMClient
     private let chatStore = ChatHistoryStore.shared
     private var pendingVoiceCommandCancellation: (commandID: String, requestStartIndex: Int, isOutputValid: @MainActor () -> Bool)?
     private var currentTurnCount = 0
@@ -28,7 +29,8 @@ final class CommandModeService: ObservableObject {
 
     // MARK: - Initialization
 
-    init() {
+    init(llmClient: LLMClient = .shared) {
+        self.llmClient = llmClient
         // Load current chat from store
         self.loadCurrentChatFromStore()
     }
@@ -467,15 +469,27 @@ final class CommandModeService: ObservableObject {
 
     /// Cancel pending command
     func cancelPendingCommand() {
-        self.pendingCommand = nil
-        self.pendingVoiceCommandCancellation = nil
+        guard !self.isProcessing, let pending = self.pendingCommand else { return }
+        if let proposal = self.conversationHistory.lastIndex(where: {
+            $0.role == .assistant && $0.toolCall?.id == pending.id
+        }) {
+            // This proposal was never dispatched, so there is no tool result to pair with it.
+            // Retain the user's request and any actual completions before the proposal.
+            self.discardUndispatchedMessages(from: proposal)
+        }
         self.conversationHistory.append(Message(
             role: .assistant,
-            content: "Command cancelled.",
+            content: PichiLocalization.text("Command cancelled."),
             stepType: .failure
         ))
-        self.isProcessing = false
-        self.currentStep = nil
+        // Persist before releasing approval ownership or allowing a chat switch.
+        self.saveCurrentChat()
+        self.resetChatTransientState()
+        self.syncToNotchState()
+        if self.shouldSyncCommandNotchState {
+            NotchContentState.shared.setCommandProcessing(false)
+            NotchContentState.shared.updateCommandStreamingText("")
+        }
     }
 
     /// Escape invalidates the voice owner before canceling its deferred confirmation.
@@ -687,9 +701,9 @@ final class CommandModeService: ObservableObject {
 
     private func stepDescription(for stepType: Message.StepType) -> String {
         switch stepType {
-        case .checking: return "Checking prerequisites..."
-        case .verifying: return "Verifying the result..."
-        case .executing: return "Executing command..."
+        case .checking: return PichiLocalization.text("Checking prerequisites...")
+        case .verifying: return PichiLocalization.text("Verifying the result...")
+        case .executing: return PichiLocalization.text("Executing command...")
         default: return ""
         }
     }
@@ -827,26 +841,25 @@ final class CommandModeService: ObservableObject {
     private func callLLM(isOutputValid: @escaping @MainActor () -> Bool) async throws -> LLMResponse {
         guard isOutputValid() else { throw CancellationError() }
         let settings = SettingsStore.shared
-        if let issue = settings.commandModeReadinessIssue {
-            throw LLMError.invalidRequest(issue)
+        guard let verified = settings.verifiedChatModelConfiguration(
+            providerID: settings.effectiveCommandModeProviderID,
+            modelID: settings.effectiveCommandModeSelectedModel
+        ) else {
+            throw LLMError.invalidRequest(settings.commandModeReadinessIssue ?? PichiLocalization.text("Command Mode needs a verified chat provider."))
         }
-
-        let providerID = settings.effectiveCommandModeProviderID
-        let model = settings.effectiveCommandModeSelectedModel
-        let apiKey = settings.getAPIKey(for: providerID) ?? ""
-
-        let baseURL: String
-        if let provider = settings.savedProviders.first(where: { $0.id == providerID }) {
-            baseURL = provider.baseURL
-        } else if ModelRepository.shared.isBuiltIn(providerID) {
-            baseURL = ModelRepository.shared.defaultBaseURL(for: providerID)
-        } else {
-            baseURL = ""
-        }
+        let providerID = verified.option.providerID
+        let model = verified.option.modelID
+        let apiKey = verified.apiKey
+        let baseURL = verified.baseURL
 
         // Build conversation with agentic system prompt
         let systemPrompt = """
         You are an autonomous, thoughtful macOS terminal agent. Execute user requests reliably and safely.
+
+        ## REQUEST SCOPE:
+        For informational questions or requests to produce text that do not require inspecting or changing the Mac, answer directly without tools or terminal pre-flight checks.
+        Honor explicit instructions not to use tools and the user's requested output format. For an exact-output request, return only the requested content without a preamble, explanation, or success/failure prefix.
+        These instructions take precedence over the workflow and summary conventions below, which apply to requests to inspect or act on the Mac.
 
         ## AGENTIC WORKFLOW (Follow this pattern):
 
@@ -980,7 +993,7 @@ final class CommandModeService: ObservableObject {
 
         // Reasoning models (o1, o3, gpt-5) don't support temperature parameter at all
         let isReasoningModel = settings.isReasoningModel(model)
-        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model)
+        let isTemperatureUnsupported = settings.isTemperatureUnsupported(model, baseURL: baseURL)
 
         // Get reasoning config for this model (e.g., reasoning_effort, enable_thinking)
         let reasoningConfig = SettingsStore.shared.getReasoningConfig(forModel: model, provider: providerID)
@@ -1015,7 +1028,7 @@ final class CommandModeService: ObservableObject {
             extraParameters: extraParams
         )
 
-        config.providerOptions = settings.providerConnectionOptions[providerID] ?? [:]
+        config.providerOptions = verified.connectionOptions
 
         // Keep retry logic (exponential backoff)
         config.maxRetries = 3
@@ -1064,7 +1077,7 @@ final class CommandModeService: ObservableObject {
 
         DebugLogger.shared.info("Using LLMClient for Command Mode (streaming=\(enableStreaming), messages=\(messages.count), history=\(self.conversationHistory.count))", source: "CommandModeService")
 
-        let response = try await LLMClient.shared.call(config)
+        let response = try await self.llmClient.call(config)
         guard isOutputValid() else { throw CancellationError() }
 
         // Final UI update - ensure all content is displayed

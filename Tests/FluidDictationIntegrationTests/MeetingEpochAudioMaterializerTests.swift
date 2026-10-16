@@ -287,6 +287,55 @@ final class MeetingEpochAudioMaterializerTests: XCTestCase {
         XCTAssertEqual(actual.spanSamples.last?.sampleRange.upperBound, actual.samples.count)
     }
 
+    func testBoundedReplayMatchesContinuousResamplingAndOwnsDerivativeCleanup() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replay-conversion-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = try self.writeWAV(into: directory, relativePath: "first.wav", seconds: 1.1,
+                                      sampleRate: 48_000, channels: 2, amplitude: 0.4)
+        let second = try self.writeWAV(into: directory, relativePath: "second.wav", seconds: 1.3,
+                                       sampleRate: 48_000, channels: 2, amplitude: 0.2)
+        let fixture = try self.makeManifestFixture(directory: directory, chunks: [
+            (self.makeChunk(sequence: 0, start: 0, end: 1.1, written: first), first),
+            (self.makeChunk(sequence: 1, start: 1.1, end: 2.4, written: second), second)
+        ])
+        let track = try XCTUnwrap(fixture.manifest.track(fixture.track.id))
+        let epoch = try XCTUnwrap(track.epochs.first)
+        let materializer = MeetingEpochAudioMaterializer()
+        let expected = try await materializer.materialize(epoch: epoch, track: track, manifest: fixture.manifest, sessionDirectory: directory)
+        var replay: MeetingEpochAudioReplay? = try await materializer.makeReplay(epoch: epoch, track: track,
+            manifest: fixture.manifest, sessionDirectory: directory)
+        XCTAssertEqual(replay?.source.totalSampleCount, expected.samples.count)
+        XCTAssertEqual(replay?.spanSamples, expected.spanSamples)
+        var actual: [Float] = []
+        try await replay?.source.replay { actual.append(contentsOf: $0) }
+        XCTAssertEqual(actual.count, expected.samples.count)
+        XCTAssertLessThan(zip(actual, expected.samples).map { abs($0 - $1) }.max() ?? 0, 1e-6)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix(".analysis-replay-") }.isEmpty,
+                      "The derivative is already unlinked while its handle remains readable; a process crash cannot leave raw PCM")
+        replay = nil
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix(".analysis-replay-") }.isEmpty)
+    }
+
+    func testReplayConversionFailureRemovesOwnedDerivative() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("replay-failure-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let written = try self.writeWAV(into: directory, relativePath: "source.wav", seconds: 1)
+        let fixture = try self.makeManifestFixture(directory: directory, chunks: [
+            (self.makeChunk(sequence: 0, start: 0, end: 1, written: written), written)
+        ])
+        let track = try XCTUnwrap(fixture.manifest.track(fixture.track.id))
+        let epoch = try XCTUnwrap(track.epochs.first)
+        try Data([1, 2, 3]).write(to: written.url)
+        do {
+            _ = try await MeetingEpochAudioMaterializer().makeReplay(epoch: epoch, track: track,
+                manifest: fixture.manifest, sessionDirectory: directory)
+            XCTFail("Changed source bytes must be refused")
+        } catch { XCTAssertTrue(error is MeetingEpochMaterializationError) }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix(".analysis-replay-") }.isEmpty)
+    }
+
     func testChangedBytesFailClosed() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("materializer-write-\(UUID().uuidString)", isDirectory: true)

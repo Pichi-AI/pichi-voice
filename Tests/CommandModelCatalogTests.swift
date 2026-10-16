@@ -8,6 +8,7 @@ final class UserDefaults {
     var values: [String: Any] = [:]
     var writes: [String] = []
     func object(forKey key: String) -> Any? { self.values[key] }
+    func string(forKey key: String) -> String? { self.values[key] as? String }
     func set(_ value: Any?, forKey key: String) {
         self.values[key] = value
         self.writes.append(key)
@@ -53,9 +54,11 @@ final class SettingsStore: ObservableObject {
     var rewriteModeSelectedProviderID = "anthropic" { didSet { self.writes.append("rewriteProvider") } }
     var rewriteModeSelectedModel = "rewrite-model" { didSet { self.writes.append("rewriteModel") } }
     var verifiedProviderFingerprints: [String: String] = [:] { didSet { self.writes.append("verification") } }
+    var providerConnectionOptions: [String: [String: String]] = [:] { didSet { self.writes.append("providerOptions") } }
     var availableModelsByProvider: [String: [String]] = [:] { didSet { self.writes.append("modelLists") } }
     var savedProviders: [SavedProvider] = [] { didSet { self.writes.append("savedProviders") } }
     var credentials: [String: String] = [:]
+    var loadedProviderAPIKeys: [String: String]? { self.credentials }
     var credentialSnapshots = 0
     var providerAPIKeys: [String: String] {
         self.credentialSnapshots += 1
@@ -109,7 +112,56 @@ final class SettingsStore: ObservableObject {
         self.staleSelectionsHaveNoEffects()
         self.customAliasesResolveConsistently()
         self.verifiedKeylessAndCredentialPrecedenceStayCompatible()
+        self.readinessMessagesRespectInterfaceLanguage()
         print("Command model catalog: \(self.checks) checks passed")
+    }
+
+    static func readinessMessagesRespectInterfaceLanguage() {
+        self.check(Bundle.main.localizations.contains("ru"), "Readiness fixture must load the actual compiled Russian catalog")
+        let cases: [(String, String, (SettingsStore) -> Void)] = [
+            ("Fluid Intelligence for Command Mode is coming soon. Choose a model from a verified chat provider.",
+             "Поддержка Fluid Intelligence в режиме команд скоро появится. Выберите модель проверенного чат-провайдера.",
+             { $0.selectedProviderID = "fluid" }),
+            ("Command Mode needs a verified chat provider.", "Для режима команд нужен проверенный чат-провайдер.",
+             { $0.selectedProviderID = "" }),
+            ("Command Mode needs a selected chat model.", "Для режима команд нужно выбрать чат-модель.",
+             { $0.selectedProviderID = "ollama"; $0.availableModelsByProvider["ollama"] = [] }),
+            ("Command Mode needs a chat model. The selected model is not supported by the chat/completions endpoint.",
+             "Для режима команд нужна чат-модель. Выбранная модель не поддерживается интерфейсом chat/completions.",
+             { $0.availableModelsByProvider["openai"] = ["text-embedding-3"] }),
+            ("Command Mode needs a verified chat provider. Choose a verified model, or verify a provider in AI Providers.",
+             "Для режима команд нужен проверенный чат-провайдер. Выберите проверенную модель или проверьте провайдера в разделе «Провайдеры ИИ».",
+             { $0.verifiedProviderFingerprints.removeValue(forKey: "openai") }),
+            ("Command Mode needs a verified chat provider. Verify this provider in AI Providers before using Command Mode.",
+             "Для режима команд нужен проверенный чат-провайдер. Проверьте этого провайдера в разделе «Провайдеры ИИ», прежде чем использовать режим команд.",
+             { $0.commandModeLinkedToGlobal = false; $0.commandModeSelectedProviderID = "openai"; $0.verifiedProviderFingerprints.removeValue(forKey: "openai") }),
+        ]
+        for language in ["en", "ru"] {
+            for (english, russian, configure) in cases {
+                let settings = self.fixture()
+                configure(settings)
+                UserDefaults.standard.set(language, forKey: PichiInterfaceLanguage.defaultsKey)
+                settings.writes = []
+                UserDefaults.standard.writes = []
+                let provider = settings.effectiveCommandModeProviderID
+                let model = settings.effectiveCommandModeSelectedModel
+                let verification = settings.verifiedProviderFingerprints
+                self.check(settings.commandModeReadinessIssue == (language == "ru" ? russian : english),
+                           "Actual readiness branch must use the compiled \(language) copy: \(english)")
+                self.check(settings.effectiveCommandModeProviderID == provider && settings.effectiveCommandModeSelectedModel == model
+                    && settings.verifiedProviderFingerprints == verification && settings.writes.isEmpty && UserDefaults.standard.writes.isEmpty,
+                    "Readiness localization must not change selection, verification or settings")
+            }
+            let settings = self.fixture()
+            UserDefaults.standard.set(language, forKey: PichiInterfaceLanguage.defaultsKey)
+            self.check(settings.commandModeReadinessIssue == nil, "A verified chat route must remain ready in either interface language")
+            let literal = "Command Mode needs a verified chat provider."
+            settings.savedProviders = [.init(id: "custom-a", name: literal, baseURL: "https://gateway.test/v1", models: [literal])]
+            settings.availableModelsByProvider["custom:custom-a"] = [literal]
+            let option = settings.commandModeModelCatalog().first { $0.providerID == "custom-a" }
+            self.check(option?.providerName == literal && option?.modelID == literal,
+                       "Provider names and model identifiers equal to catalog keys must remain literal data")
+        }
     }
 
     static func catalogIncludesEveryEligibleProvider() {

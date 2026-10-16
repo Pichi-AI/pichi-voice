@@ -376,7 +376,7 @@ struct MeetingRecordingPillContent: View {
         } label: {
             Image(systemName: "stop.fill")
                 .font(.fluidSystem(size: 8, weight: .bold))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(self.theme.palette.foreground(on: Color(red: 0.93, green: 0.23, blue: 0.23)))
                 .frame(width: 20, height: 20)
                 .background(Color(red: 0.93, green: 0.23, blue: 0.23), in: Circle())
         }

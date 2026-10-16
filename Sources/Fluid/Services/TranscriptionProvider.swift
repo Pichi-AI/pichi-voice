@@ -106,7 +106,7 @@ final nonisolated class ModelPreparationProgressRelay: @unchecked Sendable {
 
 /// Unified result type for ASR transcription across all providers
 /// Named ASRTranscriptionResult to avoid conflict with MeetingTranscriptionService.TranscriptionResult
-struct ASRTranscriptionResult {
+nonisolated struct ASRTranscriptionResult: Sendable {
     let text: String
     let confidence: Float
     /// Optional calibrated endpoint evidence from providers that actually expose an EOU head.
@@ -116,6 +116,9 @@ struct ASRTranscriptionResult {
     let parakeetProcessingDurationMilliseconds: Int?
     let pronunciationEnrollment: PronunciationEnrollmentCapture?
     let dictionaryLearningAlignment: DictionaryLearningAlignment?
+    /// Native utterance intervals, when a provider cannot supply word alignment.
+    /// These retain coarser timing precision and must never be presented as word times.
+    let segmentTimings: [ASRSegmentTiming]
 
     init(
         text: String,
@@ -123,7 +126,8 @@ struct ASRTranscriptionResult {
         endOfUtteranceProbability: Float? = nil,
         parakeetProcessingDurationMilliseconds: Int? = nil,
         pronunciationEnrollment: PronunciationEnrollmentCapture? = nil,
-        dictionaryLearningAlignment: DictionaryLearningAlignment? = nil
+        dictionaryLearningAlignment: DictionaryLearningAlignment? = nil,
+        segmentTimings: [ASRSegmentTiming] = []
     ) {
         self.text = text
         self.confidence = confidence
@@ -131,6 +135,7 @@ struct ASRTranscriptionResult {
         self.parakeetProcessingDurationMilliseconds = parakeetProcessingDurationMilliseconds
         self.pronunciationEnrollment = pronunciationEnrollment
         self.dictionaryLearningAlignment = dictionaryLearningAlignment
+        self.segmentTimings = segmentTimings
     }
 }
 
@@ -138,6 +143,33 @@ nonisolated struct ASRWordTiming: Sendable {
     let text: String
     let start: TimeInterval
     let end: TimeInterval
+}
+
+/// A provider's actual segment boundary, in seconds from its input PCM start.
+/// Unlike word alignment, one interval may contain multiple words or a sentence.
+nonisolated struct ASRSegmentTiming: Sendable, Equatable {
+    let text: String
+    let start: TimeInterval
+    let end: TimeInterval
+
+    /// Partial or malformed timing metadata must not silently discard wording or
+    /// invent a speaker boundary. Admit only an ordered, physically valid complete
+    /// segmentation whose rendered text still equals the provider's whole result.
+    static func validated(_ segments: [Self], text: String, duration: TimeInterval) -> [Self] {
+        guard duration.isFinite, duration > 0, !segments.isEmpty, segments.count <= 8_192 else { return [] }
+        var previousEnd: TimeInterval = 0
+        for segment in segments {
+            guard !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  segment.start.isFinite, segment.end.isFinite, segment.start >= previousEnd,
+                  segment.end > segment.start, segment.end <= duration + 1e-6 else { return [] }
+            previousEnd = segment.end
+        }
+        func normalized(_ value: String) -> String {
+            value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+        guard normalized(segments.map(\.text).joined(separator: " ")) == normalized(text) else { return [] }
+        return segments
+    }
 }
 
 // MARK: - Transcription Provider Protocol
@@ -199,6 +231,10 @@ protocol TranscriptionProvider {
     /// artifacts; cancellation must join any file operation before returning.
     func importModel(from directory: URL) async throws
 
+    /// Restore the registered download source after an explicit local import, retaining weights.
+    /// Callers use the same maintenance admission and joined cleanup as folder import.
+    func restoreDefaultModelSource() async throws
+
     /// Clear cached models
     func clearCache() async throws
 
@@ -215,6 +251,11 @@ extension TranscriptionProvider {
     func importModel(from directory: URL) async throws {
         throw NSError(domain: "TranscriptionProvider", code: -2, userInfo: [
             NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support importing a model folder."),
+        ])
+    }
+    func restoreDefaultModelSource() async throws {
+        throw NSError(domain: "TranscriptionProvider", code: -3, userInfo: [
+            NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support changing its model source."),
         ])
     }
     var shouldClearCacheAfterCancellation: Bool { true }

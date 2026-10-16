@@ -83,7 +83,7 @@ struct SearchableProviderPicker: View {
                 // Search field
                 HStack {
                     Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(self.theme.palette.secondaryText)
                     TextField("Search providers...", text: self.$searchText)
                         .textFieldStyle(.plain)
                 }
@@ -100,7 +100,7 @@ struct SearchableProviderPicker: View {
                             Text("BUILT-IN")
                                 .font(.fluidSystem(.caption2))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.horizontal, 10)
                                 .padding(.top, 8)
                                 .padding(.bottom, 4)
@@ -121,7 +121,7 @@ struct SearchableProviderPicker: View {
                             Text("CUSTOM")
                                 .font(.fluidSystem(.caption2))
                                 .fontWeight(.semibold)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding(.horizontal, 10)
                                 .padding(.top, 4)
                                 .padding(.bottom, 4)
@@ -134,7 +134,7 @@ struct SearchableProviderPicker: View {
                         if self.filteredProviders.isEmpty {
                             Text("No providers match '\(self.searchText)'")
                                 .font(.fluidSystem(.caption))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(self.theme.palette.secondaryText)
                                 .padding()
                         }
                     }
@@ -142,6 +142,8 @@ struct SearchableProviderPicker: View {
                 .frame(maxHeight: 300)
             }
             .frame(width: 240)
+            .foregroundStyle(self.theme.palette.primaryText)
+            .background(self.theme.palette.cardBackground)
         }
     }
 
@@ -157,7 +159,7 @@ struct SearchableProviderPicker: View {
                 Spacer()
                 if provider.id == self.selectedProviderID {
                     Image(systemName: "checkmark")
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                 }
             }
             .padding(.horizontal, 10)

@@ -37,6 +37,7 @@ private final class HistoryAppIconCache {
 }
 
 struct HistoryAppIcon: View {
+    @Environment(\.theme) private var theme
     let appName: String
     @State private var image: NSImage?
 
@@ -45,7 +46,7 @@ struct HistoryAppIcon: View {
             if let image {
                 Image(nsImage: image).resizable().scaledToFit()
             } else {
-                Image(systemName: "app").resizable().scaledToFit().foregroundStyle(.secondary)
+                Image(systemName: "app").resizable().scaledToFit().foregroundStyle(self.theme.palette.secondaryText)
             }
         }
         .frame(width: 22, height: 22)

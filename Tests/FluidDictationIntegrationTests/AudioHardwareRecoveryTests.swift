@@ -1617,6 +1617,141 @@ final class AudioRouteRecoveryIntegrationTests: XCTestCase {
             fixture.assertSessionPreserved()
         }
     }
+
+    @MainActor
+    func testRecoveryFixtureTerminatesOnlyItsOwnedMediaService() async throws {
+        var retainedFixture: ASRRecoveryFixture?
+        let unrelatedTransport = RecoveryMediaTransport()
+        let unrelated = MediaPlaybackService(transport: unrelatedTransport, settle: {})
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            retainedFixture = fixture
+            XCTAssertTrue(fixture.service.mediaPlaybackOwnerForTesting === fixture.media)
+            XCTAssertFalse(fixture.service.mediaPlaybackOwnerForTesting === MediaPlaybackService.shared,
+                           "Terminal fixture cleanup must never own the app's shared media service")
+        }
+        let fixture = try XCTUnwrap(retainedFixture)
+        let ownedQueries = await fixture.mediaTransport.queryCount
+        fixture.media.recordingStarted(sessionID: 123, enabled: true)
+        await fixture.media.waitUntilSettled()
+        let ignoredQueries = await fixture.mediaTransport.queryCount
+        XCTAssertEqual(ignoredQueries, ownedQueries, "The fixture's private media owner is terminal after cleanup")
+
+        unrelated.recordingStarted(sessionID: 456, enabled: true)
+        await unrelated.waitUntilSettled()
+        let paused = await unrelatedTransport.commands
+        XCTAssertEqual(paused, [.pause], "Unrelated media owners remain usable after fixture shutdown")
+        unrelated.sessionFinished(sessionID: 456)
+        await unrelated.waitUntilSettled()
+        let restored = await unrelatedTransport.commands
+        XCTAssertEqual(restored, [.pause, .play])
+        await unrelated.shutdown()
+    }
+
+    @MainActor
+    func testRecoveryFixtureUsesItsPrivateMicrophoneCoordinator() async throws {
+        let fixtureSuite = "recovery-coordinator-\(UUID().uuidString)"
+        let hostSuite = "recovery-host-\(UUID().uuidString)"
+        let fixtureDefaults = try XCTUnwrap(UserDefaults(suiteName: fixtureSuite))
+        let hostDefaults = try XCTUnwrap(UserDefaults(suiteName: hostSuite))
+        defer {
+            fixtureDefaults.removePersistentDomain(forName: fixtureSuite)
+            hostDefaults.removePersistentDomain(forName: hostSuite)
+        }
+        let fixtureSettings = SettingsStore(defaults: fixtureDefaults)
+        let hostSettings = SettingsStore(defaults: hostDefaults)
+        hostSettings.microphoneSelectionMigrationVersion = SettingsStore.microphonePriorityMigrationVersion
+        hostSettings.microphonePriority = [.init(uid: "foreign-host-original", name: "Host original")]
+        let hostInput = AudioDevice.Device(
+            id: 400, uid: "foreign-host-new", name: "Host new", hasInput: true, hasOutput: false
+        )
+        struct HostDevicePolicy: AudioDeviceManaging {
+            let input: AudioDevice.Device
+            func listInputDevices() -> [AudioDevice.Device] { [self.input] }
+            func defaultInputDevice() -> AudioDevice.Device? { self.input }
+        }
+        let hostCoordinator = MicrophonePreferenceCoordinator(
+            settings: hostSettings, devices: HostDevicePolicy(input: hostInput)
+        )
+        try await withASRRecoveryFixture(queryDelay: 0, microphoneSettings: fixtureSettings) { fixture in
+            let injected = try XCTUnwrap(fixture.service.microphonePreferenceCoordinatorForTesting)
+            XCTAssertFalse(injected === AppServices.shared.microphonePreferenceCoordinator)
+            XCTAssertEqual(injected.inputDeviceForCapture()?.uid, fixture.hardware.builtIn.uid)
+            XCTAssertNil(injected.inputDeviceForCapture(excluding: [fixture.hardware.builtIn.uid]),
+                         "Default capture selection must honor the injected device policy and exclusions")
+            let observer = AppServices.shared.audioObserver
+            let tick = observer.inputAvailabilityTick
+            let delivered = self.expectation(description: "Active format callback delivered")
+            fixture.service.recoveryFormatInvalidationDidFinishForTesting = { delivered.fulfill() }
+            defer { fixture.service.recoveryFormatInvalidationDidFinishForTesting = nil }
+            fixture.service.recoveryFormatInvalidationHandlerForTesting(.init(
+                generation: fixture.controller.snapshot.generation, deviceID: 200,
+                reason: "fixture_active_format_change", wasRunning: true
+            ))
+            await self.fulfillment(of: [delivered], timeout: 1)
+            XCTAssertEqual(observer.inputAvailabilityTick, tick + 1,
+                           "An active callback must still publish the existing availability event")
+            // ContentView responds to that global event by reconciling the real host
+            // catalog. Exercise an unrelated catalog deterministically: its writes
+            // must not reach the fixture coordinator's private preference owner.
+            _ = hostCoordinator.reconcileMicrophoneSelection(
+                availableInputs: [hostInput], defaultInputUID: hostInput.uid
+            )
+            let expectedHostPriority = ["foreign-host-original", hostInput.uid]
+            XCTAssertEqual(hostSettings.microphonePriority.map(\.uid), expectedHostPriority)
+            XCTAssertEqual(hostSettings.preferredInputDeviceUID, "foreign-host-original")
+            fixture.assertSettingsPreserved()
+            try await fixture.waitForBuiltInRecovery()
+            XCTAssertEqual(injected.confirmedActiveInputUID, fixture.hardware.builtIn.uid,
+                           "Recovery confirmation must stay in the fixture-owned coordinator")
+            fixture.assertSettingsPreserved()
+            fixtureSettings.suppressedMicrophoneUIDs = [fixture.hardware.builtIn.uid]
+            XCTAssertNil(injected.inputDeviceForCapture(),
+                         "Capture policy must read the same private preference owner whose priority is asserted")
+            XCTAssertEqual(hostSettings.microphonePriority.map(\.uid), expectedHostPriority,
+                           "Fixture recovery must not add synthetic capture devices to a foreign owner")
+            XCTAssertEqual(hostSettings.preferredInputDeviceUID, "foreign-host-original")
+        }
+    }
+
+    @MainActor
+    func testRecoveryFixtureTeardownRejectsLateEventsAndRestoresRawPreferences() async throws {
+        let original = ASRRecoveryFixture.rawPreferences()
+        var retainedFixture: ASRRecoveryFixture?
+        var retainedCallback: (@Sendable (DirectCoreAudioLifecycleController.FormatInvalidation) -> Void)?
+        try await withASRRecoveryFixture(queryDelay: 0) { fixture in
+            retainedFixture = fixture
+            retainedCallback = fixture.service.recoveryFormatInvalidationHandlerForTesting
+            fixture.service.triggerAudioRouteRecoveryForTesting()
+            try await fixture.waitForBuiltInRecovery()
+            fixture.assertSettingsPreserved()
+        }
+        let fixture = try XCTUnwrap(retainedFixture)
+        XCTAssertTrue(NSDictionary(dictionary: original).isEqual(to: ASRRecoveryFixture.rawPreferences()),
+                      "Joined teardown must restore exact presence and values, without coupled settings setters")
+        let queries = fixture.hardware.queryCount
+        fixture.service.triggerAudioRouteRecoveryForTesting()
+        XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.pending,
+                       "A retained callback owner must not rearm recovery after teardown")
+        XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.recovering)
+        XCTAssertEqual(fixture.controller.snapshot.phase, .shutDown)
+        XCTAssertEqual(fixture.hardware.queryCount, queries)
+        let observer = AppServices.shared.audioObserver
+        let tick = observer.inputAvailabilityTick
+        let delivered = self.expectation(description: "Retained callback delivered after teardown")
+        fixture.service.recoveryFormatInvalidationDidFinishForTesting = { delivered.fulfill() }
+        defer { fixture.service.recoveryFormatInvalidationDidFinishForTesting = nil }
+        try XCTUnwrap(retainedCallback)(.init(
+            generation: fixture.controller.snapshot.generation, deviceID: 200,
+            reason: "fixture_late_format_change", wasRunning: true
+        ))
+        await self.fulfillment(of: [delivered], timeout: 1)
+        XCTAssertEqual(observer.inputAvailabilityTick, tick,
+                       "The actual queued callback must not publish shared availability after shutdown")
+        XCTAssertFalse(fixture.service.audioRouteRecoveryStateForTesting.pending)
+        XCTAssertEqual(fixture.hardware.queryCount, queries)
+        XCTAssertTrue(NSDictionary(dictionary: original).isEqual(to: ASRRecoveryFixture.rawPreferences()),
+                      "Late route events must not change the restored preferences")
+    }
 }
 
 @MainActor
@@ -1627,83 +1762,106 @@ private func withASRRecoveryFixture(
     operationTimeout: TimeInterval? = nil,
     firstQueryDelay: TimeInterval? = nil,
     builtInStartDelay: TimeInterval = 0,
+    microphoneSettings: SettingsStore? = nil,
     _ body: (ASRRecoveryFixture) async throws -> Void
 ) async throws {
-    // The hosted app also performs its normal startup device reconciliation.
-    // Seed those existing inputs below the fake pair so that unrelated startup
-    // discovery cannot masquerade as a recovery-induced preference change.
-    let query = DirectCoreAudioLifecycleController(packetHandler: { _, _, _, _, _ in }, onFormatInvalidated: { _ in })
-    let liveInputs = try await query.readDeviceSnapshot().devices.filter(\.hasInput)
     let fixture = ASRRecoveryFixture(
         queryDelay: queryDelay,
         queryFailures: queryFailures,
-        liveInputs: liveInputs,
         externalStopDelay: externalStopDelay,
         operationTimeout: operationTimeout,
         firstQueryDelay: firstQueryDelay,
-        builtInStartDelay: builtInStartDelay
+        builtInStartDelay: builtInStartDelay,
+        microphoneSettings: microphoneSettings
     )
     defer { fixture.restoreSettings() }
     do {
         try await fixture.start()
         try await body(fixture)
     } catch {
-        await fixture.service.finishAudioRouteRecoveryTest()
+        await fixture.service.shutdownForTermination()
         throw error
     }
-    await fixture.service.finishAudioRouteRecoveryTest()
+    await fixture.service.shutdownForTermination()
 }
 
 @MainActor
 private final class ASRRecoveryFixture {
+    static let preferenceKeys = [
+        "MicrophonePriority", "PreferredInputDeviceUID", "SuppressedMicrophoneUIDs",
+        "MicrophoneSelectionMode", "AppOnlyMicrophoneSelectionMigrationVersion",
+        "ShowMicrophoneChangeAlerts", "PauseMediaDuringTranscription",
+    ]
+
+    static func rawPreferences() -> [String: Any] {
+        let defaults = UserDefaults.standard
+        return Dictionary(uniqueKeysWithValues: self.preferenceKeys.compactMap { key in
+            defaults.object(forKey: key).map { (key, $0) }
+        })
+    }
+
     let service: ASRService
     let controller: DirectCoreAudioLifecycleController
     let hardware: ASRRecoveryHardware
+    let mediaTransport: RecoveryMediaTransport
+    let media: MediaPlaybackService
     private let restore: () -> Void
     private let outputUID: String?
     private let modelID: String
     private let providerID: String
     private let expectedPriority: [String]
+    private let microphoneSettings: SettingsStore
     private let prefix: [Float] = [0.125, 0.25, 0.375]
 
     init(
         queryDelay: TimeInterval,
         queryFailures: Int,
-        liveInputs: [AudioDevice.Device],
         externalStopDelay: TimeInterval,
         operationTimeout: TimeInterval?,
         firstQueryDelay: TimeInterval?,
-        builtInStartDelay: TimeInterval
+        builtInStartDelay: TimeInterval,
+        microphoneSettings: SettingsStore?
     ) {
+        let original = Self.rawPreferences()
         let settings = SettingsStore.shared
-        let priority = settings.microphonePriority
-        let preferred = settings.preferredInputDeviceUID
-        let suppressed = settings.suppressedMicrophoneUIDs
-        let version = settings.microphoneSelectionMigrationVersion
-        let alerts = settings.showMicrophoneChangeAlerts
-        let pauseMedia = settings.pauseMediaDuringTranscription
         self.restore = {
-            settings.microphonePriority = priority
-            settings.preferredInputDeviceUID = preferred
-            settings.suppressedMicrophoneUIDs = suppressed
-            settings.microphoneSelectionMigrationVersion = version
-            settings.showMicrophoneChangeAlerts = alerts
-            settings.pauseMediaDuringTranscription = pauseMedia
+            let defaults = UserDefaults.standard
+            for key in Self.preferenceKeys {
+                if let value = original[key] { defaults.set(value, forKey: key) }
+                else { defaults.removeObject(forKey: key) }
+            }
         }
-        settings.microphoneSelectionMigrationVersion = 4
+        settings.microphoneSelectionMigrationVersion = SettingsStore.microphonePriorityMigrationVersion
         settings.microphonePriority = [
             .init(uid: "recovery-test-external", name: "Test External"),
             .init(uid: "recovery-test-built-in", name: "Test Built-in"),
-        ] + liveInputs.map { .init(uid: $0.uid, name: $0.name) }
+        ]
         settings.preferredInputDeviceUID = "recovery-test-external"
         settings.suppressedMicrophoneUIDs = []
         settings.showMicrophoneChangeAlerts = false
         settings.pauseMediaDuringTranscription = false
         self.expectedPriority = settings.microphonePriority.map(\.uid)
+        // Most recovery tests assert shared app preferences. The global-event test
+        // owns a separate coordinator store because normal host UI reconciliation
+        // intentionally updates shared microphone priority after the event.
+        let microphoneSettings = microphoneSettings ?? settings
+        self.microphoneSettings = microphoneSettings
+        if microphoneSettings !== settings {
+            microphoneSettings.microphoneSelectionMigrationVersion = settings.microphoneSelectionMigrationVersion
+            microphoneSettings.microphonePriority = settings.microphonePriority
+            microphoneSettings.preferredInputDeviceUID = settings.preferredInputDeviceUID
+            microphoneSettings.suppressedMicrophoneUIDs = settings.suppressedMicrophoneUIDs
+            microphoneSettings.showMicrophoneChangeAlerts = false
+        }
         self.outputUID = settings.preferredOutputDeviceUID
         self.modelID = settings.selectedSpeechModel.rawValue
         self.providerID = settings.selectedProviderID
-        let service = ASRService()
+        let mediaTransport = RecoveryMediaTransport()
+        let media = MediaPlaybackService(transport: mediaTransport, settle: {})
+        self.mediaTransport = mediaTransport
+        self.media = media
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        service.useMediaPlaybackForTesting(media)
         self.service = service
         let hardware = ASRRecoveryHardware(
             queryDelay: queryDelay,
@@ -1713,6 +1871,10 @@ private final class ASRRecoveryFixture {
             builtInStartDelay: builtInStartDelay
         )
         self.hardware = hardware
+        service.microphonePreferenceCoordinatorForTesting = MicrophonePreferenceCoordinator(
+            settings: microphoneSettings,
+            devices: RecoveryDevicePolicy(input: hardware.builtIn)
+        )
         self.controller = DirectCoreAudioLifecycleController(
             packetHandler: service.recoveryPacketHandlerForTesting,
             inputFactory: { id, handler in hardware.makeInput(id, handler: handler) },
@@ -1771,22 +1933,32 @@ private final class ASRRecoveryFixture {
     }
 
     func assertSettingsPreserved() {
-        XCTAssertEqual(SettingsStore.shared.microphonePriority.map(\.uid), self.expectedPriority)
-        XCTAssertEqual(SettingsStore.shared.preferredInputDeviceUID, "recovery-test-external")
+        XCTAssertEqual(self.microphoneSettings.microphonePriority.map(\.uid), self.expectedPriority)
+        XCTAssertEqual(self.microphoneSettings.preferredInputDeviceUID, "recovery-test-external")
         XCTAssertEqual(SettingsStore.shared.preferredOutputDeviceUID, self.outputUID)
         XCTAssertEqual(SettingsStore.shared.selectedSpeechModel.rawValue, self.modelID)
         XCTAssertEqual(SettingsStore.shared.selectedProviderID, self.providerID)
     }
 
     func restoreSettings() { self.restore() }
+
+    private struct RecoveryDevicePolicy: AudioDeviceManaging {
+        let input: AudioDevice.Device
+        var isClamshellClosed: Bool { false }
+        func listInputDevices() -> [AudioDevice.Device] { [self.input] }
+        func defaultInputDevice() -> AudioDevice.Device? { self.input }
+        func isInputDeviceUsable(_ device: AudioDevice.Device) -> Bool { device.isAlive }
+    }
 }
 
 private actor RecoveryMediaTransport: MediaPlaybackTransport {
     private var playing = true
     private(set) var commands: [MediaPlaybackCommand] = []
+    private(set) var queryCount = 0
 
     func query() async -> MediaPlaybackQueryResult {
-        .snapshot(MediaPlaybackSnapshot(bundleIdentifier: "test.player", processID: 1, title: "Test item", isPlaying: self.playing))
+        self.queryCount += 1
+        return .snapshot(MediaPlaybackSnapshot(bundleIdentifier: "test.player", processID: 1, title: "Test item", isPlaying: self.playing))
     }
 
     func send(_ command: MediaPlaybackCommand) async -> MediaPlaybackCommandResult {

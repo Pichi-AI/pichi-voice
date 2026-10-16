@@ -123,7 +123,7 @@ https://github.com/user-attachments/assets/c57ef6d5-f0a1-4a3f-a121-637533442c24
 - **Today-Usage Stats** — daily usage tracking at a glance with a stats header card and toolbar pill
 - **Adaptive Theming** — light/dark theme that follows your system, with a compact toolbar switcher
 - **Global Hotkey** — instant voice capture from anywhere, no app switching needed
-- **Hold Space to Mute** — optional temporary mute within a dictation: hold Space while thinking, then release to continue the same recording; quick taps still type spaces
+- **Hold Space to Mute** - optional temporary mute within a dictation: hold Space while thinking, then release to continue the same recording; quick taps still type spaces
 - **Smart Typing** — direct insertion into any app via accessibility APIs for reliable, app-independent text entry
 - **Menu Bar Integration** — quick access, status, and settings from the menu bar
 - **Auto-Updates** — seamless updates with an optional beta channel for early previews

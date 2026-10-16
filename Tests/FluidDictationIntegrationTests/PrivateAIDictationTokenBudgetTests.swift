@@ -307,9 +307,13 @@ final class PrivateAIDictationTokenBudgetTests: XCTestCase {
     private func assertRejectedBeforeProvider(_ transcript: String, failureMessage: String) async {
         let runtime = self.runtimeConfiguration()
         let context = self.appContext()
+        let probe = PrivateAIEnhancementProbe()
+        let service = PrivateAIIntegrationService(testingProvider: PrivateAITestIntegrationProvider(
+            probe: probe, delayNanoseconds: 0, shouldFail: false
+        ))
 
         do {
-            _ = try await PrivateAIIntegrationService.shared.enhanceDictation(
+            _ = try await service.enhanceDictation(
                 transcript,
                 runtime: runtime,
                 context: context
@@ -320,6 +324,8 @@ final class PrivateAIDictationTokenBudgetTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+        let snapshot = await probe.snapshot()
+        XCTAssertTrue(snapshot.calls.isEmpty, "Legacy admission must reject input before invoking the provider")
     }
 
     private func runtimeConfiguration() -> PrivateAIIntegrationService.RuntimeConfiguration {

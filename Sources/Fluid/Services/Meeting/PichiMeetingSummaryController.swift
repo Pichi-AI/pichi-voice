@@ -6,7 +6,7 @@ final class PichiMeetingSummarySettings: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case local, configuredProvider
         var id: String { self.rawValue }
-        var title: String { self == .local ? PichiLocalization.text("Local model on this Mac") : PichiLocalization.text("Configured AI provider") }
+        var title: String { self == .local ? PichiLocalization.text("Local API endpoint") : PichiLocalization.text("Configured AI provider") }
     }
 
     enum TimeBudget: String, CaseIterable, Identifiable {
@@ -61,19 +61,14 @@ final class PichiMeetingSummarySettings: ObservableObject {
         let id = settings.selectedProviderID
         guard !id.isEmpty else { throw PichiMeetingSummaryError.notConfigured }
         guard id != "anthropic", id != PrivateAIProviderFeature.shared.providerID else { throw PichiMeetingSummaryError.unsupportedProvider }
-        let savedID = id.hasPrefix("custom:") ? String(id.dropFirst(7)) : id
-        let endpoint = settings.savedProviders.first(where: { $0.id == savedID })?.baseURL
-            ?? ModelRepository.shared.defaultBaseURL(for: id)
         let preferred = ModelRepository.shared.providerKeys(for: id).compactMap { settings.selectedModelByProvider[$0] }
             .first { !$0.isEmpty } ?? settings.selectedModel
         let model = preferred ?? ModelRepository.shared.defaultModels(for: id).first ?? ""
-        let apiKey = settings.getAPIKey(for: id) ?? ""
-        let config = PichiMeetingSummaryConfiguration(providerID: id, modelID: model, baseURL: endpoint,
-                                                     apiKey: apiKey, language: outputLanguage, connectionOptions: settings.providerConnectionOptions[id] ?? [:],
-                                                     execution: self.execution(model: model, provider: id, settings: settings))
-        try config.validate()
-        guard config.isOnDevice || !apiKey.isEmpty else { throw PichiMeetingSummaryError.notConfigured }
-        return config
+        let selection = MeetingSummarySelection(providerID: id,
+            modelsByProvider: [ModelRepository.shared.providerKey(for: id): model])
+        let route = try MeetingSummaryRoute.resolve(selection, settings: settings)
+        return try route.groundedConfiguration(language: outputLanguage,
+            execution: self.execution(model: model, provider: id, settings: settings))
     }
 
     private func execution(model: String, provider: String, settings: SettingsStore) -> PichiMeetingSummaryExecution {
@@ -171,15 +166,6 @@ private enum PichiMeetingSummaryFailure {
     }
 }
 
-nonisolated struct PichiMeetingSummaryArtifact: Codable, Sendable {
-    let version: Int
-    let transcriptHash: String
-    let configurationIdentity: String
-    let generatedAt: Date
-    let document: PichiMeetingSummaryDocument
-    var baseConfigurationIdentity: String? = nil
-    var modelArtifactID: String? = nil
-}
 
 @MainActor
 final class PichiMeetingSummaryController: ObservableObject {
@@ -245,14 +231,12 @@ final class PichiMeetingSummaryController: ObservableObject {
             guard let directory = try? await MeetingSessionStore.shared.existingSessionDirectory(for: session.id),
                   let data = try? Data(contentsOf: directory.appendingPathComponent("pichi-meeting-summary.json")),
                   let artifact = try? JSONDecoder().decode(PichiMeetingSummaryArtifact.self, from: data),
-                  artifact.version == 6, artifact.transcriptHash == hash,
+                  artifact.transcriptHash == hash,
                   artifact.baseConfigurationIdentity == baseIdentity,
                   (offline || artifact.configurationIdentity == identity),
-                  let validated = try? artifact.document.validated(against: PichiMeetingSummaryInput.turns(for: session))
+                  let validated = try? artifact.validated(for: session)
             else { return nil }
-            return PichiMeetingSummaryArtifact(version: artifact.version, transcriptHash: artifact.transcriptHash,
-                configurationIdentity: artifact.configurationIdentity, generatedAt: artifact.generatedAt, document: validated,
-                baseConfigurationIdentity: artifact.baseConfigurationIdentity, modelArtifactID: artifact.modelArtifactID)
+            return validated
         }.value
         guard self.generationID == generationID, !Task.isCancelled else { return }
         if let cached {

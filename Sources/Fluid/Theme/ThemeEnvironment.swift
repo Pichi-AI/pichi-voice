@@ -13,16 +13,25 @@ extension EnvironmentValues {
 
 extension View {
     /// Applies an app theme to the view hierarchy.
-    func appTheme(_ theme: AppTheme) -> some View {
-        self.font(theme.typography.inheritedFont)
+    @ViewBuilder func appTheme(_ theme: AppTheme) -> some View {
+        let themed = self.font(theme.typography.inheritedFont)
+        .foregroundStyle(theme.palette.primaryText)
         .environment(\.theme, theme)
         .buttonStyle(FluidOutlinedButtonStyle())
+        if let variant = theme.variant {
+            themed.environment(\.colorScheme, theme.palette.nativeColorScheme(fallback: variant))
+        } else {
+            themed
+        }
     }
 }
 
 struct AdaptiveAppTheme<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var settings = SettingsStore.shared
+    #if os(macOS)
+    @ObservedObject private var applicationAppearance = BrandAppearanceController.ApplicationAppearance.shared
+    #endif
 
     let accent: Color
     let content: Content
@@ -34,18 +43,37 @@ struct AdaptiveAppTheme<Content: View>: View {
 
     var body: some View {
         let preferredScheme = self.settings.themePreference.preferredColorScheme
+        #if os(macOS)
+        let activeScheme = preferredScheme ?? self.applicationAppearance.colorScheme
+        #else
         let activeScheme = preferredScheme ?? self.colorScheme
+        #endif
         let activeAccent = self.settings.accentColorOption == .brand
             ? (Color(hex: activeScheme == .dark ? AppBrand.profile.accentDark : AppBrand.profile.accentLight) ?? self.accent)
             : self.accent
+        let theme = AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme)
 
         self.content
-            .appTheme(AppTheme.adaptive(accent: activeAccent, colorScheme: activeScheme))
+            .appTheme(theme)
             .environment(\.locale, PichiLocalization.locale)
             .environment(\.layoutDirection, PichiLocalization.language.usesRightToLeftLayout ? .rightToLeft : .leftToRight)
             .tint(activeAccent)
+            #if os(macOS)
+            // Inherit the application's live appearance when it already matches
+            // the palette. Pinning the same scheme here creates a second owner
+            // during hot changes: application first, then the old window override.
+            // Imported inverted palettes still need an owned window override.
+            .preferredColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme) == self.applicationAppearance.colorScheme
+                ? nil : theme.palette.nativeColorScheme(fallback: activeScheme))
+            // Keep the branded bar surface, but let native toolbar glass supply
+            // its own appearance to its labels. A separate bar color-scheme
+            // preference can pin ink while the glass still uses another scheme.
+            .toolbarBackground(theme.palette.toolbarBackground, for: .windowToolbar)
+            .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+            #else
             .preferredColorScheme(preferredScheme)
-            .toolbarColorScheme(activeScheme, for: .windowToolbar)
+            .toolbarColorScheme(theme.palette.nativeColorScheme(fallback: activeScheme), for: .navigationBar)
+            #endif
     }
 }
 

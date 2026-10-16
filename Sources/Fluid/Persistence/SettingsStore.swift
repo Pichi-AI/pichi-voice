@@ -1,6 +1,8 @@
+import Foundation
+import Combine
+#if os(macOS)
 import AppKit
 import ApplicationServices
-import Combine
 import CryptoKit
 import Foundation
 import ServiceManagement
@@ -10,22 +12,23 @@ import FluidAudio
 #endif
 
 // swiftlint:disable file_length type_body_length
+#endif
 final class SettingsStore: ObservableObject {
-    enum UpdateKeys {
-        static let autoUpdateCheckEnabled = "AutoUpdateCheckEnabled"
-        static let showUpdatePopups = "ShowUpdatePopups"
-        static let popupPreferenceRevision = "UpdatePopupPreferenceRevision"
-        static let betaReleasesEnabled = "BetaReleasesEnabled"
-        static let channelPreferenceRevision = "UpdateChannelPreferenceRevision"
-        static let lastUpdateCheckDate = "LastUpdateCheckDate"
-        static let updatePromptSnoozedUntil = "UpdatePromptSnoozedUntil"
-        static let snoozedUpdateVersion = "SnoozedUpdateVersion"
+    static let shared = SettingsStore()
+    let defaults: UserDefaults
+    static let automaticWhisperLanguageCode = "auto"
+    static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        #if os(macOS)
+        self.initializeDesktopPreferences()
+        #endif
     }
 
+    #if os(macOS)
     static let microphonePriorityMigrationVersion = 4
 
-    static let shared = SettingsStore()
-    private static let automaticWhisperLanguageCode = "auto"
     static let transcriptionPreviewCharLimitRange: ClosedRange<Int> = 50...800
     static let transcriptionPreviewCharLimitStep = 50
     static let defaultTranscriptionPreviewCharLimit = 150
@@ -37,20 +40,17 @@ final class SettingsStore: ObservableObject {
     static let privateAIDictationRoundTripTokenCost = 2.75
     private static let privateAIDenseSegmentByteThreshold = 12
     private static let privateAIDenseBytesPerToken = 2
-    static let privateAIBackendPreferenceDefaultsKey = "FluidIntelligenceBackendPreference"
     private static let forcedOnboardingResetIntroducedAt = Date(timeIntervalSince1970: 1_782_091_732)
-    private let defaults = UserDefaults.standard
     private let keychain = KeychainService.shared
+    private var providerCredentialCleanupNeedsPersistence = false
     private(set) var launchAtStartupEnabled = false
     private(set) var launchAtStartupErrorMessage: String?
     private(set) var launchAtStartupStatusMessage =
         "FluidVoice reflects the actual macOS login item state. Unsigned or development builds may fail to enable this."
 
-    private init() {
+    private func initializeDesktopPreferences() {
         self.migrateTranscriptionStartSoundIfNeeded()
         self.ensureDebugLoggingDefaults()
-        self.migrateProviderAPIKeysIfNeeded()
-        self.scrubSavedProviderAPIKeys()
         self.migrateExplicitDictationPromptsIfNeeded()
         self.migrateDictationPromptProfilesIfNeeded()
         self.migrateLegacyDictationAIPreferenceIfNeeded()
@@ -62,7 +62,11 @@ final class SettingsStore: ObservableObject {
         self.migrateOverlayBottomOffsetTo50IfNeeded()
         self.migratePrivateAIContextDefaultTo4KIfNeeded()
         Self.migrateTextInsertionModeToReliablePasteIfNeeded(defaults: self.defaults)
+        Self.migrateFillerWordDefaultsIfNeeded(defaults: self.defaults)
         self.refreshLaunchAtStartupStatus(clearError: true, logMismatch: false)
+        // Do not dispatch while shared initialization owns its once token. Provider
+        // canonicalization may consult ModelRepository/SettingsStore again.
+        DispatchQueue.main.async { self.refreshProviderAPIKeys() }
     }
 
     static func clampPrivateAIContextTokenLimit(_ value: Int) -> Int {
@@ -1476,6 +1480,10 @@ final class SettingsStore: ObservableObject {
             self.apiKey = apiKey
             self.models = models
         }
+
+        nonisolated func redactingAPIKey() -> Self {
+            Self(id: self.id, name: self.name, baseURL: self.baseURL, models: self.models)
+        }
     }
 
     var enableAIProcessing: Bool {
@@ -1595,27 +1603,55 @@ final class SettingsStore: ObservableObject {
     }
 
     var providerAPIKeys: [String: String] {
-        get { (try? self.keychain.fetchAllKeys()) ?? [:] }
-        set {
-            objectWillChange.send()
-            do {
-                _ = try self.saveProviderAPIKeys(newValue)
-            } catch {
-                self.logProviderAPIKeyPersistenceFailure(error)
-            }
-        }
+        self.keychain.cachedKeys ?? [:]
     }
 
+    /// Cache-only admission snapshot. Display values may outlive a failed refresh.
+    var loadedProviderAPIKeys: [String: String]? { self.keychain.loadedKeys }
+
+    var providerAPIKeyReadiness: KeychainService.Readiness { self.keychain.readiness }
+
+    @MainActor
+    func loadProviderAPIKeysForUserAction() async throws -> [String: String] {
+        defer { self.objectWillChange.send() }
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        let keys = try await self.keychain.loadForUserAction(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { keys in
+            await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+        }
+        return keys
+    }
+
+    @MainActor
     @discardableResult
-    func saveProviderAPIKeys(_ values: [String: String]) throws -> [String: String] {
-        let trimmed = self.sanitizeAPIKeys(values)
-        try self.keychain.storeAllKeys(trimmed)
-        return try self.keychain.fetchAllKeys()
+    func saveProviderAPIKeys(
+        _ values: [String: String], replacing knownValues: [String: String], removing providerIDs: [String] = []
+    ) async throws -> [String: String] {
+        defer { self.objectWillChange.send() }
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        let result = try await self.keychain.saveForUserAction(
+            self.sanitizeAPIKeys(values), replacing: self.sanitizeAPIKeys(knownValues),
+            removing: providerIDs, migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs
+        ) { migratedKeys in
+            await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: migratedKeys)
+        }
+        return result.keys
+    }
+
+    /// Startup and activation are cache-only on main and coalesce on the owned
+    /// worker. Authentication prompts are reserved for explicit credential actions.
+    func refreshProviderAPIKeys() {
+        let snapshot = self.providerCredentialMigrationSnapshot()
+        self.keychain.loadInBackground(migrating: snapshot.keys, canonicalProviderIDs: snapshot.canonicalProviderIDs) { result in
+            if case let .success(keys) = result {
+                _ = await self.acknowledgeProviderCredentialMigration(snapshot, verifiedKeys: keys)
+            }
+            self.objectWillChange.send()
+        }
     }
 
     /// Securely retrieve API key for a provider, handling custom prefix logic
     func getAPIKey(for providerID: String) -> String? {
-        let keys = self.providerAPIKeys
+        guard let keys = self.keychain.loadedKeys else { return nil }
         // Try exact match first
         if let key = keys[providerID] { return key }
 
@@ -1952,15 +1988,7 @@ final class SettingsStore: ObservableObject {
 
     /// Reuses finalized Parakeet windows so long recordings only process their remaining tail at stop.
     /// Experimental and enabled by default; users can fall back to full-buffer finalization.
-    var experimentalParakeetUnifiedFinalEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.experimentalParakeetUnifiedFinalEnabled) as? Bool ?? true }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.experimentalParakeetUnifiedFinalEnabled)
-        }
-    }
 
-    /// Opt in to restoring the field captured at recording start.
     var returnDictationToStartingField: Bool {
         get { self.defaults.bool(forKey: Keys.returnDictationToStartingField) }
         set {
@@ -1975,6 +2003,27 @@ final class SettingsStore: ObservableObject {
         set {
             objectWillChange.send()
             self.defaults.set(newValue, forKey: Keys.showHistoryPerformanceMetrics)
+        }
+    }
+
+    /// Lets the bundled `fv-serve` command read saved meetings. Off until the user turns it on;
+    /// the command reads this same key from the app's preferences.
+    var fluidServeMeetingAccessEnabled: Bool {
+        get { self.defaults.bool(forKey: FluidServeMeetings.accessDefaultsKey) }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: FluidServeMeetings.accessDefaultsKey)
+        }
+    }
+
+    /// Set when the user copied the skill instructions for an agent FluidVoice cannot see (Cursor,
+    /// Gemini and others). It keeps meetings shared after the Claude Code and Codex skills are removed,
+    /// until the user stops it.
+    var fluidServeOtherAgentsShared: Bool {
+        get { self.defaults.bool(forKey: "FluidServeOtherAgentsShared") }
+        set {
+            objectWillChange.send()
+            self.defaults.set(newValue, forKey: "FluidServeOtherAgentsShared")
         }
     }
 
@@ -2046,76 +2095,6 @@ final class SettingsStore: ObservableObject {
             } else {
                 self.defaults.set(newValue.sorted(), forKey: Keys.suppressedMicrophoneUIDs)
             }
-        }
-    }
-
-    var meetingRecordingDefaults: MeetingRecordingDefaults {
-        get {
-            guard let data = self.defaults.data(forKey: Keys.meetingRecordingDefaults),
-                  let saved = try? JSONDecoder().decode(MeetingRecordingDefaults.self, from: data)
-            else {
-                return .unconfigured
-            }
-            return saved
-        }
-        set {
-            guard let data = try? JSONEncoder().encode(newValue) else {
-                return
-            }
-            self.defaults.set(data, forKey: Keys.meetingRecordingDefaults)
-        }
-    }
-
-    var meetingAudioRetentionPolicy: MeetingAudioRetentionPolicy {
-        get {
-            guard let raw = self.defaults.string(forKey: Keys.meetingAudioRetentionPolicy),
-                  let policy = MeetingAudioRetentionPolicy(rawValue: raw)
-            else { return .days7 }
-            return policy
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.meetingAudioRetentionPolicy)
-        }
-    }
-
-    /// Which meeting transcription backend final processing should use.
-    ///
-    /// An absent preference resolves to the current production default. A stored value is handed
-    /// through verbatim, including an ID this build does not know: the pipeline rejects an unknown
-    /// selection loudly rather than quietly transcribing with a different backend than the one
-    /// that was chosen. An explicit legacy selection therefore remains a reliable rollback switch.
-    var meetingTranscriptionBackendID: MeetingBackendID {
-        get {
-            guard let raw = self.defaults.string(forKey: Keys.meetingTranscriptionBackendID)
-            else { return .productionDefault }
-            return MeetingBackendID(rawValue: raw)
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.meetingTranscriptionBackendID)
-        }
-    }
-
-    /// Tier 1 native (Zoom/Teams/Webex) meeting auto-detection (default: ON).
-    var meetingAutoDetectEnabled: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.meetingAutoDetectEnabled)
-            if value == nil { return true }
-            return self.defaults.bool(forKey: Keys.meetingAutoDetectEnabled)
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.meetingAutoDetectEnabled)
-        }
-    }
-
-    /// Tier 2 browser-tab meeting auto-detection (default: OFF — reads the frontmost tab's URL).
-    var meetingAutoDetectBrowserEnabled: Bool {
-        get { self.defaults.bool(forKey: Keys.meetingAutoDetectBrowserEnabled) }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.meetingAutoDetectBrowserEnabled)
         }
     }
 
@@ -2546,64 +2525,6 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Preferences Settings
 
-    enum AccentColorOption: String, CaseIterable, Identifiable, Codable {
-        case brand = "Brand"
-        case cyan = "Cyan"
-        case green = "Green"
-        case blue = "Blue"
-        case purple = "Purple"
-        case orange = "Orange"
-
-        var id: String {
-            self.rawValue
-        }
-
-        var hex: String {
-            switch self {
-            case .brand: return AppBrand.profile.accentLight
-            case .cyan: return "#3AC8C6"
-            case .green: return "#22C55E"
-            case .blue: return "#3B82F6"
-            case .purple: return "#A855F7"
-            case .orange: return "#F59E0B"
-            }
-        }
-    }
-
-    enum ThemePreference: String, CaseIterable, Identifiable, Codable {
-        case system
-        case light
-        case dark
-
-        var id: String {
-            self.rawValue
-        }
-
-        var displayName: String {
-            switch self {
-            case .system: return "System"
-            case .light: return "Light"
-            case .dark: return "Dark"
-            }
-        }
-
-        var systemImageName: String {
-            switch self {
-            case .system: return "circle.lefthalf.filled"
-            case .light: return "sun.max"
-            case .dark: return "moon"
-            }
-        }
-
-        var preferredColorScheme: ColorScheme? {
-            switch self {
-            case .system: return nil
-            case .light: return .light
-            case .dark: return .dark
-            }
-        }
-    }
-
     enum TranscriptionStartSound: String, CaseIterable, Identifiable, Codable {
         case none
         case fluidSfx0 = "fluid_sfx_0"
@@ -2643,52 +2564,6 @@ final class SettingsStore: ObservableObject {
             case .fluidSfx0: return "FV_end_0"
             case .none, .fluidSfx1, .fluidSfx2, .fluidSfx3, .fluidSfx4: return nil
             }
-        }
-    }
-
-    var accentColorOption: AccentColorOption {
-        get {
-            guard let raw = self.defaults.string(forKey: Keys.accentColorOption),
-                  let option = AccentColorOption(rawValue: raw)
-            else {
-                return .brand
-            }
-            return option
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.accentColorOption)
-        }
-    }
-
-    var accentColor: Color {
-        Color(hex: self.accentColorOption.hex) ?? Color(red: 0.404, green: 0.286, blue: 0.757)
-    }
-
-    var interfaceLanguage: PichiInterfaceLanguage {
-        get { .stored(in: self.defaults) }
-        set {
-            guard newValue != self.interfaceLanguage else { return }
-            objectWillChange.send()
-            newValue.persist(in: self.defaults)
-            PichiLocalization.configureApplicationLanguage()
-            NotificationCenter.default.post(name: PichiLocalization.languageChanged, object: nil)
-        }
-    }
-
-    var themePreference: ThemePreference {
-        get {
-            guard let raw = self.defaults.string(forKey: Keys.themePreference),
-                  let preference = ThemePreference(rawValue: raw)
-            else {
-                return .system
-            }
-            return preference
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.themePreference)
-            NSApplication.shared.appearance = BrandAppearanceController.nativeAppearance(for: newValue.preferredColorScheme)
         }
     }
 
@@ -2944,39 +2819,6 @@ final class SettingsStore: ObservableObject {
         }
     }
 
-    var onboardingSelectedLanguageID: String {
-        get { Self.onboardingLanguagePreference(in: self.defaults, defaultLanguageID: VoiceEngineLanguageCatalog.defaultOnboardingLanguageID) }
-        set {
-            objectWillChange.send()
-            let normalized = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if normalized.isEmpty { self.defaults.removeObject(forKey: Keys.onboardingSelectedLanguageID) }
-            else { self.defaults.set(normalized, forKey: Keys.onboardingSelectedLanguageID) }
-        }
-    }
-
-    /// Read an explicit choice before applying the distribution's first-run default.
-    static func onboardingLanguagePreference(in defaults: UserDefaults, defaultLanguageID: String) -> String {
-        let stored = defaults.string(forKey: Keys.onboardingSelectedLanguageID)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return stored.flatMap { $0.isEmpty ? nil : $0 } ?? defaultLanguageID
-    }
-
-    var selectedAppleSpeechLocaleIdentifier: String {
-        get {
-            let stored = self.defaults.string(forKey: Keys.selectedAppleSpeechLocaleIdentifier)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let stored, !stored.isEmpty {
-                return stored
-            }
-            return Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
-        }
-        set {
-            objectWillChange.send()
-            let normalized = newValue
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "_", with: "-")
-            self.defaults.set(normalized.isEmpty ? "en-US" : normalized, forKey: Keys.selectedAppleSpeechLocaleIdentifier)
-        }
-    }
 
     var selectedAppleSpeechLocale: Locale {
         Locale(identifier: self.selectedAppleSpeechLocaleIdentifier)
@@ -3411,10 +3253,13 @@ final class SettingsStore: ObservableObject {
     }
 
     /// Whether the model rejects the `temperature` parameter.
-    /// Covers reasoning models plus Anthropic models that have deprecated temperature
-    /// (Opus 4.7+, every Claude 5 model, Fable/Mythos — Sonnet 4.6 and older still accept it).
-    func isTemperatureUnsupported(_ model: String) -> Bool {
+    /// Order: reasoning models, then support learned from `/models` metadata or a past
+    /// HTTP 400 (`ModelTemperatureSupport`), then a version check for Anthropic models that
+    /// have deprecated temperature (Opus 4.7+, every Claude 5 model, Fable/Mythos - Sonnet 4.6
+    /// and older still accept it).
+    func isTemperatureUnsupported(_ model: String, baseURL: String, support: ModelTemperatureSupport = .shared) -> Bool {
         if self.isReasoningModel(model) { return true }
+        if let supported = support.isSupported(model, baseURL: baseURL) { return !supported }
         // Normalize version separators so dotted IDs (e.g. OpenRouter's
         // anthropic/claude-opus-4.8) match the hyphenated forms below.
         let modelLower = model.lowercased().replacingOccurrences(of: ".", with: "-")
@@ -3618,7 +3463,7 @@ final class SettingsStore: ObservableObject {
         SettingsBackupPayload(
             selectedProviderID: self.selectedProviderID,
             selectedModelByProvider: self.selectedModelByProvider,
-            savedProviders: self.savedProviders,
+            savedProviders: self.savedProviders.map { $0.redactingAPIKey() },
             modelReasoningConfigs: self.modelReasoningConfigs,
             privateAIPrefixKVCacheEnabled: self.privateAIPrefixKVCacheEnabled,
             privateAIBoostEnabled: self.privateAIBoostEnabled,
@@ -3996,35 +3841,98 @@ final class SettingsStore: ObservableObject {
         self.defaults.removeObject(forKey: Keys.enableTranscriptionSounds)
     }
 
-    private func migrateProviderAPIKeysIfNeeded() {
-        self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+    private struct ProviderCredentialMigrationSnapshot: Sendable {
+        let legacyDefaults: [String: String]?
+        let savedProviderBytes: Data?
+        let keys: [String: String]
+        let canonicalProviderIDs: [String: String]
+    }
 
-        var merged = (try? self.keychain.fetchAllKeys()) ?? [:]
-        var didMutate = false
-
-        if let legacyDefaults = defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String],
-           legacyDefaults.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyDefaults)) { _, new in new }
-            didMutate = true
+    /// Called on main after init, before dispatch; workers never consult mutable
+    /// preferences or ModelRepository while SettingsStore.shared is initializing.
+    private func providerCredentialMigrationSnapshot() -> ProviderCredentialMigrationSnapshot {
+        let legacy = self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String]
+        let savedBytes = self.defaults.data(forKey: Keys.savedProviders)
+        var mapping = Dictionary(uniqueKeysWithValues: ModelRepository.builtInProviderIDs.map { ($0, self.canonicalProviderKey(for: $0)) })
+        var keys: [String: String] = [:]
+        for (id, key) in self.sanitizeAPIKeys(legacy ?? [:]) {
+            let canonical = self.canonicalProviderKey(for: id)
+            mapping[id] = canonical
+            mapping[canonical] = canonical
+            keys[canonical] = key
         }
-        self.defaults.removeObject(forKey: Keys.providerAPIKeys)
-
-        if let legacyKeychain = try? keychain.legacyProviderEntries(),
-           legacyKeychain.isEmpty == false
-        {
-            merged.merge(self.sanitizeAPIKeys(legacyKeychain)) { _, new in new }
-            didMutate = true
-            try? self.keychain.removeLegacyEntries(providerIDs: Array(legacyKeychain.keys))
-        }
-
-        if didMutate {
-            do {
-                _ = try self.saveProviderAPIKeys(merged)
-            } catch {
-                self.logProviderAPIKeyPersistenceFailure(error)
+        if let savedBytes, let providers = try? JSONDecoder().decode([SavedProvider].self, from: savedBytes) {
+            for provider in providers {
+                let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                let canonical = self.canonicalProviderKey(for: provider.id)
+                mapping[provider.id] = canonical
+                mapping[canonical] = canonical
+                if !key.isEmpty { keys[canonical] = key }
             }
         }
+        return ProviderCredentialMigrationSnapshot(legacyDefaults: legacy, savedProviderBytes: savedBytes, keys: keys, canonicalProviderIDs: mapping)
+    }
+
+    @MainActor
+    private func acknowledgeProviderCredentialMigration(
+        _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
+    ) async -> Bool {
+        guard self.completeProviderCredentialMigration(snapshot, verifiedKeys: verifiedKeys) else { return false }
+        guard self.providerCredentialCleanupNeedsPersistence else { return true }
+        let preferences = self.defaults
+        // Unlike ordinary preference edits, this one-time credential cleanup
+        // must join pending persistence before a later Keychain mutation commits.
+        guard await self.keychain.confirmLegacyCleanup({ preferences.synchronize() }) else { return false }
+        self.providerCredentialCleanupNeedsPersistence = false
+        // Recheck without mutating: a source reintroduced during the wait must
+        // remain intact and require a fresh acknowledged migration.
+        return self.providerCredentialSourcesAreClear()
+    }
+
+    private func completeProviderCredentialMigration(
+        _ snapshot: ProviderCredentialMigrationSnapshot, verifiedKeys: [String: String]
+    ) -> Bool {
+        // Compare original values so an in-flight migration cannot clear a newer
+        // edit. Each source is removed only after its own secret was verified.
+        if let legacy = snapshot.legacyDefaults,
+           self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] == legacy,
+           self.sanitizeAPIKeys(legacy).allSatisfy({ verifiedKeys[self.canonicalProviderKey(for: $0.key)] == $0.value })
+        {
+            if !self.sanitizeAPIKeys(legacy).isEmpty { self.providerCredentialCleanupNeedsPersistence = true }
+            self.defaults.removeObject(forKey: Keys.providerAPIKeys)
+            self.defaults.removeObject(forKey: Keys.providerAPIKeyIdentifiers)
+        }
+        if let bytes = snapshot.savedProviderBytes,
+           self.defaults.data(forKey: Keys.savedProviders) == bytes,
+           var providers = try? JSONDecoder().decode([SavedProvider].self, from: bytes)
+        {
+            var changed = false
+            for index in providers.indices {
+                let provider = providers[index]
+                let key = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !key.isEmpty, verifiedKeys[self.canonicalProviderKey(for: provider.id)] == key else { continue }
+                providers[index] = provider.redactingAPIKey()
+                changed = true
+            }
+            if changed, let sanitized = try? JSONEncoder().encode(providers) {
+                self.providerCredentialCleanupNeedsPersistence = true
+                self.defaults.set(sanitized, forKey: Keys.savedProviders)
+            }
+        }
+        return self.providerCredentialSourcesAreClear()
+    }
+
+    private func providerCredentialSourcesAreClear() -> Bool {
+        // A changed/new plaintext source is not an acknowledgment. Keep the
+        // user edit unapplied so a restart cannot resurrect the previous secret.
+        let remainingDefaults = self.sanitizeAPIKeys(self.defaults.dictionary(forKey: Keys.providerAPIKeys) as? [String: String] ?? [:])
+        guard remainingDefaults.isEmpty else { return false }
+        if let data = self.defaults.data(forKey: Keys.savedProviders),
+           let providers = try? JSONDecoder().decode([SavedProvider].self, from: data)
+        {
+            return providers.allSatisfy { $0.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        return self.defaults.data(forKey: Keys.savedProviders) == nil
     }
 
     static func customPromptBody(_ text: String, mode: PromptMode) -> String {
@@ -4290,46 +4198,6 @@ final class SettingsStore: ObservableObject {
         NotificationCenter.default.post(name: NSNotification.Name("OverlayOffsetChanged"), object: nil)
     }
 
-    private func scrubSavedProviderAPIKeys() {
-        guard let data = defaults.data(forKey: Keys.savedProviders),
-              var decoded = try? JSONDecoder().decode([SavedProvider].self, from: data) else { return }
-
-        var didModify = false
-        for index in decoded.indices {
-            let provider = decoded[index]
-            let trimmed = provider.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.isEmpty == false else { continue }
-
-            let keyID = self.canonicalProviderKey(for: provider.id)
-            do {
-                try self.keychain.storeKey(trimmed, for: keyID)
-                didModify = true
-            } catch {
-                DebugLogger.shared
-                    .error(
-                        "Failed to migrate API key for \(provider.name): \(error.localizedDescription)",
-                        source: "SettingsStore"
-                    )
-            }
-
-            decoded[index] = SavedProvider(
-                id: provider.id,
-                name: provider.name,
-                baseURL: provider.baseURL,
-                apiKey: "",
-                models: provider.models
-            )
-        }
-
-        if didModify,
-           let encoded = try? JSONEncoder().encode(decoded)
-        {
-            self.defaults.set(encoded, forKey: Keys.savedProviders)
-        }
-
-        // No need to track migrated IDs; consolidated storage keeps them together.
-    }
-
     private func canonicalProviderKey(for providerID: String) -> String {
         let trimmed = providerID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
@@ -4583,7 +4451,7 @@ final class SettingsStore: ObservableObject {
 
     // MARK: - Filler Words
 
-    static let defaultFillerWords = [
+    private static let legacyDefaultFillerWords = [
         "um",
         "uh",
         "er",
@@ -4602,6 +4470,44 @@ final class SettingsStore: ObservableObject {
         "urm",
         "ugh",
     ]
+
+    // Include hesitation sounds in both languages regardless of the interface language.
+    // Words such as "ну", "это" and "типа", and the unit "мм", must remain opt-in.
+    // Keep the first multilingual preset unchanged as the second migration's snapshot.
+    private static let initialMultilingualDefaultFillerWords = SettingsStore.legacyDefaultFillerWords + [
+        "э",
+        "ээ",
+        "эээ",
+        "э-э",
+        "э-э-э",
+        "эм",
+        "эмм",
+        "эммм",
+        "ммм",
+        "м-м",
+        "м-м-м",
+        "хм",
+        "хмм",
+    ]
+
+    static let defaultFillerWords = SettingsStore.initialMultilingualDefaultFillerWords + ["э-мм"]
+
+    static func migrateFillerWordDefaultsIfNeeded(defaults: UserDefaults) {
+        if !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV1) {
+            // Upgrade only the unchanged old defaults. An empty or customized list is intentional.
+            if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.legacyDefaultFillerWords {
+                defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
+            }
+            defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV1)
+        }
+
+        guard !defaults.bool(forKey: Keys.fillerWordDefaultsMigrationV2) else { return }
+        // Existing installations may already have completed the first migration.
+        if defaults.array(forKey: Keys.fillerWords) as? [String] == Self.initialMultilingualDefaultFillerWords {
+            defaults.set(Self.defaultFillerWords, forKey: Keys.fillerWords)
+        }
+        defaults.set(true, forKey: Keys.fillerWordDefaultsMigrationV2)
+    }
 
     var fillerWords: [String] {
         get {
@@ -5001,821 +4907,10 @@ final class SettingsStore: ObservableObject {
 
     /// A custom dictionary entry that maps multiple misheard/alternate spellings to a correct replacement.
     /// For example: ["fluid voice", "fluid boys"] -> "FluidVoice"
-    nonisolated struct CustomDictionaryEntry: Codable, Identifiable, Hashable, Sendable {
-        let id: UUID
-        /// Words/phrases to look for (case-insensitive matching)
-        var triggers: [String]
-        /// The correct replacement text
-        var replacement: String
-
-        init(triggers: [String], replacement: String) {
-            self.id = UUID()
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            self.replacement = replacement
-        }
-
-        init(id: UUID, triggers: [String], replacement: String) {
-            self.id = id
-            self.triggers = triggers.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            self.replacement = replacement
-        }
-
-        /// Trims padding around visible replacement text while preserving an intentional
-        /// all-whitespace payload such as a newline, space, or tab.
-        static func sanitizedReplacement(_ text: String) -> String {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? text : trimmed
-        }
-    }
-
-    var vocabularyBoostingEnabled: Bool {
-        get {
-            let value = self.defaults.object(forKey: Keys.vocabularyBoostingEnabled)
-            return value as? Bool ?? false
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.vocabularyBoostingEnabled)
-            NotificationCenter.default.post(name: .parakeetVocabularyDidChange, object: nil)
-        }
-    }
-
-    enum AutomaticDictionarySuggestionFrequency: Int, Codable, CaseIterable, Identifiable {
-        case first = 1
-        case second = 2
-        case third = 3
-
-        var id: Int { self.rawValue }
-
-        var displayName: String {
-            switch self {
-            case .first: "1 correction"
-            case .second: "2 corrections"
-            case .third: "3 corrections"
-            }
-        }
-    }
-
-    var automaticDictionaryLearningEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.automaticDictionaryLearningEnabled) as? Bool ?? true }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.automaticDictionaryLearningEnabled)
-        }
-    }
-
-    var automaticDictionarySuggestionFrequency: AutomaticDictionarySuggestionFrequency {
-        get {
-            let stored = self.defaults.integer(forKey: Keys.automaticDictionarySuggestionFrequency)
-            return AutomaticDictionarySuggestionFrequency(rawValue: stored) ?? .first
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.automaticDictionarySuggestionFrequency)
-        }
-    }
-
-    var pronunciationMatchingEnabled: Bool {
-        get { self.defaults.object(forKey: Keys.pronunciationMatchingEnabled) as? Bool ?? false }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue, forKey: Keys.pronunciationMatchingEnabled)
-        }
-    }
-
-    /// Custom dictionary entries for word replacement
-    var customDictionaryEntries: [CustomDictionaryEntry] {
-        get {
-            guard let data = defaults.data(forKey: Keys.customDictionaryEntries),
-                  let decoded = try? JSONDecoder().decode([CustomDictionaryEntry].self, from: data)
-            else {
-                return []
-            }
-            return decoded
-        }
-        set {
-            objectWillChange.send()
-            if let encoded = try? JSONEncoder().encode(newValue) {
-                self.defaults.set(encoded, forKey: Keys.customDictionaryEntries)
-            }
-        }
-    }
-
     // MARK: - Speech Model (Unified ASR Model Selection)
 
     /// Unified speech recognition model selection.
     /// Replaces the old TranscriptionProviderOption + WhisperModelSize dual-setting.
-    enum SpeechModel: String, CaseIterable, Identifiable, Codable {
-        /// Temporarily disabled in UI/runtime while Parakeet word boosting work is prioritized.
-        /// Flip to `true` in a future round to re-enable Qwen without deleting implementation.
-        static let qwenPreviewEnabled = false
-
-        // MARK: - FluidAudio Models (Apple Silicon Only)
-
-        case parakeetTDT = "parakeet-tdt"
-        case parakeetTDTv2 = "parakeet-tdt-v2"
-        case fluidParakeetMini = "fluid-parakeet-mini"
-        case fluidParakeetPico = "fluid-parakeet-pico"
-        case parakeetRealtime = "parakeet-realtime"
-        case qwen3Asr = "qwen3-asr"
-        case cohereTranscribeSixBit = "cohere-transcribe-6bit"
-        case nemotronOffline = "nemotron-3.5-offline"
-        case nemotronStreaming = "nemotron-3.5-streaming"
-        case nemotronStreaming320 = "nemotron-3.5-streaming-320"
-
-        // MARK: - Pichi Russian Models
-
-        case gigaam = "gigaam-v3-eou"
-
-        // MARK: - Apple Native
-
-        case appleSpeech = "apple-speech"
-        case appleSpeechAnalyzer = "apple-speech-analyzer"
-
-        // MARK: - Whisper Models (Universal)
-
-        case whisperTiny = "whisper-tiny"
-        case whisperBase = "whisper-base"
-        case whisperSmall = "whisper-small"
-        case whisperMedium = "whisper-medium"
-        case whisperLargeTurbo = "whisper-large-turbo"
-        case whisperLarge = "whisper-large"
-
-        var parakeetDescriptor: ParakeetSpeechModelCatalog.Descriptor? {
-            ParakeetSpeechModelCatalog.descriptor(forModelID: self.rawValue)
-        }
-
-        var libraryMetadata: SpeechModelLibraryMetadata? {
-            guard self == .gigaam else { return nil }
-            return PichiGigaAMModelStore.preferredLibraryMetadata
-        }
-
-        /// Relative product ratings for display and sorting, not benchmark accuracy.
-        var hasPerformanceRatings: Bool {
-            if self.libraryMetadata != nil { return true }
-            guard let descriptor = self.parakeetDescriptor else { return true }
-            return descriptor.performanceRatings != nil
-        }
-
-        var id: String {
-            rawValue
-        }
-
-        /// Installation transport is engine metadata; common screens call the same service API.
-        var supportsFolderImport: Bool { self == .gigaam }
-
-        /// A folder import remains optional when the registered engine has a pinned download.
-        var supportsAutomaticDownload: Bool { self != .gigaam || PichiGigaAMModelStore.supportsDefaultDownload }
-        var requiresFolderImport: Bool { self.supportsFolderImport && !self.supportsAutomaticDownload }
-
-        /// Trusted localization template. The picker inserts the model name exactly once.
-        var importFolderPrompt: String { "Choose the folder containing the %@ model files." }
-
-        // MARK: - Display Properties
-
-        var displayName: String {
-            switch self {
-            case .gigaam: return "Pichi GigaAM v3"
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.displayName ?? self.rawValue
-            case .parakeetRealtime: return "Parakeet Flash (Beta)"
-            case .qwen3Asr: return "Qwen3 ASR (Beta)"
-            case .cohereTranscribeSixBit: return "Cohere Transcribe"
-            case .nemotronOffline: return "Nemotron 3.5 Multilingual"
-            case .nemotronStreaming: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
-            case .nemotronStreaming320: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
-            case .appleSpeech: return "Apple ASR Legacy"
-            case .appleSpeechAnalyzer: return "Apple Speech - macOS 26+"
-            case .whisperTiny: return "Whisper Tiny"
-            case .whisperBase: return "Whisper Base"
-            case .whisperSmall: return "Whisper Small"
-            case .whisperMedium: return "Whisper Medium"
-            case .whisperLargeTurbo: return "Whisper Large Turbo"
-            case .whisperLarge: return "Whisper Large"
-            }
-        }
-
-        var languageSupport: String {
-            switch self {
-            case .gigaam: return "Russian"
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.languageSupport ?? "English Only"
-            case .parakeetRealtime: return "English Only (Live Streaming)"
-            case .qwen3Asr: return "30 Languages"
-            case .cohereTranscribeSixBit: return "14 Languages (Select Manually)"
-            case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "Around 40 Languages"
-            case .appleSpeech: return "System Languages"
-            case .appleSpeechAnalyzer: return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
-            case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
-                return "99 Languages"
-            }
-        }
-
-        var downloadSize: String {
-            switch self {
-            case .gigaam: return String(format: "~%.1f MiB", Double(PichiGigaAMModelStore.defaultDownloadByteCount) / 1_048_576)
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.downloadSize ?? ""
-            case .parakeetRealtime: return "~428.4 MiB"
-            case .qwen3Asr: return "~2.0 GiB"
-            case .cohereTranscribeSixBit: return "~1.54 GiB"
-            case .nemotronOffline: return "~530.8 MiB"
-            case .nemotronStreaming: return "~668.2 MiB"
-            case .nemotronStreaming320: return "~668.2 MiB"
-            case .appleSpeech: return "Built-in"
-            case .appleSpeechAnalyzer: return "Built-in"
-            case .whisperTiny: return "~43.9 MiB"
-            case .whisperBase: return "~81.0 MiB"
-            case .whisperSmall: return "~257.3 MiB"
-            case .whisperMedium: return "~793.0 MiB"
-            case .whisperLargeTurbo: return "~845.3 MiB"
-            case .whisperLarge: return "~1.55 GiB"
-            }
-        }
-
-        var expectedDownloadBytes: Int64 {
-            switch self {
-            case .gigaam: return PichiGigaAMModelStore.defaultDownloadByteCount
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.expectedDownloadBytes ?? 0
-            case .parakeetRealtime: return 449_190_189
-            case .qwen3Asr: return 2000 * 1024 * 1024
-            case .cohereTranscribeSixBit: return 1_650_748_785
-            case .nemotronOffline: return 556_552_620
-            case .nemotronStreaming, .nemotronStreaming320: return 700_685_415
-            case .whisperTiny: return 45_981_088
-            case .whisperBase: return 84_962_880
-            case .whisperSmall: return 269_751_136
-            case .whisperMedium: return 831_538_144
-            case .whisperLargeTurbo: return 886_381_760
-            case .whisperLarge: return 1_668_741_440
-            case .appleSpeech, .appleSpeechAnalyzer: return 0
-            }
-        }
-
-        var requiresAppleSilicon: Bool {
-            switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return true
-            default: return false
-            }
-        }
-
-        var isWhisperModel: Bool {
-            switch self {
-            case .gigaam: return false
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeech,
-                 .appleSpeechAnalyzer: return false
-            default: return true
-            }
-        }
-
-        /// The GGUF filename for transcribe.cpp Whisper models.
-        var whisperModelFile: String? {
-            switch self {
-            case .whisperTiny: return "whisper-tiny-Q8_0.gguf"
-            case .whisperBase: return "whisper-base-Q8_0.gguf"
-            case .whisperSmall: return "whisper-small-Q8_0.gguf"
-            case .whisperMedium: return "whisper-medium-Q8_0.gguf"
-            case .whisperLargeTurbo: return "whisper-large-v3-turbo-Q8_0.gguf"
-            case .whisperLarge: return "whisper-large-v3-Q8_0.gguf"
-            default: return nil
-            }
-        }
-
-        var legacyWhisperModelFile: String? {
-            switch self {
-            case .whisperTiny: return "ggml-tiny.bin"
-            case .whisperBase: return "ggml-base.bin"
-            case .whisperSmall: return "ggml-small.bin"
-            case .whisperMedium: return "ggml-medium.bin"
-            case .whisperLargeTurbo: return "ggml-large-v3-turbo.bin"
-            case .whisperLarge: return "ggml-large-v3.bin"
-            default: return nil
-            }
-        }
-
-        static let legacyWhisperModelFiles: Set<String> = [
-            "ggml-tiny.bin",
-            "ggml-base.bin",
-            "ggml-small.bin",
-            "ggml-medium.bin",
-            "ggml-large-v3-turbo.bin",
-            "ggml-large-v3.bin",
-        ]
-
-        /// The short model name for whisper.cpp internal usage
-        var whisperModelName: String? {
-            switch self {
-            case .whisperTiny: return "tiny"
-            case .whisperBase: return "base"
-            case .whisperSmall: return "small"
-            case .whisperMedium: return "medium"
-            case .whisperLargeTurbo: return "large-v3-turbo"
-            case .whisperLarge: return "large-v3"
-            default: return nil
-            }
-        }
-
-        // MARK: - Architecture Filtering
-
-        /// Requires macOS 26 (Tahoe) or later
-        var requiresMacOS26: Bool {
-            switch self {
-            case .appleSpeechAnalyzer: return true
-            default: return false
-            }
-        }
-
-        /// Requires macOS 15 or later.
-        var requiresMacOS15: Bool {
-            switch self {
-            case .fluidParakeetMini, .fluidParakeetPico, .qwen3Asr, .cohereTranscribeSixBit: return true
-            default: return false
-            }
-        }
-
-        /// Returns models available for the current Mac's architecture and OS
-        static var availableModels: [SpeechModel] {
-            allCases.filter { model in
-                if model == .whisperLargeTurbo, !CPUArchitecture.isAppleSilicon {
-                    return false
-                }
-                if model == .whisperLarge, !CPUArchitecture.isAppleSilicon {
-                    return false
-                }
-                if model == .qwen3Asr, !Self.qwenPreviewEnabled {
-                    return false
-                }
-                if model == .nemotronStreaming320 {
-                    return false
-                }
-                // Filter by Apple Silicon requirement
-                if model.requiresAppleSilicon, !CPUArchitecture.isAppleSilicon {
-                    return false
-                }
-                // Filter by macOS 15 requirement
-                if model.requiresMacOS15, #unavailable(macOS 15.0) {
-                    return false
-                }
-                // Filter by macOS 26 requirement
-                if model.requiresMacOS26 {
-                    if #available(macOS 26.0, *) {
-                        return true
-                    } else {
-                        return false
-                    }
-                }
-                return true
-            }
-        }
-
-        /// First-run engine uses the shipped onboarding language's existing route.
-        static var defaultModel: SpeechModel {
-            VoiceEngineLanguageCatalog.packagedDefaultSpeechModel(
-                availableModels: self.availableModels,
-                packagedLanguageID: AppBrand.packagedPackage.style?.defaultOnboardingLanguageID
-            ) ?? (CPUArchitecture.isAppleSilicon ? .parakeetTDT : .whisperBase)
-        }
-
-        // MARK: - UI Card Metadata
-
-        /// Human-readable marketing name for the card UI
-        var humanReadableName: String {
-            switch self {
-            case .gigaam: return "GigaAM - Russian"
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.humanReadableName ?? self.rawValue
-            case .parakeetRealtime: return "Flash Dictation"
-            case .qwen3Asr: return "Qwen3 - Multilingual"
-            case .cohereTranscribeSixBit: return "Cohere - High Accuracy"
-            case .nemotronOffline: return "Nemotron 3.5 Multilingual"
-            case .nemotronStreaming: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
-            case .nemotronStreaming320: return "Nemotron Speech 3.5 - Ultra Fast Low Latency"
-            case .appleSpeech: return "Apple ASR Legacy"
-            case .appleSpeechAnalyzer: return "Apple Speech - macOS 26+"
-            case .whisperTiny: return "Fast & Light"
-            case .whisperBase: return "Standard Choice"
-            case .whisperSmall: return "Balanced Speed & Accuracy"
-            case .whisperMedium: return "Medium Quality"
-            case .whisperLargeTurbo: return "Higher Quality but Faster"
-            case .whisperLarge: return "Maximum Accuracy"
-            }
-        }
-
-        /// One-line description for the card UI
-        var cardDescription: String {
-            switch self {
-            case .gigaam: return "Local Russian recognition with GigaAM. Download the compact model or import a verified local export."
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
-                return self.parakeetDescriptor?.cardDescription ?? ""
-            case .parakeetRealtime:
-                return "English-only streaming local dictation with low-latency partial text and end-of-utterance detection."
-            case .qwen3Asr:
-                return "Qwen3 multilingual ASR via FluidAudio. Higher quality, heavier memory footprint."
-            case .cohereTranscribeSixBit:
-                return "High-accuracy multilingual transcription. Select the language manually before dictation for best results."
-            case .nemotronOffline:
-                return "Slower but more accurate NVIDIA Nemotron 3.5 transcription. Supports 40 language-locales with auto or manual language selection."
-            case .nemotronStreaming:
-                return "NVIDIA Nemotron 3.5 streaming-capable transcription. Supports 40 language-locales with auto or manual language selection."
-            case .nemotronStreaming320:
-                return "NVIDIA Nemotron 3.5 streaming-capable transcription. Supports 40 language-locales with auto or manual language selection."
-            case .appleSpeech:
-                return "Built-in macOS speech recognition. No model download required."
-            case .appleSpeechAnalyzer:
-                return "Advanced and modern on-device recognition for newer macOS devices."
-            case .whisperTiny:
-                return "Minimal resource usage. Best for older Macs or battery life."
-            case .whisperBase:
-                return "Good balance of speed and accuracy. Works on any Mac."
-            case .whisperSmall:
-                return "Better accuracy than Base. Moderate resource usage."
-            case .whisperMedium:
-                return "High accuracy for demanding tasks. Requires more memory."
-            case .whisperLargeTurbo:
-                return "Near-maximum accuracy with optimized speed."
-            case .whisperLarge:
-                return "Best possible accuracy. Large download and memory usage."
-            }
-        }
-
-        /// Minimum recommended RAM in GB for this model to run safely
-        var requiredMemoryGB: Double {
-            switch self {
-            case .gigaam: return 4.0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
-                return 4.0
-            case .qwen3Asr:
-                return 8.0
-            case .cohereTranscribeSixBit:
-                return 8.0
-            case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-                return 8.0
-            case .appleSpeech, .appleSpeechAnalyzer:
-                return 2.0 // Built-in, minimal overhead
-            case .whisperTiny:
-                return 2.0
-            case .whisperBase:
-                return 3.0
-            case .whisperSmall:
-                return 4.0
-            case .whisperMedium:
-                return 5.0
-            case .whisperLargeTurbo:
-                return 6.0
-            case .whisperLarge:
-                return 8.0
-            }
-        }
-
-        /// Warning text for models with high memory requirements, nil if no warning needed
-        var memoryWarning: String? {
-            switch self {
-            case .qwen3Asr:
-                return "⚠️ Requires 8GB+ RAM. Best on newer Apple Silicon Macs."
-            case .whisperLarge:
-                return "⚠️ Requires 10GB+ RAM. May crash on systems with limited memory."
-            case .whisperLargeTurbo:
-                return "⚠️ Requires 8GB+ RAM. May be unstable on some systems."
-            case .whisperMedium:
-                return "Requires 6GB+ RAM for stable operation."
-            default:
-                return nil
-            }
-        }
-
-        /// Speed rating (1-5, higher is faster)
-        var speedRating: Int {
-            switch self {
-            case .gigaam: return self.libraryMetadata?.performanceRatings.speedRating ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedRating ?? 0
-            case .parakeetRealtime: return 5
-            case .qwen3Asr: return 3
-            case .cohereTranscribeSixBit: return 3
-            case .nemotronOffline: return 3
-            case .nemotronStreaming, .nemotronStreaming320: return 4
-            case .appleSpeech: return 4
-            case .appleSpeechAnalyzer: return 4
-            case .whisperTiny: return 4
-            case .whisperBase: return 4
-            case .whisperSmall: return 3
-            case .whisperMedium: return 2
-            case .whisperLargeTurbo: return 3
-            case .whisperLarge: return 1
-            }
-        }
-
-        /// Accuracy rating (1-5, higher is more accurate)
-        var accuracyRating: Int {
-            switch self {
-            case .gigaam: return self.libraryMetadata?.performanceRatings.accuracyRating ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyRating ?? 0
-            case .parakeetRealtime: return 4
-            case .qwen3Asr: return 4
-            case .cohereTranscribeSixBit: return 5
-            case .nemotronOffline: return 5
-            case .nemotronStreaming, .nemotronStreaming320: return 4
-            case .appleSpeech: return 4
-            case .appleSpeechAnalyzer: return 4
-            case .whisperTiny: return 2
-            case .whisperBase: return 3
-            case .whisperSmall: return 4
-            case .whisperMedium: return 4
-            case .whisperLargeTurbo: return 5
-            case .whisperLarge: return 5
-            }
-        }
-
-        /// Exact speed percentage (0.0 - 1.0) for the liquid bars
-        var speedPercent: Double {
-            switch self {
-            case .gigaam: return self.libraryMetadata?.performanceRatings.speedPercent ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.speedPercent ?? 0
-            case .parakeetRealtime: return 1.0
-            case .qwen3Asr: return 0.45
-            case .cohereTranscribeSixBit: return 0.85
-            case .nemotronOffline: return 0.85
-            case .nemotronStreaming, .nemotronStreaming320: return 1.0
-            case .appleSpeech: return 0.60
-            case .appleSpeechAnalyzer: return 0.85
-            case .whisperTiny: return 0.90
-            case .whisperBase: return 0.80
-            case .whisperSmall: return 0.60
-            case .whisperMedium: return 0.40
-            case .whisperLargeTurbo: return 0.65
-            case .whisperLarge: return 0.20
-            }
-        }
-
-        /// Exact accuracy percentage (0.0 - 1.0) for the liquid bars
-        var accuracyPercent: Double {
-            switch self {
-            case .gigaam: return self.libraryMetadata?.performanceRatings.accuracyPercent ?? 0
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico: return self.parakeetDescriptor?.performanceRatings?.accuracyPercent ?? 0
-            case .parakeetRealtime: return 0.75
-            case .qwen3Asr: return 0.90
-            case .cohereTranscribeSixBit: return 0.98
-            case .nemotronOffline: return 0.90
-            case .nemotronStreaming, .nemotronStreaming320: return 0.85
-            case .appleSpeech: return 0.60
-            case .appleSpeechAnalyzer: return 0.80
-            case .whisperTiny: return 0.40
-            case .whisperBase: return 0.60
-            case .whisperSmall: return 0.70
-            case .whisperMedium: return 0.80
-            case .whisperLargeTurbo: return 0.95
-            case .whisperLarge: return 1.00
-            }
-        }
-
-        /// Optional badge text for the card (e.g., "FluidVoice Pick")
-        var badgeText: String? {
-            switch self {
-            case .gigaam: return "Pichi"
-            case .parakeetTDT: return AppBrand.text("FluidVoice Pick")
-            case .parakeetTDTv2: return AppBrand.text("FluidVoice Pick")
-            case .fluidParakeetMini, .fluidParakeetPico: return "New"
-            case .parakeetRealtime: return "Beta"
-            case .qwen3Asr: return "Beta"
-            case .cohereTranscribeSixBit: return "New"
-            case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320: return "New + Beta"
-            case .appleSpeechAnalyzer: return "New"
-            default: return nil
-            }
-        }
-
-        /// Optimization level for Apple Silicon (for display)
-        var appleSiliconOptimized: Bool {
-            switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .qwen3Asr, .cohereTranscribeSixBit, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320, .appleSpeechAnalyzer:
-                return true
-            default:
-                return false
-            }
-        }
-
-        /// Whether this model supports real-time streaming/chunk processing.
-        /// Large Whisper models are too slow for streaming, so they only do final transcription on stop.
-        var supportsStreaming: Bool {
-            switch self {
-            case .qwen3Asr, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
-                return false // Too slow for real-time chunk processing
-            default:
-                return true // All other models support streaming
-            }
-        }
-
-        var supportsPronunciationMatching: Bool {
-            #if arch(arm64)
-            switch self {
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
-                return true
-            default:
-                return false
-            }
-            #else
-            return false
-            #endif
-        }
-
-        /// Preview update cadence for real-time transcription.
-        /// Models without native incremental decoding should use a slower interval.
-        var streamingPreviewIntervalSeconds: Double {
-            switch self {
-            case .gigaam: return 0.5
-            case .parakeetRealtime:
-                return 0.2
-            case .nemotronStreaming, .nemotronStreaming320:
-                return 0.32
-            case .cohereTranscribeSixBit:
-                return 1.0
-            default:
-                return 0.6
-            }
-        }
-
-        /// Minimum audio required before attempting a preview decode.
-        /// Cohere performs better with a slightly larger prefix than the default 1 second.
-        var minimumStreamingPreviewSeconds: Double {
-            switch self {
-            case .gigaam: return 0.5
-            case .parakeetRealtime:
-                return 0.2
-            case .nemotronStreaming, .nemotronStreaming320:
-                return 0.64
-            case .cohereTranscribeSixBit:
-                return 1.5
-            default:
-                return 1.0
-            }
-        }
-
-        /// Provider category for tab grouping
-        enum Provider: String, CaseIterable {
-            case pichi = "Pichi"
-            case nvidia = "NVIDIA"
-            case apple = "Apple"
-            case openai = "OpenAI"
-            case qwen = "Qwen"
-            case cohere = "Cohere"
-        }
-
-        /// Which provider this model belongs to
-        var provider: Provider {
-            switch self {
-            case .gigaam: return .pichi
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-                return .nvidia
-            case .appleSpeech, .appleSpeechAnalyzer:
-                return .apple
-            case .qwen3Asr:
-                return .qwen
-            case .cohereTranscribeSixBit:
-                return .cohere
-            case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
-                return .openai
-            }
-        }
-
-        /// Get models filtered by provider
-        static func models(for provider: Provider) -> [SpeechModel] {
-            self.availableModels.filter { $0.provider == provider }
-        }
-
-        /// Whether this model is built-in or already downloaded on disk
-        var isInstalled: Bool {
-            switch self {
-            case .gigaam: return PichiGigaAMModelStore.shared.modelsExistOnDisk()
-            case .appleSpeech, .appleSpeechAnalyzer:
-                return true
-            case .parakeetTDT, .parakeetTDTv2, .fluidParakeetMini, .fluidParakeetPico:
-                #if canImport(FluidAudio)
-                guard let descriptor = self.parakeetDescriptor else { return false }
-                return Self.parakeetModelsExist(descriptor: descriptor)
-                #else
-                return false
-                #endif
-            case .parakeetRealtime:
-                #if canImport(FluidAudio)
-                return Self.parakeetRealtimeModelsExist()
-                #else
-                return false
-                #endif
-            case .qwen3Asr:
-                #if canImport(FluidAudio) && ENABLE_QWEN
-                if #available(macOS 15.0, *) {
-                    return Qwen3AsrModels.modelsExist(at: Qwen3AsrModels.defaultCacheDirectory())
-                }
-                return false
-                #else
-                return false
-                #endif
-            case .cohereTranscribeSixBit:
-                guard
-                    let spec = self.externalCoreMLSpec,
-                    let directory = SettingsStore.shared.externalCoreMLArtifactsDirectory(for: self)
-                else {
-                    return false
-                }
-                return spec.validatesInstalledArtifacts(at: directory)
-            case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-                let hint: String
-                switch self {
-                case .nemotronOffline:
-                    hint = "nemotron-3.5-asr-offline-6bit-CoreML"
-                default:
-                    hint = "nemotron-3.5-asr-streaming320-int8-CoreML"
-                }
-                let directory: URL? = AppBrand.cachesDirectory
-                    .appendingPathComponent(hint, isDirectory: true)
-                #if arch(arm64)
-                return directory.map { NemotronProvider.artifactsAreComplete(at: $0) } ?? false
-                #else
-                return false
-                #endif
-            default:
-                // Whisper models
-                guard let whisperFile = self.whisperModelFile else { return false }
-                let directory: URL? = AppBrand.cachesDirectory
-                    .appendingPathComponent("WhisperModels")
-                let modelURL = directory?.appendingPathComponent(whisperFile)
-                guard
-                    let modelURL,
-                    let attributes = try? FileManager.default.attributesOfItem(atPath: modelURL.path),
-                    let size = attributes[.size] as? NSNumber,
-                    size.int64Value > 0
-                else {
-                    return false
-                }
-                return size.int64Value == self.expectedDownloadBytes
-            }
-        }
-
-        #if canImport(FluidAudio)
-        private static func parakeetModelsExist(descriptor: ParakeetSpeechModelCatalog.Descriptor) -> Bool {
-            let modelsDirectory = AppBrand.modelsDirectory
-            let directory = descriptor.cacheDirectory(in: modelsDirectory)
-            return descriptor.artifactsAreComplete(at: directory)
-        }
-
-        private static func parakeetRealtimeModelsExist() -> Bool {
-            let modelsDirectory = AppBrand.modelsDirectory
-            let modelDirectory = modelsDirectory
-                .appendingPathComponent("parakeet-eou-streaming", isDirectory: true)
-                .appendingPathComponent(Repo.parakeetEou160.folderName, isDirectory: true)
-
-            return ModelNames.ParakeetEOU.requiredModels.allSatisfy { modelName in
-                let artifact = modelDirectory.appendingPathComponent(modelName)
-                return HuggingFaceModelDownloader.artifactIsComplete(
-                    at: artifact,
-                    isDirectory: modelName.hasSuffix(".mlmodelc")
-                )
-            }
-        }
-        #endif
-
-        /// Brand/provider name for the model (NVIDIA, Apple, OpenAI)
-        var brandName: String {
-            switch self {
-            case .gigaam: return "Pichi"
-            case .fluidParakeetMini, .fluidParakeetPico:
-                return "FluidVoice"
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-                return "NVIDIA"
-            case .qwen3Asr:
-                return "Qwen"
-            case .cohereTranscribeSixBit:
-                return "Cohere"
-            case .appleSpeech, .appleSpeechAnalyzer:
-                return "Apple"
-            case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
-                return "OpenAI"
-            }
-        }
-
-        /// Whether this model uses Apple's SF Symbol for branding (apple.logo)
-        var usesAppleLogo: Bool {
-            switch self {
-            case .appleSpeech, .appleSpeechAnalyzer: return true
-            default: return false
-            }
-        }
-
-        /// Brand color for the provider badge
-        var brandColorHex: String {
-            switch self {
-            case .gigaam: return AppBrand.profile.accentLight
-            case .fluidParakeetMini, .fluidParakeetPico:
-                return "#1A75FF" // FluidBrandColors.blue
-            case .parakeetTDT, .parakeetTDTv2, .parakeetRealtime, .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-                return "#76B900"
-            case .qwen3Asr:
-                return "#E67E22"
-            case .cohereTranscribeSixBit:
-                return "#FA6B3C"
-            case .appleSpeech, .appleSpeechAnalyzer:
-                return "#A2AAAD" // Apple Gray
-            case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeTurbo, .whisperLarge:
-                return "#10A37F" // OpenAI Teal
-            }
-        }
-    }
-
     // MARK: - Transcription Provider (ASR)
 
     /// Available transcription providers
@@ -5876,211 +4971,11 @@ final class SettingsStore: ObservableObject {
             self.defaults.set(newValue.rawValue, forKey: Keys.whisperModelSize)
         }
     }
+    #endif
 }
 
+#if os(macOS)
 // swiftlint:enable type_body_length
-
-private extension SettingsStore {
-    /// Keys
-    enum Keys {
-        static let enableAIProcessing = "EnableAIProcessing"
-        static let showMainWindowAtLoginLaunch = "ShowMainWindowAtLoginLaunch"
-        static let fileTranscriptionSpeakerLabelsEnabled = "FileTranscriptionSpeakerLabelsEnabled"
-        static let fileTranscriptionExpectedSpeakerCount = "FileTranscriptionExpectedSpeakerCount"
-        static let dictationPromptOff = "DictationPromptOff"
-        static let enableDebugLogs = "EnableDebugLogs"
-        static let availableAIModels = "AvailableAIModels"
-        static let availableModelsByProvider = "AvailableModelsByProvider"
-        static let selectedAIModel = "SelectedAIModel"
-        static let selectedModelByProvider = "SelectedModelByProvider"
-        static let selectedProviderID = "SelectedProviderID"
-        static let privateAIPrefixKVCacheEnabled = "PrivateAIProviderPrefixKVCacheEnabled"
-        static let privateAIBoostEnabled = "PrivateAIProviderBoostEnabled"
-        static let privateAIIdleUnloadMinutes = "PrivateAIProviderIdleUnloadMinutes"
-        static let privateAIIdleUnloadTestSeconds = "PrivateAIProviderIdleUnloadTestSeconds"
-        static let privateAIBackendPreference = SettingsStore.privateAIBackendPreferenceDefaultsKey
-        static let privateAIContextTokenLimit = "PrivateAIProviderContextTokenLimit"
-        static let privateAIContextDefaultMigratedTo4K = "PrivateAIProviderContextDefaultMigratedTo4K"
-        static let providerAPIKeys = "ProviderAPIKeys"
-        static let providerAPIKeyIdentifiers = "ProviderAPIKeyIdentifiers"
-        static let savedProviders = "SavedProviders"
-        static let verifiedProviderFingerprints = "VerifiedProviderFingerprints"
-        static let verifiedPrivateAIModelFingerprints = "VerifiedPrivateAIModelFingerprints"
-        static let shareAnonymousAnalytics = "ShareAnonymousAnalytics"
-        static let privateAIInterestCaptured = "PrivateAIProviderInterestCaptured"
-        static let hotkeyShortcutKey = "HotkeyShortcutKey"
-        static let primaryDictationShortcutsKey = "PrimaryDictationShortcuts"
-        static let preferredInputDeviceUID = "PreferredInputDeviceUID"
-        static let microphonePriority = "MicrophonePriority"
-        static let suppressedMicrophoneUIDs = "SuppressedMicrophoneUIDs"
-        static let preferredOutputDeviceUID = "PreferredOutputDeviceUID"
-        static let meetingRecordingDefaults = "MeetingRecordingDefaults"
-        static let meetingAudioRetentionPolicy = "MeetingAudioRetentionPolicy"
-        static let meetingTranscriptionBackendID = "MeetingTranscriptionBackendID"
-        static let meetingAutoDetectEnabled = "MeetingAutoDetectEnabled"
-        static let meetingAutoDetectBrowserEnabled = "MeetingAutoDetectBrowserEnabled"
-        static let microphoneSelectionMode = "MicrophoneSelectionMode"
-        // Keep the original persisted key so existing installs migrate in place.
-        static let microphoneSelectionMigrationVersion = "AppOnlyMicrophoneSelectionMigrationVersion"
-        static let showMicrophoneChangeAlerts = "ShowMicrophoneChangeAlerts"
-        static let showPasteCheckAlerts = "ShowPasteCheckAlerts"
-        static let visualizerNoiseThreshold = "VisualizerNoiseThreshold"
-        static let launchAtStartup = "LaunchAtStartup"
-        static let showInDock = "ShowInDock"
-        static let accentColorOption = "AccentColorOption"
-        static let themePreference = "ThemePreference"
-        static let enableTranscriptionSounds = "EnableTranscriptionSounds"
-        static let transcriptionStartSound = "TranscriptionStartSound"
-        static let transcriptionSoundVolume = "TranscriptionSoundVolume"
-        static let pressAndHoldMode = "PressAndHoldMode"
-        static let hotkeyMode = "HotkeyMode"
-        static let holdSpaceToMute = "HoldSpaceToMute"
-        static let enableStreamingPreview = "EnableStreamingPreview"
-        static let experimentalParakeetUnifiedFinalEnabled = "ExperimentalParakeetUnifiedFinalEnabled"
-        static let returnDictationToStartingField = "ReturnDictationToStartingField"
-        static let showHistoryPerformanceMetrics = "ShowHistoryPerformanceMetrics"
-        static let skipSilentRecordingsEnabled = "SkipSilentRecordingsEnabled"
-        static let enableAIStreaming = "EnableAIStreaming"
-        static let copyTranscriptionToClipboard = "CopyTranscriptionToClipboard"
-        static let textInsertionMode = "TextInsertionMode"
-        static let spokenSendEnabled = "SpokenSendEnabled"
-        static let spokenSendImmediatelyEnabled = "SpokenSendImmediatelyEnabled"
-        static let spokenSendPhrase = "SpokenSendPhrase"
-        static let spokenSendKey = "SpokenSendKey"
-        static let reliablePasteMigrationV1 = "TextInsertionModeMigratedToReliablePasteV1"
-        static let autoUpdateCheckEnabled = UpdateKeys.autoUpdateCheckEnabled
-        static let showUpdatePopups = UpdateKeys.showUpdatePopups
-        static let betaReleasesEnabled = UpdateKeys.betaReleasesEnabled
-        static let lastUpdateCheckDate = UpdateKeys.lastUpdateCheckDate
-        static let updatePromptSnoozedUntil = UpdateKeys.updatePromptSnoozedUntil
-        static let snoozedUpdateVersion = UpdateKeys.snoozedUpdateVersion
-        static let playgroundUsed = "PlaygroundUsed"
-        static let onboardingCompleted = "OnboardingCompleted"
-        static let onboardingGeneration = "OnboardingGeneration"
-        static let manualOnboardingResetRequested = "ManualOnboardingResetRequested"
-        static let manualOnboardingResetRequestedAt = "ManualOnboardingResetRequestedAt"
-        static let onboardingCurrentStep = "OnboardingCurrentStep"
-        static let onboardingAISkipped = "OnboardingAISkipped"
-        static let onboardingPlaygroundValidated = "OnboardingPlaygroundValidated"
-        static let onboardingPlaygroundSkipped = "OnboardingPlaygroundSkipped"
-        static let onboardingSelectedLanguageID = "OnboardingSelectedLanguageID"
-
-        // Command Mode Keys
-        static let commandModeSelectedModel = "CommandModeSelectedModel"
-        static let commandModeSelectedProviderID = "CommandModeSelectedProviderID"
-        static let commandModeHotkeyShortcut = "CommandModeHotkeyShortcut"
-        static let commandModeConfirmBeforeExecute = "CommandModeConfirmBeforeExecute"
-        static let cancelRecordingHotkeyShortcut = "CancelRecordingHotkeyShortcut"
-        static let pasteLastTranscriptionHotkeyShortcut = "PasteLastTranscriptionHotkeyShortcut"
-        static let pasteLastTranscriptionShortcutEnabled = "PasteLastTranscriptionShortcutEnabled"
-        static let commandModeLinkedToGlobal = "CommandModeLinkedToGlobal"
-        static let commandModeShortcutEnabled = "CommandModeShortcutEnabled"
-
-        // Prompt Mode Keys (Transcribe with Prompt)
-        static let promptModeHotkeyShortcut = "PromptModeHotkeyShortcut"
-        static let promptModeShortcutEnabled = "PromptModeShortcutEnabled"
-        static let promptModeSelectedPromptID = "PromptModeSelectedPromptID"
-        static let secondaryDictationPromptOff = "SecondaryDictationPromptOff"
-        static let secondaryPromptShortcutRemoved = "SecondaryPromptShortcutRemoved"
-        static let legacySecondaryPromptShortcutRetired = "LegacySecondaryPromptShortcutRetired"
-        static let dictationPromptConfigurations = "DictationPromptConfigurations"
-
-        // Rewrite Mode Keys
-        static let rewriteModeHotkeyShortcut = "RewriteModeHotkeyShortcut"
-        static let rewriteModeSelectedModel = "RewriteModeSelectedModel"
-        static let rewriteModeSelectedProviderID = "RewriteModeSelectedProviderID"
-        static let rewriteModeLinkedToGlobal = "RewriteModeLinkedToGlobal"
-
-        // Model Reasoning Config Keys
-        static let modelReasoningConfigs = "ModelReasoningConfigs"
-        static let rewriteModeShortcutEnabled = "RewriteModeShortcutEnabled"
-        static let showThinkingTokens = "ShowThinkingTokens"
-
-        // Stats Keys
-        static let userTypingWPM = "UserTypingWPM"
-        static let saveTranscriptionHistory = "SaveTranscriptionHistory"
-        static let saveAudioWithTranscriptionHistory = "SaveAudioWithTranscriptionHistory"
-        static let audioHistoryBudgetGB = "AudioHistoryBudgetGB"
-        static let notifyAIProcessingFailures = "NotifyAIProcessingFailures"
-
-        // Filler Words
-        static let fillerWords = "FillerWords"
-        static let removeFillerWordsEnabled = "RemoveFillerWordsEnabled"
-        static let autoConvertPunctuationEnabled = "AutoConvertPunctuationEnabled"
-        static let literalDictationFormattingEnabled = "LiteralDictationFormattingEnabled"
-        static let punctuationDictionaryPrefix = "PunctuationDictionaryPrefix"
-        static let punctuationDictionaryRules = "PunctuationDictionaryRules"
-        static let spokenFormattingActionRules = "SpokenFormattingActionRules"
-
-        /// GAAV Mode (removes capitalization and trailing punctuation)
-        static let gaavModeEnabled = "GAAVModeEnabled"
-        static let gaavLowercaseFirstLetterEnabled = "GAAVLowercaseFirstLetterEnabled"
-        static let gaavRemoveTrailingPeriodEnabled = "GAAVRemoveTrailingPeriodEnabled"
-
-        /// Continuous Dictation Mode (append trailing space + smart caps for chaining)
-        static let continuousDictationModeEnabled = "ContinuousDictationModeEnabled"
-        static let continuousDictationSpacingEnabled = "ContinuousDictationSpacingEnabled"
-        static let contextAwareCapitalizationEnabled = "ContextAwareCapitalizationEnabled"
-
-        // Custom Dictionary
-        static let customDictionaryEntries = "CustomDictionaryEntries"
-        static let automaticDictionaryLearningEnabled = "AutomaticDictionaryLearningEnabled"
-        static let automaticDictionarySuggestionFrequency = "AutomaticDictionarySuggestionFrequency"
-        static let vocabularyBoostingEnabled = "VocabularyBoostingEnabled"
-        static let pronunciationMatchingEnabled = "PronunciationMatchingEnabled"
-
-        // Transcription Provider (ASR)
-        static let selectedTranscriptionProvider = "SelectedTranscriptionProvider"
-        static let whisperModelSize = "WhisperModelSize"
-
-        /// Unified Speech Model (replaces above two)
-        static let selectedSpeechModel = "SelectedSpeechModel"
-        static let selectedWhisperLanguageCode = "SelectedWhisperLanguageCode"
-        static let selectedCohereLanguage = "SelectedCohereLanguage"
-        static let selectedNemotronLanguage = "SelectedNemotronLanguage"
-        static let selectedAppleSpeechLocaleIdentifier = "SelectedAppleSpeechLocaleIdentifier"
-        static let externalCoreMLArtifactsDirectories = "ExternalCoreMLArtifactsDirectories"
-
-        // Overlay Position
-        static let overlayPosition = "OverlayPosition"
-        static let notchPresentationMode = "NotchPresentationMode"
-        static let overlayBottomOffset = "OverlayBottomOffset"
-        static let overlayBottomOffsetMigratedTo50 = "OverlayBottomOffsetMigratedTo50"
-        static let overlaySize = "OverlaySize"
-        static let overlayMaterial = "OverlayMaterial"
-        static let overlayGlassOpacity = "OverlayGlassOpacity"
-        static let meetingOverlayPreference = "MeetingOverlayPreference"
-        static let transcriptionPreviewCharLimit = "TranscriptionPreviewCharLimit"
-
-        /// Media Playback Control
-        static let pauseMediaDuringTranscription = "PauseMediaDuringTranscription"
-
-        /// Custom Dictation Prompt
-        static let customDictationPrompt = "CustomDictationPrompt"
-
-        // Dictation Prompt Profiles (multi-prompt system)
-        static let dictationPromptProfiles = "DictationPromptProfiles"
-        static let appPromptBindings = "AppPromptBindings"
-        static let selectedDictationPromptID = "SelectedDictationPromptID"
-        static let sendCustomPromptOnly = "SendCustomPromptOnly"
-        static let editPromptOff = "EditPromptOff"
-        static let selectedEditPromptID = "SelectedEditPromptID"
-        static let selectedWritePromptID = "SelectedWritePromptID" // legacy fallback key
-        static let selectedRewritePromptID = "SelectedRewritePromptID" // legacy fallback key
-
-        // Default Dictation Prompt Override (optional)
-        // nil   => use built-in default prompt
-        // ""    => use empty system prompt
-        // other => use custom default prompt text
-        static let defaultDictationPromptOverride = "DefaultDictationPromptOverride"
-        static let defaultEditPromptOverride = "DefaultEditPromptOverride"
-        static let defaultWritePromptOverride = "DefaultWritePromptOverride" // legacy fallback key
-        static let defaultRewritePromptOverride = "DefaultRewritePromptOverride" // legacy fallback key
-
-        /// Streak Settings
-        static let weekendsDontBreakStreak = "WeekendsDontBreakStreak"
-    }
-}
 
 extension SettingsStore {
     enum SpokenSendKey: String, CaseIterable, Identifiable, Codable {
@@ -6255,260 +5150,4 @@ extension SettingsStore {
     }
 }
 
-extension SettingsStore.SpeechModel {
-    var supportedLanguageCodes: String? {
-        switch self {
-        case .gigaam:
-            return "RU"
-        case .parakeetTDT:
-            return "BG, HR, CS, DA, NL, EN, ET, FI, FR, DE, EL, HU, IT, LV, LT, MT, PL, PT, RO, SK, SL, ES, SV, RU, UK"
-        case .fluidParakeetMini, .fluidParakeetPico, .parakeetRealtime:
-            return "EN"
-        case .cohereTranscribeSixBit:
-            return "AR, DE, EL, EN, ES, FR, IT, JA, KO, NL, PL, PT, VI, ZH"
-        case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-            return "40 language-locales"
-        case .appleSpeechAnalyzer:
-            return "EN, ES, FR, DE, IT, JA, KO, PT, ZH"
-        default:
-            return nil
-        }
-    }
-
-    var supportedLanguageNames: String? {
-        switch self {
-        case .gigaam:
-            return "Russian"
-        case .parakeetTDT:
-            return """
-            Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian, Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian, Slovak, Slovenian, Spanish, Swedish, Russian, and Ukrainian
-            """
-        case .fluidParakeetMini, .fluidParakeetPico:
-            return "English"
-        case .cohereTranscribeSixBit:
-            return "Arabic, German, Greek, English, Spanish, French, Italian, Japanese, Korean, Dutch, Polish, Portuguese, Vietnamese, and Mandarin Chinese"
-        case .nemotronOffline, .nemotronStreaming, .nemotronStreaming320:
-            return "Spanish, Italian, Portuguese, Hindi, Korean, English, German, French, Russian, Turkish, Vietnamese, Dutch, Japanese, Arabic, " +
-                "Ukrainian; Polish, Norwegian Bokmal, Finnish, Mandarin, Czech, Bulgarian, Slovak, Swedish, Croatian, Romanian, Estonian, " +
-                "Danish, and Hungarian are Alpha; Greek, Hebrew, Lithuanian, Slovenian, Latvian, Maltese, Thai, and Norwegian Nynorsk are Experimental."
-        default:
-            return nil
-        }
-    }
-}
-
-extension SettingsStore {
-    enum CohereLanguage: String, CaseIterable, Identifiable, Codable {
-        case arabic = "ar"
-        case german = "de"
-        case greek = "el"
-        case english = "en"
-        case spanish = "es"
-        case french = "fr"
-        case italian = "it"
-        case japanese = "ja"
-        case korean = "ko"
-        case dutch = "nl"
-        case polish = "pl"
-        case portuguese = "pt"
-        case vietnamese = "vi"
-        case mandarinChinese = "zh"
-
-        var id: String {
-            self.rawValue
-        }
-
-        var displayName: String {
-            switch self {
-            case .arabic: return "Arabic"
-            case .german: return "German"
-            case .greek: return "Greek"
-            case .english: return "English"
-            case .spanish: return "Spanish"
-            case .french: return "French"
-            case .italian: return "Italian"
-            case .japanese: return "Japanese"
-            case .korean: return "Korean"
-            case .dutch: return "Dutch"
-            case .polish: return "Polish"
-            case .portuguese: return "Portuguese"
-            case .vietnamese: return "Vietnamese"
-            case .mandarinChinese: return "Mandarin Chinese"
-            }
-        }
-
-        var tokenString: String {
-            "<|\(self.rawValue)|>"
-        }
-    }
-
-    // MARK: - Unified Speech Model Selection
-
-    /// The selected speech recognition model.
-    /// This unified setting replaces the old TranscriptionProviderOption + WhisperModelSize combination.
-    var selectedSpeechModel: SpeechModel {
-        get {
-            // Check if already using new system
-            if let rawValue = defaults.string(forKey: Keys.selectedSpeechModel),
-               let model = SpeechModel(rawValue: rawValue)
-            {
-                // If Qwen was previously selected, transparently fall back while preview is disabled.
-                if model == .qwen3Asr, !SpeechModel.qwenPreviewEnabled {
-                    return SpeechModel.defaultModel
-                }
-                if model == .nemotronStreaming320 {
-                    return .nemotronStreaming
-                }
-                let requiresAppleSiliconWhisper = model == .whisperLargeTurbo || model == .whisperLarge
-                if requiresAppleSiliconWhisper, !CPUArchitecture.isAppleSilicon {
-                    return .whisperBase
-                }
-                // Validate model is available on this architecture
-                if model.requiresAppleSilicon && !CPUArchitecture.isAppleSilicon {
-                    return .whisperBase
-                }
-                if model.requiresMacOS15, #unavailable(macOS 15.0) {
-                    return .whisperBase
-                }
-                if model.requiresMacOS26, #unavailable(macOS 26.0) {
-                    return .whisperBase
-                }
-                return model
-            }
-
-            // Migration: Convert old settings to new SpeechModel
-            return self.migrateToSpeechModel()
-        }
-        set {
-            objectWillChange.send()
-            let model = newValue == .nemotronStreaming320 ? SpeechModel.nemotronStreaming : newValue
-            self.defaults.set(model.rawValue, forKey: Keys.selectedSpeechModel)
-        }
-    }
-
-    /// The language Whisper should transcribe, or `nil` to detect it from each recording.
-    /// Existing installs keep automatic detection until the user selects a language.
-    var selectedWhisperLanguageCode: String? {
-        get {
-            Self.whisperLanguageCode(fromStoredValue: self.defaults.string(forKey: Keys.selectedWhisperLanguageCode))
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue ?? Self.automaticWhisperLanguageCode, forKey: Keys.selectedWhisperLanguageCode)
-        }
-    }
-
-    static func whisperLanguageCode(fromStoredValue value: String?) -> String? {
-        guard let value, value != self.automaticWhisperLanguageCode else { return nil }
-        return VoiceEngineLanguageCatalog.whisperLanguage(forCode: value) == nil ? nil : value
-    }
-
-    static func whisperLanguageBackupValue(for languageCode: String?) -> String {
-        languageCode ?? self.automaticWhisperLanguageCode
-    }
-
-    static func whisperLanguageCode(fromBackupValue value: String) -> String? {
-        value == self.automaticWhisperLanguageCode ? nil : value
-    }
-
-    var selectedCohereLanguage: CohereLanguage {
-        get {
-            if let rawValue = self.defaults.string(forKey: Keys.selectedCohereLanguage),
-               let language = CohereLanguage(rawValue: rawValue)
-            {
-                return language
-            }
-            return .english
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.selectedCohereLanguage)
-        }
-    }
-
-    var selectedNemotronLanguage: NemotronLanguage {
-        get {
-            if let rawValue = self.defaults.string(forKey: Keys.selectedNemotronLanguage),
-               let language = NemotronLanguage.supportedLanguage(rawValue: rawValue)
-            {
-                return language
-            }
-            return .english
-        }
-        set {
-            objectWillChange.send()
-            self.defaults.set(newValue.rawValue, forKey: Keys.selectedNemotronLanguage)
-        }
-    }
-
-    /// Read only the persisted choice; callers can resolve the fallback off the main thread.
-    func storedExternalCoreMLArtifactsPath(for model: SpeechModel) -> String? {
-        let paths = self.defaults.dictionary(forKey: Keys.externalCoreMLArtifactsDirectories) as? [String: String] ?? [:]
-        guard let path = paths[model.rawValue], !path.isEmpty else { return nil }
-        return path
-    }
-
-    func externalCoreMLArtifactsDirectory(for model: SpeechModel) -> URL? {
-        guard let spec = model.externalCoreMLSpec else { return nil }
-        let paths = self.defaults.dictionary(forKey: Keys.externalCoreMLArtifactsDirectories) as? [String: String] ?? [:]
-        if let storedPath = paths[model.rawValue], storedPath.isEmpty == false {
-            return URL(fileURLWithPath: storedPath, isDirectory: true)
-        }
-
-        let cachesDirectory: URL? = AppBrand.cachesDirectory
-        let fallback = cachesDirectory?.appendingPathComponent(spec.artifactFolderHint, isDirectory: true)
-        guard let fallback else { return nil }
-        if FileManager.default.fileExists(atPath: fallback.path) {
-            return fallback
-        }
-        return nil
-    }
-
-    func setExternalCoreMLArtifactsDirectory(_ directory: URL?, for model: SpeechModel) {
-        guard model.requiresExternalArtifacts else { return }
-        objectWillChange.send()
-        var paths = self.defaults.dictionary(forKey: Keys.externalCoreMLArtifactsDirectories) as? [String: String] ?? [:]
-        if let directory {
-            paths[model.rawValue] = directory.standardizedFileURL.path
-        } else {
-            paths.removeValue(forKey: model.rawValue)
-        }
-        self.defaults.set(paths, forKey: Keys.externalCoreMLArtifactsDirectories)
-    }
-
-    /// Migrates old TranscriptionProviderOption + WhisperModelSize settings to new SpeechModel
-    private func migrateToSpeechModel() -> SpeechModel {
-        let oldProvider = self.defaults.string(forKey: Keys.selectedTranscriptionProvider)
-        let oldWhisperSize = self.defaults.string(forKey: Keys.whisperModelSize)
-        let newModel = Self.migratedSpeechModel(legacyProvider: oldProvider, legacyWhisperSize: oldWhisperSize,
-                                               isAppleSilicon: CPUArchitecture.isAppleSilicon,
-                                               freshDefault: SpeechModel.defaultModel)
-
-        // Persist only after checking both current and legacy selections.
-        self.defaults.set(newModel.rawValue, forKey: Keys.selectedSpeechModel)
-        DebugLogger.shared.info("Migrated speech model settings: \(oldProvider ?? "unset")/\(oldWhisperSize ?? "unset") -> \(newModel.rawValue)", source: "SettingsStore")
-        return newModel
-    }
-
-    /// Keep old installations' explicit automatic/engine selections while applying
-    /// the packaged first-run default only when no speech choice has been saved.
-    static func migratedSpeechModel(legacyProvider: String?, legacyWhisperSize: String?,
-                                    isAppleSilicon: Bool, freshDefault: SpeechModel) -> SpeechModel {
-        guard legacyProvider != nil || legacyWhisperSize != nil else { return freshDefault }
-        switch legacyProvider ?? "auto" {
-        case "whisper":
-            switch legacyWhisperSize ?? "ggml-base.bin" {
-            case "ggml-tiny.bin": return .whisperTiny
-            case "ggml-base.bin": return .whisperBase
-            case "ggml-small.bin": return .whisperSmall
-            case "ggml-medium.bin": return .whisperMedium
-            case "ggml-large-v3.bin": return isAppleSilicon ? .whisperLarge : .whisperBase
-            default: return .whisperBase
-            }
-        case "fluidAudio":
-            return isAppleSilicon ? .parakeetTDT : .whisperBase
-        default:
-            return isAppleSilicon ? .parakeetTDT : .whisperBase
-        }
-    }
-}
+#endif

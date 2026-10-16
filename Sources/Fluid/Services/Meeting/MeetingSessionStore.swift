@@ -49,7 +49,7 @@ actor MeetingSessionStore: MeetingSessionStoring {
             let applicationSupport = fileManager.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
-            ).first ?? fileManager.homeDirectoryForCurrentUser
+            ).first ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
             self.rootDirectory = applicationSupport
                 .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
@@ -58,7 +58,9 @@ actor MeetingSessionStore: MeetingSessionStoring {
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        // This canonical manifest is also the strict capture checkpoint. Formatting every
+        // growing transcript adds sorting, whitespace and temporary allocations to each audio
+        // window's critical path; readers only depend on its schema, never JSON key order.
         self.encoder = encoder
 
         let decoder = JSONDecoder()
@@ -520,10 +522,21 @@ actor MeetingSessionStore: MeetingSessionStoring {
             [.posixPermissions: NSNumber(value: Int16(0o700))],
             ofItemAtPath: url.path
         )
+        #if os(iOS)
+        try self.fileSystem.manager.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: url.path)
+        var protectedURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try protectedURL.setResourceValues(values)
+        #endif
     }
 
     private func atomicPrivateWrite(_ data: Data, to destination: URL) throws {
+        #if os(iOS)
+        try data.write(to: destination, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        #else
         try data.write(to: destination, options: .atomic)
+        #endif
         try self.fileSystem.manager.setAttributes(
             [.posixPermissions: NSNumber(value: Int16(0o600))],
             ofItemAtPath: destination.path
@@ -549,9 +562,10 @@ actor MeetingSessionStore: MeetingSessionStoring {
             sessionIDs: [],
             updatedAt: Date()
         )
-        if !index.sessionIDs.contains(id) {
-            index.sessionIDs.append(id)
-        }
+        // Membership does not change during a recording. Keep the on-disk read so a removed or
+        // damaged index is repaired, without another atomic replacement on every checkpoint.
+        guard !index.sessionIDs.contains(id) else { return }
+        index.sessionIDs.append(id)
         index.updatedAt = Date()
         let data = try self.encoder.encode(index)
         try self.atomicPrivateWrite(

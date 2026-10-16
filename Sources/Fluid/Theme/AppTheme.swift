@@ -1,4 +1,9 @@
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Shared product accents. Onboarding and feature surfaces use the same source of truth.
 enum FluidBrandColors {
@@ -26,12 +31,84 @@ struct AppTheme {
         var accentForegroundOverride: Color? = nil
         var accentForeground: Color {
             if let accentForegroundOverride { return accentForegroundOverride }
-            guard let rgb = NSColor(self.accent).usingColorSpace(.deviceRGB) else { return .white }
+            return Self.contrastingInk(on: self.accent)
+        }
+
+        /// A fill and text drawn on a neutral surface have different contrast needs.
+        /// Saved accents and legacy profiles may predate package contrast validation.
+        var accentText: Color {
+            self.readableText(self.accent, minimumContrast: 4.5)
+        }
+
+        private var backgrounds: [Color] {
+            [windowBackground, contentBackground, sidebarBackground,
+             cardBackground, elevatedCardBackground, toolbarBackground]
+        }
+
+        func readableText(_ proposed: Color) -> Color {
+            self.readableText(proposed, minimumContrast: 3)
+        }
+
+        func readableText(_ proposed: Color, minimumContrast: Double) -> Color {
+            return self.backgrounds.allSatisfy { Self.contrast(proposed, $0) >= minimumContrast }
+                ? proposed : self.primaryText
+        }
+
+        /// Native controls paint their own ink and material. A portable palette
+        /// can use light surfaces in its dark variant, or the reverse; select
+        /// native ink against those surfaces without changing the brand variant.
+        func nativeColorScheme(fallback: ColorScheme) -> ColorScheme {
+            var result = fallback
+            let resolve = {
+                let lightContrast = self.backgrounds.map { Self.contrast(.black, $0) }.min() ?? 0
+                let darkContrast = self.backgrounds.map { Self.contrast(.white, $0) }.min() ?? 0
+                if lightContrast != darkContrast { result = lightContrast > darkContrast ? .light : .dark }
+            }
+            #if canImport(AppKit)
+            NSAppearance(named: fallback == .dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance(resolve)
+            #else
+            UITraitCollection(userInterfaceStyle: fallback == .dark ? .dark : .light).performAsCurrent(resolve)
+            #endif
+            return result
+        }
+
+        func foreground(on fill: Color) -> Color {
+            fill == self.accent ? self.accentForeground : Self.contrastingInk(on: fill)
+        }
+
+        static func contrastingInk(on fill: Color) -> Color {
+            Self.luminance(fill) > 0.179 ? .black : .white
+        }
+
+        private static func luminance(_ color: Color, over background: Color? = nil) -> Double {
+            #if canImport(AppKit)
+            guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return 0 }
+            let surface = background.flatMap { NSColor($0).usingColorSpace(.sRGB) }
+            let red = rgb.redComponent, green = rgb.greenComponent, blue = rgb.blueComponent
+            let surfaceRed = surface?.redComponent ?? 0
+            let surfaceGreen = surface?.greenComponent ?? 0
+            let surfaceBlue = surface?.blueComponent ?? 0
+            let alpha = surface == nil ? 1 : rgb.alphaComponent
+            #else
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, colorAlpha: CGFloat = 0
+            guard UIColor(color).getRed(&red, green: &green, blue: &blue, alpha: &colorAlpha) else { return 0 }
+            var surfaceRed: CGFloat = 0, surfaceGreen: CGFloat = 0, surfaceBlue: CGFloat = 0, surfaceAlpha: CGFloat = 0
+            let hasSurface = background.map {
+                UIColor($0).getRed(&surfaceRed, green: &surfaceGreen, blue: &surfaceBlue, alpha: &surfaceAlpha)
+            } ?? false
+            let alpha: CGFloat = hasSurface ? colorAlpha : 1
+            #endif
             func channel(_ value: CGFloat) -> Double {
                 value <= 0.04045 ? Double(value / 12.92) : pow(Double((value + 0.055) / 1.055), 2.4)
             }
-            let light = channel(rgb.redComponent) * 0.2126 + channel(rgb.greenComponent) * 0.7152 + channel(rgb.blueComponent) * 0.0722
-            return light > 0.179 ? .black : .white
+            return channel(red * alpha + surfaceRed * (1 - alpha)) * 0.2126
+                + channel(green * alpha + surfaceGreen * (1 - alpha)) * 0.7152
+                + channel(blue * alpha + surfaceBlue * (1 - alpha)) * 0.0722
+        }
+
+        private static func contrast(_ first: Color, _ second: Color) -> Double {
+            let a = Self.luminance(first, over: second), b = Self.luminance(second)
+            return (max(a, b) + 0.05) / (min(a, b) + 0.05)
         }
     }
 
@@ -58,12 +135,40 @@ struct AppTheme {
         let chromeCaption: Font
         var inheritedFont: Font? = nil
         var brandStyle: BrandStyle? = nil
+        #if canImport(AppKit)
         var nativeBodyFont: NSFont { .fluidSystemFont(ofSize: 14, style: self.brandStyle) }
+        var nativeBodySmallFont: NSFont { .fluidSystemFont(ofSize: 13, style: self.brandStyle) }
+        #endif
 
         static var standard: Typography { self.standard(style: AppBrand.package.style) }
 
         static func standard(style: BrandStyle?) -> Typography {
-            Typography(
+            #if os(iOS)
+            return Typography(
+                displayTitle: .fluidSystem(.largeTitle, style: style).weight(.semibold),
+                statement: .fluidSystem(.body, style: style),
+                title: .fluidSystem(.title2, style: style).weight(.bold),
+                titleIcon: .fluidSystem(.title2, style: style),
+                sectionTitle: .fluidSystem(.headline, style: style),
+                body: .fluidSystem(.body, style: style),
+                bodyStrong: .fluidSystem(.body, style: style).weight(.medium),
+                bodySmall: .fluidSystem(.subheadline, style: style),
+                bodySmallStrong: .fluidSystem(.subheadline, style: style).weight(.medium),
+                caption: .fluidSystem(.caption, style: style),
+                captionStrong: .fluidSystem(.caption, style: style).weight(.medium),
+                captionSmall: .fluidSystem(.caption2, style: style),
+                tiny: .fluidSystem(.caption2, style: style),
+                tinyStrong: .fluidSystem(.caption2, style: style).weight(.bold),
+                badge: .fluidSystem(.caption, style: style).weight(.semibold),
+                metricTiny: .fluidSystem(.caption, design: .rounded, style: style).weight(.bold),
+                codeCaption: .fluidSystem(.caption, design: .monospaced, style: style).weight(.medium),
+                sidebarItem: .fluidSystem(.body, style: style),
+                sidebarSection: .fluidSystem(.caption, style: style).weight(.medium),
+                chromeCaption: .fluidSystem(.caption, style: style),
+                inheritedFont: .fluidSystem(.body, style: style), brandStyle: style
+            )
+            #else
+            return Typography(
                 displayTitle: .fluidSystem(size: 42, weight: .semibold, role: .title, style: style),
                 statement: .fluidSystem(size: 17, weight: .regular, style: style),
                 title: .fluidSystem(size: 22, weight: .bold, role: .title, style: style),
@@ -87,6 +192,7 @@ struct AppTheme {
                 inheritedFont: FluidTypography.overridesStandard(style: style) ? .fluidSystem(.body, style: style) : nil,
                 brandStyle: style
             )
+            #endif
         }
     }
 
@@ -296,11 +402,16 @@ struct AppTheme {
     let typography: Typography
     let metrics: Metrics
     let materials: Materials
+    /// Retained across AppKit rehosting and export rendering so native control
+    /// appearance cannot switch the selected portable palette or logo variant.
+    var variant: ColorScheme? = nil
 
     static func adaptive(accent: Color, colorScheme: ColorScheme, package: BrandPackage = AppBrand.package) -> AppTheme {
         let base = colorScheme == .light ? Self.light(accent: accent) : Self.dark(accent: accent)
         let palette = colorScheme == .light ? package.theme?.light : package.theme?.dark
-        return base.applying(palette: palette, style: package.style, brandAccent: colorScheme == .light ? package.profile.accentLight : package.profile.accentDark)
+        var theme = base.applying(palette: palette, style: package.style, brandAccent: colorScheme == .light ? package.profile.accentLight : package.profile.accentDark)
+        theme.variant = colorScheme
+        return theme
     }
 
     private func applying(palette branded: BrandPalette?, style: BrandStyle?, brandAccent: String) -> AppTheme {
@@ -318,7 +429,7 @@ struct AppTheme {
             separator: color("separator", self.palette.separator),
             primaryText: color("primaryText", self.palette.primaryText),
             secondaryText: color("secondaryText", self.palette.secondaryText),
-            tertiaryText: color("tertiaryText", self.palette.tertiaryText),
+            tertiaryText: color("tertiaryText", self.palette.secondaryText),
             accent: self.palette.accent,
             warning: color("warning", self.palette.warning),
             success: color("success", self.palette.success),
@@ -340,25 +451,58 @@ struct AppTheme {
         return AppTheme(palette: palette, typography: .standard(style: style), metrics: metrics, materials: self.materials)
     }
 
+    private enum NativeColor {
+        case windowBackgroundColor, controlBackgroundColor, separatorColor, labelColor
+        case secondaryLabelColor, tertiaryLabelColor, systemOrange, systemGreen
+    }
+
+    private static func nativeColor(_ role: NativeColor) -> Color {
+        #if canImport(AppKit)
+        let color: NSColor = switch role {
+        case .windowBackgroundColor: .windowBackgroundColor
+        case .controlBackgroundColor: .controlBackgroundColor
+        case .separatorColor: .separatorColor
+        case .labelColor: .labelColor
+        case .secondaryLabelColor: .secondaryLabelColor
+        case .tertiaryLabelColor: .tertiaryLabelColor
+        case .systemOrange: .systemOrange
+        case .systemGreen: .systemGreen
+        }
+        return Color(nsColor: color)
+        #else
+        let color: UIColor = switch role {
+        case .windowBackgroundColor: .systemGroupedBackground
+        case .controlBackgroundColor: .secondarySystemGroupedBackground
+        case .separatorColor: .separator
+        case .labelColor: .label
+        case .secondaryLabelColor: .secondaryLabel
+        case .tertiaryLabelColor: .tertiaryLabel
+        case .systemOrange: .systemOrange
+        case .systemGreen: .systemGreen
+        }
+        return Color(uiColor: color)
+        #endif
+    }
+
     /// Light theme using system colors so macOS accessibility contrast settings stay in control.
     static func light(accent: Color) -> AppTheme {
         AppTheme(
             palette: Palette(
-                windowBackground: Color(nsColor: .windowBackgroundColor),
-                contentBackground: Color(nsColor: .controlBackgroundColor),
-                sidebarBackground: Color(nsColor: .windowBackgroundColor),
-                cardBackground: Color(nsColor: .controlBackgroundColor),
-                elevatedCardBackground: Color(nsColor: .windowBackgroundColor),
-                toolbarBackground: Color(nsColor: .windowBackgroundColor),
+                windowBackground: Self.nativeColor(.windowBackgroundColor),
+                contentBackground: Self.nativeColor(.controlBackgroundColor),
+                sidebarBackground: Self.nativeColor(.windowBackgroundColor),
+                cardBackground: Self.nativeColor(.controlBackgroundColor),
+                elevatedCardBackground: Self.nativeColor(.windowBackgroundColor),
+                toolbarBackground: Self.nativeColor(.windowBackgroundColor),
 
                 cardBorder: Color.black.opacity(0.12),
-                separator: Color(nsColor: .separatorColor),
-                primaryText: Color(nsColor: .labelColor),
-                secondaryText: Color(nsColor: .secondaryLabelColor),
-                tertiaryText: Color(nsColor: .tertiaryLabelColor),
+                separator: Self.nativeColor(.separatorColor),
+                primaryText: Self.nativeColor(.labelColor),
+                secondaryText: Self.nativeColor(.secondaryLabelColor),
+                tertiaryText: Self.nativeColor(.tertiaryLabelColor),
                 accent: accent,
-                warning: Color(nsColor: .systemOrange),
-                success: Color(nsColor: .systemGreen)
+                warning: Self.nativeColor(.systemOrange),
+                success: Self.nativeColor(.systemGreen)
             ),
             typography: .standard,
             metrics: Metrics(
@@ -396,12 +540,12 @@ struct AppTheme {
 
                 cardBorder: Color.white.opacity(0.10),
                 separator: Color.white.opacity(0.16),
-                primaryText: Color(nsColor: .labelColor),
-                secondaryText: Color(nsColor: .secondaryLabelColor),
-                tertiaryText: Color(nsColor: .tertiaryLabelColor),
+                primaryText: Self.nativeColor(.labelColor),
+                secondaryText: Self.nativeColor(.secondaryLabelColor),
+                tertiaryText: Self.nativeColor(.tertiaryLabelColor),
                 accent: accent,
-                warning: Color(nsColor: .systemOrange),
-                success: Color(nsColor: .systemGreen)
+                warning: Self.nativeColor(.systemOrange),
+                success: Self.nativeColor(.systemGreen)
             ),
             typography: .standard,
             metrics: Metrics(

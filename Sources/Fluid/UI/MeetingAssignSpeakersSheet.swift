@@ -139,6 +139,8 @@ struct MeetingAssignSpeakersSheet: View {
         .frame(minWidth: 480, idealWidth: 560, maxWidth: 560)
         .frame(minHeight: 420, idealHeight: 560)
         .background(self.theme.palette.windowBackground)
+        .appTheme(self.theme)
+        .tint(self.theme.palette.accent)
     }
 
     private var header: some View {
@@ -205,9 +207,30 @@ struct MeetingAssignSpeakersSheet: View {
                     get: { self.drafts[speaker.id] ?? speaker.displayName },
                     set: { self.drafts[speaker.id] = $0 }
                 ),
-                prompt: Text(speaker.displayName)
+                prompt: Text(verbatim: "")
             )
-            .textFieldStyle(.roundedBorder)
+            // A native bezel chooses its own fill independently of the portable
+            // sheet palette. Keep the native editor, pairing its ink and opaque
+            // surface explicitly, including imported inverted palettes.
+            .textFieldStyle(.plain)
+            .font(self.theme.typography.body)
+            .foregroundStyle(self.theme.palette.primaryText)
+            .overlay(alignment: .leading) {
+                if (self.drafts[speaker.id] ?? speaker.displayName).isEmpty {
+                    Text(verbatim: speaker.displayName)
+                        .foregroundStyle(self.theme.palette.secondaryText)
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(self.theme.metrics.spacing.sm)
+            .background(self.theme.palette.elevatedCardBackground, in: RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm))
+            .overlay {
+                RoundedRectangle(cornerRadius: self.theme.metrics.corners.sm)
+                    .strokeBorder(self.focusedField == speaker.id ? self.theme.palette.accentText : self.theme.palette.cardBorder)
+                    .allowsHitTesting(false)
+            }
             .controlSize(.large)
             .accessibilityLabel("Name for \(speaker.displayName)")
             .focused(self.$focusedField, equals: speaker.id)

@@ -4,6 +4,7 @@ import SwiftUI
 /// A lightweight macOS-native text view that reliably renders bound text immediately,
 /// avoiding occasional `TextEditor` refresh glitches in sheets.
 struct PromptTextView: NSViewRepresentable {
+    @Environment(\.theme) private var theme
     @Binding var text: String
 
     var isEditable: Bool = true
@@ -39,6 +40,7 @@ struct PromptTextView: NSViewRepresentable {
         textView.textContainer?.containerSize = NSSize(width: scrollView.contentSize.width, height: .greatestFiniteMagnitude)
 
         textView.string = self.text
+        self.applyAppearance(to: textView)
 
         scrollView.documentView = textView
         return scrollView
@@ -55,6 +57,7 @@ struct PromptTextView: NSViewRepresentable {
             textView.selectedRanges = selectedRanges
         }
 
+        self.applyAppearance(to: textView)
         if textView.isEditable != self.isEditable { textView.isEditable = self.isEditable }
         textView.isSelectable = true
         textView.drawsBackground = false
@@ -65,6 +68,12 @@ struct PromptTextView: NSViewRepresentable {
         if textView.textContainer?.lineFragmentPadding != 0 {
             textView.textContainer?.lineFragmentPadding = 0
         }
+    }
+
+    private func applyAppearance(to textView: NSTextView) {
+        let ink = NSColor(self.theme.palette.primaryText)
+        if textView.textColor != ink { textView.textColor = ink }
+        if textView.insertionPointColor != ink { textView.insertionPointColor = ink }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

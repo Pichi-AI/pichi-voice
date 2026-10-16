@@ -8,6 +8,7 @@ struct AddProviderSheet<Logo: View>: View {
     @State private var draft = ProviderSetupDraft()
     @State private var isEditing = false
     @State private var saveFailed = false
+    @State private var isSubmitting = false
     @State private var modelFetchTask: Task<Void, Never>?
     @State private var modelFetchID: UUID?
     @State private var modelFetchError: String?
@@ -28,7 +29,7 @@ struct AddProviderSheet<Logo: View>: View {
                         self.logo(self.draft.providerID, self.draft.name)
                     } else {
                         Image(systemName: "square.stack.3d.up")
-                            .font(.fluidSystem(size: 26)).foregroundStyle(FluidBrandColors.blue)
+                            .font(.fluidSystem(size: 26)).foregroundStyle(self.theme.palette.accentText)
                             .frame(width: 48, height: 48)
                     }
                     VStack(alignment: .leading, spacing: 6) {
@@ -37,7 +38,10 @@ struct AddProviderSheet<Logo: View>: View {
                             .font(self.theme.typography.body).foregroundStyle(self.theme.palette.secondaryText)
                     }
                     Spacer()
-                    Button("Cancel") { self.dismiss() }
+                    Button("Cancel") {
+                        guard !self.isSubmitting, !self.viewModel.isSavingProviderCredentials else { return }
+                        self.dismiss()
+                    }
                         .keyboardShortcut(.cancelAction)
                         .fluidGlassAction()
                 }
@@ -79,14 +83,14 @@ struct AddProviderSheet<Logo: View>: View {
                                 } label: {
                                     HStack(spacing: 14) {
                                         Image(systemName: "server.rack").font(.fluidSystem(size: 24))
-                                            .foregroundStyle(FluidBrandColors.blue).frame(width: 38, height: 38)
+                                            .foregroundStyle(self.theme.palette.accentText).frame(width: 38, height: 38)
                                         VStack(alignment: .leading, spacing: 5) {
                                             Text("Custom Provider").font(self.theme.typography.bodyStrong)
                                             Text("Your service or server")
                                                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                                         }
                                         Spacer()
-                                        Image(systemName: "plus").foregroundStyle(FluidBrandColors.blue)
+                                        Image(systemName: "plus").foregroundStyle(self.theme.palette.accentText)
                                     }.padding(16).contentShape(RoundedRectangle(cornerRadius: 16))
                                 }
                                 .buttonStyle(ProviderChoiceStyle())
@@ -101,6 +105,8 @@ struct AddProviderSheet<Logo: View>: View {
         .padding(28)
         .frame(width: 720, height: 650)
         .background(self.theme.palette.windowBackground)
+        .disabled(self.isSubmitting || self.viewModel.isSavingProviderCredentials)
+        .interactiveDismissDisabled(self.isSubmitting || self.viewModel.isSavingProviderCredentials)
         .onChange(of: self.draft.connectionIdentity) { _, _ in
             self.cancelModelFetch()
             self.modelFetchError = nil
@@ -135,19 +141,28 @@ struct AddProviderSheet<Logo: View>: View {
             .textFieldStyle(.roundedBorder)
             if self.saveFailed {
                 Text("Couldn’t save this provider. Check Keychain access and try again.")
-                    .font(self.theme.typography.caption).foregroundStyle(.red)
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red))
             }
             Spacer()
             HStack {
-                Button("Back") { self.cancelModelFetch(); self.isEditing = false; self.saveFailed = false; self.showingManualModel = false }
+                Button("Back") {
+                    guard !self.isSubmitting, !self.viewModel.isSavingProviderCredentials else { return }
+                    self.cancelModelFetch(); self.isEditing = false; self.saveFailed = false; self.showingManualModel = false
+                }
                     .fluidGlassAction()
                 Spacer()
                 Button("Add Provider") {
-                    if self.viewModel.addProvider(self.draft) { self.dismiss() } else { self.saveFailed = true }
+                    guard !self.isSubmitting, !self.viewModel.isSavingProviderCredentials else { return }
+                    self.isSubmitting = true
+                    let submission = self.draft
+                    Task {
+                        defer { self.isSubmitting = false }
+                        if await self.viewModel.addProvider(submission) { self.dismiss() } else { self.saveFailed = true }
+                    }
                 }
                 .keyboardShortcut(.defaultAction)
                 .fluidGlassAction(prominent: true)
-                .disabled(self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
+                .disabled(self.isSubmitting || self.viewModel.isSavingProviderCredentials || self.modelFetchID != nil || !self.draft.isValid || self.viewModel.isTestingConnection || self.viewModel.isFetchingModels)
             }
         }
     }
@@ -191,7 +206,7 @@ struct AddProviderSheet<Logo: View>: View {
                 : "Load models with the reload button, or use + to enter a model ID."))
                 .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             if let error = self.modelFetchError {
-                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(.red)
+                Text(PichiLocalization.text(error)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.readableText(.red))
                     .textSelection(.enabled)
             }
         }

@@ -118,7 +118,7 @@ struct DashboardView: View {
                 ? PichiLocalization.text(self.greeting) + "."
                 : PichiLocalization.text(self.greeting) + ", " + self.greetingName + ".")
                 .font(.fluidSystem(size: 34, weight: .regular, design: .serif))
-                .foregroundStyle(.primary)
+                .foregroundStyle(self.theme.palette.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
                 self.selectedSidebarItem = .voiceEngine
@@ -182,10 +182,10 @@ struct DashboardView: View {
 
     private func stat(_ title: String, value: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(PichiLocalization.text(title)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            Text(PichiLocalization.text(title)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
             Text(value).font(.fluidSystem(size: 27, weight: .semibold)).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.7)
-            Text(PichiLocalization.text(detail)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+            Text(PichiLocalization.text(detail)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
@@ -197,7 +197,7 @@ struct DashboardView: View {
                 Text("Recent dictations").font(self.theme.typography.sectionTitle)
                 Spacer()
                 Button("View all") { self.selectedSidebarItem = .history }
-                    .buttonStyle(.plain).foregroundStyle(self.theme.palette.accent)
+                    .buttonStyle(.plain).foregroundStyle(self.theme.palette.accentText)
                     .disabled(self.busy)
             }
             ThemedCard(style: .subtle, padding: 0) {
@@ -205,10 +205,10 @@ struct DashboardView: View {
                     ProgressView("Loading history…").frame(maxWidth: .infinity).padding(32)
                 } else if self.history.entries.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Image(systemName: "text.bubble").font(.fluidSystem(size: 24)).foregroundStyle(self.theme.palette.accent)
+                        Image(systemName: "text.bubble").font(.fluidSystem(size: 24)).foregroundStyle(self.theme.palette.accentText)
                         Text("Your words start here").font(self.theme.typography.bodyStrong)
                         Text("Your recent dictations will appear here after you speak.")
-                            .font(self.theme.typography.bodySmall).foregroundStyle(.secondary)
+                            .font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading).padding(24)
                 } else {
@@ -270,54 +270,49 @@ struct DashboardView: View {
         let layout = horizontal
             ? AnyLayout(HStackLayout(alignment: .top, spacing: 18))
             : AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
-        return VStack(alignment: .leading, spacing: 18) {
-            Text("Make it yours").font(self.theme.typography.sectionTitle)
-            FluidGlassControlGroup {
-                layout {
-                    if !self.shortcut.isEmpty {
-                        VStack(spacing: 18) {
-                            Text("YOUR SHORTCUT")
-                                .font(.fluidSystem(size: 10, weight: .semibold))
-                                .tracking(1.4).foregroundStyle(.secondary)
-                            self.shortcutKey
-                            if self.settings.primaryDictationShortcuts.count > 1 {
-                                Text("+\(self.settings.primaryDictationShortcuts.count - 1) more")
-                                    .font(self.theme.typography.caption).foregroundStyle(.secondary)
-                            }
-                            Button(action: self.openShortcutSettings) {
-                                HStack(spacing: 6) {
-                                    Text("Change shortcut")
-                                    Image(systemName: "arrow.up.right").font(.fluidSystem(size: 10, weight: .medium))
+        return ThemedCard(style: .standard, padding: 20) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Make it yours").font(self.theme.typography.sectionTitle)
+                FluidGlassControlGroup {
+                    layout {
+                        if !self.shortcut.isEmpty {
+                            VStack(spacing: 18) {
+                                Text("YOUR SHORTCUT")
+                                    .font(.fluidSystem(size: 10, weight: .semibold))
+                                    .tracking(1.4).foregroundStyle(self.theme.palette.secondaryText)
+                                self.shortcutKey
+                                if self.settings.primaryDictationShortcuts.count > 1 {
+                                    Text("+\(self.settings.primaryDictationShortcuts.count - 1) more")
+                                        .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                                 }
-                                .font(self.theme.typography.captionStrong)
+                                Button(action: self.openShortcutSettings) {
+                                    HStack(spacing: 6) {
+                                        Text("Change shortcut")
+                                        Image(systemName: "arrow.up.right").font(.fluidSystem(size: 10, weight: .medium))
+                                    }
+                                    .font(self.theme.typography.captionStrong)
+                                }
+                                .fluidOutlinedButton()
                             }
-                            .fluidGlassAction()
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16).padding(.horizontal, 14)
+                            .disabled(self.busy)
+                            .frame(width: horizontal ? 220 : nil)
+                        }
+                        VStack(alignment: .leading, spacing: 0) {
+                            DashboardQuickAction(title: "Vocabulary", detail: "Names & terms", icon: "text.book.closed") {
+                                self.selectedSidebarItem = .customDictionary
+                            }
+                            .disabled(self.busy)
+                            Divider().padding(.leading, 46).padding(.trailing, 12)
+                            DashboardQuickAction(title: "Writing style", detail: "Make it sound like you", icon: "wand.and.stars") {
+                                self.selectedSidebarItem = .cleanupStyles
+                            }
+                            .disabled(self.busy)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16).padding(.horizontal, 14)
-                        .disabled(self.busy)
-                        .frame(width: horizontal ? 220 : nil)
                     }
-                    VStack(alignment: .leading, spacing: 0) {
-                        DashboardQuickAction(title: "Vocabulary", detail: "Names & terms", icon: "text.book.closed") {
-                            self.selectedSidebarItem = .customDictionary
-                        }
-                        .disabled(self.busy)
-                        Divider().padding(.leading, 46).padding(.trailing, 12)
-                        DashboardQuickAction(title: "Writing style", detail: "Make it sound like you", icon: "wand.and.stars") {
-                            self.selectedSidebarItem = .cleanupStyles
-                        }
-                        .disabled(self.busy)
-                    }
-                    .frame(maxWidth: .infinity)
                 }
-            }
-        }
-        .padding(20)
-        .background(self.reduceTransparency ? self.theme.palette.cardBackground : Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 24))
-        .background {
-            if !self.reduceTransparency {
-                RoundedRectangle(cornerRadius: 24).fill(.ultraThinMaterial)
             }
         }
     }
@@ -329,7 +324,7 @@ struct DashboardView: View {
                     Label(AppBrand.text("Try Fluid Intelligence"), systemImage: "sparkles")
                         .font(self.theme.typography.sectionTitle)
                     Text("Turn spoken thoughts into lists, emails, and polished paragraphs.")
-                        .font(self.theme.typography.bodySmall).foregroundStyle(.secondary)
+                        .font(self.theme.typography.bodySmall).foregroundStyle(self.theme.palette.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
@@ -346,30 +341,23 @@ struct DashboardView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(self.theme.palette.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 18))
+        .background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(self.theme.palette.accent.opacity(0.18)))
     }
 
     @ViewBuilder
     private var shortcutKey: some View {
-        let button = Button(action: self.openShortcutSettings) {
+        Button(action: self.openShortcutSettings) {
             Text(self.settings.primaryDictationShortcuts.first?.displayString ?? PichiLocalization.text("Off"))
                 .font(.fluidSystem(size: 25, weight: .medium))
                 .lineLimit(2).minimumScaleFactor(0.5)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-                .frame(width: 126, height: 64)
-                .contentShape(RoundedRectangle(cornerRadius: 18))
+                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(FluidOutlinedButtonStyle(height: 64, fillsWidth: true))
+        .frame(width: 126, height: 64)
         .help(PichiLocalization.format("%@ — Change your dictation shortcuts", self.shortcut))
         .accessibilityLabel(PichiLocalization.format("Dictation shortcuts: %@", self.shortcut))
-        if #available(macOS 26, *), !self.reduceTransparency {
-            button.glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18))
-        } else {
-            button.background(self.theme.palette.cardBackground, in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(self.theme.palette.cardBorder, lineWidth: 1))
-        }
     }
 }
 
@@ -398,18 +386,18 @@ private struct DashboardRecentRow: View {
                         Text("·")
                         Text(self.entry.timestamp, style: .date)
                     }
-                    .font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    .font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if self.copied {
                     Text("Copied").font(self.theme.typography.caption)
-                        .foregroundStyle(self.theme.palette.accent)
+                        .foregroundStyle(self.theme.palette.accentText)
                 }
                 Image(systemName: self.copied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(self.copied ? self.theme.palette.accent : self.theme.palette.secondaryText)
+                    .foregroundStyle(self.copied ? self.theme.palette.accentText : self.theme.palette.secondaryText)
             }
             .padding(18)
-            .background(self.theme.palette.accent.opacity(self.hovered ? 0.06 : 0))
+            .background(self.hovered ? self.theme.palette.elevatedCardBackground : self.theme.palette.cardBackground)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -432,36 +420,28 @@ private struct DashboardQuickAction: View {
     let icon: String
     let action: () -> Void
     @Environment(\.theme) private var theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovered = false
 
     var body: some View {
         Button(action: self.action) {
             HStack(spacing: 12) {
                 Image(systemName: self.icon)
                     .font(self.theme.typography.bodySmall)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(PichiLocalization.text(self.title)).font(self.theme.typography.bodySmallStrong).lineLimit(1)
-                    Text(PichiLocalization.text(self.detail)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text(PichiLocalization.text(self.detail)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
                     .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
             .padding(.vertical, 16)
-            .background(Color.primary.opacity(self.hovered ? 0.045 : 0), in: RoundedRectangle(cornerRadius: 12))
-            .contentShape(RoundedRectangle(cornerRadius: 12))
         }
-        .buttonStyle(.plain)
-        .onHover { self.hovered = $0 && self.isEnabled }
-        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.15), value: self.hovered)
+        .buttonStyle(FluidOutlinedButtonStyle(fillsWidth: true))
     }
 }
 
@@ -481,13 +461,13 @@ private struct DashboardSetupCard: View {
                 FluidIconTile(icon: self.icon, tint: self.theme.palette.accent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(PichiLocalization.text(self.title)).font(self.theme.typography.bodySmallStrong).lineLimit(1)
-                    Text(PichiLocalization.text(self.detail)).font(self.theme.typography.caption).foregroundStyle(.secondary)
+                    Text(PichiLocalization.text(self.detail)).font(self.theme.typography.caption).foregroundStyle(self.theme.palette.secondaryText)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
                 Text("Set up")
                     .font(self.theme.typography.captionStrong)
-                    .foregroundStyle(self.theme.palette.accent)
+                    .foregroundStyle(self.theme.palette.accentText)
                     .fixedSize()
             }
             .frame(maxWidth: .infinity, alignment: .leading)

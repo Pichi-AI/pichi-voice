@@ -1590,7 +1590,7 @@ struct ContentView: View {
 
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(self.theme.palette.secondaryText)
                 .padding(.horizontal, self.theme.metrics.spacing.md)
                 .padding(.top, self.theme.metrics.spacing.sm)
                 .padding(.bottom, self.theme.metrics.spacing.xs)
@@ -1631,16 +1631,11 @@ struct ContentView: View {
                 ForEach(self.filteredSettingsSections) { section in
                     let isSelected = self.settingsNavigation.selectedSection == section
                     NavigationLink(value: section) {
-                        HStack(spacing: self.theme.metrics.spacing.sm) {
+                        self.sidebarLabel(section.title, isSelected: isSelected) {
                             Image(systemName: section.systemImage)
                                 .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                                 .frame(width: 18)
-
-                            Text(section.title)
-                                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
                         }
-                        .font(self.theme.typography.sidebarItem)
                     }
                     .sidebarOptionHover(
                         isSelected: isSelected,
@@ -1704,7 +1699,7 @@ struct ContentView: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: "gearshape")
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(width: 18)
 
                 Text("Settings")
@@ -1713,7 +1708,7 @@ struct ContentView: View {
 
                 Image(systemName: "chevron.right")
                     .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.horizontal, self.theme.metrics.spacing.md)
@@ -1748,7 +1743,7 @@ struct ContentView: View {
             HStack(spacing: self.theme.metrics.spacing.sm) {
                 Image(systemName: "questionmark.circle")
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(width: 18)
 
                 Text("Help")
@@ -1757,7 +1752,7 @@ struct ContentView: View {
 
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.fluidSystem(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(self.theme.palette.tertiaryText)
             }
             .font(self.theme.typography.sidebarItem)
             .padding(.horizontal, self.theme.metrics.spacing.md)
@@ -1790,28 +1785,35 @@ struct ContentView: View {
     private func sidebarSectionHeader(_ title: String) -> some View {
         Text(title)
             .font(self.theme.typography.sidebarSection)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(self.theme.palette.secondaryText)
             .textCase(nil)
             .padding(.top, self.theme.metrics.spacing.sm)
             .padding(.bottom, self.theme.metrics.spacing.xs)
     }
 
+    /// Native sidebar labels must pair their ink with the selected brand's
+    /// surfaces, independently of the application's system appearance.
+    private func sidebarLabel<Icon: View>(_ title: String, isSelected: Bool, @ViewBuilder icon: () -> Icon) -> some View {
+        HStack(spacing: self.theme.metrics.spacing.sm) {
+            icon()
+                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.secondaryText)
+            Text(title)
+                .foregroundStyle(isSelected ? self.theme.palette.accentForeground : self.theme.palette.primaryText)
+        }
+        .font(self.theme.typography.sidebarItem)
+    }
+
     private func sidebarNavigationLink(_ item: SidebarItem, systemImage: String) -> some View {
         let isSelected = self.selectedSidebarItem == item
         return NavigationLink(value: item) {
-            HStack(spacing: self.theme.metrics.spacing.sm) {
+            self.sidebarLabel(item.title, isSelected: isSelected) {
                 Image(nsImage: SidebarSymbolCache.image(named: systemImage))
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
-                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground.opacity(0.9) : Color.secondary)
                     .frame(width: 16, height: 16)
                     .accessibilityHidden(true)
-
-                Text(item.title)
-                    .foregroundStyle(isSelected ? self.theme.palette.accentForeground : Color.primary)
             }
-            .font(self.theme.typography.sidebarItem)
             .padding(.vertical, self.theme.metrics.spacing.xs / 2)
         }
         .sidebarOptionHover(
@@ -2558,8 +2560,11 @@ struct ContentView: View {
     }
 
     private func resolveTypingTargetPID(returnToStartingField: Bool = true) -> (pid: pid_t?, shouldRestoreOriginalFocus: Bool) {
+        self.resolveTypingTargetPID(returnToStartingField: returnToStartingField, context: NotchContentState.shared.recordingTargetContext, fallbackOriginalPID: NotchContentState.shared.recordingTargetPID)
+    }
+
+    private func resolveTypingTargetPID(returnToStartingField: Bool, context: TypingService.RecordingTargetContext?, fallbackOriginalPID: pid_t?) -> (pid: pid_t?, shouldRestoreOriginalFocus: Bool) {
         let startedAt = ProcessInfo.processInfo.systemUptime
-        let context = NotchContentState.shared.recordingTargetContext
         let focusedPID = TypingService.currentFocusedPID()
         let pidFinishedAt = ProcessInfo.processInfo.systemUptime
         let checksElement = returnToStartingField && context?.pid == focusedPID && context?.element != nil
@@ -2568,7 +2573,7 @@ struct ContentView: View {
             returnToStartingField: returnToStartingField,
             focusedPID: focusedPID,
             ownPID: ProcessInfo.processInfo.processIdentifier,
-            originalPID: context?.pid ?? NotchContentState.shared.recordingTargetPID,
+            originalPID: context?.pid ?? fallbackOriginalPID,
             originalFieldIsFocused: context != nil && context?.pid == focusedPID && elementIsFocused
         )
         let finishedAt = ProcessInfo.processInfo.systemUptime
@@ -2728,7 +2733,8 @@ struct ContentView: View {
         dictationSlot: SettingsStore.DictationShortcutSlot? = nil,
         streamHandler: PrivateAIStreamHandler? = nil,
         benchmarkID: String? = nil,
-        stopSnapshot: DictationStopSnapshot? = nil
+        stopSnapshot: DictationStopSnapshot? = nil,
+        client: LLMClient = .shared
     ) async throws -> AITextProcessingResult {
         guard let summaryActivity = MeetingSummaryActivityCoordinator.shared.beginProcessing() else {
             throw MeetingModelResidencyError.busy
@@ -2739,6 +2745,9 @@ struct ContentView: View {
         let appInfo = stopSnapshot?.appInfo ?? self.recordingAppInfo ?? self.getCurrentAppInfo()
         let route: DictationProviderRoute
         if let stopSnapshot {
+            // Stop-time admission is immutable across ASR finalization. Never
+            // re-read credentials or re-verify against later preferences here.
+            guard stopSnapshot.usesAI else { throw AIProcessingError.noVerifiedProvider }
             route = stopSnapshot.route
         } else if let overrideProviderID, let overrideModel {
             route = DictationProviderRoute.resolve(
@@ -2752,6 +2761,11 @@ struct ContentView: View {
                 dictationSlot: dictationSlot,
                 appBundleID: appInfo.bundleId
             )
+        }
+        if stopSnapshot == nil {
+            guard DictationAIPostProcessingGate.isProviderConfigured(route: route, settings: SettingsStore.shared) else {
+                throw AIProcessingError.noVerifiedProvider
+            }
         }
         self.appBench(
             "ai_route_resolved elapsedMs=\(Int(((ProcessInfo.processInfo.systemUptime - routeStartedAt) * 1000).rounded()))"
@@ -2886,7 +2900,7 @@ struct ContentView: View {
         }
 
         // Check if this model doesn't support the temperature parameter
-        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel)
+        let isTemperatureUnsupported = SettingsStore.shared.isTemperatureUnsupported(derivedSelectedModel, baseURL: derivedBaseURL)
 
         // Get reasoning config for this model (uses per-model settings or auto-detection)
         // This handles custom parameters like reasoning_effort, enable_thinking, etc.
@@ -2938,7 +2952,7 @@ struct ContentView: View {
         let response: LLMClient.Response
         if enableStreaming {
             do {
-                response = try await LLMClient.shared.call(config)
+                response = try await client.call(config)
             } catch {
                 guard DictationStreamingFallbackPolicy.shouldRetryWithoutStreaming(after: error, baseURL: config.baseURL) else {
                     self.appBench("ai_streaming_fallback_skipped reason=transport_or_cancel")
@@ -2962,10 +2976,10 @@ struct ContentView: View {
                 )
                 fallbackConfig.providerOptions = config.providerOptions
                 DictationPostProcessingService.configureInteractiveLocalRequest(&fallbackConfig)
-                response = try await LLMClient.shared.call(fallbackConfig)
+                response = try await client.call(fallbackConfig)
             }
         } else {
-            response = try await LLMClient.shared.call(config)
+            response = try await client.call(config)
         }
 
         // Log thinking if present (for debugging)
@@ -3394,13 +3408,14 @@ struct ContentView: View {
 
         // A sidebar search field that was already focused when recording began gets
         // the text through its field editor, which also fires change notifications.
+        // So does an in-app editor that opted in with `DictationTextTarget`.
         if isFluidFrontmost, shouldDeliverOutputs, !sendsExistingDraft,
            let focusTarget = self.recordingFocusTarget,
            focusTarget.pid == ProcessInfo.processInfo.processIdentifier,
            TypingService.isExactFocusTargetActive(focusTarget),
            let window = NSApp.keyWindow,
            let editor = window.firstResponder as? NSTextView,
-           SidebarSearchField.owns(editor, in: window)
+           SidebarSearchField.owns(editor, in: window) || DictationTextTarget.accepts(editor)
         {
             editor.insertText(finalText, replacementRange: editor.selectedRange())
         }
@@ -3475,6 +3490,7 @@ struct ContentView: View {
                     toggleStopRequestedAt: toggleStopRequestedAt,
                     tracksDictionaryCorrections: true,
                     preserveTranscriptOnClipboard: shouldCopyToClipboard,
+                    requiredFocusTarget: stopSnapshot?.focusTarget,
                     isOutputValid: { self.cancelledOutputLifecycleID != expectedOverlayLifecycleID }
                 )
                 didTypeExternally = deliveryResult.wasDispatched
@@ -4170,15 +4186,23 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func retryTextDelivery(_ transcript: String) async {
+    private func retryTextDelivery(_ transcript: String, targetContext: TypingService.RecordingTargetContext?, fallbackTargetPID: pid_t?, lifecycleID: UInt64) async {
         guard !transcript.isEmpty else { return }
+        let isOutputValid: @MainActor () -> Bool = { self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
+        guard isOutputValid() else { return }
 
         self.menuBarManager.setProcessing(true)
         NotchOverlayManager.shared.updateTranscriptionText("Inserting")
-        let typingTarget = self.resolveTypingTargetPID()
+        let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: fallbackTargetPID)
+        let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+            guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+            return .init(pid: context.pid, window: context.window, element: element)
+        } ?? (typingTarget.shouldRestoreOriginalFocus ? nil : TypingService.captureSystemFocusTarget().flatMap { $0.pid == typingTarget.pid ? $0 : nil })
+        let keepBackup = SettingsStore.shared.copyTranscriptionToClipboard
         if typingTarget.shouldRestoreOriginalFocus,
-           !(await self.prepareRecordingTargetForDelivery(transcript, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard))
+           !(await self.prepareRecordingTargetForDelivery(transcript, keepBackup: keepBackup, targetContext: targetContext, isOutputValid: isOutputValid))
         {
+            guard isOutputValid() else { return }
             self.showTextDeliveryFailure(.targetRestoreFailed, transcript: transcript)
             return
         }
@@ -4186,8 +4210,11 @@ struct ContentView: View {
         let result = await self.asr.typeTextToActiveField(
             transcript,
             preferredTargetPID: typingTarget.pid,
-            preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard
+            preserveTranscriptOnClipboard: keepBackup,
+            requiredFocusTarget: focusTarget,
+            isOutputValid: isOutputValid
         )
+        guard isOutputValid() else { return }
         if case let .recoverableFailure(failure) = result {
             self.showTextDeliveryFailure(failure, transcript: transcript)
         } else {
@@ -4292,9 +4319,13 @@ struct ContentView: View {
 
         let shouldTypeExternally = !isFluidFrontmost
         if shouldTypeExternally {
-            let typingTarget = self.resolveTypingTargetPID()
+            let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: targetContext?.pid)
+            let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+                guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+                return .init(pid: context.pid, window: context.window, element: element)
+            }
             if typingTarget.shouldRestoreOriginalFocus {
-                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard) else {
+                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext) else {
                     self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
                     return
                 }
@@ -4302,7 +4333,8 @@ struct ContentView: View {
             let result = await self.asr.typeOutputPlanToActiveField(
                 outputPlan,
                 preferredTargetPID: typingTarget.pid,
-                preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard
+                preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard,
+                requiredFocusTarget: focusTarget
             )
             if case let .recoverableFailure(failure) = result {
                 self.showTextDeliveryFailure(failure, transcript: finalText)
@@ -4421,9 +4453,13 @@ struct ContentView: View {
         let isFluidFrontmost = frontmostApp?.bundleIdentifier?.contains("fluid") == true
         let shouldTypeExternally = !isFluidFrontmost || self.isTranscriptionFocused == false
         if shouldTypeExternally {
-            let typingTarget = self.resolveTypingTargetPID()
+            let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: targetContext?.pid)
+            let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+                guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+                return .init(pid: context.pid, window: context.window, element: element)
+            }
             if typingTarget.shouldRestoreOriginalFocus {
-                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard) else {
+                guard await self.prepareRecordingTargetForDelivery(finalText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, targetContext: targetContext) else {
                     self.showTextDeliveryFailure(.targetRestoreFailed, transcript: finalText)
                     return
                 }
@@ -4431,7 +4467,8 @@ struct ContentView: View {
             let result = await self.asr.typeOutputPlanToActiveField(
                 outputPlan,
                 preferredTargetPID: typingTarget.pid,
-                preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard
+                preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard,
+                requiredFocusTarget: focusTarget
             )
             if case let .recoverableFailure(failure) = result {
                 self.showTextDeliveryFailure(failure, transcript: finalText)
@@ -4465,6 +4502,8 @@ struct ContentView: View {
     ) async {
         let isOutputValid: @MainActor () -> Bool = { self.overlayLifecycleID == lifecycleID && self.cancelledOutputLifecycleID != lifecycleID }
         guard isOutputValid() else { return }
+        let targetContext = NotchContentState.shared.recordingTargetContext
+        let fallbackTargetPID = NotchContentState.shared.recordingTargetPID
         defer {
             if !isOutputValid() { self.rewriteModeService.clearState() }
         }
@@ -4486,35 +4525,46 @@ struct ContentView: View {
 
         // If rewrite was successful, type the result
         if !self.rewriteModeService.rewrittenText.isEmpty {
+            let rewrittenText = self.rewriteModeService.rewrittenText
             DebugLogger.shared.info("Rewrite successful, typing result (chars: \(self.rewriteModeService.rewrittenText.count))", source: "ContentView")
 
             // Type the rewritten text
-            let typingTarget = self.resolveTypingTargetPID()
+            let typingTarget = self.resolveTypingTargetPID(returnToStartingField: true, context: targetContext, fallbackOriginalPID: fallbackTargetPID)
+            let focusTarget = targetContext.flatMap { context -> TypingService.CapturedFocusTarget? in
+                guard context.pid == typingTarget.pid, let element = context.element else { return nil }
+                return .init(pid: context.pid, window: context.window, element: element)
+            } ?? (typingTarget.shouldRestoreOriginalFocus ? nil : TypingService.captureSystemFocusTarget().flatMap { $0.pid == typingTarget.pid ? $0 : nil })
+            let keepBackup = SettingsStore.shared.copyTranscriptionToClipboard
             if typingTarget.shouldRestoreOriginalFocus {
-                guard await self.prepareRecordingTargetForDelivery(self.rewriteModeService.rewrittenText, keepBackup: SettingsStore.shared.copyTranscriptionToClipboard, isOutputValid: isOutputValid) else {
+                guard await self.prepareRecordingTargetForDelivery(rewrittenText, keepBackup: keepBackup, targetContext: targetContext, isOutputValid: isOutputValid) else {
                     guard isOutputValid() else { return }
                     self.showTextDeliveryFailure(
                         .targetRestoreFailed,
-                        transcript: self.rewriteModeService.rewrittenText
+                        transcript: rewrittenText
                     )
                     return
                 }
             }
             let deliveryResult = await self.asr.typeTextToActiveField(
-                self.rewriteModeService.rewrittenText,
+                rewrittenText,
                 preferredTargetPID: typingTarget.pid,
-                preserveTranscriptOnClipboard: SettingsStore.shared.copyTranscriptionToClipboard,
+                preserveTranscriptOnClipboard: keepBackup,
+                requiredFocusTarget: focusTarget,
                 isOutputValid: isOutputValid
             )
             guard isOutputValid() else { return }
             if case let .recoverableFailure(failure) = deliveryResult {
-                self.showTextDeliveryFailure(failure, transcript: self.rewriteModeService.rewrittenText)
+                self.showTextDeliveryFailure(failure, transcript: rewrittenText)
                 return
             }
 
-            // Clear the rewrite service state for next use
-            self.rewriteModeService.clearState()
-            self.hideOverlayAfterOutput()
+            // Clear only the result dispatched by this operation.
+            if self.rewriteModeService.rewrittenText == rewrittenText {
+                self.rewriteModeService.clearState()
+                self.hideOverlayAfterOutput()
+            } else {
+                self.menuBarManager.finishProcessingKeepingOverlayVisible()
+            }
         } else {
             await self.menuBarManager.finishProcessingAndHideOverlay()
             DebugLogger.shared.error("Rewrite failed - no result", source: "ContentView")
@@ -4797,15 +4847,23 @@ struct ContentView: View {
 
     /// Restores only the window and element captured when recording started.
     private func prepareRecordingTargetForDelivery(_ transcript: String, keepBackup: Bool, needsRestoration: Bool = true, isOutputValid: @escaping @MainActor () -> Bool = { true }) async -> Bool {
+        await self.prepareRecordingTargetForDelivery(transcript, keepBackup: keepBackup, needsRestoration: needsRestoration, targetContext: NotchContentState.shared.recordingTargetContext, isOutputValid: isOutputValid)
+    }
+
+    private func prepareRecordingTargetForDelivery(_ transcript: String, keepBackup: Bool, needsRestoration: Bool = true, targetContext: TypingService.RecordingTargetContext?, isOutputValid: @escaping @MainActor () -> Bool = { true }) async -> Bool {
         guard isOutputValid() else { return false }
         guard needsRestoration else { return true }
         return await PasteDeliveryCoordinator.shared.prepareForDelivery(transcript, preserveTranscriptOnClipboard: keepBackup, isOutputValid: isOutputValid) {
-            await self.restoreFocusToRecordingTarget(isOutputValid: isOutputValid)
+            await self.restoreFocusToRecordingTarget(context: targetContext, isOutputValid: isOutputValid)
         }
     }
 
     private func restoreFocusToRecordingTarget(isOutputValid: @escaping @MainActor () -> Bool = { true }) async -> Bool {
-        guard let context = NotchContentState.shared.recordingTargetContext else { return false }
+        await self.restoreFocusToRecordingTarget(context: NotchContentState.shared.recordingTargetContext, isOutputValid: isOutputValid)
+    }
+
+    private func restoreFocusToRecordingTarget(context: TypingService.RecordingTargetContext?, isOutputValid: @escaping @MainActor () -> Bool = { true }) async -> Bool {
+        guard let context else { return false }
         let pid = context.pid
         let startedAt = ProcessInfo.processInfo.systemUptime
         self.appBench("focus_restore_start targetPID=\(pid)")
@@ -4917,8 +4975,11 @@ struct ContentView: View {
             self.pasteLastDictationFromHistory()
         }
         NotchContentState.shared.onRetryTextDeliveryRequested = { transcript in
+            let targetContext = NotchContentState.shared.recordingTargetContext
+            let fallbackTargetPID = NotchContentState.shared.recordingTargetPID
+            let lifecycleID = self.overlayLifecycleID
             Task { @MainActor in
-                await self.retryTextDelivery(transcript)
+                await self.retryTextDelivery(transcript, targetContext: targetContext, fallbackTargetPID: fallbackTargetPID, lifecycleID: lifecycleID)
             }
         }
         NotchContentState.shared.onUndoLastAIRequested = {
@@ -6016,29 +6077,29 @@ private enum SidebarSymbolCache {
 }
 
 private struct SidebarChromeButtonStyle: ButtonStyle {
+    @Environment(\.theme) private var theme
     let isHovered: Bool
     let reduceMotion: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         let scale = self.reduceMotion || !configuration.isPressed ? 1 : 0.985
+        let highlighted = configuration.isPressed || self.isHovered
+        let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
 
         configuration.label
-            .foregroundStyle(.primary)
+            .foregroundStyle(self.theme.palette.primaryText)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.primary.opacity(self.backgroundOpacity(isPressed: configuration.isPressed)))
+                shape.fill(highlighted ? self.theme.palette.elevatedCardBackground : .clear)
             )
+            .overlay {
+                shape.strokeBorder(highlighted ? self.theme.palette.secondaryText : .clear, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
             .scaleEffect(scale)
             .animation(.easeOut(duration: self.reduceMotion ? 0.08 : 0.1), value: configuration.isPressed)
             .animation(.easeOut(duration: 0.1), value: self.isHovered)
     }
 
-    private func backgroundOpacity(isPressed: Bool) -> Double {
-        if isPressed {
-            return 0.12
-        }
-        return self.isHovered ? 0.08 : 0
-    }
 }
 
 extension View {
@@ -6063,6 +6124,11 @@ private struct SidebarOptionHoverModifier: ViewModifier {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(self.backgroundColor)
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(self.isHovered && !self.isSelected ? self.theme.palette.secondaryText : .clear, lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
             .padding(.horizontal, -5)
             .padding(.vertical, -3)
             .contentShape(Rectangle())
@@ -6074,7 +6140,7 @@ private struct SidebarOptionHoverModifier: ViewModifier {
         if self.isSelected {
             return self.theme.palette.accent
         }
-        return Color.primary.opacity(self.isHovered ? 0.08 : 0)
+        return self.isHovered ? self.theme.palette.elevatedCardBackground : .clear
     }
 }
 
@@ -6097,7 +6163,7 @@ private struct AccessibilitySettingsFloatingGuideView: View {
             HStack(spacing: 12) {
                 Image(systemName: "arrow.up")
                     .font(.fluidSystem(size: 30, weight: .bold))
-                    .foregroundStyle(FluidOnboardingLandingColors.blue)
+                    .foregroundStyle(.white)
                     .offset(y: self.reduceMotion ? 0 : (self.isArrowRaised ? -8 : 4))
                     .animation(
                         self.reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
@@ -6267,8 +6333,7 @@ private struct UpdateAvailableToolbarButton: View {
                 self.updater.showAvailableUpdate()
             } label: {
                 Image(systemName: "arrow.down.circle.fill")
-                    .fluidToolbarIcon()
-                    .foregroundStyle(self.theme.palette.accent)
+                    .fluidToolbarIcon(foreground: self.theme.palette.accent)
             }
             .buttonStyle(.automatic)
             .disabled(self.updater.isCheckingForUpdates || self.updater.isUpdateInProgress)
@@ -6303,6 +6368,8 @@ private struct TodayStatsToolbarButton: View {
                 }
             }
             .font(.fluidSystem(size: 12, weight: .medium))
+            .foregroundStyle(Color.primary)
+            .traceToolbarAppearance()
         }
         .help(hasActivity ? "Today: \(summary.words) words · \(timeSaved) saved - view stats" : "View your stats")
         .accessibilityLabel("Today stats")

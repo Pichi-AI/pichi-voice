@@ -25,17 +25,32 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     static let shared = MeetingDiarizationModelStore()
 
-    static let repositoryOwner = "altic-dev"
+    static let repositoryOwner = "FluidInference"
     static let repositoryName = "nemotron-3-diarization-coreml"
     /// Pinned so a later push to the repository can never change an installed app's model.
-    static let repositoryRevision = "8976c3c40a752cd6468a08f2aa08626770bc048f"
+    static let repositoryRevision = "25a90f97f254428d4b30374b76af9c74fdee8327"
+
+    // This author-compiled graph has no metadata.json. Declare the pinned files rather
+    // than applying the downloader's generic compiled-directory completeness contract.
+    static let requiredDownloadItems: [HuggingFaceModelDownloader.ModelItem] = [
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/analytics/coremldata.bin", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/coremldata.bin", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/model.mil", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/weights/weight.bin", isDirectory: false),
+        .init(path: "learnable_sil_emb.bin", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.projectionFileName, isDirectory: false),
+    ]
 
     typealias Validate = @Sendable () throws -> MeetingNemotronModelArtifact
     typealias Install = @Sendable (_ progress: @escaping @Sendable (Double) -> Void) async throws
         -> MeetingNemotronModelArtifact
 
     @Published private(set) var state: State = .idle
+    @Published private(set) var voiceMatchingReady = false
     private var attempt: Task<MeetingNemotronModelArtifact, Error>?
+    private var voiceAttempt: Task<Void, Error>?
+    private let validateVoice: @Sendable () throws -> Void
+    private let installVoice: @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void
     private let canDownload: @Sendable () -> Bool
     private let validate: Validate
     private let install: Install
@@ -49,11 +64,15 @@ final class MeetingDiarizationModelStore: ObservableObject {
             )
             return try MeetingModelInstaller.validate(package)
         },
-        install: @escaping Install = MeetingDiarizationModelStore.downloadAndInstall
+        install: @escaping Install = MeetingDiarizationModelStore.downloadAndInstall,
+        validateVoice: @escaping @Sendable () throws -> Void = MeetingSpeakerVoiceModelArtifacts.validate,
+        installVoice: @escaping @Sendable (@escaping @Sendable (Double) -> Void) async throws -> Void = MeetingSpeakerVoiceModelArtifacts.ensureInstalled
     ) {
         self.canDownload = canDownload
         self.validate = validate
         self.install = install
+        self.validateVoice = validateVoice
+        self.installVoice = installVoice
     }
 
     /// Starts a check, and a download when needed, without waiting for it.
@@ -63,7 +82,57 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     /// Returns the installed model, downloading it first when it is missing or damaged.
     @discardableResult
-    func ensureInstalled() async throws -> MeetingNemotronModelArtifact {
+    func ensureInstalled(includingVoiceEncoder: Bool = false) async throws -> MeetingNemotronModelArtifact {
+        let installed = try await self.ensureSeparationInstalled()
+        if includingVoiceEncoder { try await self.ensureVoiceMatchingInstalled() }
+        return installed
+    }
+
+    func prepare(dependencies: Set<MeetingDiarizationDependency>) async throws {
+        guard !dependencies.isEmpty else { return }
+        if dependencies.contains(.speakerSeparation) {
+            _ = try await self.ensureInstalled(includingVoiceEncoder: dependencies.contains(.voiceMatching))
+        } else if dependencies.contains(.voiceMatching) { try await self.ensureVoiceMatchingInstalled() }
+    }
+
+    var allSpeakerResourcesReady: Bool {
+        if case .ready = self.state { return self.voiceMatchingReady }
+        return false
+    }
+
+    private func ensureVoiceMatchingInstalled() async throws {
+        if let voiceAttempt { return try await voiceAttempt.value }
+        let task = Task { @MainActor in
+            defer { self.voiceAttempt = nil }
+            let validate = self.validateVoice
+            if (try? await Task.detached(priority: .utility, operation: validate).value) != nil {
+                self.voiceMatchingReady = true
+                return
+            }
+            self.voiceMatchingReady = false
+            let prior = self.state
+            self.state = .downloading(fraction: 0)
+            do {
+                try await self.installVoice { fraction in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.voiceAttempt != nil, !self.voiceMatchingReady,
+                              case .downloading = self.state else { return }
+                        self.state = .downloading(fraction: fraction)
+                    }
+                }
+                try await Task.detached(priority: .utility, operation: validate).value
+                self.voiceMatchingReady = true
+                self.state = prior
+            } catch {
+                self.state = .failed(message: Self.userMessage(for: error))
+                throw DownloadError(message: Self.userMessage(for: error))
+            }
+        }
+        self.voiceAttempt = task
+        try await task.value
+    }
+
+    private func ensureSeparationInstalled() async throws -> MeetingNemotronModelArtifact {
         if let attempt { return try await attempt.value }
         let attempt = Task { @MainActor in
             // Cleared before the result is delivered, so a caller reacting to a failure can
@@ -123,26 +192,35 @@ final class MeetingDiarizationModelStore: ObservableObject {
     nonisolated static func downloadAndInstall(
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> MeetingNemotronModelArtifact {
-        let destination = MeetingNemotronModelLocator.defaultPackageURL()
+        try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(), progress: progress)
+    }
+
+    /// The existing install operation can target an explicitly owned store. Test and
+    /// mobile preflight use the same pinned download and publication as desktop setup.
+    nonisolated static func downloadAndInstall(
+        to destination: URL, progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> MeetingNemotronModelArtifact {
         let staging = destination.deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("download-\(MeetingNemotronModelLocator.cacheVersion)", isDirectory: true)
-        let downloader = HuggingFaceModelDownloader(
+        let downloader = await HuggingFaceModelDownloader(
             owner: Self.repositoryOwner,
             repo: Self.repositoryName,
             revision: Self.repositoryRevision,
-            requiredItems: [
-                .init(path: MeetingNemotronModelLocator.packageFileName, isDirectory: true),
-                .init(path: MeetingModelInstaller.silenceEmbeddingFileName, isDirectory: false),
-            ]
+            requiredItems: Self.requiredDownloadItems
         )
         try await downloader.ensureModelsPresent(at: staging) { fraction, _ in progress(fraction) }
         let downloaded = staging.appendingPathComponent(MeetingNemotronModelLocator.packageFileName, isDirectory: true)
         do {
             let installed = try await Task.detached(priority: .utility) {
-                try MeetingModelInstaller.installSilenceEmbedding(
-                    from: staging.appendingPathComponent(MeetingModelInstaller.silenceEmbeddingFileName),
-                    besides: destination
-                )
+                // Publish weights and both host assets in one immutable atomic directory swap.
+                try? FileManager.default.removeItem(at: downloaded)
+                try FileManager.default.createDirectory(at: downloaded, withIntermediateDirectories: false)
+                try FileManager.default.copyItem(
+                    at: staging.appendingPathComponent(MeetingNemotronModelLocator.remoteModelPath),
+                    to: downloaded.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName))
+                for name in ["learnable_sil_emb.bin", MeetingNemotronModelLocator.projectionFileName] {
+                    try FileManager.default.copyItem(at: staging.appendingPathComponent(name), to: downloaded.appendingPathComponent(name))
+                }
                 return try MeetingModelInstaller.install(from: downloaded, to: destination)
             }.value
             try? FileManager.default.removeItem(at: staging)

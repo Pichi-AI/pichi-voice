@@ -290,6 +290,9 @@ protocol PrivateAIIntegrationProviding: Sendable {
     func unloadCachedRuntime(reason: String) async
     func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws
     func shutdownForTermination() async
+    /// Providers with a native tokenizer or chunking own their admission budget.
+    /// The default retains the conservative single-request budget for bridge runtimes.
+    nonisolated func dictationOutputTokenLimit(for inputText: String, contextTokenLimit: Int) throws -> Int
     nonisolated func enhanceDictation(
         _ inputText: String,
         runtime: PrivateAIIntegrationService.RuntimeConfiguration,
@@ -304,6 +307,9 @@ protocol PrivateAIIntegrationProviding: Sendable {
         streamHandler: PrivateAIStreamHandler?
     ) async throws -> PrivateAIIntegrationService.EnhancementResult
     func summarizeMeeting(_ transcript: String, style: String) async throws -> String
+    /// `instructions` replaces the built-in guidance for a custom summary; `thinking` lets the
+    /// model reason before it answers.
+    func summarizeMeeting(_ transcript: String, style: String, instructions: String, thinking: Bool) async throws -> String
     func rewrite(
         _ inputText: String,
         systemPrompt: String,
@@ -313,6 +319,16 @@ protocol PrivateAIIntegrationProviding: Sendable {
 }
 
 extension PrivateAIIntegrationProviding {
+    nonisolated func dictationOutputTokenLimit(for inputText: String, contextTokenLimit: Int) throws -> Int {
+        let budget = SettingsStore.privateAIDictationTokenBudget(
+            forInputText: inputText, contextTokenLimit: contextTokenLimit
+        )
+        guard budget.hasSufficientHeadroom else {
+            throw AIProcessingError.dictationExceedsAIContextWindow
+        }
+        return budget.maxOutputTokens
+    }
+
     /// Providers with concurrent inference must hold their ownership gate through file mutation.
     func withUnloadedRuntime(reason: String, operation: @Sendable () throws -> Void) async throws {
         await self.unloadCachedRuntime(reason: reason)
@@ -321,6 +337,11 @@ extension PrivateAIIntegrationProviding {
 
     func summarizeMeeting(_: String, style _: String) async throws -> String {
         throw PrivateAIUnavailableError()
+    }
+
+    /// A provider that predates these arguments still summarizes the built-in types.
+    func summarizeMeeting(_ transcript: String, style: String, instructions _: String, thinking _: Bool) async throws -> String {
+        try await self.summarizeMeeting(transcript, style: style)
     }
 
     func residencySnapshot() async throws -> MeetingResidentModel? {

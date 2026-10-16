@@ -1,4 +1,6 @@
 import Foundation
+enum PichiLocalization { static func text(_ key: String) -> String { key }; static func format(_ key: String, _ value: Int64) -> String { key } }
+enum KeychainService { enum Readiness { case pending, loaded, unavailable } }
 
 // Compile the production draft/save adapter against isolated settings and Keychain doubles.
 final class UserDefaults {
@@ -19,6 +21,7 @@ struct ModelRepository {
     static let shared = ModelRepository()
     func isBuiltIn(_ id: String) -> Bool { ["openai", "ollama", "fluid"].contains(id) }
     func defaultModels(for id: String) -> [String] { ["default-model"] }
+    func builtInProvidersList() -> [(id: String, name: String)] { [("openai", "OpenAI"), ("ollama", "Ollama"), ("fluid", "Fluid")] }
 }
 
 final class SettingsStore {
@@ -35,6 +38,8 @@ final class SettingsStore {
         var shortcut = "keep-shortcut"
     }
 
+    var providerAPIKeyReadiness = KeychainService.Readiness.loaded
+    var providerAPIKeys: [String: String] = [:]
     var providerConnectionOptions: [String: [String: String]] = [:]
     var selectedProviderID = "fluid"
     var selectedModel: String? = "mini"
@@ -57,14 +62,27 @@ final class AIEnhancementSettingsViewModel {
 
     let settings = SettingsStore()
     var isTestingConnection = false
+    var isSavingProviderCredentials = false
     var isFetchingModels = false
     var selectedProviderID = "openai"
     var managedOriginalKey: String?
+    var managedProviderID: String?
+    var knownProviderAPIKeys: [String: String] = [:]
+    var persistsSelectedProvider = true
+    var unconfiguredProviderDraftIDs = Set<String>()
+    var credentialReads = 0
     var fetchedModelsProviders: Set<String> = []
     var providerAPIKeys: [String: String] = [:]
     var savedProviders: [SettingsStore.SavedProvider] = []
     var availableModelsByProvider: [String: [String]] = [:]
     var selectedModelByProvider: [String: String] = ["fluid": "mini"]
+    enum Status { case unknown, success }
+    var statuses: [String: Status] = [:]
+    var verifiedRefreshes = 0
+    func connectionStatus(for id: String) -> Status { self.statuses[id] ?? .unknown }
+    var cachedProviderItems: [ProviderItemData] = []
+    var cachedVerifiedProviderItems: [ProviderItemData] = []
+    var cachedUnverifiedProviderItems: [ProviderItemData] = []
     var cachedAddedProviderItems: [ProviderItemData] = []
     var failKeychain = false
     var saves = 0
@@ -73,33 +91,53 @@ final class AIEnhancementSettingsViewModel {
     func providerKey(for id: String) -> String { id }
     func providerAPIKey(for id: String) -> String { self.providerAPIKeys[id] ?? "" }
     func updateProviderAPIKey(_ value: String, for id: String) { self.providerAPIKeys[id] = value }
-    func saveProviderAPIKeys(invalidating id: String) -> Bool {
+    func saveProviderAPIKeys(invalidating id: String, removing ids: [String] = []) async -> Bool {
         self.keySaves += 1
         guard !self.failKeychain else { return false }
         self.persistedKeys = self.providerAPIKeys
+        self.knownProviderAPIKeys = self.persistedKeys
         return true
     }
 
-    func hasProviderAPIKeyDraft(for id: String) -> Bool { self.providerAPIKeys[id] != nil }
-    func refreshProviderItems() {
-        let items = [
-            ProviderItemData(id: "openai", name: "OpenAI", isBuiltIn: true),
-            ProviderItemData(id: "ollama", name: "Ollama", isBuiltIn: true),
-            ProviderItemData(id: "fluid", name: "Fluid", isBuiltIn: true),
-        ]
-            + self.savedProviders.map { ProviderItemData(id: $0.id, name: $0.name, isBuiltIn: false) }
-        self.cachedAddedProviderItems = addedProviderItems(from: items)
+    func ensureKeychainAccessForAPIKeyEdit() async -> Bool {
+        self.credentialReads += 1
+        self.settings.providerAPIKeyReadiness = .loaded
+        self.mergeLoadedProviderAPIKeys(self.settings.providerAPIKeys)
+        return true
     }
+    func selectProviderForUse(_ id: String) { self.selectedProviderID = id }
+    func setEditingAPIKey(_ editing: Bool, for id: String) {}
 
+    func hasProviderAPIKeyDraft(for id: String) -> Bool { self.providerAPIKeys[id] != nil }
     func saveSavedProviders() { self.saves += 1; self.refreshProviderItems() }
     func clearEditProviderDraft() {}
     func finishConfiguringProvider() { self.selectedProviderID = self.settings.selectedProviderID }
-    func refreshVerifiedProviders() {}
+    func refreshVerifiedProviders() { self.verifiedRefreshes += 1 }
     func selectSoleVerifiedProviderIfNeeded() {}
 }
 
+// Trace only the actual arguments passed to SwiftUI's outer presentation
+// modifiers. This is a source-boundary probe, never native interaction evidence.
+struct AddProviderPresentationBoundary {
+    var controlsEnabled = true
+    var interactiveDismissalAllowed = true
+    func disabled(_ value: Bool) -> Self {
+        var copy = self
+        copy.controlsEnabled = !value
+        return copy
+    }
+    func interactiveDismissDisabled(_ value: Bool) -> Self {
+        var copy = self
+        copy.interactiveDismissalAllowed = !value
+        return copy
+    }
+    func attemptControl(_ action: () -> Void) {
+        if self.controlsEnabled { action() }
+    }
+}
+
 @main enum ProviderSetupBoundaryTests {
-    static func main() throws {
+    static func main() async throws {
         var count = 0
         func check(_ value: Bool, _ message: String) {
             precondition(value, message)
@@ -151,7 +189,7 @@ final class AIEnhancementSettingsViewModel {
         reloaded.baseURL = "http://localhost:4321/v1"
         reloaded.apiKey = "new-key"
         let freshVM = AIEnhancementSettingsViewModel()
-        check(freshVM.addProvider(reloaded), "A custom provider can be saved after rapid connection edits")
+        check((await freshVM.addProvider(reloaded)), "A custom provider can be saved after rapid connection edits")
         check(freshVM.savedProviders.first?.models == [], "Persistence receives no model from the previous connection")
         check(freshVM.settings.selectedProviderID == "fluid", "Saving the new connection leaves the current dictation route intact")
         var draft = ProviderSetupDraft(name: "Local", baseURL: "http://localhost:1234/v1", model: "tiny")
@@ -173,26 +211,27 @@ final class AIEnhancementSettingsViewModel {
         check(discoveryDraft.connectionIdentity != originalConnection, "Credential edits invalidate stale discovery")
         check(vm.saves == 0 && vm.providerAPIKeys.isEmpty && vm.savedProviders.isEmpty, "Model discovery drafts do not persist credentials or providers")
         draft.baseURL = "file:///tmp/model"
-        check(!draft.isValid && !vm.addProvider(draft), "Reject non-HTTP endpoints without persistence")
+        let invalidAdd = await vm.addProvider(draft)
+        check(!draft.isValid && !invalidAdd, "Reject non-HTTP endpoints without persistence")
         draft.baseURL = "https://user:secret@example.com"
         check(!draft.isValid, "Reject credentials embedded in URL")
         draft.baseURL = "http://localhost:1234/v1"
         draft.apiKey = "test-key"
         vm.failKeychain = true
         check(
-            !vm.addProvider(draft) && vm.savedProviders.isEmpty && vm.providerAPIKeys.isEmpty && vm.saves == 0,
+            !(await vm.addProvider(draft)) && vm.savedProviders.isEmpty && vm.providerAPIKeys.isEmpty && vm.saves == 0,
             "Keychain failure keeps records, keys, and model maps unchanged"
         )
         vm.failKeychain = false
         draft.fetchedModels = ["other", "tiny"]
-        check(vm.addProvider(draft) && vm.savedProviders.count == 1, "Explicit Add saves a custom provider")
+        check((await vm.addProvider(draft)) && vm.savedProviders.count == 1, "Explicit Add saves a custom provider")
         check(vm.savedProviders.first?.models == ["tiny", "other"], "Add persists the selected model and complete discovered list")
         check(vm.settings.selectedProviderID == "fluid" && vm.selectedModelByProvider["fluid"] == "mini", "Adding does not change current route/model")
-        check(vm.addProvider(draft) && vm.savedProviders.count == 2, "Same display name cannot overwrite another provider")
+        check((await vm.addProvider(draft)) && vm.savedProviders.count == 2, "Same display name cannot overwrite another provider")
         check(vm.cachedAddedProviderItems.count == 2, "Saved custom providers appear without verification")
         let builtIn = ProviderSetupDraft(providerID: "ollama", name: "Ollama", baseURL: "http://localhost:11434/v1")
-        check(vm.addProvider(builtIn), "Keyless local provider can be added")
-        check(!vm.addProvider(builtIn), "Duplicate built-in Add is rejected")
+        check((await vm.addProvider(builtIn)), "Keyless local provider can be added")
+        check(!(await vm.addProvider(builtIn)), "Duplicate built-in Add is rejected")
         check(vm.cachedAddedProviderItems.contains { $0.id == "ollama" }, "Keyless provider remains visible via explicit membership")
         vm.providerAPIKeys["openai"] = "expired-key"
         vm.refreshProviderItems()
@@ -202,7 +241,7 @@ final class AIEnhancementSettingsViewModel {
         vm.refreshProviderItems()
         check(vm.cachedAddedProviderItems.contains { $0.id == "openai" }, "Referenced provider stays visible after credentials disappear")
         vm.isFetchingModels = true
-        check(!vm.addProvider(draft), "In-flight editor request blocks another Add")
+        check(!(await vm.addProvider(draft)), "In-flight editor request blocks another Add")
         let source = try String(contentsOfFile: "Sources/Fluid/UI/AISettingsView+AIConfiguration.swift", encoding: .utf8)
         let manager = source.components(separatedBy: "private var externalProviderManager: some View")[1]
             .components(separatedBy: "private var legacyAIConfigurationCard")[0]
@@ -210,7 +249,7 @@ final class AIEnhancementSettingsViewModel {
         check(source.contains(".onSubmit {") && source.contains("self.viewModel.addNewModel()"), "Manual model input retains Enter-to-add behavior")
         check(source.contains(".accessibilityLabel(\"Add model\")"), "Model add button remains accessible")
         check(source.contains("if isCustom || managementLayout"), "Built-in management exposes removal")
-        let makeDefault = source.components(separatedBy: "private func makePrimaryDefaultProvider")[1]
+        let makeDefault = source.components(separatedBy: "private func makePrimaryDefaultProviderAfterSaving")[1]
             .components(separatedBy: "private func modelBinding")[0]
         check(
             makeDefault.contains("saveManagedProviderAPIKeyIfNeeded") && !makeDefault.contains("saveProviderAPIKeys"),
@@ -218,6 +257,7 @@ final class AIEnhancementSettingsViewModel {
         )
         let removal = AIEnhancementSettingsViewModel()
         removal.providerAPIKeys = ["openai": "remove-key", "other": "keep-key"]
+        removal.knownProviderAPIKeys = removal.providerAPIKeys
         removal.settings.dictationPromptConfigurations = [
             "affected": .init(providerID: "openai"),
             "unrelated": .init(providerID: "other"),
@@ -231,15 +271,15 @@ final class AIEnhancementSettingsViewModel {
         UserDefaults.standard.set(["openai", "other"], forKey: AIEnhancementSettingsViewModel.addedProviderIDsKey)
         let before = removal.settings.dictationPromptConfigurations
         removal.failKeychain = true
-        check(!removal.deleteCurrentProvider(), "Failed credential removal must fail the operation")
+        check(!(await removal.deleteCurrentProvider()), "Failed credential removal must fail the operation")
         check(removal.providerAPIKeys["openai"] == "remove-key" && removal.saves == 0, "Failed removal restores keys without saving provider changes")
         check(removal.settings.dictationPromptConfigurations == before, "Failed removal preserves assignments")
         check(UserDefaults.standard.stringArray(forKey: AIEnhancementSettingsViewModel.addedProviderIDsKey) == ["openai", "other"], "Failed removal preserves explicit membership")
         removal.failKeychain = false
         removal.isFetchingModels = true
-        check(!removal.deleteCurrentProvider(), "Busy editor cannot remove a provider")
+        check(!(await removal.deleteCurrentProvider()), "Busy editor cannot remove a provider")
         removal.isFetchingModels = false
-        check(removal.deleteCurrentProvider(), "Built-in removal succeeds")
+        check((await removal.deleteCurrentProvider()), "Built-in removal succeeds")
         check(removal.settings.selectedProviderID == "fluid" && removal.settings.selectedModel == "mini", "Removing another provider preserves the default")
         check(removal.settings.dictationPromptConfigurations["affected"]?.providerID == "", "Removed provider cannot remain referenced")
         check(removal.settings.dictationPromptConfigurations["affected"]?.shortcut == "keep-shortcut", "Removal preserves hotkeys")
@@ -253,36 +293,153 @@ final class AIEnhancementSettingsViewModel {
         let keySavesBeforeKeylessRemoval = removal.keySaves
         removal.failKeychain = true
         check(
-            removal.deleteCurrentProvider() && removal.settings.selectedProviderID.isEmpty && removal.settings.selectedModel == nil,
+            (await removal.deleteCurrentProvider()) && removal.settings.selectedProviderID.isEmpty && removal.settings.selectedModel == nil,
             "Removing the default clears its model without selecting another provider"
         )
         check(removal.keySaves == keySavesBeforeKeylessRemoval, "Removing a keyless provider does not require a Keychain write")
         removal.selectedProviderID = "fluid"
-        check(!removal.deleteCurrentProvider(), "External provider removal cannot remove private AI")
+        check(!(await removal.deleteCurrentProvider()), "External provider removal cannot remove private AI")
+        let newDraft = AIEnhancementSettingsViewModel()
+        newDraft.selectedProviderID = "new-synthetic-draft"
+        newDraft.unconfiguredProviderDraftIDs.insert(newDraft.selectedProviderID)
+        newDraft.settings.providerAPIKeyReadiness = .unavailable
+        check(await newDraft.deleteCurrentProvider(), "A keyless draft created in this session can be removed without loading credentials")
+        check(newDraft.credentialReads == 0 && newDraft.keySaves == 0, "Removing a new keyless draft never invokes the credential backend")
+        let cold = AIEnhancementSettingsViewModel()
+        cold.settings.providerAPIKeyReadiness = .pending
+        cold.configureProvider("openai")
+        check(cold.managedOriginalKey == nil, "Cold manager baseline is unknown, never verified empty")
+        cold.settings.providerAPIKeys = ["openai": "synthetic-loaded-key"]
+        check(await cold.deleteCurrentProvider(), "Cold manager removes the credential found by authoritative load")
+        check(cold.credentialReads == 1 && cold.keySaves == 1 && cold.persistedKeys["openai"] == nil,
+              "Cold removal performs the real production credential-delete boundary")
+        let arriving = AIEnhancementSettingsViewModel()
+        arriving.settings.providerAPIKeyReadiness = .pending
+        arriving.refreshProviderItems()
+        check(arriving.cachedAddedProviderItems.isEmpty, "Credential-only provider is absent while cold keys are unknown")
+        arriving.configureProvider("openai")
+        arriving.statuses["openai"] = .success
+        arriving.mergeLoadedProviderAPIKeys(["openai": "synthetic-arrived-key"])
+        arriving.settings.providerAPIKeyReadiness = .loaded
+        check(arriving.cachedAddedProviderItems.contains { $0.id == "openai" }, "Successful key arrival refreshes the displayed provider membership without reopening")
+        check(arriving.cachedVerifiedProviderItems.contains { $0.id == "openai" } && arriving.verifiedRefreshes == 1,
+              "Key arrival refreshes the verified and added descriptor lists through the production list builder")
+        check(arriving.managedOriginalKey == "synthetic-arrived-key", "Stored key arrival establishes the manager baseline")
+        check(await arriving.saveManagedProviderBeforeClosing("openai"), "Unedited cold manager may close after load")
+        check(arriving.keySaves == 0 && arriving.selectedProviderID == "openai", "Key arrival is not misclassified as an edit and keeps selection")
+        let dirty = AIEnhancementSettingsViewModel()
+        dirty.settings.providerAPIKeyReadiness = .pending
+        dirty.configureProvider("openai")
+        dirty.updateProviderAPIKey("synthetic-user-edit", for: "openai")
+        dirty.mergeLoadedProviderAPIKeys(["openai": "synthetic-arrived-key"])
+        check(dirty.providerAPIKey(for: "openai") == "synthetic-user-edit" && dirty.managedOriginalKey == "synthetic-arrived-key",
+              "Cold arrival preserves the draft while recording its persisted baseline")
+        let external = AIEnhancementSettingsViewModel()
+        external.settings.providerAPIKeyReadiness = .loaded
+        external.configureProvider("openai")
+        check(external.managedOriginalKey == "", "Loaded empty is a verified empty baseline")
+        external.mergeLoadedProviderAPIKeys(["openai": "synthetic-external-key"])
+        check(await external.saveManagedProviderBeforeClosing("openai"), "An untouched external key arrival may close")
+        check(external.keySaves == 0, "An untouched external key arrival is never an implicit write")
         let closing = AIEnhancementSettingsViewModel()
+        closing.managedProviderID = "openai"
         closing.providerAPIKeys["openai"] = "edited-key"
         closing.managedOriginalKey = "edited-key"
+        closing.knownProviderAPIKeys["openai"] = "edited-key"
         closing.failKeychain = true
-        check(closing.saveManagedProviderBeforeClosing("openai") && closing.keySaves == 0, "Unchanged key closes without any Keychain write, even if writes would fail")
+        check((await closing.saveManagedProviderBeforeClosing("openai")) && closing.keySaves == 0, "Unchanged key closes without any Keychain write, even if writes would fail")
         closing.managedOriginalKey = "old-key"
+        closing.knownProviderAPIKeys["openai"] = "old-key"
         closing.failKeychain = true
-        check(!closing.saveManagedProviderBeforeClosing("openai"), "Keychain failure keeps Manage open")
+        check(!(await closing.saveManagedProviderBeforeClosing("openai")), "Keychain failure keeps Manage open")
         check(closing.providerAPIKeys["openai"] == "edited-key" && closing.settings.selectedProviderID == "fluid", "Failed close preserves the draft and default")
         closing.failKeychain = false
         check(
-            closing.saveManagedProviderBeforeClosing("openai") && closing.persistedKeys["openai"] == "edited-key",
+            (await closing.saveManagedProviderBeforeClosing("openai")) && closing.persistedKeys["openai"] == "edited-key",
             "Done persists an edited key without verification or model refresh"
         )
         let savedCount = closing.keySaves
         closing.selectedProviderID = "fluid"
-        check(closing.saveManagedProviderBeforeClosing("openai") && closing.keySaves == savedCount, "Removal cleanup must not save a different selected provider")
+        check((await closing.saveManagedProviderBeforeClosing("openai")) && closing.keySaves == savedCount, "Removal cleanup must not save a different selected provider")
         closing.selectedProviderID = "ollama"
-        check(closing.saveManagedProviderBeforeClosing("ollama") && closing.keySaves == savedCount, "Keyless provider close does not touch Keychain")
+        check((await closing.saveManagedProviderBeforeClosing("ollama")) && closing.keySaves == savedCount, "Keyless provider close does not touch Keychain")
         closing.failKeychain = true
-        check(closing.saveManagedProviderAPIKeyIfNeeded("ollama") && closing.keySaves == savedCount, "Making a keyless provider default does not require a Keychain write")
+        check((await closing.saveManagedProviderAPIKeyIfNeeded("ollama")) && closing.keySaves == savedCount, "Making a keyless provider default does not require a Keychain write")
         closing.isTestingConnection = true
-        check(!closing.saveManagedProviderBeforeClosing("ollama"), "Busy editor cannot dismiss")
+        check(!(await closing.saveManagedProviderBeforeClosing("ollama")), "Busy editor cannot dismiss")
         check(manager.contains(".interactiveDismissDisabled()"), "Interactive dismissal cannot bypass failed persistence")
+        let addSheet = AIEnhancementSettingsViewModel()
+        var presentation = AddProviderPresentationFixture(viewModel: addSheet)
+        var cancelCount = 0
+        var backCount = 0
+        var editedKey = "synthetic-original"
+        let idle = presentation.boundary
+        idle.attemptControl { cancelCount += 1 }
+        idle.attemptControl { backCount += 1 }
+        idle.attemptControl { editedKey = "synthetic-edited" }
+        check(cancelCount == 1 && backCount == 1 && editedKey == "synthetic-edited",
+              "Idle Add-sheet boundary preserves Cancel, Back and form editing")
+        check(idle.interactiveDismissalAllowed, "Idle Add-sheet permits normal interactive dismissal")
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1
+            && !presentation.isEditing && !presentation.saveFailed && !presentation.showingManualModel,
+              "Exact idle Cancel and Back handlers retain dismissal and draft/fetch reset behavior")
+        presentation.isEditing = true
+        presentation.saveFailed = true
+        presentation.showingManualModel = true
+        presentation.draft.name = "Synthetic submitted snapshot"
+        presentation.beginSubmission()
+        let admitted = presentation.boundary
+        admitted.attemptControl { cancelCount += 1 }
+        admitted.attemptControl { backCount += 1 }
+        admitted.attemptControl { editedKey = "synthetic-admission-race" }
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1
+            && presentation.isEditing && presentation.saveFailed && presentation.showingManualModel,
+              "Exact handlers reject dismissal/reset in the pre-Task admission window, before a native control refresh")
+        check(presentation.isSubmitting && !addSheet.isSavingProviderCredentials,
+              "Production Button admission sets its local gate synchronously before any Task starts")
+        check(cancelCount == 1 && backCount == 1 && editedKey == "synthetic-edited" && !admitted.interactiveDismissalAllowed,
+              "Cancel/Escape, Back, editing and interactive dismissal are gated during the admission window")
+        presentation.draft.name = "Synthetic later source change"
+        check(presentation.submittedDraft?.name == "Synthetic submitted snapshot", "The queued action owns the exact synchronously captured draft")
+        presentation.beginSubmission()
+        check(presentation.submittedDraft?.name == "Synthetic submitted snapshot", "A second admission cannot replace the owned submission")
+        addSheet.isSavingProviderCredentials = true
+        let saving = presentation.boundary
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1,
+              "Exact Cancel and Back handlers cannot dismiss the owned credential operation")
+        presentation.isSubmitting = false
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(!presentation.boundary.controlsEnabled && !presentation.boundary.interactiveDismissalAllowed
+            && presentation.cancelCount == 1 && presentation.fetchCancellationCount == 1,
+              "VM-owned credential IO alone also gates the sheet if local submission has not started")
+        presentation.isSubmitting = true
+        saving.attemptControl { cancelCount += 1 }
+        saving.attemptControl { backCount += 1 }
+        saving.attemptControl { editedKey = "synthetic-racing-edit" }
+        check(cancelCount == 1 && backCount == 1 && editedKey == "synthetic-edited",
+              "Actual production saving gate disables Cancel/Escape, Back and form changes while intent is owned")
+        check(!saving.interactiveDismissalAllowed, "Actual production saving gate prevents interactive dismissal during credential IO")
+        addSheet.isSavingProviderCredentials = false
+        check(!presentation.boundary.controlsEnabled, "Local submission ownership remains until the sheet Task's defer completes")
+        presentation.isSubmitting = false
+        let resumed = presentation.boundary
+        presentation.cancelFromButton()
+        presentation.backFromButton()
+        check(presentation.cancelCount == 2 && presentation.fetchCancellationCount == 2
+            && !presentation.isEditing && !presentation.saveFailed && !presentation.showingManualModel,
+              "Exact Cancel/Back handlers resume normal behavior when submission ownership is released")
+        resumed.attemptControl { cancelCount += 1 }
+        resumed.attemptControl { backCount += 1 }
+        resumed.attemptControl { editedKey = "synthetic-after-save" }
+        check(cancelCount == 2 && backCount == 2 && editedKey == "synthetic-after-save" && resumed.interactiveDismissalAllowed,
+              "Completion/failure releases the scoped gate and restores normal sheet actions")
         let historySource = try String(contentsOfFile: "Sources/Fluid/UI/TranscriptionHistoryView.swift", encoding: .utf8)
         // Inspect only the request type and its inputs. Unrelated properties may
         // legitimately sit between these declarations and the filtered list.

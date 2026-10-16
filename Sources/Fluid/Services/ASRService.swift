@@ -1,3 +1,4 @@
+#if os(macOS)
 import Accelerate
 import AVFoundation
 import Combine
@@ -9,70 +10,6 @@ import FluidAudio
 import AppKit
 import AudioToolbox
 import CoreAudio
-
-/// Serializes transcription operations and lets teardown cancel the real queued work.
-actor TranscriptionExecutor {
-    private var lastTask: Task<Void, Never>?
-    private var lastTaskID: UUID?
-    private var operationCancellations: [UUID: () -> Void] = [:]
-
-    #if DEBUG
-    var pendingOperationCountForTesting: Int { self.operationCancellations.count }
-    #endif
-
-    func run<T>(benchmarkSessionID: Int? = nil, _ operation: @escaping () async throws -> T) async throws -> T {
-        try Task.checkCancellation()
-        logTranscriptionExecutorPhase("entered", sessionID: benchmarkSessionID)
-        let previous = self.lastTask
-        let operationID = UUID()
-        let task = Task<T, Error> {
-            logTranscriptionExecutorPhase("task_started", sessionID: benchmarkSessionID)
-            _ = await previous?.result
-            logTranscriptionExecutorPhase("previous_finished", sessionID: benchmarkSessionID)
-            try Task.checkCancellation()
-            let result = try await operation()
-            try Task.checkCancellation()
-            return result
-        }
-        self.operationCancellations[operationID] = { task.cancel() }
-        self.lastTask = Task { _ = try? await task.value }
-        self.lastTaskID = operationID
-        defer { self.operationCancellations.removeValue(forKey: operationID) }
-        return try await withTaskCancellationHandler {
-            let result = try await task.value
-            try Task.checkCancellation()
-            return result
-        } onCancel: {
-            task.cancel()
-        }
-    }
-
-    func cancelAndAwaitPending() async {
-        let pending = self.lastTask
-        let pendingID = self.lastTaskID
-        let cancellations = self.operationCancellations
-        for cancel in cancellations.values {
-            cancel()
-        }
-        _ = await pending?.result
-        if self.lastTaskID == pendingID {
-            self.lastTask = nil
-            self.lastTaskID = nil
-        }
-        // A newer queued operation may have arrived while the old work drained.
-        // Retire only the captured ownership set, preserving its cancellation handle.
-        for id in cancellations.keys { self.operationCancellations.removeValue(forKey: id) }
-    }
-}
-
-private nonisolated func logTranscriptionExecutorPhase(_ phase: String, sessionID: Int?) {
-    guard DebugLogger.diagnosticsEnabled, let sessionID else { return }
-    let timestamp = ProcessInfo.processInfo.systemUptime
-    DebugLogger.shared.debug(
-        "ASR_BENCH t=\(timestamp) session=\(sessionID) final_queue_\(phase) mainThread=\(Thread.isMainThread)",
-        source: "ASRBenchmark"
-    )
-}
 
 private nonisolated func logStreamingProviderOperationReturn(
     sessionID: Int,
@@ -381,51 +318,6 @@ enum ASRStopOutcome: Equatable {
     case failed
 }
 
-enum ASRExclusiveActivity: String, Equatable {
-    case dictation
-    case fileTranscription
-    case localAPI
-    case meeting
-    case modelMaintenance
-    case settingsRestore
-
-    var displayName: String {
-        switch self {
-        case .dictation:
-            return "dictation"
-        case .fileTranscription:
-            return "file transcription"
-        case .localAPI:
-            return "local API transcription"
-        case .meeting:
-            return "meeting transcription"
-        case .modelMaintenance:
-            return "voice model maintenance"
-        case .settingsRestore:
-            return "settings import"
-        }
-    }
-}
-
-struct ASRActivityLease: Equatable {
-    let id: UUID
-    let activity: ASRExclusiveActivity
-}
-
-enum ASRActivityError: LocalizedError {
-    case activityInProgress(ASRExclusiveActivity)
-    case settingsRestoreUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case let .activityInProgress(activity):
-            return "Wait for the active \(activity.displayName) to finish."
-        case .settingsRestoreUnavailable:
-            return "Finish the current recording, transcription, microphone preview, or voice model operation, then import the backup again."
-        }
-    }
-}
-
 nonisolated enum ASRHardwareListenerEventDisposition: Equatable {
     case ignore
     case latchUntilInstalled
@@ -714,13 +606,26 @@ final class ASRService: ObservableObject {
     }
 
     private var meetingASRPreparationOwner: MeetingASRPreparationOwner?
-    private var activeMeetingASRScope: MeetingASRScope?
+    private let meetingPreparedScope = MeetingASRPreparedScope()
+    private var activeMeetingASRScope: MeetingASRPreparedScope? {
+        self.meetingPreparedScope.isActive ? self.meetingPreparedScope : nil
+    }
     private var deferredMeetingActivityLeaseRelease: ASRActivityLease?
     #if DEBUG
     /// Test seam replacing the lazily wired production owner so scope tests use fake providers.
     var meetingASRPreparationOwnerForTesting: MeetingASRPreparationOwner?
     var meetingCaptureResidencyParticipantForTesting: MeetingModelParticipant?
+    /// Fake capture hardware must use the same injected device policy for selection and notices,
+    /// rather than retaining synthetic identities in the app's shared preference coordinator.
+    var microphonePreferenceCoordinatorForTesting: MicrophonePreferenceCoordinator?
     #endif
+
+    private var microphonePreferences: MicrophonePreferenceCoordinator {
+        #if DEBUG
+        if let injected = self.microphonePreferenceCoordinatorForTesting { return injected }
+        #endif
+        return AppServices.shared.microphonePreferenceCoordinator
+    }
     var isRunningOrStarting: Bool {
         self.isRunning || self.isStarting
     }
@@ -890,7 +795,7 @@ final class ASRService: ObservableObject {
             return
         }
 
-        AppServices.shared.microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+        self.microphonePreferences.reconcileMicrophoneSelection(
             availableInputs: snapshot.0,
             defaultInputUID: snapshot.1
         )
@@ -993,9 +898,12 @@ final class ASRService: ObservableObject {
         { [weak self] invalidation in
             Task { @MainActor in
                 await self?.handleDirectCaptureFormatInvalidation(invalidation)
+                self?.recoveryFormatInvalidationDidFinishForTesting?()
             }
         }
     }
+
+    var recoveryFormatInvalidationDidFinishForTesting: (@MainActor () -> Void)?
 
     func configureAudioRouteRecoveryForTesting(
         controller: DirectCoreAudioLifecycleController,
@@ -1025,6 +933,8 @@ final class ASRService: ObservableObject {
     func useMediaPlaybackForTesting(_ service: MediaPlaybackService) {
         self.mediaPlaybackService = service
     }
+
+    var mediaPlaybackOwnerForTesting: MediaPlaybackService { self.mediaPlaybackService }
 
     func failAudioRouteRecoveryForTesting(stale: Bool = false) async {
         await self.finishAudioRouteRecoveryFailure(AudioRouteRecoveryRequest(
@@ -1200,10 +1110,7 @@ final class ASRService: ObservableObject {
         // outside the CoreML executor. Termination must join that work before releasing
         // its provider claim or the meeting activity lease.
         if let scope = self.activeMeetingASRScope {
-            scope.cancelBody?()
-            if let awaitBodyCompletion = scope.awaitBodyCompletion {
-                await awaitBodyCompletion()
-            }
+            await scope.cancelAndWait()
         }
         if let meetingOwner = self.activeMeetingASRPreparationOwner,
            let claimToken = meetingOwner.currentClaimToken,
@@ -1469,7 +1376,7 @@ final class ASRService: ObservableObject {
             guard let self else { return }
             do {
                 DebugLogger.shared.info("Downloading model: \(model.displayName) (without changing active selection)", source: "ASRService")
-                try await provider.prepare(progressHandler: { progress in
+                try await SpeechModelPreparationOperation.prepare(provider: provider, updateWeights: updateWeights, progress: { progress in
                     Task { @MainActor in
                         guard
                             self.modelDownloadOperationID == operationID,
@@ -1490,17 +1397,6 @@ final class ASRService: ObservableObject {
                 if !updateWeights { try Task.checkCancellation() }
                 DebugLogger.shared.info("Model download completed: \(model.displayName)", source: "ASRService")
             } catch {
-                if ParakeetArchiveDownloader.isCleanupFailure(error) { throw error }
-                let wasCancelled = Task.isCancelled || Self.isModelPreparationCancellation(error)
-                if wasCancelled, !updateWeights,
-                   provider.shouldClearCacheAfterCancellation,
-                   provider.modelsExistOnDisk() == false
-                {
-                    try? await provider.clearCache()
-                }
-                if wasCancelled {
-                    throw CancellationError()
-                }
                 throw error
             }
         }
@@ -1545,8 +1441,7 @@ final class ASRService: ObservableObject {
         }
     }
 
-    /// Installs folder-based engines through the existing model operation, activity and resource
-    /// mechanisms. The provider owns artifact validation; this service owns admission and teardown.
+    /// Installs a local folder through the same admitted operation as source restoration.
     func importModel(_ model: SettingsStore.SpeechModel, from directory: URL) async throws {
         try Task.checkCancellation()
         guard model.supportsFolderImport else {
@@ -1554,6 +1449,21 @@ final class ASRService: ObservableObject {
                 NSLocalizedDescriptionKey: AppBrand.text("This speech model does not support importing a model folder."),
             ])
         }
+        try await self.changeModelSource(model) { provider in try await provider.importModel(from: directory) }
+    }
+
+    /// Optional provider source reset, sharing import's cancellation, residency and reset drain.
+    func useDefaultModelSource(_ model: SettingsStore.SpeechModel) async throws {
+        try await self.changeModelSource(model) { provider in try await provider.restoreDefaultModelSource() }
+    }
+
+    /// Both source-changing operations must invalidate a selected provider only after its
+    /// atomic artifact operation and native cleanup have joined. Providers own source details.
+    private func changeModelSource(
+        _ model: SettingsStore.SpeechModel,
+        operation: @escaping @MainActor (TranscriptionProvider) async throws -> Void
+    ) async throws {
+        try Task.checkCancellation()
         guard !self.isTerminating, !self.isRunning, !self.isStarting, !self.isStoppingFinalTranscription,
               !self.recordingBufferHandoffGate.isActive, !self.recordingBufferHandoffGate.isRecovering,
               !self.isMicrophonePreviewRequested, !self.isMicrophonePreviewActive, !self.isDictionaryTrainingCaptureActive,
@@ -1579,7 +1489,7 @@ final class ASRService: ObservableObject {
         let task = Task { @MainActor in
             let outcome: Result<Void, Error>
             do {
-                try await provider.importModel(from: directory)
+                try await operation(provider)
                 outcome = .success(())
             } catch {
                 outcome = .failure(error)
@@ -1600,7 +1510,7 @@ final class ASRService: ObservableObject {
         } catch {
             outcome = .failure(error)
         }
-        // The joined operation has finished every import and release hook before admission opens.
+        // The joined operation has finished every source mutation and release hook before admission opens.
         if self.modelDownloadOperationID == operationID {
             self.modelDownloadTask = nil
             self.modelDownloadOperationID = nil
@@ -1613,7 +1523,7 @@ final class ASRService: ObservableObject {
             self.providerResetPending = true
         }
         self.meetingModelResidency.endOperation(admission)
-        // Releasing the import lease precedes reset admission, so modelMaintenance is not nested.
+        // Releasing the source-change lease precedes reset admission, so modelMaintenance is not nested.
         self.releaseExclusiveActivity(lease)
         while let drain = self.providerResetDrain { await drain.task.value }
         SpeechModelInstallationSnapshot.shared.refresh()
@@ -1929,11 +1839,14 @@ final class ASRService: ObservableObject {
     }
 
     private func resolvedInputDeviceForCapture(
-        availableInputs: [AudioDevice.Device] = AudioDevice.listInputDevices(),
-        defaultInputUID: String? = AudioDevice.getDefaultInputDevice()?.uid,
+        availableInputs: [AudioDevice.Device]? = nil,
+        defaultInputUID: String? = nil,
         excluding excludedUIDs: Set<String> = []
     ) -> AudioDevice.Device? {
-        return AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture(
+        guard let availableInputs else {
+            return self.microphonePreferences.inputDeviceForCapture(excluding: excludedUIDs)
+        }
+        return self.microphonePreferences.inputDeviceForCapture(
             availableInputs: availableInputs,
             defaultInputUID: defaultInputUID,
             excluding: excludedUIDs
@@ -2092,7 +2005,7 @@ final class ASRService: ObservableObject {
                 self.audioStartAttemptInputName = device.name
                 self.audioStartAttemptIsBluetooth = device.isBluetooth
                 self.audioStartAttemptIsInternalMicrophone = device.isUnavailableWhenClamshellClosed
-                AppServices.shared.microphonePreferenceCoordinator.reportResolvedSelection(
+                self.microphonePreferences.reportResolvedSelection(
                     uid: device.uid,
                     name: device.name
                 )
@@ -2488,9 +2401,9 @@ final class ASRService: ObservableObject {
     }
 
     private func handleInputDeviceAvailabilityChanged(deviceID: AudioObjectID?) {
-        let resolvedInput = AppServices.shared.microphonePreferenceCoordinator.inputDeviceForCapture()
+        let resolvedInput = self.microphonePreferences.inputDeviceForCapture()
         let preparedDeviceID = self.directAudioLifecycleController.snapshot.deviceID
-        let confirmedUID = AppServices.shared.microphonePreferenceCoordinator.confirmedActiveInputUID
+        let confirmedUID = self.microphonePreferences.confirmedActiveInputUID
         let activeSelectionChanged = self.isRunning && resolvedInput?.uid != confirmedUID
         let preparedSelectionChanged = self.hasPreparedAudioCapture && resolvedInput?.id != preparedDeviceID
         guard activeSelectionChanged || preparedSelectionChanged else { return }
@@ -2606,7 +2519,7 @@ final class ASRService: ObservableObject {
         }
         guard self.isTerminating == false else { return }
 
-        let microphonePreferenceCoordinator = AppServices.shared.microphonePreferenceCoordinator
+        let microphonePreferenceCoordinator = self.microphonePreferences
         microphonePreferenceCoordinator.reconcileMicrophoneSelection(
             availableInputs: initialInputSnapshot.0,
             defaultInputUID: initialInputSnapshot.1
@@ -3233,7 +3146,7 @@ final class ASRService: ObservableObject {
                             outcome: "first_pcm"
                         )
                     }
-                    AppServices.shared.microphonePreferenceCoordinator.confirmActiveSelection(
+                    self.microphonePreferences.confirmActiveSelection(
                         uid: self.audioStartAttemptInputUID,
                         name: self.audioStartAttemptInputName
                     )
@@ -3382,7 +3295,7 @@ final class ASRService: ObservableObject {
             }
 
             guard wasCancelled == false else { return .failed }
-            AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+            self.microphonePreferences.markActiveSelectionUnavailable()
 
             // Provide user-friendly error feedback
             let nsError = error as NSError
@@ -3580,7 +3493,7 @@ final class ASRService: ObservableObject {
             return
         }
 
-        let microphonePreferenceCoordinator = AppServices.shared.microphonePreferenceCoordinator
+        let microphonePreferenceCoordinator = self.microphonePreferences
         let resolvedInput: AudioDevice.Device?
         if request.reconcilesInputSelection {
             resolvedInput = microphonePreferenceCoordinator.reconcileMicrophoneSelection(
@@ -4554,78 +4467,15 @@ final class ASRService: ObservableObject {
         configuration: MeetingFinalProcessingConfiguration,
         body: @escaping (any TranscriptionProvider) async throws -> Result
     ) async throws -> Result {
-        try Task.checkCancellation()
         guard let lease = self.activeActivityLease, lease.activity == .meeting else {
             throw MeetingASRPreparationError.invalidActivityLease
         }
-        guard self.activeMeetingASRScope == nil else {
-            throw MeetingASRPreparationError.preparationInProgress
-        }
-        let scopeID = UUID()
-        self.activeMeetingASRScope = MeetingASRScope(
-            id: scopeID,
-            lease: lease,
-            cancelBody: nil,
-            awaitBodyCompletion: nil
+        defer { self.flushDeferredMeetingLeaseReleaseIfReady() }
+        return try await self.meetingPreparedScope.run(
+            lease: lease, attemptID: attemptID, configuration: configuration,
+            owner: self.meetingASROwner(), isActiveLease: { [weak self] in self?.activeActivityLease == $0 },
+            body: body
         )
-
-        let owner = self.meetingASROwner()
-        let provider: any TranscriptionProvider
-        do {
-            provider = try await owner.prepare(lease: lease, attemptID: attemptID, configuration: configuration)
-        } catch {
-            // The owner already drained the failed preparation.
-            self.finishMeetingASRScope(scopeID: scopeID)
-            throw error
-        }
-        guard self.activeActivityLease == lease,
-              let token = owner.currentClaimToken, token.lease == lease
-        else {
-            if let token = owner.currentClaimToken { await owner.release(token) }
-            self.finishMeetingASRScope(scopeID: scopeID)
-            throw CancellationError()
-        }
-
-        do {
-            let bodyTask = Task { @MainActor in
-                try await body(provider)
-            }
-            guard self.activeMeetingASRScope?.id == scopeID else {
-                bodyTask.cancel()
-                _ = await bodyTask.result
-                throw CancellationError()
-            }
-            self.activeMeetingASRScope?.cancelBody = {
-                bodyTask.cancel()
-            }
-            self.activeMeetingASRScope?.awaitBodyCompletion = {
-                _ = await bodyTask.result
-            }
-            let result = try await withTaskCancellationHandler {
-                try await bodyTask.value
-            } onCancel: {
-                bodyTask.cancel()
-            }
-            // A provider/model call may not observe cooperative cancellation until it
-            // returns. Never publish that late success after the enclosing attempt was
-            // cancelled; teardown still runs below before cancellation escapes.
-            if bodyTask.isCancelled { throw CancellationError() }
-            try Task.checkCancellation()
-            await owner.release(token)
-            self.finishMeetingASRScope(scopeID: scopeID)
-            return result
-        } catch {
-            await owner.release(token)
-            self.finishMeetingASRScope(scopeID: scopeID)
-            throw error
-        }
-    }
-
-    private func finishMeetingASRScope(scopeID: UUID) {
-        if self.activeMeetingASRScope?.id == scopeID {
-            self.activeMeetingASRScope = nil
-        }
-        self.flushDeferredMeetingLeaseReleaseIfReady()
     }
 
     private func flushDeferredMeetingLeaseReleaseIfReady() {
@@ -4915,7 +4765,7 @@ final class ASRService: ObservableObject {
     @discardableResult
     private func setEngineInputDevice(deviceID: AudioObjectID, deviceUID: String, deviceName: String) -> Bool {
         DebugLogger.shared.debug("setEngineInputDevice() - Binding input to device ID: \(deviceID)", source: "ASRService")
-        AppServices.shared.microphonePreferenceCoordinator.reportResolvedSelection(
+        self.microphonePreferences.reportResolvedSelection(
             uid: deviceUID,
             name: deviceName
         )
@@ -5505,7 +5355,7 @@ final class ASRService: ObservableObject {
             return false
         }
 
-        AppServices.shared.microphonePreferenceCoordinator.reconcileMicrophoneSelection(
+        self.microphonePreferences.reconcileMicrophoneSelection(
             availableInputs: snapshot.0,
             defaultInputUID: snapshot.1
         )
@@ -5644,7 +5494,7 @@ final class ASRService: ObservableObject {
                     return
                 }
                 if readiness == .ready {
-                    AppServices.shared.microphonePreferenceCoordinator.confirmActiveSelection(
+                    self.microphonePreferences.confirmActiveSelection(
                         uid: self.audioStartAttemptInputUID,
                         name: self.audioStartAttemptInputName
                     )
@@ -5708,7 +5558,7 @@ final class ASRService: ObservableObject {
         guard request.generation == self.audioRouteRecoveryGeneration,
               Task.isCancelled == false, self.isTerminating == false else { return }
         DebugLogger.shared.error("Audio route recovery failed: \(error)", source: "ASRService")
-        AppServices.shared.microphonePreferenceCoordinator.markActiveSelectionUnavailable()
+        self.microphonePreferences.markActiveSelectionUnavailable()
         let failedSessionID = self.benchmarkSessionID
         var expectedStartGeneration = self.audioCaptureStartGeneration
         let wasCapturing = self.isRunning || self.isStarting
@@ -5738,6 +5588,9 @@ final class ASRService: ObservableObject {
     private func handleDirectCaptureFormatInvalidation(
         _ invalidation: DirectCoreAudioLifecycleController.FormatInvalidation
     ) async {
+        // A native callback may already be queued when shutdown closes its owner.
+        // Reject it before publishing availability or restarting shared observers.
+        guard !self.isTerminating else { return }
         let captureSnapshot = self.directAudioLifecycleController.snapshot
         guard invalidation.generation == captureSnapshot.generation else {
             self.benchmarkLog(
@@ -6583,7 +6436,7 @@ final class ASRService: ObservableObject {
                 currentLivenessByUID != cachedLivenessByUID
             {
                 let microphonePreferenceCoordinator =
-                    AppServices.shared.microphonePreferenceCoordinator
+                    self.microphonePreferences
                 let migrationPending = microphonePreferenceCoordinator.needsMicrophonePriorityMigration
                 let resolvedInput = microphonePreferenceCoordinator.reconcileMicrophoneSelection(
                     availableInputs: currentDevices,
@@ -6747,6 +6600,11 @@ final class ASRService: ObservableObject {
             throw ASRActivityError.activityInProgress(.settingsRestore)
         }
         guard !self.isOrdinaryASRBlockedByMeetingCapture else { throw MeetingModelResidencyError.busy }
+        // A claimed meeting owns the provider. Reject before preference reads or new
+        // residency admission, including in the isolated host that forbids credentials.
+        guard !self.isMeetingASRPreparationClaimed else {
+            throw MeetingASRPreparationError.preparationInProgress
+        }
         let admission = try self.meetingModelResidency.beginOperation(
             owner: "speech", modelID: SettingsStore.shared.selectedSpeechModel.id
         )
@@ -7672,6 +7530,7 @@ final class ASRService: ObservableObject {
         preferredTargetPID: pid_t?,
         textReadyAt: TimeInterval? = nil,
         preserveTranscriptOnClipboard: Bool = false,
+        requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         await self.typeOutputPlanToActiveField(
@@ -7679,6 +7538,7 @@ final class ASRService: ObservableObject {
             preferredTargetPID: preferredTargetPID,
             textReadyAt: textReadyAt,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            requiredFocusTarget: requiredFocusTarget,
             isOutputValid: isOutputValid
         )
     }
@@ -7691,6 +7551,7 @@ final class ASRService: ObservableObject {
         toggleStopRequestedAt: TimeInterval? = nil,
         tracksDictionaryCorrections: Bool = false,
         preserveTranscriptOnClipboard: Bool = false,
+        requiredFocusTarget: TypingService.CapturedFocusTarget? = nil,
         isOutputValid: @escaping @MainActor () -> Bool = { true }
     ) async -> TextDeliveryResult {
         let requestedAt = ProcessInfo.processInfo.systemUptime
@@ -7708,6 +7569,7 @@ final class ASRService: ObservableObject {
             toggleStopRequestedAt: toggleStopRequestedAt,
             tracksDictionaryCorrections: tracksDictionaryCorrections,
             preserveTranscriptOnClipboard: preserveTranscriptOnClipboard,
+            requiredFocusTarget: requiredFocusTarget,
             isOutputValid: isOutputValid
         )
         let dispatchedAt = ProcessInfo.processInfo.systemUptime
@@ -8722,3 +8584,5 @@ final nonisolated class AudioCapturePipeline: @unchecked Sendable {
         return mono
     }
 }
+
+#endif

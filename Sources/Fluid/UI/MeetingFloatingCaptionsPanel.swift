@@ -223,20 +223,21 @@ struct MeetingFloatingCaptionsContent: View {
         VStack(alignment: .leading, spacing: 10) {
             self.header
 
-            if rows.isEmpty {
+            if rows.isEmpty && self.coordinator.pendingSpeech.tokens.isEmpty {
                 Text("Listening…")
                     .font(self.theme.typography.bodySmall)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             } else {
-                MeetingLiveBubbleScrollList(rows: rows, hidesPartialFromAccessibility: false)
+                MeetingLiveBubbleScrollList(rows: rows, pending: self.coordinator.pendingSpeech,
+                                           hidesPartialFromAccessibility: false)
             }
         }
         .padding(14)
         .frame(minWidth: 320, maxWidth: .infinity, minHeight: 240, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(self.theme.palette.contentBackground.opacity(0.96))
+                .fill(self.theme.palette.contentBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -267,7 +268,7 @@ struct MeetingFloatingCaptionsContent: View {
             } label: {
                 Label("Stop", systemImage: "stop.fill")
                     .font(.fluidSystem(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(self.theme.palette.foreground(on: Color(red: 0.93, green: 0.23, blue: 0.23)))
                     .padding(.horizontal, 10)
                     .frame(height: 24)
                     .background(Color(red: 0.93, green: 0.23, blue: 0.23), in: Capsule())

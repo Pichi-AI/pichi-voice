@@ -18,11 +18,59 @@ nonisolated struct MeetingNemotronSpeakerSegment: Equatable, Sendable {
     let end: TimeInterval
 }
 
-/// One fresh Nemotron diarizer state for exactly one analysis epoch.
+/// Read-only replay of the stopped recording. Audio remains owned by the capture archive;
+/// callers decode bounded mono16k ranges and never materialize a whole meeting as Float PCM.
+nonisolated protocol MeetingPCMReplaySource: Sendable {
+    var totalSampleCount: Int { get }
+    func readSamples(in range: Range<Int>) async throws -> [Float]
+}
+
+extension MeetingPCMReplaySource {
+    /// Replay begins only after capture has joined. One model state receives every range,
+    /// including ranges containing silence; neither speaker state nor time resets at a boundary.
+    nonisolated func replay(_ consume: ([Float]) throws -> Void) async throws {
+        let count = self.totalSampleCount
+        guard count > 0 else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+        var offset = 0
+        while offset < count {
+            try Task.checkCancellation()
+            let end = offset + min(16_000, count - offset)
+            let samples = try await self.readSamples(in: offset..<end)
+            guard samples.count == end - offset, samples.allSatisfy(\.isFinite) else {
+                throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+            }
+            try Task.checkCancellation()
+            try consume(samples)
+            offset = end
+        }
+        try Task.checkCancellation()
+    }
+}
+
+/// One fresh Nemotron diarizer state for a complete track or one analysis epoch.
 nonisolated protocol MeetingNemotronDiarizerSession: Sendable {
     /// 16kHz mono epoch audio -> finalized speaker segments. Implementations may block on CoreML
     /// and are always awaited from a background context.
     func diarize(samples: [Float]) async throws -> [MeetingNemotronSpeakerSegment]
+    /// Post-stop whole-track analysis with bounded decoded PCM and continuous speaker state.
+    func diarize(source: any MeetingPCMReplaySource) async throws -> [MeetingNemotronSpeakerSegment]
+}
+
+extension MeetingNemotronDiarizerSession {
+    nonisolated func diarize(source: any MeetingPCMReplaySource) async throws -> [MeetingNemotronSpeakerSegment] {
+        // Preserve small injected fixtures without letting an old adapter accidentally
+        // materialize an unbounded stopped recording. Production implements bounded replay.
+        guard source.totalSampleCount > 0, source.totalSampleCount <= 320_000 else {
+            throw MeetingPCMInputError.unsupportedRuntime
+        }
+        try Task.checkCancellation()
+        let samples = try await source.readSamples(in: 0..<source.totalSampleCount)
+        guard samples.count == source.totalSampleCount, samples.allSatisfy(\.isFinite) else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+        try Task.checkCancellation()
+        return try await self.diarize(samples: samples)
+    }
 }
 
 /// Hands out per-epoch diarizers. Every call must return entirely fresh streaming state; model
@@ -45,18 +93,47 @@ nonisolated struct MeetingNemotronPhaseResult: Sendable {
     var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
 }
 
+/// One bounded core whose provider could not supply usable word timing. Native segment
+/// times remain native; an absent segmentation falls back only to this input core's range.
+nonisolated struct MeetingUntimedASRChunk: Sendable {
+    let sampleRange: Range<Int>
+    let text: String
+    let segmentTimings: [ASRSegmentTiming]
+}
+
 nonisolated struct MeetingParakeetEpochOutput: Sendable {
     let epochID: MeetingAnalysisEpochID
     let text: String
     let words: [ASRWordTiming]
+    let segmentTimings: [ASRSegmentTiming]
     let sampleRate: Double
     let sampleCount: Int
     let spanSamples: [MeetingMaterializedSpanSamples]
+    let untimedChunks: [MeetingUntimedASRChunk]
+
+    init(epochID: MeetingAnalysisEpochID, text: String, words: [ASRWordTiming],
+         segmentTimings: [ASRSegmentTiming] = [], sampleRate: Double, sampleCount: Int,
+         spanSamples: [MeetingMaterializedSpanSamples], untimedChunks: [MeetingUntimedASRChunk] = []) {
+        self.epochID = epochID
+        self.text = text
+        self.words = words
+        self.segmentTimings = segmentTimings
+        self.sampleRate = sampleRate
+        self.sampleCount = sampleCount
+        self.spanSamples = spanSamples
+        self.untimedChunks = untimedChunks
+    }
 }
 
 nonisolated struct MeetingParakeetPhaseResult: Sendable {
     var outputs: [MeetingParakeetEpochOutput] = []
     var failures: [MeetingAnalysisEpochID: String] = [:]
+    /// Ownership transfers from a progressive ASR body to the subsequent speaker
+    /// phase. Only that same physical window is retained, never another buffer.
+    var boundedPCMSamples: [Float] = []
+    /// Original consumed frame count when only an accepted prefix leaves ASR.
+    /// The uncovered tail remains explicit without retaining a second PCM buffer.
+    var boundedPCMSourceSampleCount: Int? = nil
 }
 
 /// The composite backend's runtime, one per attempt. `withNemotronDiarization` is the only owner
@@ -67,6 +144,27 @@ nonisolated struct MeetingParakeetPhaseResult: Sendable {
 /// (plan §6 D/E isolation). Concrete phase result types are deliberate: a generic scoped-closure
 /// witness across the app/test module boundary is not ABI-stable under MainActor-by-default.
 protocol MeetingParakeetNemotronRunning: Sendable {
+    nonisolated var supportsProgressivePCMInput: Bool { get }
+    nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { get }
+    nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+                                 trackID: MeetingAudioTrackID, attemptID: UUID,
+                                 configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch
+    /// A display-only speech observation after the ASR scope has drained, before attribution.
+    /// The owner must apply privacy and generation checks; this batch is not a durable result.
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch
+    /// Capture is already stopped and ASR is drained. Reassign only speaker metadata on
+    /// the accepted, privacy-protected transcript using one global recording analysis.
+    nonisolated func diarizePCMRecording(
+        source: any MeetingPCMReplaySource, transcript: MeetingPCMTranscriptBatch,
+        trackID: MeetingAudioTrackID, attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration
+    ) async throws -> MeetingPCMTranscriptBatch
+    nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws
     nonisolated func speakerVoiceProfiles(
         samples: [MeetingSpeakerVoiceSamples]
     ) async throws -> [MeetingSpeakerVoiceProfile]
@@ -84,8 +182,48 @@ protocol MeetingParakeetNemotronRunning: Sendable {
 }
 
 extension MeetingParakeetNemotronRunning {
+    nonisolated var supportsProgressivePCMInput: Bool { false }
+    nonisolated var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot? { nil }
+
+    nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
+                                 trackID: MeetingAudioTrackID, attemptID: UUID,
+                                 configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+        throw MeetingPCMInputError.unsupportedRuntime
+    }
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
+        throw MeetingPCMInputError.unsupportedRuntime
+    }
+
+    /// Existing injected runtimes keep their original final operation without claiming an
+    /// early observation. Concrete adapters can implement the additive preview capability.
+    nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: MeetingAudioTrackID,
+                                 attemptID: UUID, configuration: MeetingFinalProcessingConfiguration,
+                                 preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
+        try await self.recognizePCM(samples: samples, offset: offset, trackID: trackID,
+                                    attemptID: attemptID, configuration: configuration)
+    }
+
+    nonisolated func diarizePCMRecording(
+        source: any MeetingPCMReplaySource, transcript: MeetingPCMTranscriptBatch,
+        trackID: MeetingAudioTrackID, attemptID: UUID,
+        configuration: MeetingFinalProcessingConfiguration
+    ) async throws -> MeetingPCMTranscriptBatch {
+        guard !configuration.speakerLabelsEnabled else { throw MeetingPCMInputError.unsupportedRuntime }
+        return transcript
+    }
+
+    nonisolated func preparePCMResources(attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws {
+        throw MeetingModelResidencyError.unsupportedProvider
+    }
     /// Existing injected runtimes without a voice encoder retain separate speaker identities.
     nonisolated func speakerVoiceProfiles(
         samples _: [MeetingSpeakerVoiceSamples]
     ) async throws -> [MeetingSpeakerVoiceProfile] { [] }
+}
+
+nonisolated enum MeetingPCMInputError: LocalizedError {
+    case unsupportedRuntime
+    var errorDescription: String? { PichiLocalization.text("The selected meeting runtime does not support in-memory audio.") }
 }

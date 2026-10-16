@@ -6,6 +6,7 @@ import NativeTextInference
 nonisolated protocol S1MiniInferenceEngine: Sendable {
     var isLoaded: Bool { get async }
     func load(modelURL: URL, contextTokenLimit: Int) async throws
+    func tokenCount(in text: String) async throws -> Int
     func generate(prompt: String, maxOutputTokens: Int, streamHandler: PrivateAIStreamHandler?) async throws -> String
     func unload() async
 }
@@ -189,6 +190,14 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
 
     func shutdownForTermination() async { await self.unloadCachedRuntime(reason: "termination") }
 
+    nonisolated func dictationOutputTokenLimit(for _: String, contextTokenLimit: Int) throws -> Int {
+        guard NativeTextInference.contextTokenLimits.contains(contextTokenLimit) else {
+            throw NativeTextInferenceError.invalidContextLimit
+        }
+        // Exact prompt accounting and bounded chunking happen under the engine's lease.
+        return contextTokenLimit - 1
+    }
+
     nonisolated func enhanceDictation(
         _ inputText: String,
         runtime: PrivateAIIntegrationService.RuntimeConfiguration,
@@ -208,19 +217,24 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
         guard S1MiniProviderFeature.shared.isKnownModelID(runtime.model) else { throw S1MiniError.unknownModel }
         // Every value is immutable before admission. A settings change cannot switch this attempt's model.
         let selection = try await self.selection(model: self.selectedModel, path: runtime.localModelPath, context: runtime.contextTokenLimit)
-        let prompt = S1MiniPrompt.make(transcript: inputText)
+        guard inputText.utf8.count <= Self.maximumDictationBytes else {
+            throw AIProcessingError.dictationExceedsAIContextWindow
+        }
         return try await self.serialized {
-            try await self.enhance(selection, prompt: prompt, maxOutputTokens: maxOutputTokens, streamHandler: streamHandler)
+            try await self.enhance(selection, inputText: inputText, maxOutputTokens: maxOutputTokens, streamHandler: streamHandler)
         }
     }
 
     private func enhance(
-        _ selection: Selection, prompt: String, maxOutputTokens: Int, streamHandler: PrivateAIStreamHandler?
+        _ selection: Selection, inputText: String, maxOutputTokens: Int, streamHandler: PrivateAIStreamHandler?
     ) async throws -> PrivateAIIntegrationService.EnhancementResult {
         let start = ContinuousClock.now
         try await self.load(selection)
         do {
-            let output = try await self.engine.generate(prompt: prompt, maxOutputTokens: maxOutputTokens, streamHandler: streamHandler)
+            let output = try await self.enhanceChunks(inputText, selection: selection, maxOutputTokens: maxOutputTokens)
+            try Task.checkCancellation()
+            // Publish only after every chunk succeeds, including output-limit retries.
+            if !output.isEmpty { streamHandler?(output) }
             try Task.checkCancellation()
             let elapsed = start.duration(to: .now).components
             let milliseconds = Int(elapsed.seconds * 1000 + elapsed.attoseconds / 1_000_000_000_000_000)
@@ -230,6 +244,106 @@ actor S1MiniIntegrationProvider: PrivateAIIntegrationProviding {
             await self.retireAfterFailure(failure)
             throw failure
         }
+    }
+
+    private static let maximumDictationBytes = 8 * 1024 * 1024
+
+    private struct Chunk {
+        let text: Substring
+        let separator: String
+    }
+
+    private func enhanceChunks(_ input: String, selection: Selection, maxOutputTokens: Int) async throws -> String {
+        guard maxOutputTokens > 0, maxOutputTokens < selection.contextTokenLimit else {
+            throw NativeTextInferenceError.invalidOutputLimit
+        }
+        let overhead = try await self.engine.tokenCount(in: S1MiniPrompt.make(transcript: ""))
+        var pending = [Chunk(text: input[...], separator: "")]
+        var output = ""
+        var outputBytes = 0
+        var completedChunks = 0
+        var outputRetries = 0
+        while let chunk = pending.popLast() {
+            try Task.checkCancellation()
+            // Bound tokenizer work and prompt copies even for a multi-megabyte dictation.
+            if chunk.text.utf8.count > selection.contextTokenLimit * 8 {
+                try Self.split(chunk, onto: &pending)
+                continue
+            }
+            let prompt = S1MiniPrompt.make(transcript: String(chunk.text))
+            let promptTokens = try await self.engine.tokenCount(in: prompt)
+            try Task.checkCancellation()
+            let inputTokens = max(1, promptTokens - overhead)
+            let reserve = min(maxOutputTokens, max(32, Int((Double(inputTokens) * 1.15).rounded(.up)) + 64))
+            guard promptTokens + reserve <= selection.contextTokenLimit else {
+                try Self.split(chunk, onto: &pending)
+                continue
+            }
+            let cleaned: String
+            do {
+                DebugLogger.shared.debug(
+                    "Native dictation chunk start inputChars=\(chunk.text.count) promptTokens=\(promptTokens) outputLimit=\(reserve) completedChunks=\(completedChunks)",
+                    source: "S1MiniIntegrationProvider"
+                )
+                cleaned = try await self.engine.generate(
+                    prompt: prompt,
+                    maxOutputTokens: reserve,
+                    streamHandler: nil
+                ).trimmingCharacters(in: .whitespacesAndNewlines)
+            } catch NativeTextInferenceError.outputLimitExceeded {
+                // The failed partial output is discarded. Retry only smaller original input.
+                outputRetries += 1
+                DebugLogger.shared.info(
+                    "Native dictation chunk reached output limit; retrying smaller input inputChars=\(chunk.text.count) outputLimit=\(reserve)",
+                    source: "S1MiniIntegrationProvider"
+                )
+                try Self.split(chunk, onto: &pending, failure: S1MiniError.incompleteOutput)
+                continue
+            }
+            try Task.checkCancellation()
+            let separator = output.isEmpty || cleaned.isEmpty ? "" : chunk.separator
+            let additionalBytes = separator.utf8.count + cleaned.utf8.count
+            guard additionalBytes <= Self.maximumDictationBytes - outputBytes else {
+                throw S1MiniError.incompleteOutput
+            }
+            output += separator
+            output += cleaned
+            outputBytes += additionalBytes
+            completedChunks += 1
+        }
+        DebugLogger.shared.info(
+            "Native dictation cleanup completed chunks=\(completedChunks) outputRetries=\(outputRetries) contextTokens=\(selection.contextTokenLimit) inputChars=\(input.count) outputChars=\(output.count)",
+            source: "S1MiniIntegrationProvider"
+        )
+        return output
+    }
+
+    /// Split without overlap, loss, or breaking a Unicode grapheme. Each child is strictly smaller.
+    private static func split(_ chunk: Chunk, onto pending: inout [Chunk], failure: Error = AIProcessingError.dictationExceedsAIContextWindow) throws {
+        let text = chunk.text
+        let count = text.count
+        guard count > 1 else { throw failure }
+        let midpoint = text.index(text.startIndex, offsetBy: count / 2)
+        let lower = text.index(text.startIndex, offsetBy: count / 4)
+        var word: String.Index?
+        var sentence: String.Index?
+        var newline: String.Index?
+        for index in text.indices where index >= lower && index < midpoint {
+            let character = text[index]
+            let boundary = text.index(after: index)
+            if character.isWhitespace { word = boundary }
+            if ".!?。！？".contains(character) { sentence = boundary }
+            if character.isNewline { newline = boundary }
+        }
+        let boundary = newline ?? sentence ?? word ?? midpoint
+        let left = text[..<boundary]
+        let right = text[boundary...]
+        let whitespace = String(left.reversed().prefix(while: { $0.isWhitespace }).reversed())
+            + String(right.prefix(while: { $0.isWhitespace }))
+        let newlineCount = whitespace.filter { $0.isNewline }.count
+        let separator = newlineCount > 1 ? "\n\n" : newlineCount == 1 ? "\n" : whitespace.isEmpty ? "" : " "
+        pending.append(Chunk(text: right, separator: separator))
+        pending.append(Chunk(text: left, separator: chunk.separator))
     }
 
     func summarizeMeeting(_: String, style _: String) async throws -> String { throw S1MiniError.unsupportedTask }
