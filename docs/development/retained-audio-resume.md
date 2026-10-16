@@ -14,6 +14,9 @@ frontend tails, speaker cache, FIFO, frame/sample cursors and open/closed speake
 each five seconds of source audio. The final pre-padding snapshot permits repeating only the
 uncommitted tail. Completed tracks retain native intervals; evidence is rebuilt with the new
 attempt's IDs and current validated span references, without replacing strings in old evidence.
+ASR cores are cached only when the provider supplies a verified nonempty artifact fingerprint.
+Adapters with an unspecified artifact identity may resume pinned diarization, but repeat ASR
+instead of mixing completed text with unknown same-name weights.
 
 Each recovery re-observes actual source bytes with the existing bounded SHA-256 observer and
 binds all decoded facts, admission rules and time mappings. Attempt-derived manifest IDs are

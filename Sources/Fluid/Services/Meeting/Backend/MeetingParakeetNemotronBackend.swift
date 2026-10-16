@@ -261,6 +261,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             self.state.streamingStates.removeValue(forKey: trackID); try self.persist()
         }
         func saveASR(_ progress: ASRProgress, epochID: MeetingAnalysisEpochID) throws {
+            // A model name (or two equal nil fingerprints) does not prove the same weights.
+            // Such adapters can resume the independently pinned diarizer, but must redo ASR.
+            guard self.pin.configuration.asrArtifactFingerprint?.isEmpty == false else { return }
             self.state.asr[epochID] = progress; try self.persist()
         }
         func saveOwnerTokens(_ tokens: Set<MeetingBackendSpeakerToken>) throws {
@@ -348,7 +351,12 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             ? try ResumeOwner(request: request, manifest: manifest, backendID: backendID,
                               backendVersion: backendVersion, ownerVoiceIdentity: ownerIdentity,
                               runtimeFingerprint: runtimeFingerprint) : nil
-        let restored = await resume?.snapshot() ?? ResumeState()
+        var restoredState = await resume?.snapshot() ?? ResumeState()
+        if request.configuration.asrArtifactFingerprint?.isEmpty != false {
+            guard restoredState.asr.isEmpty else { throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration }
+            restoredState.asr = [:]
+        }
+        let restored = restoredState
 
         // Phase A: Nemotron diarization, one continuous state per track, then drained. A track's
         // epochs are diarized in order as one stream, so a voice keeps its slot across a reset;

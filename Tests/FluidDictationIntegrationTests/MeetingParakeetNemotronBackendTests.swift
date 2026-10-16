@@ -10,13 +10,15 @@ import XCTest
 @MainActor
 final class MeetingParakeetNemotronBackendTests: XCTestCase {
     func testRetainedNewAttemptRestoresCompletedASRCoresAndContinuousSpeakerEvidence() async throws {
+        for fingerprint: String? in ["synthetic-sha256", nil] {
         let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 145)
         let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
         var session = self.makeSession(mode: .inRoom, tracks: [track])
         let directory = try self.makeTempSessionDirectory()
+        let pinnedASR = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: fingerprint, languageCode: "en")
         let first = FakeRuntime(), materializer = FakeMaterializer()
         let backend = self.makeBackend(runtime: first, materializer: materializer)
-        let request = self.makeRequest(session: session, directory: directory)
+        let request = self.makeRequest(session: session, directory: directory, configuration: pinnedASR)
         let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
             .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 45)
         ]
@@ -39,8 +41,11 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             .init(text: "second", words: [.init(text: "second", start: 2.5, end: 3)]),
             .init(text: "third", words: [.init(text: "third", start: 2.5, end: 3)]),
         ]
+        if fingerprint == nil {
+            resumedRuntime.asrSession.responses.insert(.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1)]), at: 0)
+        }
         let resumedBackend = self.makeBackend(runtime: resumedRuntime, materializer: materializer)
-        let resumedRequest = self.makeRequest(session: session, directory: directory)
+        let resumedRequest = self.makeRequest(session: session, directory: directory, configuration: pinnedASR)
         let resumedPlan = try resumedBackend.plan(resumedRequest)
         let resumedManifest = try self.makeManifest(plan: resumedPlan, observations: observations)
         let result = try await resumedBackend.execute(plan: resumedPlan, manifest: resumedManifest, progress: { _ in })
@@ -50,9 +55,11 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(bundle.evidence.units.map(\.text), ["first", "second", "third"])
         XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), [0.5, 20.5, 40.5])
         XCTAssertEqual(Set(bundle.evidence.units.map(\.id)).count, 3, "Completed cores cannot be duplicated")
-        XCTAssertEqual(resumedRuntime.asrSession.callSampleCounts, [24, 7].map { $0 * 16_000 })
+        XCTAssertEqual(resumedRuntime.asrSession.callSampleCounts, (fingerprint == nil ? [22, 24, 7] : [24, 7]).map { $0 * 16_000 },
+                       "Only a verified artifact identity authorizes reuse of completed ASR cores")
         XCTAssertTrue(resumedRuntime.diarizerFactory.createdEpochs.isEmpty, "Completed diarization is restored, never repeated")
         XCTAssertEqual(bundle.evidence.speakerActivity.map(\.token.label), ["slot-2"])
+        }
     }
 
     func testRetainedCheckpointRejectsASRModelDriftBeforeInference() async throws {
@@ -1547,9 +1554,10 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
     func testTransientMissingEpochCannotCacheShortenedContinuousTrack() async throws {
         let fixture = self.makeTwoEpochFixture()
         let directory = try self.makeTempSessionDirectory()
+        let pinnedASR = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: "synthetic-sha256", languageCode: "en")
         let initial = FakeRuntime(), materializer = FakeMaterializer()
         let firstBackend = self.makeBackend(runtime: initial, materializer: materializer)
-        let firstPlan = try firstBackend.plan(self.makeRequest(session: fixture.session, directory: directory))
+        let firstPlan = try firstBackend.plan(self.makeRequest(session: fixture.session, directory: directory, configuration: pinnedASR))
         let firstManifest = try self.makeManifest(plan: firstPlan, observations: fixture.observations)
         let epochs = try XCTUnwrap(firstManifest.track(fixture.micTrack.id)?.epochs)
         materializer.failingEpochs = [epochs[1].id]
@@ -1566,7 +1574,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         ]
         resumed.asrSession.responses = [.init(text: "second", words: [.init(text: "second", start: 0.2, end: 0.4)])]
         let secondBackend = self.makeBackend(runtime: resumed, materializer: materializer)
-        let secondPlan = try secondBackend.plan(self.makeRequest(session: fixture.session, directory: directory))
+        let secondPlan = try secondBackend.plan(self.makeRequest(session: fixture.session, directory: directory, configuration: pinnedASR))
         let result = try await secondBackend.execute(plan: secondPlan,
             manifest: self.makeManifest(plan: secondPlan, observations: fixture.observations), progress: { _ in })
         guard case let .canonicalEvidence(bundle) = result else { return XCTFail("Expected canonical result") }
