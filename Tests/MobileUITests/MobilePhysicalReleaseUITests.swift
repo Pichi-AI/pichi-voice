@@ -369,51 +369,63 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         #endif
     }
 
-    /// Human-observed smoke flow. Every checkpoint pauses before the next UI action
-    /// until the parent has inspected the native screenshot and supplied its ACK.
+    /// Human-observed smoke flow, extended to three minutes for external playback.
+    /// Every checkpoint pauses until the parent inspects the native screenshot and ACKs.
     @MainActor
     func testReleaseVisibleOneMinuteRecordingWithParentCheckpoints() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("Requires an explicitly authorized, visually observed physical-device audio lease")
         #else
         let environment = ProcessInfo.processInfo.environment
+        let externalAudio = environment["PICHI_PHYSICAL_EXTERNAL_AUDIO"] == "1"
         guard environment["PICHI_PHYSICAL_VISIBLE_UI"] == "1",
-              environment["PICHI_PHYSICAL_RELEASE_UI_AUDIO"] == "1" else {
+              externalAudio || environment["PICHI_PHYSICAL_RELEASE_UI_AUDIO"] == "1" else {
             throw XCTSkip("Enable visible physical recording and audible playback explicitly")
         }
         let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
         try require(!revision.isEmpty && revision != "working-tree", "A concrete frozen AUT revision is required")
+        let expectedExternalLiveText = environment["PICHI_PHYSICAL_EXPECTED_LIVE_TEXT"]
+            .map(normalizedVisibleSpeech).flatMap { $0.isEmpty ? nil : $0 }
         let runnerID = try XCTUnwrap(Bundle.main.bundleIdentifier)
         try require(runnerID.hasSuffix(".xctrunner"), "Only the UI runner may own synthetic playback")
-        let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
-        try require(backgroundModes.contains("audio"), "The frozen, validly signed runner must declare background audio")
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                  appropriateFor: nil, create: true)
-        let fixture = support.appendingPathComponent("PhysicalReleaseUI/audio/ru.wav")
-        try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved synthetic Russian WAV in the runner")
-        let player = try AVAudioPlayer(contentsOf: fixture)
-        try require(player.duration.isFinite && player.duration >= 1, "The speech fixture must be valid")
-        player.numberOfLoops = -1
-        player.volume = 0.8
+        let player: AVAudioPlayer?
+        if externalAudio {
+            player = nil
+        } else {
+            let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+            try require(backgroundModes.contains("audio"), "The frozen, validly signed runner must declare background audio")
+            let fixture = support.appendingPathComponent("PhysicalReleaseUI/audio/ru.wav")
+            try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved synthetic Russian WAV in the runner")
+            let ownedPlayer = try AVAudioPlayer(contentsOf: fixture)
+            try require(ownedPlayer.duration.isFinite && ownedPlayer.duration >= 1, "The speech fixture must be valid")
+            ownedPlayer.numberOfLoops = -1
+            ownedPlayer.volume = 0.8
+            player = ownedPlayer
+        }
+        let audioSource = externalAudio ? "external_parent_acoustic" : "runner_speaker"
         let checkpoints = support.appendingPathComponent("VisibleRecordingUI", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: checkpoints, withIntermediateDirectories: true)
-        print("[VISIBLE_UI_RUN] directory=\(checkpoints.path) revision=\(revision) test=testReleaseVisibleOneMinuteRecordingWithParentCheckpoints")
+        print("[VISIBLE_UI_RUN] directory=\(checkpoints.path) revision=\(revision) test=testReleaseVisibleOneMinuteRecordingWithParentCheckpoints source=\(audioSource)")
 
         let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
         app.launchArguments = []
         app.launchEnvironment = [:]
-        let audioSession = AVAudioSession.sharedInstance()
-        let originalCategory = audioSession.category
-        let originalMode = audioSession.mode
-        let originalOptions = audioSession.categoryOptions
+        // External playback is owned and observed by the parent on another device.
+        // Do not create an audio session or switch foreground apps on that route.
+        let audioSession = externalAudio ? nil : AVAudioSession.sharedInstance()
+        let originalCategory = audioSession?.category
+        let originalMode = audioSession?.mode
+        let originalOptions = audioSession?.categoryOptions
         var ownsRecording = false
         var changedPlaybackCategory = false
         var ownsPlaybackSession = false
         defer {
-            player.stop()
-            if ownsPlaybackSession { try? audioSession.setActive(false, options: .notifyOthersOnDeactivation) }
-            if changedPlaybackCategory {
+            player?.stop()
+            if ownsPlaybackSession { try? audioSession?.setActive(false, options: .notifyOthersOnDeactivation) }
+            if changedPlaybackCategory, let audioSession, let originalCategory, let originalMode, let originalOptions {
                 try? audioSession.setCategory(originalCategory, mode: originalMode, options: originalOptions)
             }
         }
@@ -435,7 +447,9 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                         && app.buttons["meeting.start"].isEnabled && app.buttons["meeting.start"].isHittable,
                         "The real Start action must be ready")
             try require(app.alerts.count == 0, "Resolve permission or readiness prompts through normal UI before testing")
-            try require(audioSession.outputVolume > 0.05, "The device speaker must already be audible")
+            if let audioSession {
+                try require(audioSession.outputVolume > 0.05, "The device speaker must already be audible")
+            }
             try await visibleCheckpoint("03-ready", app: app, revision: revision, directory: checkpoints)
 
             try tap(app.buttons["meeting.start"], "Tap the actual Release Start action before any speech playback")
@@ -444,36 +458,69 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             let beforeSpeechTimer = try visibleTimerSeconds(in: app)
             try await visibleCheckpoint("04-recording-before-speech", app: app, revision: revision, directory: checkpoints)
             try verifyVisibleRecording(in: app)
-            try require(!player.isPlaying, "No speech may play before visually acknowledged recording")
+            try require(player?.isPlaying != true, "No owned speech may play before visually acknowledged recording")
 
-            let runner = XCUIApplication(bundleIdentifier: runnerID)
-            runner.activate()
-            try await visibleCheckpoint("05-playback-runner-foreground", app: runner, revision: revision, directory: checkpoints)
-            try require(runner.state == .runningForeground, "Initiate playback while its owning runner is foreground")
-            try audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
-            changedPlaybackCategory = true
-            try audioSession.setActive(true)
-            ownsPlaybackSession = true
-            try require(player.prepareToPlay(), "The foreground runner must prepare synthetic playback")
-            try require(player.play(), "The runner must start real synthetic speech playback")
-            app.activate()
-            try verifyVisibleRecording(in: app)
-            try require(try visibleTimerSeconds(in: app) >= beforeSpeechTimer, "The same recording timer must survive the foreground change")
-            try await visibleCheckpoint("06-recording-with-speech", app: app, revision: revision, directory: checkpoints)
-            let speechStartTimer = try visibleTimerSeconds(in: app)
-            try await observeVisibleRecording(in: app, player: player, seconds: 30)
-            let thirtySecondTimer = try visibleTimerSeconds(in: app)
-            try require(thirtySecondTimer >= speechStartTimer + 25, "The visible timer must advance during the first speech interval")
-            try await visibleCheckpoint("07-recording-30-seconds", app: app, revision: revision, directory: checkpoints)
-            try await observeVisibleRecording(in: app, player: player, seconds: 30)
-            let sixtySecondTimer = try visibleTimerSeconds(in: app)
-            try require(sixtySecondTimer >= thirtySecondTimer + 25, "The visible timer must keep advancing during the second speech interval")
-            try await visibleCheckpoint("08-recording-60-seconds", app: app, revision: revision, directory: checkpoints)
-            print("[VISIBLE_UI_RECORDING] timerBeforeSpeech=\(beforeSpeechTimer) timerAtSpeech=\(speechStartTimer) timerAt30=\(thirtySecondTimer) timerAt60=\(sixtySecondTimer) liveCharacters=\(liveTextCharacterCount(in: app))")
-            try require(liveTextCharacterCount(in: app) > 0, "Audible input must produce actual visible live text before Stop")
+            if externalAudio {
+                print("[VISIBLE_UI_EXTERNAL_AUDIO] action=start_approved_synthetic_playback_before_ack checkpoint=05-external-playback-ready")
+                try await visibleCheckpoint("05-external-playback-ready", app: app, revision: revision, directory: checkpoints)
+                try verifyVisibleRecording(in: app)
+                try require(try visibleTimerSeconds(in: app) >= beforeSpeechTimer, "The same recording must continue while external playback starts")
+                try await visibleCheckpoint("06-recording-with-speech", app: app, revision: revision, directory: checkpoints)
+                var intervalStartTimer = try visibleTimerSeconds(in: app)
+                for interval in 1...3 {
+                    try await observeVisibleRecording(in: app, player: nil, seconds: 60)
+                    let intervalEndTimer = try visibleTimerSeconds(in: app)
+                    try require(intervalEndTimer >= intervalStartTimer + 55, "The visible recording timer must advance through each external speech interval")
+                    let liveCharacters = liveTextCharacterCount(in: app)
+                    try require(liveCharacters > 0, "External audible input must produce actual visible live text during every interval")
+                    try verifyLatestCaptionVisible(in: app)
+                    print("[VISIBLE_UI_RECORDING] source=\(audioSource) playbackEvidence=parent_checkpoint_ack interval=\(interval) observedSeconds=60 timerStart=\(intervalStartTimer) timerEnd=\(intervalEndTimer) liveCharacters=\(liveCharacters)")
+                    try await visibleCheckpoint("07-recording-\(interval * 60)-seconds", app: app, revision: revision, directory: checkpoints)
+                    intervalStartTimer = try visibleTimerSeconds(in: app)
+                }
+                if let expectedExternalLiveText {
+                    let visibleSpeech = normalizedVisibleSpeech(liveParagraphs(in: app).map(\.label).joined(separator: " "))
+                    try require(visibleSpeech.contains(expectedExternalLiveText),
+                                "Visible live captions must contain the explicitly expected external fixture phrase before Stop")
+                    print("[VISIBLE_UI_EXTERNAL_AUDIO] expectedLivePhraseMatched=true source=\(audioSource)")
+                }
+                // The ACK attests that the parent stopped its external player after
+                // inspecting this still-active recording. The runner owns no player.
+                print("[VISIBLE_UI_EXTERNAL_AUDIO] action=stop_external_playback_before_ack checkpoint=08-ready-to-stop")
+                try await visibleCheckpoint("08-ready-to-stop", app: app, revision: revision, directory: checkpoints)
+                try verifyVisibleRecording(in: app)
+            } else {
+                let player = try XCTUnwrap(player)
+                let audioSession = try XCTUnwrap(audioSession)
+                let runner = XCUIApplication(bundleIdentifier: runnerID)
+                runner.activate()
+                try await visibleCheckpoint("05-playback-runner-foreground", app: runner, revision: revision, directory: checkpoints)
+                try require(runner.state == .runningForeground, "Initiate playback while its owning runner is foreground")
+                try audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
+                changedPlaybackCategory = true
+                try audioSession.setActive(true)
+                ownsPlaybackSession = true
+                try require(player.prepareToPlay(), "The foreground runner must prepare synthetic playback")
+                try require(player.play(), "The runner must start real synthetic speech playback")
+                app.activate()
+                try verifyVisibleRecording(in: app)
+                try require(try visibleTimerSeconds(in: app) >= beforeSpeechTimer, "The same recording timer must survive the foreground change")
+                try await visibleCheckpoint("06-recording-with-speech", app: app, revision: revision, directory: checkpoints)
+                let speechStartTimer = try visibleTimerSeconds(in: app)
+                try await observeVisibleRecording(in: app, player: player, seconds: 30)
+                let thirtySecondTimer = try visibleTimerSeconds(in: app)
+                try require(thirtySecondTimer >= speechStartTimer + 25, "The visible timer must advance during the first speech interval")
+                try await visibleCheckpoint("07-recording-30-seconds", app: app, revision: revision, directory: checkpoints)
+                try await observeVisibleRecording(in: app, player: player, seconds: 30)
+                let sixtySecondTimer = try visibleTimerSeconds(in: app)
+                try require(sixtySecondTimer >= thirtySecondTimer + 25, "The visible timer must keep advancing during the second speech interval")
+                try await visibleCheckpoint("08-recording-60-seconds", app: app, revision: revision, directory: checkpoints)
+                print("[VISIBLE_UI_RECORDING] source=\(audioSource) timerBeforeSpeech=\(beforeSpeechTimer) timerAtSpeech=\(speechStartTimer) timerAt30=\(thirtySecondTimer) timerAt60=\(sixtySecondTimer) liveCharacters=\(liveTextCharacterCount(in: app))")
+                try require(liveTextCharacterCount(in: app) > 0, "Audible input must produce actual visible live text before Stop")
 
-            player.stop()
-            try require(!player.isPlaying, "Stop the owned speech player before stopping capture")
+                player.stop()
+                try require(!player.isPlaying, "Stop the owned speech player before stopping capture")
+            }
             try tap(app.buttons["meeting.stop"], "Tap the actual Stop and Transcribe action")
             // A very short session may complete before the processing snapshot. Retain
             // the observed state rather than requiring a transient spinner to linger.
@@ -490,10 +537,10 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                 try require(speakers.allElementsBoundByIndex.allSatisfy { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
                             "Every exposed speaker must have a readable label")
             }
-            print("[VISIBLE_UI_COMPLETED] paragraphs=\(paragraphs.count) speakers=\(speakers.count) revision=\(revision)")
+            print("[VISIBLE_UI_COMPLETED] paragraphs=\(paragraphs.count) speakers=\(speakers.count) revision=\(revision) source=\(audioSource)")
             try await visibleCheckpoint("10-completed", app: app, revision: revision, directory: checkpoints)
         } catch {
-            player.stop()
+            player?.stop()
             // Ownership begins only after this test taps Start. Never stop an
             // unrelated meeting found in the initial foreground or idle checkpoint.
             if ownsRecording {
@@ -593,12 +640,14 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         throw verificationFailure("The real Start action did not reach active recording")
     }
 
-    @MainActor private func observeVisibleRecording(in app: XCUIApplication, player: AVAudioPlayer,
+    @MainActor private func observeVisibleRecording(in app: XCUIApplication, player: AVAudioPlayer?,
                                                    seconds: TimeInterval) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + seconds
         while ProcessInfo.processInfo.systemUptime < deadline {
             try verifyVisibleRecording(in: app)
-            try require(player.isPlaying, "Owned synthetic playback must remain active during recording")
+            if let player {
+                try require(player.isPlaying, "Owned synthetic playback must remain active during recording")
+            }
             try await Task.sleep(nanoseconds: 1_000_000_000)
         }
         try verifyVisibleRecording(in: app)
@@ -645,6 +694,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
 
     @MainActor private func liveTextCharacterCount(in app: XCUIApplication) -> Int {
         liveParagraphs(in: app).reduce(0) { $0 + $1.label.count }
+    }
+
+    private func normalizedVisibleSpeech(_ value: String) -> String {
+        value.lowercased().components(separatedBy: .alphanumerics.inverted)
+            .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
     @MainActor private func liveParagraphs(in app: XCUIApplication) -> [XCUIElement] {
