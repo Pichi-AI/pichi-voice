@@ -39,13 +39,7 @@ assert (DEPS / 'onnxruntime.framework').is_dir()
 (DEPS / 'module.modulemap').write_text('module OnnxRuntimeBindings {\numbrella "' + str(ORT / 'objectivec/include') + '"\nexport *\n}\n')
 # Compile exact canonical declarations, without bringing the UI, model registry or session store
 # into this offline executable. This is the same boundary used by the core's standalone tests.
-evidence = (SOURCE / 'Backend/MeetingBackendEvidence.swift').read_text()
 contracts = 'import Foundation\ntypealias MeetingAudioTrackID = UUID\n'
-contracts += evidence[evidence.index('nonisolated enum MeetingEvidenceInterval'):evidence.index('nonisolated struct MeetingFinalTranscriptEvidence')]
-contracts += '\nnonisolated extension MeetingFinalTextUnit: Codable {}\nnonisolated extension MeetingBackendSpeakerActivity: Codable {}\n'
-config = (SOURCE / 'MeetingProcessingConfiguration.swift').read_text()
-start = config.index('nonisolated enum MeetingConfigFingerprintEncoding')
-contracts += config[start:config.index('\n}\n', start) + 3]
 runtime = (SOURCE / 'Backend/MeetingParakeetNemotronRuntime.swift').read_text()
 contracts += runtime[runtime.index('nonisolated struct MeetingNemotronSpeakerSegment'):runtime.index("/// The attempt's prepared Parakeet ASR session")]
 contracts += '\nnonisolated enum MeetingPCMInputError: Error { case unsupportedRuntime }\n'
@@ -66,7 +60,7 @@ helpers = [AUDIO / ('Sources/FluidAudio/Shared/' + name + '.swift') for name in 
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'FluidAudio', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'FluidAudio.swiftmodule', '-o', BUILD / 'libFluidAudio.dylib', BUILD / 'DiarizerError.swift', *helpers])
 giga_sources = sorted((ROOT / 'Vendor/PichiGigaAM/Sources/PichiGigaAM').glob('*.swift'))
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-emit-module', '-emit-library', '-module-name', 'PichiGigaAM', '-module-cache-path', BUILD / 'ModuleCache', '-emit-module-path', BUILD / 'PichiGigaAM.swiftmodule', '-I', DEPS, '-F', DEPS, '-profile-generate', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(DEPS), DEPS / 'OnnxRuntimeBindings.o', *giga_sources, '-o', BUILD / 'libPichiGigaAM.dylib'])
-sources = [BUILD / 'CanonicalContracts.swift', BUILD / 'LegacyAttribution.swift', SOURCE / 'Backend/MeetingResumableNemotronDiarizerSession.swift', *sorted((SOURCE / 'Backend/Nemotron3').glob('*.swift')), SOURCE / 'Backend/MeetingFast32NemotronDiarizer.swift', SOURCE / 'Backend/MeetingSpeakerAttribution.swift', ROOT / 'tools/meeting-native-eval/Runner.swift']
+sources = [BUILD / 'CanonicalContracts.swift', SOURCE / 'Backend/MeetingCanonicalEvidenceTypes.swift', BUILD / 'LegacyAttribution.swift', SOURCE / 'Backend/MeetingResumableNemotronDiarizerSession.swift', *sorted((SOURCE / 'Backend/Nemotron3').glob('*.swift')), SOURCE / 'Backend/MeetingFast32NemotronDiarizer.swift', SOURCE / 'Backend/MeetingSpeakerAttribution.swift', ROOT / 'tools/meeting-native-eval/Runner.swift']
 run(['xcrun', 'swiftc', '-O', '-swift-version', '5', '-parse-as-library', '-default-isolation', 'MainActor', '-module-cache-path', BUILD / 'ModuleCache', '-I', BUILD, '-I', DEPS, '-F', DEPS, '-L', BUILD, '-lFluidAudio', '-lPichiGigaAM', '-framework', 'onnxruntime', '-lc++', '-framework', 'Accelerate', '-Xlinker', '-rpath', '-Xlinker', str(BUILD), '-Xlinker', '-rpath', '-Xlinker', str(DEPS), *sources, '-o', BUILD / 'runner'])
 manifest = {'schema_version': 1, 'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), 'baseline_revision': BASELINE, 'fluid_audio_revision': revision, 'onnx_runtime_revision': ort_revision, 'sources': {str(path.relative_to(ROOT)): sha(path) for path in [*sources, *helpers, *giga_sources, *sorted((ROOT / 'tools/meeting-native-eval').glob('*.py'))]}, 'baseline_original_source_sha256': hashlib.sha256(legacy.encode()).hexdigest(), 'binary_sha256': sha(BUILD / 'runner'), 'onnx_bridge_sha256': sha(DEPS / 'OnnxRuntimeBindings.o'), 'onnx_runtime_sha256': sha(DEPS / 'onnxruntime.framework/Versions/A/onnxruntime')}
 (BUILD / 'build-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')

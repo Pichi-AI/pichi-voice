@@ -26,8 +26,8 @@ DerivedData or output directory with another build. No dependency resolver runs 
 python3 tools/meeting-native-eval/build.py
 ```
 
-The builder compiles production source files directly. It extracts canonical declarations verbatim,
-using the same surrounding-type boundary as the core's existing standalone tests. It also compiles
+The builder compiles production source files directly, including the shared canonical value file.
+It extracts the remaining native runtime declarations verbatim. It also compiles
 verbatim coverage and handoff helpers from production revision `448431f0` as a historical baseline.
 Baseline handoff can cascade its previous assignment; the generalized core does not inherit that
 behavior. GigaAM is compiled in a separate module with its original isolation default, so importing

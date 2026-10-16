@@ -51,7 +51,8 @@ def section(path, start, end):
 source = 'import Foundation\n'
 source += section('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift', 'nonisolated enum MeetingLiveSpeaker:', 'nonisolated enum MeetingLiveTimeConversion')
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptionBackend.swift', 'nonisolated struct MeetingBackendID:', 'nonisolated enum MeetingBackendExecutionLocality:')
-source += section('Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift', 'nonisolated enum MeetingBackendEvidenceSchema', 'nonisolated extension MeetingFinalTextUnit: Codable')
+source += Path('Sources/Fluid/Services/Meeting/Backend/MeetingCanonicalEvidenceTypes.swift').read_text()
+source += section('Sources/Fluid/Services/Meeting/Backend/MeetingBackendEvidence.swift', 'nonisolated enum MeetingBackendEvidenceSchema', 'nonisolated extension MeetingFinalTranscriptEvidence: Codable')
 voice_source = Path('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift').read_text()
 # The privacy batch references only this owner-declared metadata bound, never
 # excerpt collection or inference. Extract its declaration instead of copying a value.
