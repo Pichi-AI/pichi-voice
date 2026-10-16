@@ -494,7 +494,10 @@ nonisolated extension MeetingResultSidecar {
                     receiptID: receipt.id
                 )
             }
-            guard MeetingEvidenceInterval.isValid(start: receipt.analysisStart, end: receipt.analysisEnd) else {
+            guard MeetingEvidenceInterval.isValid(start: receipt.analysisStart, end: receipt.analysisEnd),
+                  let span = manifestSpansByID[receipt.spanID],
+                  receipt.analysisStart >= span.analysisInterval.start - MeetingAnalysisManifestSchema.mappingToleranceSeconds,
+                  receipt.analysisEnd <= span.analysisInterval.end + MeetingAnalysisManifestSchema.mappingToleranceSeconds else {
                 throw MeetingResultSidecarError.invalidCoverageInterval(receiptID: receipt.id)
             }
         }
@@ -514,7 +517,8 @@ nonisolated extension MeetingResultSidecar {
         do {
             expected = try MeetingTranscriptAssembler.attributionDecisions(
                 units: self.units, activity: self.speakerActivity, policy: self.speakerAttributionPolicy,
-                dispositions: self.dispositions, manifest: self.analysisManifest)
+                dispositions: self.dispositions, coverageReceipts: self.coverageReceipts,
+                manifest: self.analysisManifest)
         } catch is CancellationError { throw CancellationError() }
         catch { throw MeetingResultSidecarError.invalidSpeakerAttribution }
         guard expected == self.speakerAttributionDecisions else {

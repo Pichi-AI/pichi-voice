@@ -221,6 +221,7 @@ struct MeetingSessionStoreCheckpointTests {
             var copy = original
             copy.nativePrecision = .word
             copy.nativeUnitID = units[index].id
+            copy.nativeSpeakerAssignment = units[index].speaker
             copy.nativeTiming = .init(start: units[index].analysisStart, end: units[index].analysisEnd)
             copy.speakerAttribution = MeetingTranscriptSpeakerAttribution.readingSummary(
                 decision: decisions[index], speakerIDs: [token: speaker.id])
@@ -239,6 +240,25 @@ struct MeetingSessionStoreCheckpointTests {
             "Explicit confirmation of the displayed person clears inferred attribution metadata")
         check(manual.transcriptSegments[0].revision == originalRevision + 1,
             "Manual confirmation records a revision even when the displayed person stays the same")
+        check(manual.transcriptSegments[0].nativeSpeakerAssignment == units[0].speaker,
+            "Manual confirmation preserves the raw native speaker annotation")
+        let targetSpeaker = MeetingSessionSpeaker(id: UUID(), displayName: "Manual target", diarizationClusterID: nil,
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        manual.speakers.append(targetSpeaker)
+        try manual.mergeSpeakers(speaker.id, into: targetSpeaker.id)
+        check(manual.transcriptSegments[0].nativeSpeakerAssignment == units[0].speaker,
+            "Manual identity merge never rewrites native token evidence")
+        let legacyWord = try JSONDecoder().decode(MeetingTranscriptSegment.self, from: JSONEncoder().encode(baseline[0]))
+        check(legacyWord.nativeSpeakerAssignment == nil, "Legacy source annotations remain optional")
+        let persistedNative = try JSONDecoder().decode(MeetingTranscriptSegment.self,
+            from: JSONEncoder().encode(compactNative[0]))
+        check(persistedNative.nativeSpeakerAssignment == units[0].speaker,
+            "Compact direct-word source assignments survive the production segment codec")
+        var invalidNative = manual
+        invalidNative.transcriptSegments[0].nativeSpeakerAssignment = .assigned(.init(
+            analysisEpochID: .init(trackID: UUID(), ordinal: 0), label: "foreign-voice"))
+        do { try invalidNative.validateTranscriptStructure(); preconditionFailure("Foreign native source scope must fail") }
+        catch MeetingModelValidationError.invalidSpeakerAttribution { checks += 1 }
         let footprintEncoder = JSONEncoder()
         let baselineBytes = try footprintEncoder.encode(baseline).count
         let compactNativeBytes = try footprintEncoder.encode(compactNative).count

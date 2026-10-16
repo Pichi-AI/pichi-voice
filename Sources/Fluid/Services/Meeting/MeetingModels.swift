@@ -893,6 +893,8 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     /// Native precision is explicit; legacy segment envelopes remain utterances.
     var nativePrecision: MeetingTextUnitPrecision? = nil
     var nativeUnitID: String? = nil
+    /// Initial acoustic token assignment, before contextual reading rules or manual identity edits.
+    var nativeSpeakerAssignment: MeetingBackendSpeakerAssignment? = nil
     var nativeTiming: MeetingTranscriptNativeTiming? = nil
     var speakerAttribution: MeetingTranscriptSpeakerAttribution? = nil
 
@@ -1437,12 +1439,27 @@ nonisolated extension MeetingSession {
                     throw MeetingModelValidationError.invalidTimeRange
                 }
             }
+            if let native = segment.nativeSpeakerAssignment {
+                let tokens = native.tokens
+                let epoch = tokens.first?.analysisEpochID
+                let validCardinality: Bool
+                if case .ambiguous = native { validCardinality = tokens.count >= 2 } else { validCardinality = true }
+                guard validCardinality, Set(tokens).count == tokens.count,
+                      tokens.allSatisfy({ $0.analysisEpochID == epoch
+                          && $0.analysisEpochID.trackID == segment.sourceTrackID
+                          && $0.analysisEpochID.ordinal >= 0 && $0.analysisEpochID.generation >= 0
+                          && !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                    throw MeetingModelValidationError.invalidSpeakerAttribution
+                }
+            }
             if let attribution = segment.speakerAttribution {
                 let references = attribution.candidates + attribution.background
                 let tokens = attribution.rawAssignment.tokens + references.map(\.token)
                     + (attribution.selectedToken.map { [$0] } ?? [])
                 let epoch = tokens.first?.analysisEpochID
                 guard !attribution.unitID.isEmpty, attribution.policyVersion > 0,
+                      (segment.nativeUnitID.map { $0 == attribution.unitID } ?? true),
+                      (segment.nativeSpeakerAssignment.map { $0 == attribution.rawAssignment } ?? true),
                       !attribution.policyFingerprint.isEmpty,
                       attribution.selectedSpeakerID == segment.speakerID,
                       attribution.selectedSpeakerID == nil || attribution.selectedToken != nil,

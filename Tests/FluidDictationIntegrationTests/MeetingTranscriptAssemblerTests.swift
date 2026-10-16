@@ -241,6 +241,81 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         catch { XCTFail("Cancellation was converted into a different error: \(error)") }
     }
 
+    func testSkippedReceiptBlocksInterruptionContextAndSurvivesSidecarReplay() throws {
+        let (plan, manifest, span) = try self.onlineMicFixture()
+        let main = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
+        let other = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "b")
+        let units = [
+            self.unit(id: "before", span: span, text: "before", analysisStart: 5.6, analysisEnd: 6, speaker: .assigned(main)),
+            self.unit(id: "mixed", span: span, text: "mixed", analysisStart: 6.1, analysisEnd: 6.8, speaker: .ambiguous([main, other])),
+            self.unit(id: "after", span: span, text: "after", analysisStart: 6.8, analysisEnd: 7.2, speaker: .assigned(main))]
+        let evidence = MeetingFinalTranscriptEvidence(backendID: plan.backendID, attemptID: plan.attemptID,
+            units: units, speakerActivity: [.init(token: main, start: 0, end: 7.2), .init(token: other, start: 6.2, end: 6.6)])
+        let echoes = Dictionary(uniqueKeysWithValues: units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) })
+        func assemble(_ receipts: [MeetingSpanCoverageReceipt]) throws -> MeetingAssemblyResult {
+            try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest, evidence: evidence,
+                coverageReceipts: receipts, echoVerdicts: echoes))
+        }
+        let baseline = try assemble(self.receipts(for: manifest))
+        XCTAssertEqual(baseline.sidecar.speakerAttributionDecisions.first { $0.unitID == "mixed" }?.rule, .briefInterruption)
+        for status in [MeetingSpanCoverageStatus.skipped, .failed, .providerTruncated] {
+            let result = try assemble([
+                .init(id: "processed-before", spanID: span.id, analysisStart: 0, analysisEnd: 6, status: .processed),
+                .init(id: "gap", spanID: span.id, analysisStart: 6, analysisEnd: 6.1, status: status),
+                .init(id: "processed-after", spanID: span.id, analysisStart: 6.1, analysisEnd: 10, status: .processed)])
+            let decision = try XCTUnwrap(result.sidecar.speakerAttributionDecisions.first { $0.unitID == "mixed" })
+            XCTAssertNotEqual(decision.rule, .briefInterruption)
+            XCTAssertNil(decision.selectedToken)
+            XCTAssertEqual(decision.rawAssignment, units[1].speaker)
+            XCTAssertEqual(result.sidecar.units, baseline.sidecar.units)
+            XCTAssertEqual(result.sidecar.speakerActivity, baseline.sidecar.speakerActivity)
+            XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), units.map { Optional($0.speaker) })
+            let replay = try JSONDecoder().decode(MeetingResultSidecar.self, from: JSONEncoder().encode(result.sidecar))
+            XCTAssertEqual(try replay.validated(), result.sidecar)
+        }
+    }
+
+    func testProvenanceQuarantineNeverEntersCoreAndDisablesBothPossibleEpochContexts() throws {
+        let first = self.chunk(sequence: 0, start: 100, end: 110)
+        let second = self.chunk(sequence: 1, start: 110, end: 120,
+            discontinuities: [.init(kind: .clockDiscontinuity, presentationTime: self.mediaTime(110), gapSeconds: nil, detail: "synthetic")])
+        let mic = self.track(kind: .microphone, chunks: [first, second], eras: [self.era(protection: .voiceProcessed, start: 100)])
+        let plan = self.plan(mode: .onlineCall, tracks: [mic])
+        let manifest = try self.buildManifest(plan: plan, observations: [
+            (mic.id, first, self.observed(first, duration: 10)), (mic.id, second, self.observed(second, duration: 10))])
+        let spans = try XCTUnwrap(manifest.track(mic.id)?.spans)
+        var units: [MeetingFinalTextUnit] = [], activity: [MeetingBackendSpeakerActivity] = []
+        for (index, span) in spans.enumerated() {
+            let main = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "a")
+            let other = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "b")
+            let offset = span.analysisInterval.start
+            units += [
+                self.unit(id: "before-\(index)", span: span, analysisStart: offset + 1, analysisEnd: offset + 2, speaker: .assigned(main)),
+                self.unit(id: "mixed-\(index)", span: span, analysisStart: offset + 2.1, analysisEnd: offset + 2.8, speaker: .ambiguous([main, other])),
+                self.unit(id: "after-\(index)", span: span, analysisStart: offset + 2.8, analysisEnd: offset + 3.2, speaker: .assigned(main))]
+            activity += [.init(token: main, start: offset, end: offset + 3.2), .init(token: other, start: offset + 2.2, end: offset + 2.6)]
+        }
+        let echoes = Dictionary(uniqueKeysWithValues: units.map { ($0.id, MeetingUnitEchoVerdict.notEcho) })
+        func assemble(_ source: [MeetingFinalTextUnit]) throws -> MeetingAssemblyResult {
+            try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+                evidence: .init(backendID: plan.backendID, attemptID: plan.attemptID, units: source, speakerActivity: activity),
+                coverageReceipts: self.receipts(for: manifest), echoVerdicts: echoes))
+        }
+        let baseline = try assemble(units)
+        XCTAssertEqual(baseline.sidecar.speakerAttributionDecisions.filter { $0.rule == .briefInterruption }.count, 2)
+        let quarantined = self.unit(id: "invalid-provenance", span: spans[1], analysisStart: 11.9, analysisEnd: 12.05,
+            epoch: spans[0].analysisEpochID, speaker: .unassigned, spanIDs: [spans[1].id])
+        let result = try assemble(units + [quarantined])
+        XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == quarantined.id }?.disposition, .rejectedInvalidTiming)
+        XCTAssertFalse(result.sidecar.speakerAttributionDecisions.contains { $0.unitID == quarantined.id },
+            "No interval query or clipped support is legal for quarantined provenance")
+        XCTAssertFalse(result.sidecar.speakerAttributionDecisions.contains { $0.rule.isHeuristic })
+        XCTAssertEqual(result.segments.map(\.id), baseline.segments.map(\.id))
+        XCTAssertEqual(result.segments.map(\.nativeSpeakerAssignment), baseline.segments.map(\.nativeSpeakerAssignment))
+        XCTAssertTrue(result.sidecar.units.contains(quarantined))
+        XCTAssertNoThrow(try result.sidecar.validated())
+    }
+
     // MARK: - Session/manifest fixtures
 
     private func chunk(

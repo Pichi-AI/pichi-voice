@@ -326,7 +326,8 @@ nonisolated struct MeetingTranscriptAssembler {
         // context barrier, and an unplaceable unit disables contextual guesses in its epoch.
         let attributionDecisions = try Self.attributionDecisions(
             units: evidence.units, activity: evidence.speakerActivity,
-            policy: input.speakerAttributionPolicy, dispositions: dispositions, manifest: manifest)
+            policy: input.speakerAttributionPolicy, dispositions: dispositions,
+            coverageReceipts: receipts, manifest: manifest)
         let decisionsByID = Dictionary(uniqueKeysWithValues: attributionDecisions.map { ($0.unitID, $0) })
         // Ambiguous-admitted units produce a segment but mint no speaker: their candidates are
         // reported, never resolved into a product identity.
@@ -394,6 +395,7 @@ nonisolated struct MeetingTranscriptAssembler {
                     attributionState: attributionState,
                     nativePrecision: unit.precision,
                     nativeUnitID: unit.id,
+                    nativeSpeakerAssignment: unit.speaker,
                     nativeTiming: .init(start: presentation.start, end: presentation.end),
                     speakerAttribution: decisionsByID[unit.id].flatMap {
                         MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDsByToken)
@@ -450,24 +452,44 @@ nonisolated struct MeetingTranscriptAssembler {
     static func attributionDecisions(
         units: [MeetingFinalTextUnit], activity: [MeetingBackendSpeakerActivity],
         policy: MeetingSpeakerAttributionPolicy?, dispositions: [MeetingTextUnitDispositionRecord],
-        manifest: MeetingAnalysisManifest
+        coverageReceipts: [MeetingSpanCoverageReceipt], manifest: MeetingAnalysisManifest
     ) throws -> [MeetingSpeakerAttributionDecision] {
         guard let policy else { return [] }
         let records = Dictionary(uniqueKeysWithValues: dispositions.map { ($0.unitID, $0) })
         let spans = Dictionary(manifest.allSpans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let usable = units.filter {
-            MeetingEvidenceInterval.isValid(start: $0.analysisStart, end: $0.analysisEnd)
-                && ($0.confidence.map { $0.isFinite && $0 >= 0 && $0 <= 1 } ?? true)
+        let usable = units.filter { unit in
+            // Quarantine means the declared timeline cannot be trusted, even when its
+            // numeric bounds happen to be finite. Do not query acoustic intervals for it.
+            guard records[unit.id]?.disposition != .rejectedInvalidTiming else { return false }
+            return MeetingEvidenceInterval.isValid(start: unit.analysisStart, end: unit.analysisEnd)
+                && (unit.confidence.map { $0.isFinite && $0 >= 0 && $0 <= 1 } ?? true)
         }
         let usableIDs = Set(usable.map(\.id))
-        let unsafeEpochs = Set(units.filter { !usableIDs.contains($0.id) }.map(\.analysisEpochID))
+        let unsafeEpochs = Set(units.filter { !usableIDs.contains($0.id) }.flatMap { unit in
+            [unit.analysisEpochID] + unit.analysisSpanIDs.compactMap { spans[$0]?.analysisEpochID }
+        })
+        var contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = []
+        for receipt in coverageReceipts where receipt.status != .processed {
+            guard let span = spans[receipt.spanID] else {
+                throw MeetingAssemblyError.unknownCoverageReceiptSpan(spanID: receipt.spanID)
+            }
+            contextualBarriers.append(.init(analysisEpochID: span.analysisEpochID,
+                interval: .init(start: receipt.analysisStart, end: receipt.analysisEnd)))
+        }
+        for span in manifest.allSpans where span.timing.certainty == .timingUncertain {
+            contextualBarriers.append(.init(analysisEpochID: span.analysisEpochID,
+                interval: .init(start: span.analysisInterval.start, end: span.analysisInterval.end)))
+        }
+        // Manifest gaps are in recorded time and have no analysis samples. Their validated
+        // epoch resets already separate context; never reinterpret recorded bounds as analysis.
         let barriers = Set(usable.filter { unit in
             guard let record = records[unit.id] else { return true }
             let publishable = record.disposition == .emitted || record.disposition == .ambiguousUnassigned
             return !publishable || unit.analysisSpanIDs.contains { spans[$0]?.timing.certainty == .timingUncertain }
         }.map(\.id))
         return try MeetingSpeakerAttribution.resolve(units: usable, activity: activity, policy: policy,
-            barrierUnitIDs: barriers, contextualBarrierEpochIDs: unsafeEpochs)
+            barrierUnitIDs: barriers, contextualBarrierEpochIDs: unsafeEpochs,
+            contextualBarriers: contextualBarriers)
     }
 
     // MARK: - Coverage reconciliation
@@ -847,6 +869,7 @@ nonisolated struct MeetingTranscriptAssembler {
                 attributionState: speakerID != nil ? .assigned : (overlap == .ambiguous ? .overlappingSpeakers : .unassigned),
                 nativePrecision: unit.precision,
                 nativeUnitID: unit.id,
+                nativeSpeakerAssignment: unit.speaker,
                 nativeTiming: .init(start: interval.start, end: interval.end),
                 speakerAttribution: decision.flatMap {
                     MeetingTranscriptSpeakerAttribution.readingSummary(decision: $0, speakerIDs: speakerIDs)
@@ -937,6 +960,7 @@ nonisolated enum MeetingPCMRecordingAttribution {
             result.segments[index].attributionState = attributed.segments[index].attributionState
             result.segments[index].nativePrecision = attributed.segments[index].nativePrecision
             result.segments[index].nativeUnitID = attributed.segments[index].nativeUnitID
+            result.segments[index].nativeSpeakerAssignment = attributed.segments[index].nativeSpeakerAssignment
             result.segments[index].nativeTiming = attributed.segments[index].nativeTiming
             result.segments[index].speakerAttribution = attributed.segments[index].speakerAttribution
         }

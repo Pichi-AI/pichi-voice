@@ -1870,6 +1870,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 if current.nativePrecision != .word, next.nativePrecision != .word,
                    current.speakerAttribution == nil, next.speakerAttribution == nil,
                    current.nativeTiming == nil, next.nativeTiming == nil,
+                   current.nativeUnitID == nil, next.nativeUnitID == nil,
+                   current.nativeSpeakerAssignment == nil, next.nativeSpeakerAssignment == nil,
                    nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
                     current.end = Self.mediaTime(max(current.end.seconds, next.end.seconds))
                     current.text = Self.joinTranscriptText(current.text, next.text)

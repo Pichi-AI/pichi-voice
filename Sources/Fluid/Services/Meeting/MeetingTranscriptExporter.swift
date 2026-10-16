@@ -191,6 +191,7 @@ nonisolated enum MeetingTranscriptExporter {
                     attributionState: $0.attributionState?.rawValue,
                     nativePrecision: $0.nativePrecision,
                     nativeUnitID: $0.nativeUnitID,
+                    nativeSpeakerAssignment: $0.nativeSpeakerAssignment,
                     nativeTiming: $0.nativeTiming,
                     speakerAttribution: $0.speakerAttribution.map { attribution in
                         ExportedSpeakerAttribution(
@@ -296,6 +297,7 @@ private struct ExportedSegment: Codable {
     var attributionState: String?
     var nativePrecision: MeetingTextUnitPrecision?
     var nativeUnitID: String?
+    var nativeSpeakerAssignment: MeetingBackendSpeakerAssignment?
     var nativeTiming: MeetingTranscriptNativeTiming?
     var speakerAttribution: ExportedSpeakerAttribution?
 }
