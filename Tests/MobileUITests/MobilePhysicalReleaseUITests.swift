@@ -2,8 +2,8 @@ import XCTest
 import UIKit
 @preconcurrency import AVFoundation
 
-/// Opt-in tests of the installed, ordinary app through its public UI. The runner owns
-/// only public synthetic playback; it does not import the app or inject capture/services.
+/// Opt-in tests of the installed app through its public UI. Audible fixtures belong
+/// to the runner; silent input uses only the app's explicit DEBUG capture adapter.
 final class MobilePhysicalReleaseUITests: XCTestCase {
     @MainActor
     func testPhysicalOwnerVoiceSampleCanBeCheckedAndDiscardedWithoutSaving() async throws {
@@ -562,6 +562,132 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     } else if !app.buttons["transcript.more"].exists {
                         print("[VISIBLE_UI_CLEANUP] stop_unavailable_requires_parent_inspection")
                     }
+                    try? self.saveVisibleCheckpoint("failure-owned-recording-cleanup", app: app,
+                                                    revision: revision, directory: checkpoints)
+                }
+                await cleanup.value
+            } else {
+                try? saveVisibleCheckpoint("failure-current-state", app: app, revision: revision, directory: checkpoints)
+            }
+            throw error
+        }
+        #endif
+    }
+
+    /// Runs the real recording UI while the DEBUG app feeds a staged file into capture.
+    /// The parent observes USB diagnostics and explicitly requests Stop after EOF.
+    @MainActor
+    func testDebugSilentLongRecordingWithParentStopSignal() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires an explicitly authorized, visibly observed physical iPad")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_SILENT_LONG_UI"] == "1" else {
+            throw XCTSkip("Enable the silent physical long-recording test explicitly")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        try require(!revision.isEmpty && revision != "working-tree", "A concrete frozen DEBUG AUT revision is required")
+        let inputFile = try XCTUnwrap(environment["PICHI_DEBUG_AUDIO_FILE"])
+        let speedText = environment["PICHI_DEBUG_AUDIO_SPEED"] ?? "1"
+        let speed = try XCTUnwrap(Double(speedText))
+        try require(!inputFile.isEmpty && speed.isFinite && (0.1...32).contains(speed),
+                    "An explicit staged input file and supported feed speed are required")
+        executionTimeAllowance = 2 * 60 * 60
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: true)
+        let checkpoints = support.appendingPathComponent("VisibleRecordingUI", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: checkpoints, withIntermediateDirectories: true)
+        print("[VISIBLE_UI_RUN] directory=\(checkpoints.path) revision=\(revision) test=testDebugSilentLongRecordingWithParentStopSignal source=debug_file_input speed=\(speed)")
+
+        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        var ownsRecording = false
+        do {
+            // Activation preserves an existing process. Never relaunch an unrelated
+            // recording merely to install the DEBUG input environment.
+            app.activate()
+            try saveVisibleCheckpoint("00-existing-foreground", app: app, revision: revision, directory: checkpoints)
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
+            try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                        "An existing recording or processing attempt is not owned by this test")
+            try await visibleCheckpoint("01-meetings-idle", app: app, revision: revision, directory: checkpoints)
+            try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                        "The app must still be idle after parent inspection before relaunch")
+            app.launchArguments = []
+            app.launchEnvironment = ["PICHI_DEBUG_AUDIO_INPUT": "1", "PICHI_DEBUG_AUDIO_FILE": inputFile,
+                                     "PICHI_DEBUG_AUDIO_SPEED": speedText, "PICHI_TEST_REVISION": revision]
+            app.launch()
+            try saveVisibleCheckpoint("02-silent-aut-launched", app: app, revision: revision, directory: checkpoints)
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
+            try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                        "The relaunched DEBUG AUT must remain idle before this test starts recording")
+            if !app.buttons["meeting.start"].exists {
+                try tap(app.buttons["meeting.new"], "Create a fresh meeting without deleting history")
+                try saveVisibleCheckpoint("02-new-meeting", app: app, revision: revision, directory: checkpoints)
+            }
+            try require(app.alerts.count == 0, "Resolve ordinary readiness prompts before silent capture")
+            try await visibleCheckpoint("03-ready", app: app, revision: revision, directory: checkpoints)
+            try tap(app.buttons["meeting.start"], "Start the actual app recording with silent DEBUG file input")
+            ownsRecording = true
+            try await waitForVisibleRecording(in: app, timeout: 90)
+            try await visibleCheckpoint("04-recording", app: app, revision: revision, directory: checkpoints)
+
+            let stopSignal = checkpoints.appendingPathComponent("silent-stop.ack")
+            let began = ProcessInfo.processInfo.systemUptime
+            let deadline = began + 2 * 60 * 60
+            var previousTimer = try visibleTimerSeconds(in: app)
+            var tick = 0
+            while !FileManager.default.fileExists(atPath: stopSignal.path) {
+                try require(ProcessInfo.processInfo.systemUptime < deadline, "Parent must signal Stop within two hours")
+                let nextTick = min(ProcessInfo.processInfo.systemUptime + 30, deadline)
+                while ProcessInfo.processInfo.systemUptime < nextTick
+                    && !FileManager.default.fileExists(atPath: stopSignal.path) {
+                    try Task.checkCancellation()
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                try verifyVisibleRecording(in: app)
+                if FileManager.default.fileExists(atPath: stopSignal.path) { break }
+                let timer = try visibleTimerSeconds(in: app)
+                try require(timer > previousTimer, "The real recording timer must advance between silent input observations")
+                let liveCharacters = liveTextCharacterCount(in: app)
+                if ProcessInfo.processInfo.systemUptime - began >= 120 {
+                    try require(liveCharacters > 0, "Silent input must expose live captions within the first two observed minutes")
+                }
+                previousTimer = timer
+                tick += 1
+                let step = String(format: "05-recording-tick-%04d", tick)
+                try saveVisibleCheckpoint(step, app: app, revision: revision, directory: checkpoints)
+                print("[SILENT_LONG_UI_TICK] step=\(step) wallSeconds=\(Int(ProcessInfo.processInfo.systemUptime - began)) timerSeconds=\(timer) liveCharacters=\(liveCharacters)")
+            }
+            try verifyVisibleRecording(in: app)
+            try require(liveTextCharacterCount(in: app) > 0, "Direct file input must produce actual visible live text before Stop")
+            try saveVisibleCheckpoint("06-parent-stop-signal", app: app, revision: revision, directory: checkpoints)
+            try tap(app.buttons["meeting.stop"], "Stop the real recording after the parent observes input EOF")
+            try await waitForVisibleProcessingOrCompletion(in: app, timeout: 30)
+            try saveVisibleCheckpoint("09-processing", app: app, revision: revision, directory: checkpoints)
+            print("[VISIBLE_UI_CHECKPOINT] step=09-processing directory=\(checkpoints.path) revision=\(revision)")
+            try await waitForCompletedTranscript(in: app, timeout: 60 * 60)
+            ownsRecording = false
+            let paragraphs = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.paragraph."))
+            try require(paragraphs.count > 0, "Joined completion must expose actual transcript paragraphs")
+            let speakers = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.speaker."))
+            print("[SILENT_LONG_UI_COMPLETED] paragraphs=\(paragraphs.count) speakers=\(speakers.count) revision=\(revision)")
+            try await visibleCheckpoint("10-completed", app: app, revision: revision, directory: checkpoints)
+        } catch {
+            if ownsRecording {
+                let cleanup = Task { @MainActor in
+                    app.activate()
+                    let identifiedStop = app.buttons["meeting.stop"]
+                    let stop = identifiedStop.exists ? identifiedStop : app.buttons["meeting.recording"]
+                    if stop.waitForExistence(timeout: 30), stop.isEnabled { stop.tap() }
+                    do { try await self.waitForCompletedTranscript(in: app, timeout: 60 * 60) }
+                    catch { print("[SILENT_LONG_UI_CLEANUP] joined_completion_requires_parent_inspection") }
                     try? self.saveVisibleCheckpoint("failure-owned-recording-cleanup", app: app,
                                                     revision: revision, directory: checkpoints)
                 }
