@@ -3132,13 +3132,14 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        var session = self.makeSession(state: .interrupted, endedAt: Date())
+        var session = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [])])
         session.audioStorageMode = .memoryOnly
         try await store.create(session)
         let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
             processing: StubProcessingController(), audioArbiter: StubArbiter())
         do { _ = try await coordinator.restartProcessing(sessionID: session.id); XCTFail("Strict mode has no retained input") }
-        catch {}
+        catch MeetingCoordinatorError.noRecoverableAudio {}
         let directory = try await store.sessionDirectory(for: session.id)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName).path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.keyFileName).path))

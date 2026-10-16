@@ -69,7 +69,8 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let directory = try self.makeTempSessionDirectory()
         let runtime = FakeRuntime(), materializer = FakeMaterializer()
         let backend = self.makeBackend(runtime: runtime, materializer: materializer)
-        let plan = try backend.plan(self.makeRequest(session: session, directory: directory))
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory,
+            configuration: .init(asrArtifactFingerprint: "original-model-sha256", languageCode: "en")))
         let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
             .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 45)
         ]
@@ -82,7 +83,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         let replacement = FakeRuntime()
         let changed = self.makeBackend(runtime: replacement, materializer: materializer)
         let changedPlan = try changed.plan(self.makeRequest(session: session, directory: directory,
-            configuration: .init(asrModel: "changed-model", languageCode: "en")))
+            configuration: .init(asrArtifactFingerprint: "replacement-model-sha256", languageCode: "en")))
         do {
             _ = try await changed.execute(plan: changedPlan,
                 manifest: self.makeManifest(plan: changedPlan, observations: observations), progress: { _ in })
