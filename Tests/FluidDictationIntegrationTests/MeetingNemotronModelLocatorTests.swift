@@ -90,6 +90,56 @@ final class MeetingNemotronModelLocatorTests: XCTestCase {
         return package
     }
 
+    private func makeFakeCompiledBundle(at url: URL) throws -> URL {
+        let package = url.appendingPathComponent(MeetingNemotronModelLocator.packageFileName, isDirectory: true)
+        let compiled = package.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName, isDirectory: true)
+        let files = ["model.mil", "coremldata.bin", "analytics/coremldata.bin", "weights/weight.bin"]
+        for file in files {
+            let destination = compiled.appendingPathComponent(file)
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("synthetic-\(file)".utf8).write(to: destination)
+        }
+        try Data("synthetic-silence".utf8).write(to: package.appendingPathComponent("learnable_sil_emb.bin"))
+        try Data("synthetic-projection".utf8).write(to: package.appendingPathComponent(MeetingNemotronModelLocator.projectionFileName))
+        return package
+    }
+
+    func testCompiledBundleUnderSystemVarAliasUsesRelativeEntries() throws {
+        let root = try self.makeTempDirectory().standardizedFileURL
+        guard root.path.hasPrefix("/var/") else {
+            throw XCTSkip("This regression requires Foundation's /var temporary-directory alias")
+        }
+        let package = try self.makeFakeCompiledBundle(at: root)
+        let entries = try XCTUnwrap(FileManager.default.enumerator(at: package, includingPropertiesForKeys: nil))
+        let firstEntry = try XCTUnwrap(entries.nextObject() as? URL)
+        XCTAssertTrue(firstEntry.path.hasPrefix("/private/var/"), "Exercise the alias returned by URL enumeration")
+        XCTAssertFalse(firstEntry.path.hasPrefix(package.path + "/"))
+
+        let locator = MeetingNemotronModelLocator(injectedURL: package)
+        let artifact = try locator.locate()
+        XCTAssertEqual(artifact.fileCount, 6)
+        XCTAssertNotNil(artifact.compiledModelURL)
+        XCTAssertEqual(try locator.recheck(artifact), artifact)
+        let canonical = URL(fileURLWithPath: "/private" + package.path, isDirectory: true)
+        XCTAssertEqual(try MeetingNemotronModelLocator(injectedURL: canonical).locate(), artifact)
+    }
+
+    func testCompiledBundleKeepsCaseAliasesAndRejectsLinkedEntries() throws {
+        let root = try self.makeTempDirectory()
+        let package = try self.makeFakeCompiledBundle(at: root.appendingPathComponent("lowercase"))
+        let alias = root.appendingPathComponent("LOWERCASE").appendingPathComponent(package.lastPathComponent, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: alias.path) else {
+            throw XCTSkip("Capitalization aliases require a case-insensitive volume")
+        }
+        XCTAssertEqual(try MeetingNemotronModelLocator(injectedURL: alias).locate().fileCount, 6)
+        let weights = package.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName + "/weights/weight.bin")
+        try FileManager.default.removeItem(at: weights)
+        try FileManager.default.createSymbolicLink(atPath: weights.path, withDestinationPath: "/etc/hosts")
+        XCTAssertThrowsError(try MeetingNemotronModelLocator(injectedURL: alias).locate()) {
+            XCTAssertEqual($0 as? MeetingNemotronModelReadinessError, .invalidModelPackage(reason: "packageContainsSymlink"))
+        }
+    }
+
     func testHomeDirectoryCapitalizationDoesNotLookLikeASymlink() throws {
         let root = try self.makeTempDirectory()
         let home = root.appendingPathComponent("gabriel/Library/Application Support/FluidVoice/MeetingModels")
@@ -275,6 +325,38 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
 
     override func setUpWithError() throws {
         guard CPUArchitecture.isAppleSilicon else { throw XCTSkip("Speaker labels require Apple silicon") }
+    }
+
+    func testPinnedDownloadFilesAcceptCompiledGraphWithoutMetadataAndRequireEveryAsset() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nemotron-download-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let items = MeetingDiarizationModelStore.requiredDownloadItems
+        let expectedPaths = Set([
+            "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/analytics/coremldata.bin",
+            "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/coremldata.bin",
+            "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/model.mil",
+            "split/Nemotron3Diarizer_s32_split_w8a8.mlmodelc/weights/weight.bin",
+            "learnable_sil_emb.bin", "pre_encode_proj_t.bin",
+        ])
+        XCTAssertEqual(Set(items.map(\.path)), expectedPaths)
+        XCTAssertEqual(items.count, 6)
+        XCTAssertTrue(items.allSatisfy { !$0.isDirectory })
+        for item in items {
+            let destination = root.appendingPathComponent(item.path)
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("synthetic-artifact".utf8).write(to: destination)
+        }
+        let compiled = root.appendingPathComponent(MeetingNemotronModelLocator.remoteModelPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: compiled.appendingPathComponent("metadata.json").path))
+        XCTAssertFalse(HuggingFaceModelDownloader.artifactIsComplete(at: compiled, isDirectory: true),
+                       "The generic compiled-directory contract remains unchanged")
+        XCTAssertTrue(HuggingFaceModelDownloader.artifactsAreComplete(root: root, items: items))
+        for item in items {
+            let destination = root.appendingPathComponent(item.path)
+            try FileManager.default.removeItem(at: destination)
+            XCTAssertFalse(HuggingFaceModelDownloader.artifactsAreComplete(root: root, items: items), item.path)
+            try Data("synthetic-artifact".utf8).write(to: destination)
+        }
     }
 
     func testInstalledModelIsReadyWithoutDownloading() async throws {

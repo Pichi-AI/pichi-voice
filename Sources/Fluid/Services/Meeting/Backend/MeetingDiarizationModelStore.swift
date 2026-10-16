@@ -30,6 +30,17 @@ final class MeetingDiarizationModelStore: ObservableObject {
     /// Pinned so a later push to the repository can never change an installed app's model.
     static let repositoryRevision = "25a90f97f254428d4b30374b76af9c74fdee8327"
 
+    // This author-compiled graph has no metadata.json. Declare the pinned files rather
+    // than applying the downloader's generic compiled-directory completeness contract.
+    static let requiredDownloadItems: [HuggingFaceModelDownloader.ModelItem] = [
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/analytics/coremldata.bin", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/coremldata.bin", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/model.mil", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/weights/weight.bin", isDirectory: false),
+        .init(path: "learnable_sil_emb.bin", isDirectory: false),
+        .init(path: MeetingNemotronModelLocator.projectionFileName, isDirectory: false),
+    ]
+
     typealias Validate = @Sendable () throws -> MeetingNemotronModelArtifact
     typealias Install = @Sendable (_ progress: @escaping @Sendable (Double) -> Void) async throws
         -> MeetingNemotronModelArtifact
@@ -195,11 +206,7 @@ final class MeetingDiarizationModelStore: ObservableObject {
             owner: Self.repositoryOwner,
             repo: Self.repositoryName,
             revision: Self.repositoryRevision,
-            requiredItems: [
-                .init(path: MeetingNemotronModelLocator.remoteModelPath, isDirectory: true),
-                .init(path: "learnable_sil_emb.bin", isDirectory: false),
-                .init(path: MeetingNemotronModelLocator.projectionFileName, isDirectory: false),
-            ]
+            requiredItems: Self.requiredDownloadItems
         )
         try await downloader.ensureModelsPresent(at: staging) { fraction, _ in progress(fraction) }
         let downloaded = staging.appendingPathComponent(MeetingNemotronModelLocator.packageFileName, isDirectory: true)
