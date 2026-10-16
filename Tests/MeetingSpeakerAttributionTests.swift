@@ -43,6 +43,7 @@ struct MeetingSpeakerAttributionTests {
 
     static func main() async throws {
         try self.acoustics()
+        try self.initialAcousticProjection()
         try self.neighbors()
         try self.interruptions()
         try self.scopeAndChronology()
@@ -101,6 +102,36 @@ struct MeetingSpeakerAttributionTests {
         self.check(utterance.selectedToken == nil && utterance.rule == .ambiguous)
         let merged = try MeetingSpeakerAttribution.unionedIntervals([.init(start: 0, end: 1), .init(start: 1, end: 2), .init(start: 0.5, end: 1.5)])
         self.check(merged == [.init(start: 0, end: 2)])
+    }
+
+    static func initialAcousticProjection() throws {
+        let a = self.token("a"), b = self.token("b")
+        let words = [self.unit("left", 0, 0.2), self.unit("unknown", 0.3, 0.5), self.unit("right", 0.6, 0.8)]
+        let activity = [self.activity("a", 0, 0.2), self.activity("b", 0.6, 0.8)]
+        let assigned = try MeetingSpeakerAttribution.acousticAssignments(units: words, activity: activity)
+        self.check(assigned.count == 3 && assigned["left"] == .assigned(a) && assigned["right"] == .assigned(b))
+        self.check(assigned["unknown"] == .unassigned, "Initial acoustic projection ran contextual interpolation")
+        let mixedActivity = [self.activity("a", 0, 1), self.activity("b", 0.4, 0.5)]
+        let mixed = [self.unit("word", 0, 1), self.unit("utterance", 0, 1, precision: .utterance)]
+        let projection = try MeetingSpeakerAttribution.acousticAssignments(units: mixed, activity: mixedActivity)
+        self.check(projection["word"] == .assigned(a))
+        self.check(projection["utterance"] == .ambiguous([a, b]))
+        self.expectError {
+            _ = try MeetingSpeakerAttribution.acousticAssignments(units: [self.unit("assigned", 0, 1, .assigned(a))], activity: [])
+        }
+        self.expectError {
+            _ = try MeetingSpeakerAttribution.acousticAssignments(units: [self.unit("bad", .nan, 1)], activity: [])
+        }
+        self.expectError {
+            _ = try MeetingSpeakerAttribution.acousticAssignments(units: [words[0], words[0]], activity: activity)
+        }
+        let epochs: Set<MeetingAnalysisEpochID> = [Self.epoch]
+        let direct = try MeetingSpeakerAttribution.resolve(units: words, activity: activity, contextualBarrierEpochIDs: epochs)
+        self.check(direct.allSatisfy { !$0.rule.isHeuristic })
+        for decision in direct {
+            if let selected = decision.selectedToken { self.check(assigned[decision.unitID] == .assigned(selected)) }
+            else { self.check(assigned[decision.unitID] == .unassigned) }
+        }
     }
 
     static func neighbors() throws {
@@ -400,6 +431,7 @@ struct MeetingSpeakerAttributionTests {
             }
             let began = Date()
             let resolution = try MeetingSpeakerAttribution.resolveWithDiagnostics(units: words, activity: activity)
+            let presentationSeconds = Date().timeIntervalSince(began)
             self.check(resolution.decisions.count == count && resolution.decisions.allSatisfy { $0.rule == .singleAcousticSupport })
             self.check(resolution.diagnostics.returnedIntervalCount == count)
             self.check(resolution.diagnostics.visitedIntervalNodeCount < count * 40, "Index visits scaled with speaker count")
@@ -407,7 +439,16 @@ struct MeetingSpeakerAttributionTests {
                 let encoded = try JSONEncoder().encode(resolution.decisions)
                 print("ATTRIBUTION_METADATA units=\(count) bytes=\(encoded.count) fingerprintLength=\(MeetingSpeakerAttributionPolicy.standard.fingerprint.count)")
             }
-            print("ATTRIBUTION_SCALE seconds=\(seconds) units=\(count) voices=1000 elapsed=\(Date().timeIntervalSince(began)) visits=\(resolution.diagnostics.visitedIntervalNodeCount)")
+            let nativeUnits = words.map { self.unit($0.id, $0.analysisStart, $0.analysisEnd) }
+            let rawBegan = Date()
+            let initial = try MeetingSpeakerAttribution.acousticAssignments(units: nativeUnits, activity: activity)
+            let rawSeconds = Date().timeIntervalSince(rawBegan)
+            self.check(initial.count == count)
+            self.check(nativeUnits.enumerated().allSatisfy { position, unit in
+                initial[unit.id] == .assigned(self.token("speaker-\(position % 1000)"))
+            })
+            print("ATTRIBUTION_RAW_SCALE seconds=\(seconds) units=\(count) voices=1000 elapsed=\(rawSeconds)")
+            print("ATTRIBUTION_SCALE seconds=\(seconds) units=\(count) voices=1000 elapsed=\(presentationSeconds) visits=\(resolution.diagnostics.visitedIntervalNodeCount)")
         }
         let count = 20_000
         let words = [self.unit("long", 0, Double(count) + 1)] + (0..<count).map { self.unit("n\($0)", Double($0), Double($0) + 0.5) }

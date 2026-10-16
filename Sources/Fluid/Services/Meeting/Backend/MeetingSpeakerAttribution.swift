@@ -220,6 +220,7 @@ nonisolated enum MeetingSpeakerAttributionError: Error, Equatable {
     case invalidUnit(String)
     case invalidTokenScope(String)
     case invalidActivity(Int)
+    case preassignedAcousticUnit(String)
     case unknownBarrierUnit(String)
     case invalidBarrierEpoch
 }
@@ -259,6 +260,41 @@ nonisolated enum MeetingSpeakerAttribution {
         }
         try Task.checkCancellation()
         return result
+    }
+
+    /// Initial native token projection for adapters with real word or utterance timing. Uses
+    /// the same indexed acoustic engine in one batch and disables every contextual rule. The
+    /// caller supplies unassigned units explicitly, so existing source assignments cannot be
+    /// overwritten accidentally or become anchors during initial acoustic classification.
+    static func acousticAssignments(
+        units: [MeetingFinalTextUnit], activity: [MeetingBackendSpeakerActivity],
+        policy: MeetingSpeakerAttributionPolicy = .standard
+    ) throws -> [String: MeetingBackendSpeakerAssignment] {
+        var epochs = Set<MeetingAnalysisEpochID>()
+        for (position, unit) in units.enumerated() {
+            try self.checkCancellation(at: position)
+            guard case .unassigned = unit.speaker else {
+                throw MeetingSpeakerAttributionError.preassignedAcousticUnit(unit.id)
+            }
+            epochs.insert(unit.analysisEpochID)
+        }
+        let resolution = try self.resolveWithDiagnostics(
+            units: units, activity: activity, policy: policy, contextualBarrierEpochIDs: epochs
+        )
+        var assignments: [String: MeetingBackendSpeakerAssignment] = [:]
+        assignments.reserveCapacity(units.count)
+        for (position, decision) in resolution.decisions.enumerated() {
+            try self.checkCancellation(at: position)
+            if let selected = decision.selectedToken { assignments[decision.unitID] = .assigned(selected) }
+            else {
+                // An indivisible utterance with two actual voices remains ambiguous even when
+                // the shorter source would be suppressed for word-level presentation.
+                let positive = decision.candidates.filter { $0.supportSeconds > policy.comparisonTolerance }.map(\.token)
+                assignments[decision.unitID] = positive.count > 1 ? .ambiguous(positive) : .unassigned
+            }
+        }
+        try Task.checkCancellation()
+        return assignments
     }
 
     static func resolve(
