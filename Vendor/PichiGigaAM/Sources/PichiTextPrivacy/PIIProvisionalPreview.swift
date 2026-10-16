@@ -52,13 +52,13 @@ extension PIIRedactor {
                 }
             }
         }
-        for span in ner where span.label == "PER" {
+        for span in ner where !["O", "LOC", "ORG"].contains(span.label) {
             // A candidate dropped by durable precision guards is still unsafe in
             // an unfinished preview, including short and mixed-script fragments.
             guard valid(span.range), span.score.isFinite, (0...1).contains(span.score) else {
                 throw TextPrivacyError.invalidSpan
             }
-            if medicationWords.contains(span.range) { continue }
+            if span.label == "PER", medicationWords.contains(span.range) { continue }
             let candidate = source.substring(with: span.range)
             // Native token classification can label a sentence mark PER. It has
             // no person-name letters; initials still retain their letter below.
@@ -66,19 +66,17 @@ extension PIIRedactor {
             let candidateWords = candidate.split(whereSeparator: { $0.isWhitespace }).map(String.init)
             // Only an entirely known non-person span shares the durable exclusion.
             // A span containing any unknown name fragment still waits for context.
-            if !candidateWords.isEmpty, candidateWords.allSatisfy(Self.isKnownNonPersonWord) { continue }
+            if span.label == "PER", !candidateWords.isEmpty, candidateWords.allSatisfy(Self.isKnownNonPersonWord) { continue }
             if !covered(span.range) { retreat(span.range.location) }
         }
-        for range in PIIRussianNameHeuristics.provisionalCandidates(text, doseQualifiedWords: doseQualifiedWords)
-            where !covered(range) { retreat(range.location) }
         let cuePatterns: [(PIIKind, String)] = [
             (.phone, #"(?:номер\s+)?(?:телефон[а-яё]*|тел\.?|позвон[а-яё]*|мобильн[а-яё]*|phone|call)"#),
             (.card, #"(?:номер\s+)?(?:карта|карты|карту|карточк[а-яё]*|card|cvv)"#),
             (.snils, #"снилс|snils"#), (.inn, #"инн|inn"#), (.passport, #"паспорт[а-яё]*|passport"#),
             (.birthDate, #"дата\s+рождения|день\s+рождения|родил[а-яё]*|birth|birthday|born"#),
             (.address, #"домашн[а-яё]*\s+адрес[а-яё]*|адрес[а-яё]*|address|домашн[а-яё]*|улица|ул\.?|street|дом|д\.?|корпус|корп\.?|к\.|строение|стр\.?|квартира|кв\.?|офис|оф\.?|house|building|apartment|office|suite|floor"#),
-            (.email, #"email|e-mail|почт[а-яё]*|mail"#), (.login, #"логин|username|login"#),
-            (.secret, #"пароль|password|секретный\s+ключ|api\s+key"#),
+            (.email, #"email|e-mail|почт[а-яё]*|mail"#), (.login, Self.loginCuePattern),
+            (.secret, Self.secretCuePattern),
             (.account, #"account\s+number"#), (.identifier, #"номер[а-яё]*|document\s+id"#),
             (.person, #"доктор|врач|профессор|пациент[а-яё]*|коллег[а-яё]*|зовут|фамил[а-яё]*|отчеств[а-яё]*|doctor|patient|professor|surname|named|first\s+name"#),
         ]
@@ -117,6 +115,10 @@ extension PIIRedactor {
             return nil
         }
         for (_, range) in cues where !resolvedCues.contains(where: { contains($0, range) }) { retreat(range.location) }
+        // A surname-shaped field word (for example "логин") is safe only
+        // after that exact field cue is resolved by a complete canonical mask.
+        for range in PIIRussianNameHeuristics.provisionalCandidates(text, doseQualifiedWords: doseQualifiedWords)
+            where !covered(range) && !resolvedCues.contains(where: { contains($0, range) }) { retreat(range.location) }
         // Literal/spoken email fragments can span many words. Once email syntax
         // appears, withhold the preceding unfinished sentence too, not just '@'.
         // A token boundary and possessive components avoid rescanning/backtracking
