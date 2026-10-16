@@ -4,7 +4,9 @@ import Foundation
 /// Presentation policy, frozen with the processing attempt. These are conservative product
 /// choices, not calibrated probabilities or assumptions about a particular diarization model.
 nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable {
-    static let currentVersion = 1
+    // Version 2 preserves per-word residual suppression inside a validated interruption bout.
+    // A previous attempt cannot replay changed ownership semantics under the same fingerprint.
+    static let currentVersion = 2
     static let standard = Self()
 
     let schemaVersion: Int
@@ -873,6 +875,14 @@ nonisolated enum MeetingSpeakerAttribution {
                   mainIntervals.contains(where: { $0.end > bout.end && $0.start < units[stop].analysisEnd })
             else { continue }
             for mixedIndex in mixed {
+                try self.checkCancellation(at: mixedIndex)
+                // Bout-level support establishes the conversational role, not ownership of
+                // every touched word. Keep residual overlap evidence, but require the same
+                // word-relative eligibility used by the acoustic projection before overriding
+                // that word. Adjacent eligible words still retain the full bout's context.
+                guard decisions[mixedIndex].candidates.contains(where: {
+                    $0.token == other && !$0.isSuppressed
+                }) else { continue }
                 decisions[mixedIndex] = decisions[mixedIndex].choosing(
                     other, rule: .briefInterruption, cues: [units[first - 1].id, units[stop].id], background: [main]
                 )

@@ -227,8 +227,8 @@
         ],
         "relation": "simultaneous",
         "rule": "briefInterruption",
-        "policyVersion": 1,
-        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+        "policyVersion": 2,
+        "policyFingerprint": "speaker-attribution-v2:196d1cbbd5ce49c733b1fce3a7d1a9c3036448ccba13619cad8eb12b7e032a9a"
       }
     },
     {
@@ -326,8 +326,8 @@
         ],
         "relation": "simultaneous",
         "rule": "briefInterruption",
-        "policyVersion": 1,
-        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+        "policyVersion": 2,
+        "policyFingerprint": "speaker-attribution-v2:196d1cbbd5ce49c733b1fce3a7d1a9c3036448ccba13619cad8eb12b7e032a9a"
       }
     },
     {
@@ -422,8 +422,8 @@
         "background": [],
         "relation": "none",
         "rule": "incomingSpeaker",
-        "policyVersion": 1,
-        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+        "policyVersion": 2,
+        "policyFingerprint": "speaker-attribution-v2:196d1cbbd5ce49c733b1fce3a7d1a9c3036448ccba13619cad8eb12b7e032a9a"
       }
     },
     {
@@ -468,8 +468,8 @@
         "background": [],
         "relation": "none",
         "rule": "incomingSpeaker",
-        "policyVersion": 1,
-        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+        "policyVersion": 2,
+        "policyFingerprint": "speaker-attribution-v2:196d1cbbd5ce49c733b1fce3a7d1a9c3036448ccba13619cad8eb12b7e032a9a"
       }
     }
   ],

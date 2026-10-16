@@ -63,7 +63,11 @@ The user-selected reading policy permits these bounded inferences:
   does not contradict it. A real continuing tail from A takes precedence over blindly choosing B.
 - If direct A continues before and after a short, recognized B interruption, actual A/B activity
   overlaps, and no third source or conflicting evidence exists, B may own the indivisible mixed
-  word fragment. A remains recorded as the background source.
+  word fragment. B must also pass the existing candidate support gate within each word. A few
+  milliseconds of B at a neighboring word's edge cannot take that whole word merely because
+  B's complete interruption is long enough. Suppressed edge words retain their acoustic decision;
+  eligible mixed words still use the full bout's context. A remains recorded as the background
+  source on words attributed to B.
 
 These are presentation heuristics, not separated ASR of the interrupting voice. Their duration,
 gap and residual tolerances are named, versioned policy parameters. They are not universal facts
@@ -74,6 +78,10 @@ than fabricated ownership. Native text, IDs and times remain unchanged.
 The policy is immutable for an attempt and participates in its configuration fingerprint.
 Resumed and uninterrupted processing of the same finalized evidence must use the same policy.
 Unsupported policy versions or incompatible checkpoints must fail explicitly.
+Policy version 2 adds this per-word interruption eligibility. Its fingerprint differs from
+version 1, and decoding a version 1 attempt policy fails before checkpoint adoption rather than
+replaying old decisions with different ownership semantics. The pipeline and backend formats
+are unchanged; the frozen configuration already includes and validates the attribution policy.
 
 ## Verification and quality claims
 

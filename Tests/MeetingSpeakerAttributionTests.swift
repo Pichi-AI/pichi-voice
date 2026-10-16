@@ -47,6 +47,7 @@ struct MeetingSpeakerAttributionTests {
         try self.initialAcousticProjection()
         try self.neighbors()
         try self.interruptions()
+        try self.interruptionWordSupport()
         try self.scopeAndChronology()
         try self.contextBarrierIntervals()
         try self.invalidInputsAndCoding()
@@ -232,6 +233,69 @@ struct MeetingSpeakerAttributionTests {
         self.check(try self.resolve(units, twoBouts)[1].rule != .briefInterruption)
     }
 
+    static func interruptionWordSupport() throws {
+        // The whole interrupter bout establishes conversational roles, but does not make a
+        // few milliseconds at an adjacent word boundary sufficient to own that whole word.
+        for offset in [0.0, 10_000.0] {
+            for labels in [("a", "b"), ("renamed-main", "renamed-interrupter")] {
+                let a = self.token(labels.0), b = self.token(labels.1)
+                let native = [self.unit("left", offset, offset + 0.2),
+                              self.unit("leading", offset + 0.3, offset + 0.5),
+                              self.unit("mixed1", offset + 0.5, offset + 0.7),
+                              self.unit("mixed2", offset + 0.7, offset + 0.9),
+                              self.unit("trailing", offset + 0.9, offset + 1.1),
+                              self.unit("right", offset + 1.2, offset + 1.4)]
+                let activity = [self.activity(labels.0, offset, offset + 1.4),
+                                self.activity(labels.1, offset + 0.495, offset + 0.905)]
+                let projection = try MeetingSpeakerAttribution.acousticAssignments(units: native, activity: activity)
+                let units = native.map { self.unit($0.id, $0.analysisStart, $0.analysisEnd, projection[$0.id]!) }
+                let base = try self.resolve(units, activity, epochs: [Self.epoch])
+                let output = try self.resolve(units, activity)
+                for position in [1, 4] {
+                    self.check(output[position] == base[position], "Suppressed interrupter stole an adjacent word")
+                    self.check(output[position].selectedToken == a && output[position].rule == .residualSuppression)
+                    self.check(output[position].candidates.first { $0.token == b }?.isSuppressed == true)
+                }
+                for position in [2, 3] {
+                    self.check(output[position].selectedToken == b && output[position].rule == .briefInterruption)
+                    self.check(output[position].backgroundTokens == [a] && output[position].cueUnitIDs == ["left", "right"])
+                    self.check(output[position].rawAssignment == units[position].speaker
+                               && output[position].candidates == base[position].candidates
+                               && output[position].simultaneousIntervals == base[position].simultaneousIntervals)
+                }
+                let fragmented = activity.flatMap { entry in
+                    let middle = (entry.start + entry.end) / 2
+                    return [entry, MeetingBackendSpeakerActivity(token: entry.token, start: entry.start, end: middle),
+                            MeetingBackendSpeakerActivity(token: entry.token, start: middle, end: entry.end)]
+                }
+                self.check(try self.resolve(units.reversed(), fragmented.reversed()) == output,
+                           "Word-level interruption eligibility depended on interval fragmentation or ordering")
+                // A real short word may be wholly inside the bout. Reusing the relative
+                // candidate gate must not become an absolute minimum duration per ASR word.
+                let short = [self.unit("left", offset, offset + 0.2, .assigned(a)),
+                             self.unit("short", offset + 0.5, offset + 0.508, .ambiguous([a, b])),
+                             self.unit("right", offset + 0.9, offset + 1.1, .assigned(a))]
+                let shortOutput = try self.resolve(short, [self.activity(labels.0, offset, offset + 1.1),
+                                                          self.activity(labels.1, offset + 0.4, offset + 0.6)])
+                self.check(shortOutput[1].selectedToken == b && shortOutput[1].rule == .briefInterruption)
+                self.check(shortOutput[1].candidates.allSatisfy { !$0.isSuppressed })
+            }
+            for (start, suppressed) in [(0.46, false), (0.460_001, true)] {
+                let a = self.token("a"), b = self.token("b")
+                let units = [self.unit("left", offset, offset + 0.2, .assigned(a)),
+                             self.unit("edge", offset + 0.3, offset + 0.5, .ambiguous([a, b])),
+                             self.unit("mixed", offset + 0.5, offset + 0.8, .ambiguous([a, b])),
+                             self.unit("right", offset + 0.9, offset + 1.1, .assigned(a))]
+                let output = try self.resolve(units, [self.activity("a", offset, offset + 1.1),
+                                                      self.activity("b", offset + start, offset + 0.65)])
+                self.check(output[1].candidates.first { $0.token == b }?.isSuppressed == suppressed)
+                self.check(output[1].selectedToken == (suppressed ? a : b))
+                self.check(output[1].rule == (suppressed ? .residualSuppression : .briefInterruption))
+                self.check(output[2].selectedToken == b && output[2].rule == .briefInterruption)
+            }
+        }
+    }
+
     static func scopeAndChronology() throws {
         let a = self.token("a"), b = self.token("b")
         let base = [self.unit("left", 0, 0.2, .assigned(a)), self.unit("unknown", 0.3, 0.5), self.unit("right", 0.6, 0.8, .assigned(b))]
@@ -360,11 +424,18 @@ struct MeetingSpeakerAttributionTests {
         self.check(MeetingSpeakerAttributionPolicy(maximumCandidateNoiseSeconds: -0.0).fingerprint == MeetingSpeakerAttributionPolicy(maximumCandidateNoiseSeconds: 0).fingerprint)
         self.check(MeetingSpeakerAttributionPolicy(maximumUnknownRunSeconds: 4).fingerprint != policy.fingerprint)
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
-        object["schemaVersion"] = 2
+        object["schemaVersion"] = MeetingSpeakerAttributionPolicy.currentVersion + 1
         do {
             _ = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONSerialization.data(withJSONObject: object))
             self.check(false, "Future policy decoded")
         } catch { self.check(true) }
+        object["schemaVersion"] = 1
+        do {
+            _ = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONSerialization.data(withJSONObject: object))
+            self.check(false, "An older interruption policy decoded with changed ownership semantics")
+        } catch MeetingSpeakerAttributionError.unsupportedPolicyVersion(1) { self.check(true) }
+        catch { self.check(false, "Unexpected policy incompatibility error: \(error)") }
+        self.check(MeetingSpeakerAttributionPolicy(schemaVersion: 1).fingerprint != policy.fingerprint)
         let decisions = try self.resolve([self.unit("x", 0, 1, .assigned(a))], [self.activity("a", 0, 1)])
         let decisionRoundTrip = try JSONDecoder().decode([MeetingSpeakerAttributionDecision].self, from: JSONEncoder().encode(decisions))
         self.check(decisionRoundTrip == decisions)
