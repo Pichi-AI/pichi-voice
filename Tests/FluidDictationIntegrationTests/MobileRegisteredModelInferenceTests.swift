@@ -199,7 +199,12 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                             observations.append(["fixture": name, "sha256": actualHash, "amplitudeScale": scale,
                                 "inputText": expected, "outputText": result.result.text,
                                 "wordErrors": errors, "wordErrorRate": rate, "samples": input.count,
-                                "durationSeconds": Double(input.count) / 16_000, "inferenceSeconds": elapsed])
+                                "durationSeconds": Double(input.count) / 16_000, "inferenceSeconds": elapsed,
+                                "nativeSegmentCount": result.result.segmentTimings.count, "wordTimingCount": result.words.count])
+                            XCTAssertFalse(result.result.segmentTimings.isEmpty,
+                                "The segment-only native fallback must retain its actual utterance intervals")
+                            XCTAssertEqual(ASRSegmentTiming.validated(result.result.segmentTimings,
+                                text: result.result.text, duration: Double(input.count) / 16_000), result.result.segmentTimings)
                             XCTAssertLessThanOrEqual(rate, 0.10, "Tiny must recognize the known full sentence in its original language")
                             XCTAssertLessThan(elapsed, Double(input.count) / 16_000,
                                               "Native Tiny inference must keep up with the duration of this fixture")
@@ -463,7 +468,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let root = try self.assets()
         let samples = try self.pcm("two-voices", in: root)
         let speakerRoot = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
-        let package = speakerRoot.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let package = speakerRoot.appendingPathComponent("nemotron/\(MeetingNemotronModelLocator.cacheVersion)/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
         let voicePackage = speakerRoot.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
@@ -502,35 +507,32 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                 try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
             }
-            let diagnostic = try await service.withMeetingModelResidency(attemptID: UUID(), acceptsCompletedCancellation: { _ in false }) {
-                try await runtime.withNemotronDiarization(artifact: locator.locate()) { factory in
-                    let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
-                    let diarizer = try await factory.makeDiarizer(epoch: epoch)
-                    let actual = try await diarizer.diarize(samples: samples)
-                    return MeetingNemotronPhaseResult(
-                        activity: actual.map { .init(token: .init(analysisEpochID: epoch, label: "slot-\($0.slotIndex)"), start: $0.start, end: $0.end) },
-                        voiceSamples: MeetingSpeakerVoiceSamples.collect(epoch: epoch, samples: samples, segments: actual)
-                    )
+            let archive = try MeetingMemoryAudioArchive()
+            for start in stride(from: 0, to: samples.count, by: 48_000) {
+                try samples.withUnsafeBufferPointer {
+                    try archive.append(UnsafeBufferPointer(rebasing: $0[start..<min(samples.count, start + 48_000)]))
                 }
             }
-            let diagnosticDirectory = root.appendingPathComponent("reports", isDirectory: true)
-            try FileManager.default.createDirectory(at: diagnosticDirectory, withIntermediateDirectories: true)
-            let diagnosticReport: [String: Any] = [
-                "activity": diagnostic.activity.map { ["slot": $0.token.label, "start": $0.start, "end": $0.end] as [String: Any] },
-                "eligibleVoiceSamples": diagnostic.voiceSamples.map { ["slot": $0.token.label, "clipLengths": $0.clips.map(\.count)] as [String: Any] },
-            ]
-            try JSONSerialization.data(withJSONObject: diagnosticReport, options: [.prettyPrinted, .sortedKeys])
-                .write(to: diagnosticDirectory.appendingPathComponent("two-voice-diarization-evidence.json"), options: .atomic)
-            let voiceProfiles = try await runtime.speakerVoiceProfiles(samples: diagnostic.voiceSamples)
-            XCTAssertEqual(voiceProfiles.count, diagnostic.voiceSamples.count)
-            let first = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+            try archive.seal()
+            defer { archive.clear() }
+            let live = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                 try await runtime.recognizePCM(samples: samples, offset: 0, trackID: track,
-                                               attemptID: attempt, configuration: configuration)
+                    attemptID: attempt, configuration: configuration)
+            }
+            XCTAssertTrue(live.speakers.isEmpty)
+            XCTAssertTrue(live.segments.allSatisfy { $0.speakerID == nil }, "Recording must not assign speakers")
+            let first = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.diarizePCMRecording(source: archive, transcript: live, trackID: track,
+                    attemptID: attempt, configuration: configuration)
             }
             let second = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
-                try await runtime.recognizePCM(samples: samples, offset: duration, trackID: track,
-                                               attemptID: attempt, configuration: configuration)
+                try await runtime.diarizePCMRecording(source: archive, transcript: live, trackID: track,
+                    attemptID: attempt, configuration: configuration)
             }
+            XCTAssertEqual(first.segments.map(\.id), live.segments.map(\.id))
+            XCTAssertEqual(first.segments.map(\.text), live.segments.map(\.text))
+            XCTAssertEqual(first.segments.map(\.start), live.segments.map(\.start))
+            XCTAssertEqual(first.segments.map(\.end), live.segments.map(\.end))
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
@@ -542,7 +544,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
             XCTAssertFalse(first.segments.filter { $0.speakerID != nil }.isEmpty)
             XCTAssertTrue(Set(second.speakers.map(\.id)).isSubset(of: Set(first.speakers.map(\.id))),
                           "Explicit local embedding evidence should reconnect the repeated voices, not slot equality.")
-            XCTAssertTrue(second.segments.allSatisfy { $0.start.seconds >= duration - 0.001 })
+            XCTAssertEqual(second.segments.map(\.id), first.segments.map(\.id))
             await service.shutdownForTermination()
         } catch {
             await service.shutdownForTermination()
@@ -554,7 +556,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let root = try self.assets()
         let samples = try self.pcm("two-voices", in: root)
         let speakerRoot = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
-        let package = speakerRoot.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let package = speakerRoot.appendingPathComponent("nemotron/\(MeetingNemotronModelLocator.cacheVersion)/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
         let voicePackage = speakerRoot.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
         let store = MeetingDiarizationModelStore(
             canDownload: { true }, validate: { try MeetingModelInstaller.validate(package) },
@@ -567,7 +569,6 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let reportDirectory = root.appendingPathComponent("reports", isDirectory: true)
         try FileManager.default.createDirectory(at: reportDirectory, withIntermediateDirectories: true)
         for model: SettingsStore.SpeechModel in [.gigaam, .whisperTiny, .parakeetTDT] {
-            let firstReportIndex = report.count
             let installed = try await self.installedConfiguration(model: model, assets: root)
             let configuration = MeetingFinalProcessingConfiguration(
                 asrModel: installed.asrModel, asrArtifactFingerprint: installed.asrArtifactFingerprint,
@@ -590,36 +591,99 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
                 try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                     try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
                 }
+                let archive = try MeetingMemoryAudioArchive()
+                for start in stride(from: 0, to: samples.count, by: 48_000) {
+                    try samples.withUnsafeBufferPointer {
+                        try archive.append(UnsafeBufferPointer(rebasing: $0[start..<min(samples.count, start + 48_000)]))
+                    }
+                }
+                try archive.seal()
+                defer { archive.clear() }
+                var speech = MeetingPCMTranscriptBatch(segments: [])
                 for start in stride(from: 0, to: samples.count, by: 128_000) {
                     let end = min(samples.count, start + 128_000)
                     let input = Array(samples[start..<end])
                     let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
                         try await runtime.recognizePCM(samples: input, offset: Double(start) / 16_000, trackID: track,
-                                                       attemptID: attempt, configuration: configuration)
+                            attemptID: attempt, configuration: configuration)
                     }
-                    XCTAssertTrue(batch.segments.allSatisfy { $0.start.seconds >= Double(start) / 16_000 - 0.001 && $0.end.seconds <= Double(end) / 16_000 + 0.001 })
-                    report.append(["modelID": model.rawValue, "start": Double(start) / 16_000,
-                                   "end": Double(end) / 16_000, "speakerIDs": batch.speakers.map { $0.id.uuidString },
-                                   "assignedSegments": batch.segments.filter { $0.speakerID != nil }.count,
-                                   "ambiguousSegments": batch.segments.filter { $0.attributionState == .overlappingSpeakers }.count,
-                                   "unassignedSegments": batch.segments.filter { $0.attributionState == .unassigned }.count,
-                                   "text": batch.segments.map(\.text).joined(separator: " ")])
-                    try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-                        .write(to: reportDirectory.appendingPathComponent("eight-second-speaker-windows.json"), options: .atomic)
+                    XCTAssertTrue(batch.speakers.isEmpty)
+                    XCTAssertTrue(batch.segments.allSatisfy { $0.speakerID == nil })
+                    speech.segments.append(contentsOf: batch.segments)
                 }
-                XCTAssertFalse((report[firstReportIndex]["speakerIDs"] as? [String] ?? []).isEmpty,
-                               "The first single-voice window has sufficient measured identity evidence.")
-                if model != .whisperTiny {
-                    XCTAssertGreaterThan(report[firstReportIndex + 1]["assignedSegments"] as? Int ?? 0, 0,
-                                         "Word-timed adapters should label the second voice inside the transition window.")
+                let final = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                    try await runtime.diarizePCMRecording(source: archive, transcript: speech, trackID: track,
+                        attemptID: attempt, configuration: configuration)
                 }
+                XCTAssertGreaterThanOrEqual(final.speakers.count, 2)
+                XCTAssertGreaterThan(final.segments.filter { $0.speakerID != nil }.count, 0)
+                XCTAssertEqual(final.segments.map(\.id), speech.segments.map(\.id))
+                XCTAssertEqual(final.segments.map(\.text), speech.segments.map(\.text))
+                report.append(["modelID": model.rawValue, "segments": final.segments.count,
+                    "speakerCount": final.speakers.count, "stage": "after-stop"])
+                try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                    .write(to: reportDirectory.appendingPathComponent("post-stop-speaker-windows.json"), options: .atomic)
                 await service.shutdownForTermination()
             } catch {
                 await service.shutdownForTermination()
                 throw error
             }
         }
-        XCTAssertEqual(report.count, 9)
+        XCTAssertEqual(report.count, 3)
+    }
+
+    /// Measures the complete sequential model workload on synthetic speech. This does not
+    /// use a microphone or change app preferences, and is not an hour-long thermal test.
+    func testStrictGigaAMWindowCadenceBenchmark() async throws {
+        guard ProcessInfo.processInfo.environment["PICHI_STRICT_CADENCE_PROBE"] == "1" else {
+            throw XCTSkip("Enable the public-model strict cadence measurement explicitly")
+        }
+        let root = try self.assets()
+        let source = try self.pcm("two-voices", in: root)
+        XCTAssertFalse(source.isEmpty)
+        let resources = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
+        let package = resources.appendingPathComponent("nemotron/\(MeetingNemotronModelLocator.cacheVersion)/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let voice = resources.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
+        let installed = try await self.installedConfiguration(model: .gigaam, assets: root)
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: installed.asrModel,
+            asrArtifactFingerprint: installed.asrArtifactFingerprint, asrArtifactDirectory: installed.asrArtifactDirectory,
+            languageCode: installed.languageCode, diarizationFingerprint: MeetingProcessingCheckpoint.currentDiarizationFingerprint,
+            speakerLabelsEnabled: true)
+        let service = ASRService(meetingModelResidency: MeetingModelResidencyCoordinator())
+        let lease = try service.acquireExclusiveActivity(.meeting)
+        defer { service.releaseExclusiveActivity(lease) }
+        do {
+            #if os(macOS)
+            try await service.retireDictationASRResourcesForMeeting(lease: lease)
+            #endif
+            let runtime = MeetingParakeetNemotronRuntime(asrServiceProvider: { service },
+                modelLocator: MeetingNemotronModelLocator(injectedURL: package), voiceModelDirectory: voice)
+            let attempt = UUID()
+            let track = UUID()
+            try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                try await runtime.preparePCMResources(attemptID: attempt, configuration: configuration)
+            }
+            var offset: Double = 0
+            for seconds in [12, 20] {
+                let samples = (0..<(seconds * 16_000)).map { source[$0 % source.count] }
+                for repetition in 0..<3 {
+                    let began = ProcessInfo.processInfo.systemUptime
+                    let batch = try await service.withMeetingModelResidency(attemptID: attempt, acceptsCompletedCancellation: { _ in false }) {
+                        try await runtime.recognizePCM(samples: samples, offset: offset, trackID: track,
+                            attemptID: attempt, configuration: configuration)
+                    }
+                    let elapsed = ProcessInfo.processInfo.systemUptime - began
+                    XCTAssertFalse(batch.segments.isEmpty)
+                    XCTAssertTrue(batch.segments.allSatisfy { $0.start.seconds >= offset - 0.001 && $0.end.seconds <= offset + Double(seconds) + 0.001 })
+                    print("[STRICT_CADENCE] audioSeconds=\(seconds) repetition=\(repetition) computeSeconds=\(elapsed) segments=\(batch.segments.count)")
+                    offset += Double(seconds)
+                }
+            }
+            await service.shutdownForTermination()
+        } catch {
+            await service.shutdownForTermination()
+            throw error
+        }
     }
 }
 

@@ -3,8 +3,15 @@
 import CoreMedia
 import Foundation
 
-/// iPad/iPhone adapter for the existing meeting lifecycle. Only the microphone is captured;
-/// another application's presentation audio is never represented as a system-audio track.
+/// A hardware or explicit DEBUG file producer shares the same capture lifecycle and sinks.
+nonisolated protocol IOSMeetingCaptureRuntime: Sendable {
+    func start() async throws
+    func stop() async throws
+    func healthSnapshot() -> MeetingTrackHealth
+}
+
+/// iPad/iPhone adapter for the existing meeting lifecycle. Shipping builds capture only the
+/// microphone; another application's presentation audio is never a system-audio track.
 actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     typealias MemoryConsumerFactory = @MainActor @Sendable (
         MeetingSession, MeetingCaptureConfiguration, MeetingAudioTrack, @escaping @Sendable (MeetingCaptureEvent) -> Void
@@ -12,13 +19,17 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
 
     private struct Capture: Sendable {
         let sessionID: MeetingSessionID
-        let runtime: IOSMeetingMicrophoneRuntime
+        let runtime: any IOSMeetingCaptureRuntime
         let writer: MeetingAudioChunkWriter?
         let memoryConsumer: (any MeetingMemoryAudioConsuming)?
         var track: MeetingAudioTrack
     }
 
     private let memoryConsumerFactory: MemoryConsumerFactory?
+#if DEBUG
+    // The source selection is frozen when the real application composes its capture owner.
+    private let debugFileInput = Result { try IOSMeetingDebugFileInput.requested() }
+#endif
     private var active: Capture?
     private var starting = false
     private var terminating = false
@@ -30,6 +41,9 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     }
 
     func preflightPermissions() async throws {
+#if DEBUG
+        if let input = try self.debugFileInput.get() { try input.validateFile(); return }
+#endif
         switch AVAudioApplication.shared.recordPermission {
         case .granted: return
         case .denied: throw MeetingCaptureError.microphonePermissionDenied
@@ -74,7 +88,13 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
         guard configuration.mode == .inRoom, configuration.application == nil else {
             throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("Only in-room microphone capture is available on this platform."))
         }
-        guard AVAudioApplication.shared.recordPermission == .granted else {
+#if DEBUG
+        let debugInput = try self.debugFileInput.get()
+        let requiresMicrophonePermission = debugInput == nil
+#else
+        let requiresMicrophonePermission = true
+#endif
+        guard !requiresMicrophonePermission || AVAudioApplication.shared.recordPermission == .granted else {
             throw MeetingCaptureError.microphonePermissionDenied
         }
         self.starting = true
@@ -105,9 +125,21 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
             writer = nil
             memoryConsumer = try await memoryConsumerFactory(session, configuration, track, eventHandler)
         }
-        let runtime = try IOSMeetingMicrophoneRuntime(trackID: track.id, microphone: configuration.microphone,
-                                                     writer: writer, memoryConsumer: memoryConsumer,
-                                                     eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+        func microphoneRuntime() throws -> IOSMeetingMicrophoneRuntime {
+            try IOSMeetingMicrophoneRuntime(trackID: track.id, microphone: configuration.microphone,
+                writer: writer, memoryConsumer: memoryConsumer,
+                eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+        }
+        let runtime: any IOSMeetingCaptureRuntime
+#if DEBUG
+        if let debugInput {
+            runtime = try IOSMeetingDebugFileRuntime(input: debugInput, trackID: track.id,
+                originHostTime: session.timebase.startedHostTime, writer: writer,
+                memoryConsumer: memoryConsumer, eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+        } else { runtime = try microphoneRuntime() }
+#else
+        runtime = try microphoneRuntime()
+#endif
         do {
             try Task.checkCancellation()
             guard !self.terminating else { throw CancellationError() }
@@ -167,6 +199,12 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     /// Input discovery uses the same identity value as macOS. The selected UID is frozen in
     /// configuration; capture refuses silent substitution if a wired/Bluetooth input disappears.
     @MainActor static func microphoneSnapshot() async -> MeetingMicrophoneCatalogSnapshot {
+#if DEBUG
+        if IOSMeetingDebugFileInput.isRequested {
+            return .init(identities: [IOSMeetingDebugFileInput.identity],
+                         defaultCoreAudioUID: IOSMeetingDebugFileInput.identity.coreAudioUID)
+        }
+#endif
         let session = AVAudioSession.sharedInstance()
 #if DEBUG
         let traceID = UUID().uuidString
@@ -209,6 +247,9 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     }
 
     @MainActor static func defaultMicrophone(preferredUID: String? = nil) async throws -> MeetingMicrophoneIdentity {
+#if DEBUG
+        if IOSMeetingDebugFileInput.isRequested { return IOSMeetingDebugFileInput.identity }
+#endif
         let snapshot = await self.microphoneSnapshot()
         return try self.resolveDefaultMicrophone(in: snapshot, preferredUID: preferredUID)
     }
@@ -249,7 +290,8 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     }
 }
 
-private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
+/// Shared microphone runtime, also used for explicit RAM-only voice enrollment.
+final nonisolated class IOSMeetingMicrophoneRuntime: IOSMeetingCaptureRuntime, @unchecked Sendable {
     private struct OwnedInput: @unchecked Sendable {
         let buffer: AVAudioPCMBuffer
         let pts: CMTime
@@ -257,8 +299,8 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     }
 
     private let engine = AVAudioEngine()
-    private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.control", qos: .userInitiated)
-    private let pcmQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.pcm", qos: .userInitiated)
+    private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.control", qos: .userInitiated, autoreleaseFrequency: .workItem)
+    private let pcmQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.pcm", qos: .userInitiated, autoreleaseFrequency: .workItem)
     private let gate = MeetingPCMIntakeGate()
     private let producerGroup = DispatchGroup()
     private let lock = NSLock()
@@ -269,6 +311,8 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     private let memoryConsumer: (any MeetingMemoryAudioConsuming)?
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
     private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
+    // Pauses only when explicitly supplied by a deterministic producer/drain test.
+    private let afterAdmission: (@Sendable () -> Void)?
     private var observers: [NSObjectProtocol] = []
     private var stopping = false
     private var terminalFailure: Error?
@@ -290,13 +334,15 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
     init(trackID: MeetingAudioTrackID, microphone: MeetingMicrophoneIdentity,
          writer: MeetingAudioChunkWriter?, memoryConsumer: (any MeetingMemoryAudioConsuming)?,
          eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
-         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?) throws {
+         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?,
+         afterAdmission: (@Sendable () -> Void)? = nil) throws {
         self.trackID = trackID
         self.microphone = microphone
         self.writer = writer
         self.memoryConsumer = memoryConsumer
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
+        self.afterAdmission = afterAdmission
         self.converter = try MeetingCapturePCMConverter()
     }
 
@@ -397,11 +443,11 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         self.trace("runtime.stop.begin")
 #endif
         self.lock.withLock { self.stopping = true }
-        self.gate.close()
         await withCheckedContinuation { continuation in
             self.controlQueue.async {
                 self.engine.stop()
                 if self.installedTap { self.engine.inputNode.removeTap(onBus: 0); self.installedTap = false }
+                self.engine.reset()
                 for observer in self.observers { NotificationCenter.default.removeObserver(observer) }
                 self.observers.removeAll()
                 continuation.resume()
@@ -410,7 +456,12 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         // A tap already admitted before stop may still be copying. Join those producers before
         // placing the PCM-queue drain, so no owned copy can arrive after the barrier.
         await withCheckedContinuation { continuation in
-            self.producerGroup.notify(queue: self.controlQueue) { continuation.resume() }
+            self.producerGroup.notify(queue: self.controlQueue) {
+                // Stop rejects new taps under the same lock as producer admission. A tap
+                // already admitted may still need its reservation before it can copy PCM.
+                self.gate.close()
+                continuation.resume()
+            }
         }
         // Enqueued copies and the finite resampling tail must finish before model/file ownership
         // is released. No callback task outlives this join.
@@ -432,24 +483,28 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
                         self.trace("runtime.restore.before")
 #endif
                         var restorationFailure: Error?
-                        func restore(_ operation: () throws -> Void) {
-                            do { try operation() } catch { restorationFailure = restorationFailure ?? error }
+                        func restore(_ stage: String, _ operation: () throws -> Void) {
+                            do { try operation() } catch {
+                                restorationFailure = restorationFailure ?? error
+                                DebugLogger.shared.warning("audio_restore_failed stage=\(stage) code=\((error as NSError).code)", source: "IOSMeetingCaptureEngine")
+                            }
                         }
                         // Attempt every restoration even when one setter fails. The engine/tap
                         // are already stopped, so restoring a vanished input to automatic is safe.
+                        // Deactivate before preference changes can start a hardware route change.
+                        restore("deactivate") { try session.setActive(false, options: .notifyOthersOnDeactivation) }
                         let priorInput = self.savedPreferredInput.flatMap { prior in
                             session.availableInputs?.first(where: { $0.uid == prior.uid })
                         }
-                        restore { try session.setPreferredInput(priorInput) }
+                        restore("preferred_input") { try session.setPreferredInput(priorInput) }
                         if let rate = self.savedPreferredSampleRate, rate > 0 {
-                            restore { try session.setPreferredSampleRate(rate) }
+                            restore("sample_rate") { try session.setPreferredSampleRate(rate) }
                         }
                         if let duration = self.savedPreferredIOBufferDuration, duration > 0 {
-                            restore { try session.setPreferredIOBufferDuration(duration) }
+                            restore("buffer_duration") { try session.setPreferredIOBufferDuration(duration) }
                         }
-                        restore { try session.setActive(false, options: .notifyOthersOnDeactivation) }
                         if let category = self.savedCategory, let mode = self.savedMode, let options = self.savedOptions {
-                            restore { try session.setCategory(category, mode: mode, options: options) }
+                            restore("category") { try session.setCategory(category, mode: mode, options: options) }
                         }
                         self.configuredSession = false
 #if DEBUG
@@ -466,6 +521,12 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
 
     func healthSnapshot() -> MeetingTrackHealth { self.lock.withLock { self.health } }
 
+#if DEBUG
+    // Inject synthetic native PCM without opening the microphone or activating a session.
+    func acceptForTesting(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) { self.accept(buffer, time: time) }
+    var hasClosedAdmissionForTesting: Bool { self.lock.withLock { self.stopping } }
+#endif
+
     private func accept(_ buffer: AVAudioPCMBuffer, time: AVAudioTime) {
         let admitted = self.lock.withLock {
             guard !self.stopping else { return false }
@@ -474,6 +535,7 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
         }
         guard admitted else { return }
         defer { self.producerGroup.leave() }
+        self.afterAdmission?()
         guard let reservation = self.gate.reserve(frames: Int(buffer.frameLength),
                                                    channels: Int(buffer.format.channelCount), sampleRate: buffer.format.sampleRate) else {
             self.fail(MeetingCapturePCMError.conversionFailed(PichiLocalization.text("The bounded microphone queue is full.")), kind: .writerBackpressure)
@@ -506,7 +568,9 @@ private final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable
             return
         }
         if let memoryConsumer, !memoryConsumer.enqueue(sample) {
-            self.fail(MeetingCapturePCMError.transcriptionStopped,
+            let error = memoryConsumer.rejectionReason.map(MeetingCapturePCMError.transcriptionRejected)
+                ?? .transcriptionStopped
+            self.fail(error,
                       kind: .writerBackpressure)
             return
         }

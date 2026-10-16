@@ -648,6 +648,8 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         var prepareCalls = 0
         var releaseCalls = 0
         var clearCacheCalls = 0
+        var supportsWordTimings = false
+        var timedCalls = 0
 
         init(endOfUtteranceProbability: Float? = nil) {
             self.endOfUtteranceProbability = endOfUtteranceProbability
@@ -681,6 +683,11 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         }
 
         func clearCache() async throws { self.clearCacheCalls += 1 }
+
+        func transcribeWithWordTimings(_ samples: [Float]) async throws -> (result: ASRTranscriptionResult, words: [ASRWordTiming]) {
+            self.timedCalls += 1
+            return (.init(text: "Closed tail"), [.init(text: "Closed", start: 17, end: 18), .init(text: "tail", start: 19, end: 20)])
+        }
     }
 
     private actor Recognizer: PichiMeetingCaptionRecognizing {
@@ -942,6 +949,25 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         XCTAssertEqual(provider.ordinaryTranscriptionCalls, 0)
     }
 
+    func testCaptionAdapterSelectsGenericTimingsOnlyForBoundaryRequests() async throws {
+        let provider = CaptionProvider()
+        provider.supportsWordTimings = true
+        let recognizer = PichiMeetingCaptionRecognizer(provider: provider)
+        self.addTeardownBlock { @MainActor in await recognizer.unload() }
+        _ = try await recognizer.recognize([0.1])
+        XCTAssertEqual(provider.timedCalls, 0)
+        let boundary = try await recognizer.recognizeWithWordTimings([0.1])
+        XCTAssertEqual(boundary.words.count, 2)
+        XCTAssertEqual(provider.timedCalls, 1)
+        XCTAssertEqual(provider.streamingInputs.count, 1)
+        XCTAssertEqual(provider.ordinaryTranscriptionCalls, 0)
+        provider.supportsWordTimings = false
+        let compatibility = try await recognizer.recognizeWithWordTimings([0.2])
+        XCTAssertTrue(compatibility.words.isEmpty)
+        XCTAssertEqual(provider.timedCalls, 1)
+        XCTAssertEqual(provider.streamingInputs.count, 2)
+    }
+
     func testPeriodicRussianCaptionAndPauseFinalizationKeepCaptureTimesAndTurnIdentity() async throws {
         let recognizer = Recognizer()
         let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
@@ -991,6 +1017,97 @@ final class PichiMeetingBufferedCaptionsTests: XCTestCase {
         XCTAssertLessThanOrEqual(bufferedCount, 320_000)
         XCTAssertTrue(inputs.allSatisfy { $0.count <= 320_000 })
         XCTAssertEqual(events.utterances.count, 1)
+        await engine.stop()
+    }
+
+    func testForcedRotationKeepsUnrecognizedWordAudioForTheNextTurn() async throws {
+        actor TimedRecognizer: PichiMeetingCaptionRecognizing {
+            var inputs: [Int] = []
+            var timedCalls = 0
+            func prepare() {}
+            func recognize(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+                self.inputs.append(samples.count)
+                return .init(text: "посмотрим дальше", endOfUtteranceProbability: nil)
+            }
+            func recognizeWithWordTimings(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+                self.timedCalls += 1
+                self.inputs.append(samples.count)
+                return .init(text: "Давайте посмотр", endOfUtteranceProbability: nil, words: [
+                    .init(text: "Давайте", start: 17.8, end: 18.8),
+                    .init(text: "посмотр", start: 19, end: 20),
+                ])
+            }
+            func unload() {}
+        }
+        let recognizer = TimedRecognizer()
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        await self.configure(engine, events: events)
+        try await engine.consumeForTesting(self.sample(start: 4, seconds: 20, value: 0.1))
+        XCTAssertEqual(events.utterances.count, 1)
+        XCTAssertEqual(events.utterances.first?.2, "Давайте")
+        XCTAssertEqual(try XCTUnwrap(events.utterances.first?.4), 22.9, accuracy: 0.0001)
+        let retained = await engine.bufferedSampleCountForTesting()
+        XCTAssertEqual(retained, 17_600)
+        try await engine.consumeForTesting(self.sample(start: 24, seconds: 1, value: 0.1))
+        try await engine.consumeForTesting(self.sample(start: 25, seconds: 0.8, value: 0))
+        XCTAssertEqual(events.utterances.map { $0.2 }, ["Давайте", "посмотрим дальше"])
+        XCTAssertEqual(try XCTUnwrap(events.utterances.last?.3), 22.9, accuracy: 0.0001)
+        let timedCalls = await recognizer.timedCalls
+        let inputs = await recognizer.inputs
+        XCTAssertEqual(timedCalls, 1, "Ordinary partials keep the fast streaming operation")
+        XCTAssertTrue(inputs.allSatisfy { $0 <= 320_000 })
+        await engine.stop()
+    }
+
+    func testForcedWordBoundaryRequiresCompleteExactTimingEvidence() {
+        func recognition(_ text: String, _ words: [ASRWordTiming]) -> PichiMeetingCaptionRecognition {
+            .init(text: text, endOfUtteranceProbability: nil, words: words)
+        }
+        let valid = [ASRWordTiming(text: "Ёжик", start: 17, end: 18),
+                     ASRWordTiming(text: "идё", start: 19.8, end: 20)]
+        let cut = recognition("  Ёжик идё  ", valid).rotation(sampleCount: 320_000, sampleRate: 16_000)
+        XCTAssertEqual(cut?.text, "Ёжик")
+        XCTAssertEqual(cut?.sample, 302_400)
+        XCTAssertNil(recognition("Ёжик идёт ещё", valid).rotation(sampleCount: 320_000, sampleRate: 16_000),
+                     "Partial alignments must not drop unmatched wording")
+        XCTAssertNil(recognition("Ёжик идё", [valid[0], .init(text: "идё", start: .nan, end: 20)])
+            .rotation(sampleCount: 320_000, sampleRate: 16_000))
+        XCTAssertNil(recognition("Ёжикидё", valid).rotation(sampleCount: 320_000, sampleRate: 16_000),
+                     "A timed BPE fragment is not a complete word boundary")
+        XCTAssertNil(recognition("Ёжик идё", [.init(text: "Ёжик", start: 17, end: 19.5), valid[1]])
+            .rotation(sampleCount: 320_000, sampleRate: 16_000), "The last second remains revisable")
+        XCTAssertNil(recognition("Ёжик идё", [valid[0], .init(text: "идё", start: 17.9, end: 20)])
+            .rotation(sampleCount: 320_000, sampleRate: 16_000), "Overlapping evidence cannot own an acoustic split")
+    }
+
+    func testClockResetDiscardsTheUncommittedBoundaryTail() async throws {
+        actor TimedRecognizer: PichiMeetingCaptionRecognizing {
+            var mixedEras = false
+            func prepare() {}
+            func recognize(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+                self.mixedEras = self.mixedEras || (samples.contains(0.1) && samples.contains(0.2))
+                return .init(text: "new era", endOfUtteranceProbability: nil)
+            }
+            func recognizeWithWordTimings(_ samples: [Float]) -> PichiMeetingCaptionRecognition {
+                .init(text: "closed tail", endOfUtteranceProbability: nil, words: [
+                    .init(text: "closed", start: 17, end: 18), .init(text: "tail", start: 19, end: 20),
+                ])
+            }
+            func unload() {}
+        }
+        let recognizer = TimedRecognizer()
+        let engine = PichiMeetingBufferedTrackEngine(kind: .microphone, recognizer: recognizer)
+        let events = Events()
+        await self.configure(engine, events: events)
+        try await engine.consumeForTesting(self.sample(start: 4, seconds: 20, value: 0.1))
+        engine.requestReset()
+        try await engine.consumeForTesting(self.sample(start: 1, seconds: 1.3, value: 0.2))
+        try await engine.consumeForTesting(self.sample(start: 2.3, seconds: 0.8, value: 0))
+        XCTAssertEqual(events.utterances.map { $0.2 }, ["closed", "new era"])
+        XCTAssertEqual(try XCTUnwrap(events.utterances.last?.3), 1, accuracy: 0.0001)
+        let mixed = await recognizer.mixedEras
+        XCTAssertFalse(mixed)
         await engine.stop()
     }
 

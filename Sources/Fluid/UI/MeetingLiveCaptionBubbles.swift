@@ -101,17 +101,32 @@ struct MeetingLiveBubbleScrollList: View {
     @Namespace private var scrollViewport
     private let bottomAnchor = "meeting.liveTranscript.bottom"
 
+    private var inlinePending: MeetingPendingSpeechSnapshot {
+        var snapshot = self.pending
+        snapshot.tokens = snapshot.tokens.filter { $0.source == self.rows.last?.speaker }
+        return snapshot
+    }
+
+    private var separatePending: MeetingPendingSpeechSnapshot {
+        var snapshot = self.pending
+        snapshot.tokens = snapshot.tokens.filter { $0.source != self.rows.last?.speaker }
+        return snapshot
+    }
+
     var body: some View {
         let rowIDs = self.rows.map(\.id)
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(self.rows)
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: self.theme.metrics.spacing.sm) {
                         if self.documentStyle {
-                            ForEach(MeetingLiveCaptionParagraphs.compose(self.rows)) { paragraph in
+                            ForEach(paragraphs) { paragraph in
                                 MeetingLiveParagraphRow(paragraph: paragraph,
                                     hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
-                                    interfaceLanguageID: self.locale.identifier)
+                                    interfaceLanguageID: self.locale.identifier,
+                                    isTail: paragraph.id == paragraphs.last?.id,
+                                    pending: paragraph.id == paragraphs.last?.id ? self.inlinePending : .empty)
                                     .equatable()
                                     .id(paragraph.id)
                                     .transition(.opacity)
@@ -119,14 +134,16 @@ struct MeetingLiveBubbleScrollList: View {
                         } else {
                             ForEach(self.rows) { row in
                                 MeetingLiveBubbleRow(row: row, hidesPartialFromAccessibility: self.hidesPartialFromAccessibility,
-                                                     interfaceLanguageID: self.locale.identifier)
+                                                     interfaceLanguageID: self.locale.identifier,
+                                                     isTail: row.id == self.rows.last?.id,
+                                                     pending: row.id == self.rows.last?.id ? self.inlinePending : .empty)
                                     .equatable()
                                     .id(row.id)
                                     .transition(.opacity)
                             }
                         }
-                        if !self.pending.tokens.isEmpty {
-                            MeetingPendingSpeechView(pending: self.pending)
+                        if !self.separatePending.tokens.isEmpty {
+                            MeetingPendingSpeechView(pending: self.separatePending)
                                 .padding(.top, self.theme.metrics.spacing.xs)
                         }
                         Color.clear.frame(height: 1).id(self.bottomAnchor).accessibilityHidden(true)
@@ -148,6 +165,7 @@ struct MeetingLiveBubbleScrollList: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("meeting.liveTranscript.viewport")
                 .animation(self.documentStyle || self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: rowIDs)
                 .modifier(MeetingCaptionScrollTracking(
                     viewport: self.scrollViewport, isPinnedToBottom: self.$isPinnedToBottom,
@@ -254,8 +272,25 @@ struct MeetingCaptionScrollTracking: ViewModifier {
 
         func followPreference(after previous: Self, currentlyFollowing: Bool,
                               userIsScrolling: Bool, upwardDrag: Bool = false) -> Bool {
-            guard userIsScrolling, offsetChanged(from: previous),
-                  let nearBottom = isPinnedToBottom else { return currentlyFollowing }
+            guard let nearBottom = isPinnedToBottom else { return currentlyFollowing }
+            let crossedDuringGrowth: Bool
+            if viewportHeight == previous.viewportHeight,
+               let offset = contentOffset, let oldOffset = previous.contentOffset,
+               let height = contentHeight, let oldHeight = previous.contentHeight,
+               offset.isFinite, oldOffset.isFinite, height.isFinite, oldHeight.isFinite {
+                crossedDuringGrowth = offset - oldOffset > max(0, height - oldHeight) + 0.5
+            } else { crossedDuringGrowth = false }
+            // Reaching the end is a position, not a scroll phase. SwiftUI may publish the
+            // final kinetic offset after the phase has already become idle. Once reached,
+            // rubber-band recoil moves toward earlier offsets while still at the end;
+            // that is not an instruction to stop following. Layout-only changes cannot
+            // opt a reader back in. Only the existing four-point rendering tolerance counts.
+            if nearBottom, offsetChanged(from: previous),
+               (!layoutChanged(from: previous) || crossedDuringGrowth),
+               currentlyFollowing || !movedTowardEarlierText(from: previous) {
+                return true
+            }
+            guard userIsScrolling, offsetChanged(from: previous) else { return currentlyFollowing }
             // Actual upward movement wins over a simultaneous caption wrap or rotation.
             // Layout changes alone cannot pause following because no user scroll is active.
             if let contentHeight, let viewportHeight, contentHeight > viewportHeight + 1,
@@ -344,12 +379,15 @@ private struct MeetingLiveParagraphRow: View, Equatable {
     let paragraph: MeetingLiveCaptionParagraphs.Paragraph
     let hidesPartialFromAccessibility: Bool
     let interfaceLanguageID: String
+    var isTail = false
+    var pending: MeetingPendingSpeechSnapshot = .empty
     @Environment(\.theme) private var theme
 
     static func == (lhs: MeetingLiveParagraphRow, rhs: MeetingLiveParagraphRow) -> Bool {
         lhs.paragraph == rhs.paragraph
             && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility
             && lhs.interfaceLanguageID == rhs.interfaceLanguageID
+            && lhs.isTail == rhs.isTail && lhs.pending == rhs.pending
     }
 
     private var flowingText: Text {
@@ -371,7 +409,13 @@ private struct MeetingLiveParagraphRow: View, Equatable {
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.paragraph.speaker == .you ? self.theme.palette.accent : self.theme.palette.secondaryText)
             }
-            self.flowingText
+            Group {
+                if self.isTail {
+                    MeetingInlineCaptionText(rows: self.paragraph.rows, pending: self.pending)
+                } else {
+                    self.flowingText
+                }
+            }
                 .font(self.theme.typography.body)
                 .lineSpacing(5)
                 .fixedSize(horizontal: false, vertical: true)
@@ -381,8 +425,10 @@ private struct MeetingLiveParagraphRow: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(self.paragraph.speaker.captionSourceLabel + ", "
-            + self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility))
-        .accessibilityHidden(self.hidesPartialFromAccessibility && self.paragraph.rows.allSatisfy(\.isPartial))
+            + self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility)
+            + (self.pending.tokens.isEmpty ? "" : ", " + PichiLocalization.text("Audio captured, waiting for transcription")))
+        .accessibilityHidden(self.hidesPartialFromAccessibility && self.paragraph.rows.allSatisfy(\.isPartial)
+            && self.pending.tokens.isEmpty)
         .accessibilityIdentifier("meeting.liveParagraph.\(self.paragraph.id.uuidString)")
     }
 }
@@ -392,6 +438,8 @@ struct MeetingLiveBubbleRow: View, Equatable {
     var hidesPartialFromAccessibility: Bool = true
     var documentStyle = false
     var interfaceLanguageID = PichiLocalization.language.rawValue
+    var isTail = false
+    var pending: MeetingPendingSpeechSnapshot = .empty
 
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
@@ -399,6 +447,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
     static func == (lhs: MeetingLiveBubbleRow, rhs: MeetingLiveBubbleRow) -> Bool {
         lhs.row == rhs.row && lhs.hidesPartialFromAccessibility == rhs.hidesPartialFromAccessibility
             && lhs.documentStyle == rhs.documentStyle && lhs.interfaceLanguageID == rhs.interfaceLanguageID
+            && lhs.isTail == rhs.isTail && lhs.pending == rhs.pending
     }
 
     private var isMicrophone: Bool { self.row.speaker == .you }
@@ -422,7 +471,13 @@ struct MeetingLiveBubbleRow: View, Equatable {
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.isMicrophone ? self.theme.palette.accentText : self.theme.palette.secondaryText)
             }
-            Text(self.row.text)
+            Group {
+                if self.isTail {
+                    MeetingInlineCaptionText(rows: [self.row], pending: self.pending, documentStyle: self.documentStyle)
+                } else {
+                    Text(self.row.text)
+                }
+            }
                 // The partial→final color swap solidifies in place; it must never animate.
                 .transaction { $0.animation = nil }
                 .meetingBubbleStyle(self.presentationStyle)
@@ -430,8 +485,9 @@ struct MeetingLiveBubbleRow: View, Equatable {
         .frame(maxWidth: .infinity, alignment: self.isMicrophone && !self.documentStyle ? .trailing : .leading)
         .padding(self.isMicrophone ? .leading : .trailing, self.documentStyle ? 0 : 32)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(self.sourceLabel), \(self.row.text)")
-        .accessibilityHidden(self.hidesPartialFromAccessibility && self.row.isPartial)
+        .accessibilityLabel(self.sourceLabel + ", " + (self.hidesPartialFromAccessibility && self.row.isPartial ? "" : self.row.text)
+            + (self.pending.tokens.isEmpty ? "" : ", " + PichiLocalization.text("Audio captured, waiting for transcription")))
+        .accessibilityHidden(self.hidesPartialFromAccessibility && self.row.isPartial && self.pending.tokens.isEmpty)
     }
 
     private var presentationStyle: MeetingBubbleStyle {

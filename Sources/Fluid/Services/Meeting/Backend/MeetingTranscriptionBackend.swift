@@ -337,6 +337,8 @@ nonisolated enum MeetingBackendPlanDefect: String, Equatable, Sendable {
 nonisolated struct MeetingCanonicalResultBundle: Equatable, Sendable {
     let evidence: MeetingFinalTranscriptEvidence
     let coverageReceipts: [MeetingSpanCoverageReceipt]
+    /// Ephemeral confirmed identity only. Owner embeddings never enter Codable evidence.
+    var confirmedLocalUserTokens: Set<MeetingBackendSpeakerToken> = []
 }
 
 /// What a backend hands back.

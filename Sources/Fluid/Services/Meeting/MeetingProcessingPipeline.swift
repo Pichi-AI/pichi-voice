@@ -1702,7 +1702,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             manifest: manifest,
             evidence: publishedEvidence,
             coverageReceipts: bundle.coverageReceipts,
-            echoVerdicts: echoVerdicts
+            echoVerdicts: echoVerdicts,
+            confirmedLocalUserTokens: bundle.confirmedLocalUserTokens
         )
         let assemblyTask = Task.detached(priority: .userInitiated) {
             try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(assemblyInput)

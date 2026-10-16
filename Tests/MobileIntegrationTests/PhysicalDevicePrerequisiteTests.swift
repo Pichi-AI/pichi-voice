@@ -26,6 +26,110 @@ private final nonisolated class PhysicalMicrophoneProbe: MeetingMemoryAudioConsu
 
 @MainActor
 final class PhysicalDevicePrerequisiteTests: XCTestCase {
+    /// Run alone in a fresh host process, before any model work. This deletes only
+    /// Apple's regeneratable execution cache, never installed models or recordings.
+    func testAuthorizedCleanupOfDerivedCoreMLCache() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires the explicitly authorized physical device")
+        #else
+        guard ProcessInfo.processInfo.environment["PICHI_CLEAR_DERIVED_COREML_CACHE"] == "1" else {
+            throw XCTSkip("Derived CoreML cache cleanup requires an explicit opt-in")
+        }
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else {
+                throw NSError(domain: "PhysicalDerivedCoreMLCacheProbe", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: message])
+            }
+        }
+        let asr = AppServices.shared.asr
+        try require(asr.activeExclusiveActivity == nil && !asr.hasActiveModelPreparation
+                    && !asr.hasActiveModelDownload && !asr.isAsrReady
+                    && !MeetingModelResidencyCoordinator.shared.isExclusive,
+                    "Cleanup requires an idle fresh host without prepared models")
+        let lease = try asr.acquireExclusiveActivity(.modelMaintenance)
+        defer { asr.releaseExclusiveActivity(lease) }
+
+        let files = FileManager.default
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
+        let caches = try files.url(for: .cachesDirectory, in: .userDomainMask,
+                                   appropriateFor: nil, create: false).standardizedFileURL
+        try require(caches.pathComponents == home.appendingPathComponent("Library/Caches", isDirectory: true).pathComponents,
+                    "Cleanup must remain in this sandbox's cache directory")
+        let bundleID = try XCTUnwrap(Bundle.main.bundleIdentifier)
+        try require(!bundleID.isEmpty && bundleID != "." && bundleID != ".."
+                    && !bundleID.contains("/") && !bundleID.contains("\\")
+                    && !bundleID.hasSuffix(".xctrunner"), "A trusted host bundle identifier is required")
+        let bundleCache = caches.appendingPathComponent(bundleID, isDirectory: true)
+        let target = bundleCache.appendingPathComponent("com.apple.e5rt.e5bundlecache", isDirectory: true)
+        try require(target.deletingLastPathComponent() == bundleCache
+                    && bundleCache.deletingLastPathComponent() == caches,
+                    "Derived cache target must not escape its cache root")
+        let keys: Set<URLResourceKey> = [.isSymbolicLinkKey, .isRegularFileKey, .isDirectoryKey, .fileSizeKey]
+        func existsWithoutSymlink(_ url: URL) throws -> Bool {
+            do {
+                let attributes = try files.attributesOfItem(atPath: url.path)
+                try require(attributes[.type] as? FileAttributeType != .typeSymbolicLink,
+                            "Cache cleanup refuses symbolic links")
+                try require(attributes[.type] as? FileAttributeType == .typeDirectory,
+                            "Cache cleanup requires ordinary directories")
+                return true
+            } catch let error as NSError where error.domain == NSCocoaErrorDomain
+                && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(error.code) {
+                return false
+            }
+        }
+        for root in [home.appendingPathComponent("Library", isDirectory: true), caches, bundleCache] {
+            _ = try existsWithoutSymlink(root)
+        }
+        func cacheSize() throws -> (bytes: UInt64, files: Int) {
+            guard try existsWithoutSymlink(target) else { return (0, 0) }
+            var enumerationFailed = false
+            guard let contents = files.enumerator(at: target, includingPropertiesForKeys: Array(keys),
+                options: [], errorHandler: { _, _ in enumerationFailed = true; return false }) else {
+                try require(false, "Derived cache enumeration could not start")
+                return (0, 0)
+            }
+            var bytes: UInt64 = 0
+            var count = 0
+            for case let item as URL in contents {
+                count += 1
+                try require(count <= 100_000, "Derived cache enumeration exceeded its safety bound")
+                try require(item.standardizedFileURL.pathComponents.starts(with: target.pathComponents),
+                            "Derived cache entry escaped its root")
+                let values = try item.resourceValues(forKeys: keys)
+                try require(values.isSymbolicLink != true, "Cache cleanup refuses symbolic link descendants")
+                if values.isRegularFile == true {
+                    let size = values.fileSize ?? 0
+                    try require(size >= 0 && UInt64(size) <= UInt64.max - bytes, "Invalid derived cache size")
+                    bytes += UInt64(size)
+                }
+            }
+            try require(!enumerationFailed, "Derived cache enumeration failed")
+            return (bytes, count)
+        }
+        func record(_ stage: String) throws {
+            let attributes = try files.attributesOfFileSystem(forPath: home.path)
+            let size = try cacheSize()
+            let report: [String: Any] = ["stage": stage,
+                "volumeFilesystemFreeSize": try XCTUnwrap(attributes[.systemFreeSize] as? NSNumber),
+                "volumeFilesystemSize": try XCTUnwrap(attributes[.systemSize] as? NSNumber),
+                "cacheLogicalBytes": size.bytes, "cacheEntryCount": size.files]
+            let data = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
+            let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
+            attachment.name = "derived-coreml-cache-\(stage)"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
+        try record("before")
+        if try existsWithoutSymlink(target) {
+            do { try files.removeItem(at: target) }
+            catch { try require(false, "Removing the authorized derived CoreML cache failed") }
+        }
+        try require(try !existsWithoutSymlink(target), "Derived CoreML cache must be removed")
+        try record("after")
+        #endif
+    }
+
     func testMicrophonePermissionWithoutModelInstallation() async throws {
         #if targetEnvironment(simulator)
         throw XCTSkip("This prerequisite checks the physical iPad microphone permission")

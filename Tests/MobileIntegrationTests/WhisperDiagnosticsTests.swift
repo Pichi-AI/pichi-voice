@@ -200,6 +200,81 @@ final class WhisperDiagnosticsTests: XCTestCase {
     func testMissingOrMalformedNativeQualityCannotBecomePerfectConfidence() throws { try WhisperDiagnosticCases.missingOrMalformedNativeQualityCannotBecomePerfectConfidence() }
     func testPartialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection() throws { try WhisperDiagnosticCases.partialQualityGateDoesNotPretendToBeSemanticOrVoiceActivityDetection() }
 
+    func testSegmentOnlyNativeResultRetainsCoarseIntervalsWithoutWordClaims() {
+        let segments = [ASRSegmentTiming(text: " Здравствуйте, давайте обсудим документ.", start: 0.2, end: 3.1),
+                        ASRSegmentTiming(text: " Хорошо, посмотрим результаты.", start: 3.3, end: 6.5)]
+        let result = WhisperProvider.transcriptionResult(
+            text: " Здравствуйте, давайте обсудим документ. Хорошо, посмотрим результаты. ",
+            segmentTimings: segments, sampleCount: 8 * 16_000)
+        XCTAssertEqual(result.segmentTimings, segments)
+        XCTAssertEqual(result.text, "Здравствуйте, давайте обсудим документ. Хорошо, посмотрим результаты.")
+        XCTAssertNil(result.dictionaryLearningAlignment, "Native segments cannot claim word alignment")
+        let options = WhisperProvider.runOptions(languageCode: "auto", timestamps: .segment,
+            loadedModelName: "whisper-tiny-Q8_0.gguf", sampleCount: 8 * 16_000)
+        XCTAssertTrue(options.timestamps == .segment, "Retaining metadata must not force costly word alignment")
+    }
+
+    func testNativeTerminalTimestampTickIsClippedOnlyToTheActualPCMEnd() {
+        // Exact public RU fixture trace: 76777 frames, native final tick 4800ms.
+        // Normal and attenuated speech return respectively one and two segments.
+        let count = 76_777
+        let duration = Double(count) / 16_000
+        for segments: [ASRSegmentTiming] in [
+            [.init(text: "First phrase. Second phrase.", start: 0, end: 4.8)],
+            [.init(text: "First phrase.", start: 0, end: 2.76), .init(text: "Second phrase.", start: 2.76, end: 4.8)]
+        ] {
+            let text = segments.map(\.text).joined(separator: " ")
+            let result = WhisperProvider.transcriptionResult(text: text, segmentTimings: segments, sampleCount: count)
+            XCTAssertEqual(result.segmentTimings.count, segments.count)
+            XCTAssertEqual(result.segmentTimings.last?.end, duration)
+            XCTAssertEqual(result.segmentTimings.map(\.start), segments.map(\.start))
+            XCTAssertEqual(result.segmentTimings.map(\.text), segments.map(\.text))
+            XCTAssertTrue(result.segmentTimings.allSatisfy { $0.end <= duration })
+            XCTAssertEqual(ASRSegmentTiming.validated(result.segmentTimings, text: text, duration: duration), result.segmentTimings)
+        }
+        let aligned = ASRSegmentTiming(text: "Aligned phrase.", start: 0, end: 4.8)
+        XCTAssertEqual(WhisperProvider.transcriptionResult(text: aligned.text,
+            segmentTimings: [aligned], sampleCount: 76_800).segmentTimings, [aligned])
+        for invalid in [ASRSegmentTiming(text: "Invalid phrase.", start: 0, end: 4.82),
+                        .init(text: "Invalid phrase.", start: 0, end: 4.799),
+                        .init(text: "Invalid phrase.", start: 4.8, end: 4.8)] {
+            let result = WhisperProvider.transcriptionResult(text: invalid.text,
+                segmentTimings: [invalid], sampleCount: count)
+            XCTAssertEqual(result.text, invalid.text)
+            XCTAssertTrue(result.segmentTimings.isEmpty,
+                "Arbitrary overrun, extra native ticks and nonphysical starts still use the complete untimed fallback")
+        }
+    }
+
+    func testMalformedOrPartialNativeSegmentationRetainsFullWordingWithoutInventedTimes() {
+        let text = "Keep the complete phrase."
+        let invalid: [[ASRSegmentTiming]] = [
+            [], [.init(text: "Keep", start: 0, end: 1)],
+            [.init(text: text, start: -0.1, end: 2)],
+            [.init(text: text, start: 0, end: .nan)],
+            [.init(text: text, start: 0, end: 2.1)],
+            [.init(text: text, start: 1, end: 1)],
+            [.init(text: "Keep the", start: 0, end: 1.5), .init(text: "complete phrase.", start: 1, end: 2)],
+            [.init(text: "Keep the", start: 1, end: 2), .init(text: "complete phrase.", start: 0, end: 1)],
+        ]
+        for segments in invalid {
+            let result = WhisperProvider.transcriptionResult(text: text, segmentTimings: segments, sampleCount: 32_000)
+            XCTAssertEqual(result.text, text)
+            XCTAssertTrue(result.segmentTimings.isEmpty)
+        }
+        let brokenWord = [ASRSegmentTiming(text: "Ко", start: 0, end: 1), .init(text: "торый", start: 1, end: 2)]
+        XCTAssertTrue(WhisperProvider.transcriptionResult(text: "Который", segmentTimings: brokenWord,
+            sampleCount: 32_000).segmentTimings.isEmpty, "Segment metadata must not insert a space inside a word")
+        let padded = WhisperProvider.transcriptionResult(text: text,
+            segmentTimings: [.init(text: text, start: 0, end: 0.8)], sampleCount: 8_000)
+        XCTAssertEqual(padded.text, text)
+        XCTAssertTrue(padded.segmentTimings.isEmpty, "Padded inference does not extend physical audio bounds")
+        XCTAssertTrue(ASRSegmentTiming.validated([.init(text: text, start: 0, end: 1)],
+            text: text, duration: .infinity).isEmpty)
+        XCTAssertTrue(ASRSegmentTiming.validated(Array(repeating: .init(text: text, start: 0, end: 1), count: 8_193),
+            text: text, duration: 10_000).isEmpty)
+    }
+
     func testProductionRunOptionsKeepRecognitionAndAutomaticLanguageSemantics() {
         for language in [nil, "auto", "ru", "en"] as [String?] {
             let options = WhisperProvider.runOptions(languageCode: language)

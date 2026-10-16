@@ -10,12 +10,17 @@ final class MeetingMemoryProcessingAttempt {
     let checkpoint: @MainActor (MeetingPCMTranscriptBatch) async throws -> Void
     let preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?
     let speechPreviewID = UUID()
+    let archive: MeetingMemoryAudioArchive
     var consumer: (any MeetingMemoryAudioConsuming)?
+    var recordingConsumer: MeetingArchivedMemoryAudioConsumer?
+    var analysisTask: Task<MeetingProcessingResult, Error>?
     init(request: MeetingBackendRequest, descriptor: MeetingBackendDescriptor, runtime: any MeetingParakeetNemotronRunning,
+         archive: MeetingMemoryAudioArchive,
          redactor: (any TranscriptTextRedacting)?,
          checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
          preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) {
-        self.request = request; self.descriptor = descriptor; self.runtime = runtime; self.redactor = redactor; self.checkpoint = checkpoint
+        self.request = request; self.descriptor = descriptor; self.runtime = runtime; self.archive = archive
+        self.redactor = redactor; self.checkpoint = checkpoint
         self.privacyContext = redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) }
         self.preview = preview
     }
@@ -125,7 +130,9 @@ extension MeetingProcessingPipeline {
             prepared = true
         }
         try Task.checkCancellation()
-        self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor, runtime: runtime, redactor: redactor, checkpoint: checkpoint, preview: preview)
+        self.memoryAttempts[session.id] = MeetingMemoryProcessingAttempt(request: request, descriptor: descriptor,
+            runtime: runtime, archive: try MeetingMemoryAudioArchive(), redactor: redactor,
+            checkpoint: checkpoint, preview: preview)
     }
 
     func memoryConsumer(for sessionID: UUID, track: MeetingAudioTrack,
@@ -149,19 +156,20 @@ extension MeetingProcessingPipeline {
                 var speech = speech
                 speech.sourceTrack = track
                 let partial: MeetingLivePartial?
+                let admission: String
                 if let privacyContext {
                     partial = try await privacyContext.previewSpeech(speech)
+                    admission = await privacyContext.speechAdmissionDiagnosticFields
                 } else {
-                    let ordered = speech.segments.sorted { $0.start < $1.start }
-                    partial = ordered.first.map {
-                        MeetingLivePartial(id: speechPreviewID, text: ordered.map(\.text).joined(separator: " "),
-                            start: $0.start.seconds, end: ordered.map { $0.end.seconds }.max())
-                    }
+                    admission = "privacy=false"
+                    partial = speech.speechPreview(id: speechPreviewID)
                 }
                 try Task.checkCancellation()
                 try await publishPreview(partial)
                 DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
-                    DebugLogger.shared.info("speech_preview visible=\(partial != nil) sourceSegments=\(speech.segments.count)", source: "MeetingMemoryAudio")
+                    let nativeTiming = speech.speechObservationHasNativeTiming.map { String($0) } ?? "legacy"
+                    let coverageEnd = partial?.end.map { String($0) } ?? "none"
+                    DebugLogger.shared.info("speech_preview visible=\(partial != nil) sourceSegments=\(speech.segments.count) nativeTiming=\(nativeTiming) sealed=\(speech.speechObservationIsFinal) coverageEnd=\(coverageEnd) \(admission)", source: "MeetingMemoryAudio")
                 }
             }
         } else { observeSpeech = nil }
@@ -186,13 +194,19 @@ extension MeetingProcessingPipeline {
             }
         }
         let failure: @Sendable (Error) -> Void = { _ in
-            // Neither provider errors nor transcript content cross into durable diagnostics.
-            eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: trackID,
-                                       detail: "In-memory transcription stopped. Completed text was preserved."))
+            // RAM recording remains authoritative when optional live recognition falls behind.
+            // The joined consumer requests a fresh protected replay after Stop. Error payloads
+            // and unredacted text never enter diagnostics or a durable checkpoint.
+            diagnostic("live_speech_deferred_until_stop")
         }
         let consumer: any MeetingMemoryAudioConsuming
+        // Amortize sequential model preparation and voice matching without accumulating a
+        // meeting's audio. The registered runtime accepts at most 20 seconds of mono PCM.
+        // Physical strict GigaAM measured ~10.7s work per 20s, versus ~8.9s per 12s.
+        let windowSeconds: Double = 20
         if let policy = attempt.descriptor.pcmObservationPolicy, runtime.supportsProgressivePCMInput {
             consumer = try Self.makeProgressiveMemoryAudioConsumer(
+                chunkSeconds: windowSeconds,
                 initialPreviewSeconds: policy.initialSeconds, previewIntervalSeconds: policy.intervalSeconds,
                 recognize: { window, offset in
                     try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
@@ -208,7 +222,7 @@ extension MeetingProcessingPipeline {
         } else {
             // Existing injected runtimes retain their sealed input contract. A scheduling
             // preference does not falsely grant an unimplemented runtime capability.
-            consumer = try Self.makeMemoryAudioConsumer(initialChunkSeconds: 3,
+            consumer = try Self.makeMemoryAudioConsumer(chunkSeconds: windowSeconds, initialChunkSeconds: 3,
                 recognize: { samples, offset in
                     try await service.withMeetingModelResidency(attemptID: attemptID, acceptsCompletedCancellation: { _ in false }) {
                         let started = ProcessInfo.processInfo.systemUptime
@@ -221,37 +235,131 @@ extension MeetingProcessingPipeline {
                 }, checkpoint: { try await checkpoint($0) }, finalize: finalize,
                 diagnostic: diagnostic, failure: failure)
         }
-        attempt.consumer = consumer
-        return consumer
+        let recording = MeetingArchivedMemoryAudioConsumer(archive: attempt.archive, speech: consumer)
+        attempt.recordingConsumer = recording
+        attempt.consumer = recording
+        return recording
     }
 
     func cancelMemoryAudio(sessionID: MeetingSessionID) async {
         guard let attempt = self.memoryAttempts[sessionID] else { return }
+        // A post-stop replay can still own Nemotron or a prepared ASR scope. Join that
+        // task before releasing its archive or letting the coordinator retire its lease.
+        if let analysis = attempt.analysisTask {
+            analysis.cancel()
+            _ = try? await analysis.value
+        }
         try? await attempt.consumer?.finish()
+        attempt.archive.clear()
         if self.memoryAttempts[sessionID] === attempt { self.memoryAttempts.removeValue(forKey: sessionID) }
     }
 
     func finishMemoryAudio(session: MeetingSession, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
-        guard let attempt = self.memoryAttempts[session.id], let consumer = attempt.consumer else { throw MeetingProcessingError.noRecoverableAudio }
-        defer { self.memoryAttempts.removeValue(forKey: session.id) }
+        guard let attempt = self.memoryAttempts[session.id], attempt.consumer != nil else { throw MeetingProcessingError.noRecoverableAudio }
+        let task: Task<MeetingProcessingResult, Error>
+        if let existing = attempt.analysisTask { task = existing }
+        else {
+            task = Task { @MainActor in
+                try await self.completeMemoryAudio(session: session, attempt: attempt, progress: progress)
+            }
+            attempt.analysisTask = task
+        }
+        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    private func completeMemoryAudio(session: MeetingSession, attempt: MeetingMemoryProcessingAttempt,
+                                     progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        guard let consumer = attempt.consumer else { throw MeetingProcessingError.noRecoverableAudio }
+        defer {
+            attempt.archive.clear()
+            attempt.analysisTask = nil
+            if self.memoryAttempts[session.id] === attempt { self.memoryAttempts.removeValue(forKey: session.id) }
+        }
         progress(.transcribing)
         try await consumer.finish()
         try Task.checkCancellation()
+        let track = session.audioTracks.first(where: { $0.kind == .microphone })
+        var batch: MeetingPCMTranscriptBatch
+        if attempt.recordingConsumer?.requiresSpeechReplay == true {
+            guard let track else { throw MeetingProcessingError.noRecoverableAudio }
+            batch = try await self.replayMemorySpeech(attempt: attempt, track: track)
+        } else {
+            batch = MeetingPCMTranscriptBatch(segments: session.transcriptSegments,
+                speakers: [], isComplete: session.transcriptIsComplete ?? true)
+        }
+        if attempt.request.configuration.speakerLabelsEnabled, !batch.segments.isEmpty {
+            guard let track else { throw MeetingProcessingError.noRecoverableAudio }
+            progress(.identifyingSpeakers)
+            let service = self.asrServiceProvider()
+            let transcript = batch
+            batch = try await service.withMeetingModelResidency(attemptID: attempt.request.attemptID,
+                acceptsCompletedCancellation: { _ in false }) {
+                try await attempt.runtime.diarizePCMRecording(source: attempt.archive, transcript: transcript,
+                    trackID: track.id, attemptID: attempt.request.attemptID,
+                    configuration: attempt.request.configuration)
+            }
+        }
+        try Task.checkCancellation()
         progress(.finalizing)
-        var record = session.processingAttempts.last(where: { $0.completedAt == nil }) ?? MeetingProcessingAttempt(
-            id: attempt.request.attemptID, startedAt: session.startedAt, completedAt: nil, stage: .pending,
-            pipelineVersion: attempt.request.configuration.pipelineVersion, asrProvider: session.recordingBackendID,
-            asrModel: attempt.request.configuration.asrModel, languageCode: session.languageCode,
+        // Stop-time pending records can predate or differ from the admitted PCM request.
+        // As in canonicalResult, preserve only the matching identity and record all lineage
+        // from the immutable configuration that actually owned inference.
+        var record = session.processingAttempts.last(where: {
+            $0.completedAt == nil && $0.id == attempt.request.attemptID
+        }) ?? MeetingProcessingAttempt(
+            id: attempt.request.attemptID, startedAt: attempt.request.session.startedAt, completedAt: nil, stage: .pending,
+            pipelineVersion: attempt.request.configuration.pipelineVersion, asrProvider: nil,
+            asrModel: nil, languageCode: nil,
             diarizationModel: attempt.request.configuration.diarizationFingerprint, lastCompletedTrackID: nil, errorCode: nil
         )
         record.completedAt = Date(); record.stage = .completed
+        record.pipelineVersion = attempt.request.configuration.pipelineVersion
+        record.languageCode = attempt.request.configuration.languageCode
+        record.diarizationModel = attempt.request.configuration.diarizationFingerprint
         record.asrModel = attempt.request.configuration.asrModel
         record.asrArtifactFingerprint = attempt.request.configuration.asrArtifactFingerprint
         record.asrProvider = attempt.descriptor.id.rawValue
         record.backendID = attempt.descriptor.id.rawValue
         record.backendVersion = attempt.descriptor.version
         progress(.completed)
-        return MeetingProcessingResult(speakers: session.speakers, segments: session.transcriptSegments,
-                                       attempt: record, isComplete: session.transcriptIsComplete ?? true)
+        return MeetingProcessingResult(speakers: batch.speakers, segments: batch.segments,
+                                       attempt: record, isComplete: batch.isComplete)
+    }
+
+    /// A failed live recognizer never removes audio from the recording. Retry the complete
+    /// sealed RAM source in bounded windows with the original model and a fresh privacy context.
+    private func replayMemorySpeech(attempt: MeetingMemoryProcessingAttempt,
+                                    track: MeetingAudioTrack) async throws -> MeetingPCMTranscriptBatch {
+        let service = self.asrServiceProvider()
+        let privacy = attempt.redactor.map { MeetingTranscriptPrivacyContext(redactor: $0) }
+        var output = MeetingPCMTranscriptBatch(segments: [])
+        var indices: [UUID: Int] = [:]
+        func merge(_ batch: MeetingPCMTranscriptBatch) {
+            for segment in batch.segments {
+                if let index = indices[segment.id] {
+                    if segment.revision >= output.segments[index].revision { output.segments[index] = segment }
+                } else {
+                    indices[segment.id] = output.segments.count
+                    output.segments.append(segment)
+                }
+            }
+            output.isComplete = output.isComplete && batch.isComplete
+        }
+        for start in stride(from: 0, to: attempt.archive.totalSampleCount, by: 320_000) {
+            try Task.checkCancellation()
+            let end = min(attempt.archive.totalSampleCount, start + 320_000)
+            let samples = try await attempt.archive.readSamples(in: start..<end)
+            var batch = try await service.withMeetingModelResidency(attemptID: attempt.request.attemptID,
+                acceptsCompletedCancellation: { _ in false }) {
+                try await attempt.runtime.recognizePCM(samples: samples, offset: Double(start) / 16_000,
+                    trackID: track.id, attemptID: attempt.request.attemptID,
+                    configuration: attempt.request.configuration)
+            }
+            batch.sourceTrack = track
+            if let privacy { batch = try await privacy.redact(batch) }
+            merge(batch)
+        }
+        if let tail = try await privacy?.finish() { merge(tail) }
+        return output
     }
 }

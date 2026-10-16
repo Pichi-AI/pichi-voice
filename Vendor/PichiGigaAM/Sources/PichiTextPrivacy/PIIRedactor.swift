@@ -66,29 +66,76 @@ struct PIIDetection: Sendable {
 }
 
 public enum PIIRedactor {
+    // Canonical PAN detection and provisional admission must agree on explicit
+    // amounts. A currency unit is quantity evidence, not a drug/name qualifier.
+    static let quantityUnitPattern = #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#
+    static let quantityUnitWords = Set("мг мкг мл г mg mcg ml gram grams единиц единицы ед iu".split(separator: " ").map(String.init))
+    static let unambiguousDoseUnitWords = quantityUnitWords.subtracting(["г", "ед", "единиц", "единицы"])
     private static let boundary = #"(?<![\p{L}\p{N}])"#
     private static let end = #"(?![\p{L}\p{N}])"#
+    // The same field cue owns durable masks and unfinished-preview admission.
+    static let loginCuePattern = #"(?:логин|username|login)(?:\s+(?:для\s+(?:входа|доступа)|в\s+систему))?"#
+    static let secretCuePattern = #"(?:пароль|секретный\s+ключ|password|api\s+key)(?:\s+(?:для\s+(?:входа|доступа)|от\s+аккаунта))?"#
     // These are precision guards also present in the Transcribe detector. They
     // are not a name dictionary or a substitute for real token classification.
     private static let nonNames = Set("аспирин инсулин витамин пенициллин анальгин метформин оземпик лизиноприл метотрексат дофамин серотонин адреналин мелатонин кофеин никотин протеин проверь проведи изучите сделай готов хорошо спасибо здравствуйте русский английский".split(separator: " ").map(String.init))
 
+    /// Reuse the existing durable precision guard at the preview boundary too.
+    /// A known ordinary word cannot become an unresolved name solely because
+    /// the same NER evaluation labels it PER in a longer meeting context.
+    static func isKnownNonPersonWord(_ word: String) -> Bool {
+        self.nonNames.contains(word.lowercased())
+    }
+
+    /// Positive grammatical evidence, not a medication dictionary: exactly one
+    /// word explicitly introduced as a drug and immediately qualified by a dose.
+    /// Bare quantities and recipient/patient constructions grant no exclusion.
+    static func medicationQualifiedWords(in text: String, personRanges: [NSRange]) throws -> Set<NSRange> {
+        let source = text as NSString
+        let pattern = #"(?<![\p{L}\p{N}])(?:препарат(?:а|у|ом|е|ы|ов|ам|ами|ах)?|лекарств(?:о|а|у|ом|е)|drug|medication|medicine)\s*[:=]?\s+([\p{L}][\p{L}\p{M}'-]{2,63})\s+(\d{1,4}(?:[.,]\d{1,3})?)(?![\d.,])"#
+        let medication = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        let quantityUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
+        var qualified: Set<NSRange> = []
+        for match in medication.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            let wordRange = match.range(at: 1)
+            let word = source.substring(with: wordRange)
+            guard !PIIRussianNameHeuristics.hasGivenNameEvidence(word),
+                  !personRanges.contains(where: { NSIntersectionRange($0, wordRange).length > 0 }) else { continue }
+            let amount = source.substring(with: match.range(at: 2)).replacingOccurrences(of: ",", with: ".")
+            guard let value = Double(amount), value.isFinite, value > 0 else { continue }
+            let suffix = source.substring(from: NSMaxRange(match.range(at: 2)))
+            guard let unit = quantityUnit.firstMatch(in: suffix, range: NSRange(location: 0, length: suffix.utf16.count)),
+                  Self.unambiguousDoseUnitWords.contains((suffix as NSString).substring(with: unit.range)
+                    .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else { continue }
+            qualified.insert(wordRange)
+        }
+        return qualified
+    }
+
     public static func redact(_ text: String, ner: [PIINERSpan]) throws -> PIIRedactionResult {
         guard text.utf16.count <= PIIWordPieceTokenizer.maximumInputUTF16 else { throw TextPrivacyError.inputTooLong }
         var entities = try structured(text) + PIIRussianNameHeuristics.detect(text)
+        let medicationWords = try Self.medicationQualifiedWords(in: text,
+            personRanges: entities.filter { $0.kind == .person }.map(\.range))
         let utf16 = Array(text.utf16)
         for span in ner {
             guard span.range.location >= 0, span.range.length > 0,
                   span.range.location <= utf16.count, span.range.length <= utf16.count - span.range.location,
                   validBoundary(span.range.location, utf16), validBoundary(NSMaxRange(span.range), utf16),
                   let range = Range(span.range, in: text), span.score.isFinite, (0...1).contains(span.score) else { throw TextPrivacyError.invalidSpan }
-            // News NER supplies persons only. Its LOC/ORG labels must not become
-            // an address or drug-removal toggle via translated/UI label matching.
-            guard span.label == "PER", span.score >= 0.5 else { continue }
+            guard span.score >= 0.5 else { continue }
+            if span.label != "PER" {
+                if let kind = typedKind(for: span, in: text) {
+                    entities.append(.init(range: span.range, kind: kind, contextual: false))
+                }
+                continue
+            }
+            if medicationWords.contains(span.range) { continue }
             let value = String(text[range])
             let letters = value.unicodeScalars.filter { CharacterSet.letters.contains($0) }
             guard letters.count >= 3 else { continue }
             let words = value.split(whereSeparator: { $0.isWhitespace }).map { $0.lowercased() }
-            guard !words.contains(where: { nonNames.contains($0) }) else { continue }
+            guard !words.contains(where: self.isKnownNonPersonWord) else { continue }
             if words.count == 1, letters.count < 4, span.score < 0.9 { continue }
             // Mixed alphabets inside one word are common ASR transliteration
             // debris. Separate RU/EN words are still valid mixed-language text.
@@ -129,11 +176,17 @@ public enum PIIRedactor {
             }
         }
         try matches(#"[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}"#, .email)
-        try matches(boundary + #"[\p{L}\p{N}_-]+(?:(?:\.|\s+(?:точка|dot|дефис|нижнее подч[её]ркивание)\s+)[\p{L}\p{N}_-]+|\s+\d+)*[\s.,;]*(?:собака|собачка|sobaka|sobachka|at)[\s.,;]*[\p{L}\p{N}-]+(?:(?:\.|\s+(?:точка|dot)\s+)[\p{L}\p{N}-]+)*(?:\.|\s+(?:точка|dot)\s+)(?:com|net|org|info|biz|dev|app|io|me|su|ru|рф|ком|ру)"# + end, .email)
+        // Preserve exact ASR offsets rather than reconstructing an address.
+        // Spoken separators are permitted only inside a complete email grammar.
+        let emailAtom = #"[\p{L}\p{N}_%+-]+"#
+        let emailJoin = #"(?:\.|\s+(?:точка|dot|дефис|hyphen|минус|нижнее\s+подч[её]ркивание|underscore|плюс|plus)\s+)"#
+        let domainJoin = #"(?:\.|\s+(?:точка|dot)\s+)"#
+        try matches(boundary + emailAtom + "(?:" + emailJoin + emailAtom + #"|\s+\d+)*[\s,;]*(?:@|собака|собачка|sobaka|sobachka|at)[\s,;]*[\p{L}\p{N}-]+(?:"# + domainJoin + #"[\p{L}\p{N}-]+)*"# + domainJoin + #"(?:com|net|org|info|biz|dev|app|io|me|su|ru|рф|ком|ру)"# + end, .email)
         try matches(#"(?:\+\s?7|(?<!\d)[78])(?:[\s()-]*\d){10}(?!\d)"#, .phone)
         try matches(#"\+\d{1,3}(?:[\s()-]*\d){8,12}(?!\d)"#, .phone)
         try matches(boundary + #"9(?:[\s()-]*\d){9}(?!\d)"#, .phone)
-        try matches(#"(?:телефон[а-яё]*|тел\.?|позвон[а-яё]*|мобильн[а-яё]*|phone|call)\D{0,25}?((?<!\d)\d(?:[ -]?\d){4,6}(?![ -]?\d))"#, .phone, capture: 1, contextual: true)
+        try matches(boundary + #"(?:телефон[а-яё]*|тел\.?|позвон[а-яё]*|мобильн[а-яё]*|phone|call)\s*[:=]?\s*((?<!\d)\d(?:[ -]?\d){4,6}(?![ -]?\d))"#, .phone, capture: 1, contextual: true)
+        entities += try spokenPhones(in: text)
         try matches(boundary + #"\d{3}-\d{3}-\d{3}[ -]?\d{2}"# + end, .snils, validate: { snilsValid(digits($0)) })
         try matches(#"снилс[^\d]{0,25}?((?<!\d)\d(?:[ -]?\d){8,10}(?![ -]?\d))"#, .snils, capture: 1, contextual: true)
         try matches(#"(?:паспорт[а-яё]*|сери[яи]|passport)[^.]{0,30}?((?<!\d)\d(?:\s?\d){5,9}(?!\s?\d))"#, .passport, capture: 1, contextual: true)
@@ -146,8 +199,7 @@ public enum PIIRedactor {
         // Context is required: blindly masking every 6-digit number destroys
         // dosages, study counts and product codes in this pharma scenario.
         try matches(#"(?:номер договора|номер полиса|номер документа|идентификатор|policy number|document id)\D{0,15}?([A-Z0-9][A-Z0-9 -]{5,30})"#, .identifier, capture: 1, contextual: true)
-        try matches(#"(?:пароль|секретный ключ|password|api key)\s*[:=]?\s*([^\s,;.!?]{4,128})"#, .secret, capture: 1, contextual: true)
-        try matches(#"(?:логин|username|login)\s*[:=]?\s*([\p{L}\p{N}_.@-]{3,128})"#, .login, capture: 1, contextual: true)
+        entities += try credentials(in: text)
         // ASR word units have no reliable sentence boundary. A free-form tail
         // after an address cue would absorb the next drug/dose phrase. Match
         // explicitly marked address fields and stop at the last numbered field.
@@ -165,13 +217,95 @@ public enum PIIRedactor {
         return entities
     }
 
+    /// Inference adapters supply canonical policy kinds, never a blanket grant
+    /// from generic geographic/date labels. Personal fields still require cues.
+    private static func typedKind(for span: PIINERSpan, in text: String) -> PIIKind? {
+        guard let kind = PIIKind(rawValue: span.label) else { return nil }
+        switch kind {
+        case .address, .birthDate:
+            let source = text as NSString
+            var begin = max(0, span.range.location - 100)
+            if begin < source.length, (0xDC00...0xDFFF).contains(source.character(at: begin)) { begin += 1 }
+            let prefix = source.substring(with: NSRange(location: begin, length: span.range.location - begin))
+            let cue = kind == .address
+                ? #"(?:домашний\s+адрес|адрес\s+проживания|жив[уёе]т?\s+по\s+адресу|home\s+address)\s*[:=]?\s*$"#
+                : #"(?:дата\s+рождения|день\s+рождения|родил[а-яё]*|date\s+of\s+birth|born)\s*[:=]?\s*$"#
+            return prefix.range(of: Self.boundary + cue, options: [.regularExpression, .caseInsensitive]) != nil
+                ? kind : nil
+        default: return kind
+        }
+    }
+
+    private static func credentials(in text: String) throws -> [PIIDetection] {
+        let source = text as NSString
+        var result: [PIIDetection] = []
+        let prose = Set("нужно надо можно нельзя изменим сменим поменяем обсудим уточним забыли забыть изменить сменить поменять восстановить используется должен должна будет был была для от в не это нужен нужна требуется я мы вы ты он она они его её их сейчас is should must needs required changed reset".split(separator: " ").map(String.init))
+        for (kind, cue) in [(PIIKind.login, loginCuePattern), (.secret, secretCuePattern)] {
+            // A whole whitespace-delimited token is atomic. Length limits or
+            // punctuation exclusions would expose the rest of a secret (A!b).
+            let pattern = boundary + "(?:" + cue + ")" + end + #"\s*(?:[:=]\s*|(?:это|is)\s+)?(?:«([^»\n]+)»|"([^"\n]+)"|([^\s«"]+))"#
+            let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+                let range = (1...3).map { match.range(at: $0) }.first { $0.location != NSNotFound }!
+                let value = source.substring(with: range)
+                // Keep placeholders idempotent and avoid ordinary instructions.
+                if PIIKind.allCases.contains(where: { value == $0.placeholder }) { continue }
+                let word = value.trimmingCharacters(in: .punctuationCharacters).lowercased()
+                let prefix = source.substring(with: NSRange(location: match.range.location,
+                    length: range.location - match.range.location))
+                let explicitlyDelimited = prefix.contains(":") || prefix.contains("=")
+                if range == match.range(at: 3), !explicitlyDelimited {
+                    // Sentence punctuation attached to the cue is not a value.
+                    // Quoted or explicitly delimited punctuation remains valid.
+                    if prefix.last?.isWhitespace != true || prose.contains(word) { continue }
+                }
+                guard kind == .secret || value.contains(where: { $0.isLetter || $0.isNumber }) else { continue }
+                result.append(.init(range: range, kind: kind, contextual: true, resolvedContextRange: match.range))
+            }
+        }
+        return result
+    }
+
+    private static func spokenPhones(in text: String) throws -> [PIIDetection] {
+        // Number words are values only after an immediate phone cue. Do not
+        // interpret arbitrary quantities, part numbers or medication doses.
+        let values: [String: Int] = ["ноль": 0, "нуль": 0, "один": 1, "одна": 1, "два": 2, "две": 2,
+            "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7, "восемь": 8, "девять": 9,
+            "десять": 10, "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13, "четырнадцать": 14,
+            "пятнадцать": 15, "шестнадцать": 16, "семнадцать": 17, "восемнадцать": 18, "девятнадцать": 19,
+            "двадцать": 20, "тридцать": 30, "сорок": 40, "пятьдесят": 50, "шестьдесят": 60,
+            "семьдесят": 70, "восемьдесят": 80, "девяносто": 90, "сто": 100, "двести": 200,
+            "триста": 300, "четыреста": 400, "пятьсот": 500, "шестьсот": 600, "семьсот": 700,
+            "восемьсот": 800, "девятьсот": 900]
+        let atom = #"(?:\d+|"# + values.keys.sorted { $0.count > $1.count }.joined(separator: "|") + #")(?![\p{L}\p{N}])"#
+        let pattern = boundary + #"(?:телефон[а-яё]*|тел\.?|мобильный|phone)(?:\s+(?:для\s+связи|номер))?\s*[:=]?\s*((?:(?:плюс|plus)\s+|\+\s*)?"# + atom + #"(?:[ -]+"# + atom + #")*)"#
+        let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        let source = text as NSString
+        return regex.matches(in: text, range: NSRange(location: 0, length: source.length)).compactMap { match in
+            let range = match.range(at: 1)
+            let tokens = source.substring(with: range).lowercased().split { $0.isWhitespace || $0 == "-" || $0 == "+" }.map(String.init)
+            var digits = 0, group: Int? = nil
+            func flush() { if let value = group { digits += String(value).count }; group = nil }
+            for token in tokens where token != "плюс" && token != "plus" {
+                guard let value = values[token] else { flush(); digits += token.count; continue }
+                if let current = group, (current >= 100 && current % 100 == 0 && value < 100)
+                    || (current >= 20 && current % 10 == 0 && value > 0 && value < 10) {
+                    group = current + value
+                } else { flush(); group = value }
+            }
+            flush()
+            guard (7...15).contains(digits), tokens.contains(where: { values[$0] != nil || $0 == "плюс" || $0 == "plus" }) else { return nil }
+            return .init(range: range, kind: .phone, contextual: true, resolvedContextRange: match.range)
+        }
+    }
+
     /// Candidate ends must be actual numeric-group boundaries. A greedy run may
     /// contain a valid 16-digit PAN followed by a separate three-digit amount;
     /// rejecting that 19-digit run must not discard the complete earlier PAN.
     private static func paymentCards(in text: String) throws -> [PIIDetection] {
         let runs = try NSRegularExpression(pattern: boundary + #"\d{1,19}(?:[\s-]+\d{1,19})*"# + end)
         let groups = try NSRegularExpression(pattern: #"\d+"#)
-        let amountUnit = try NSRegularExpression(pattern: #"^\s*(?:[.,]\d{1,2}\s*)?(?:₽|руб(?:лей|ля|ль)?\.?|доллар(?:ов|а)?|евро|USD|RUB|EUR|мг|мкг|мл|mg|mcg|ml|грамм(?:ов|а)?|килограмм(?:ов|а)?|единиц(?:ы|а)?|шт\.?)(?![\p{L}\p{N}])"#, options: [.caseInsensitive])
+        let amountUnit = try NSRegularExpression(pattern: Self.quantityUnitPattern, options: [.caseInsensitive])
         let source = text as NSString
         var result: [PIIDetection] = []
         for run in runs.matches(in: text, range: NSRange(location: 0, length: source.length)) {

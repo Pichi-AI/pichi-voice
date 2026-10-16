@@ -29,7 +29,7 @@ struct MeetingModelSettingsSection: View {
                             Text("Nemotron 3 Diarization · \(installed.totalByteCount.formatted(.byteCount(style: .file).locale(PichiLocalization.locale)))")
                         }
                         Text(CPUArchitecture.isAppleSilicon
-                            ? PichiLocalization.text("Downloads once (about 200 MB) and stays on this Mac. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities.")
+                            ? PichiLocalization.text("Downloads once and stays on this Mac. Speaker identification runs locally after recording.")
                             : PichiLocalization.text("Automatic speaker separation requires Apple Silicon. GigaAM can transcribe recordings on Intel with unknown speaker identities."))
                     }
                     .font(self.theme.typography.caption)

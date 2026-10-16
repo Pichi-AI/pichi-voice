@@ -69,6 +69,7 @@ nonisolated enum MeetingCapturePCMError: LocalizedError, Equatable {
     case timelineDiscontinuity
     case conversionFailed(String)
     case transcriptionStopped
+    case transcriptionRejected(String)
     case sampleBufferFailed(Int32)
 
     var errorDescription: String? {
@@ -79,6 +80,7 @@ nonisolated enum MeetingCapturePCMError: LocalizedError, Equatable {
         case .timelineDiscontinuity: return PichiLocalization.text("The microphone PCM timeline changed unexpectedly.")
         case let .conversionFailed(detail): return PichiLocalization.format("Microphone PCM conversion failed. %@", detail)
         case .transcriptionStopped: return PichiLocalization.text("In-memory transcription stopped. Completed text was preserved.")
+        case .transcriptionRejected(let reason): return reason
         case let .sampleBufferFailed(status): return PichiLocalization.format("Microphone sample-buffer construction failed (%d).", status)
         }
     }

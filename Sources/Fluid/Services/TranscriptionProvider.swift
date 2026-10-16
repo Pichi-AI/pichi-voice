@@ -116,6 +116,9 @@ nonisolated struct ASRTranscriptionResult: Sendable {
     let parakeetProcessingDurationMilliseconds: Int?
     let pronunciationEnrollment: PronunciationEnrollmentCapture?
     let dictionaryLearningAlignment: DictionaryLearningAlignment?
+    /// Native utterance intervals, when a provider cannot supply word alignment.
+    /// These retain coarser timing precision and must never be presented as word times.
+    let segmentTimings: [ASRSegmentTiming]
 
     init(
         text: String,
@@ -123,7 +126,8 @@ nonisolated struct ASRTranscriptionResult: Sendable {
         endOfUtteranceProbability: Float? = nil,
         parakeetProcessingDurationMilliseconds: Int? = nil,
         pronunciationEnrollment: PronunciationEnrollmentCapture? = nil,
-        dictionaryLearningAlignment: DictionaryLearningAlignment? = nil
+        dictionaryLearningAlignment: DictionaryLearningAlignment? = nil,
+        segmentTimings: [ASRSegmentTiming] = []
     ) {
         self.text = text
         self.confidence = confidence
@@ -131,6 +135,7 @@ nonisolated struct ASRTranscriptionResult: Sendable {
         self.parakeetProcessingDurationMilliseconds = parakeetProcessingDurationMilliseconds
         self.pronunciationEnrollment = pronunciationEnrollment
         self.dictionaryLearningAlignment = dictionaryLearningAlignment
+        self.segmentTimings = segmentTimings
     }
 }
 
@@ -138,6 +143,33 @@ nonisolated struct ASRWordTiming: Sendable {
     let text: String
     let start: TimeInterval
     let end: TimeInterval
+}
+
+/// A provider's actual segment boundary, in seconds from its input PCM start.
+/// Unlike word alignment, one interval may contain multiple words or a sentence.
+nonisolated struct ASRSegmentTiming: Sendable, Equatable {
+    let text: String
+    let start: TimeInterval
+    let end: TimeInterval
+
+    /// Partial or malformed timing metadata must not silently discard wording or
+    /// invent a speaker boundary. Admit only an ordered, physically valid complete
+    /// segmentation whose rendered text still equals the provider's whole result.
+    static func validated(_ segments: [Self], text: String, duration: TimeInterval) -> [Self] {
+        guard duration.isFinite, duration > 0, !segments.isEmpty, segments.count <= 8_192 else { return [] }
+        var previousEnd: TimeInterval = 0
+        for segment in segments {
+            guard !segment.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  segment.start.isFinite, segment.end.isFinite, segment.start >= previousEnd,
+                  segment.end > segment.start, segment.end <= duration + 1e-6 else { return [] }
+            previousEnd = segment.end
+        }
+        func normalized(_ value: String) -> String {
+            value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+        guard normalized(segments.map(\.text).joined(separator: " ")) == normalized(text) else { return [] }
+        return segments
+    }
 }
 
 // MARK: - Transcription Provider Protocol

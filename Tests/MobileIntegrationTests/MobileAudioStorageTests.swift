@@ -6,6 +6,30 @@ import XCTest
 
 @MainActor
 final class MobileAudioStorageTests: XCTestCase {
+    func testEphemeralAACPreservesBoundariesAndReleasesItsRecording() async throws {
+        let archive = try MeetingMemoryAudioArchive()
+        let count = 65 * 16_000 + 317
+        let input = (0..<count).map { Float(0.3) * sin(Float($0) * 0.12) }
+        for start in stride(from: 0, to: count, by: 1_600) {
+            try input.withUnsafeBufferPointer {
+                try archive.append(UnsafeBufferPointer(rebasing: $0[start..<min(count, start + 1_600)]))
+            }
+        }
+        XCTAssertLessThanOrEqual(archive.bufferedPCMSampleCount, 480_000)
+        try archive.seal()
+        XCTAssertEqual(archive.totalSampleCount, count)
+        XCTAssertLessThan(archive.retainedEncodedBytes, 1_000_000)
+        let range = (29 * 16_000)..<(31 * 16_000)
+        let decoded = try await archive.readSamples(in: range)
+        XCTAssertEqual(decoded.count, range.count)
+        let mse = zip(decoded, input[range]).reduce(Float(0)) { $0 + ($1.0 - $1.1) * ($1.0 - $1.1) } / Float(range.count)
+        XCTAssertLessThan(mse, 0.002, "AAC priming must not move the source timeline")
+        archive.clear()
+        XCTAssertEqual(archive.totalSampleCount, 0)
+        XCTAssertEqual(archive.retainedEncodedBytes, 0)
+        XCTAssertEqual(archive.bufferedPCMSampleCount, 0)
+    }
+
     func testRetainedPCMUsesOriginalWriterAndExportsProtectedPlayableAudio() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

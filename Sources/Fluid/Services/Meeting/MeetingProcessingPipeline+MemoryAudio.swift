@@ -8,7 +8,7 @@ extension MeetingProcessingPipeline {
     /// owned by the injected operations that the pipeline freezes before capture starts.
     nonisolated static func makeMemoryAudioConsumer(
         chunkSeconds: Double = 12,
-        maximumPendingSeconds: Double = 24,
+        maximumPendingSeconds: Double = 60,
         initialChunkSeconds: Double? = nil,
         recognize: @escaping @Sendable ([Float], TimeInterval) async throws -> MeetingPCMTranscriptBatch,
         checkpoint: @escaping @Sendable (MeetingPCMTranscriptBatch) async throws -> Void,
@@ -24,10 +24,11 @@ extension MeetingProcessingPipeline {
 
     /// The same bounded transport can start one recognizer while an attribution window is
     /// still growing. The recognizer owns its accumulator and joins each inference before
-    /// appending the next delta. No accepted frames leave the pending budget until it and its checkpoint return.
+    /// appending the next delta. Frames leave the pending budget after inference releases PCM;
+    /// the sole worker still joins the durable checkpoint before starting the next window.
     nonisolated static func makeProgressiveMemoryAudioConsumer(
         chunkSeconds: Double = 12,
-        maximumPendingSeconds: Double = 24,
+        maximumPendingSeconds: Double = 60,
         initialPreviewSeconds: Double = 3,
         previewIntervalSeconds: Double = 3,
         recognize: @escaping @Sendable (MeetingPCMProgressiveWindow, TimeInterval) async throws -> MeetingPCMTranscriptBatch,
@@ -165,7 +166,10 @@ nonisolated final class MeetingPCMProgressiveWindow: @unchecked Sendable {
 }
 
 /// Bounded PCM transport underneath MeetingProcessingPipeline. The budget includes the input
-/// tail, queued jobs AND in-flight recognition/checkpoint work. There is no audio file operation,
+/// tail, queued jobs AND in-flight recognition. A checkpoint retains only text, and remains
+/// serialized with recognition. The default 60-second ceiling is 3,840,000 PCM bytes, regardless
+/// of meeting duration, allowing short native model/IO stalls without an expanding queue.
+/// There is no audio file operation,
 /// path, materializer or provider-selection switch anywhere in this consumer.
 private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemoryAudioConsuming, @unchecked Sendable {
     fileprivate enum Recognition: Sendable {
@@ -211,10 +215,15 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
     private var tailStart: TimeInterval = 0
     private var jobs: [Job] = []
     private var pendingFrames = 0
+    private var peakPendingFrames = 0
     private var origin: CMTime?
     private var expectedPTS: CMTime?
     private var worker: Task<Void, Never>?
     private var finishTask: Task<Void, Error>?
+
+    var rejectionReason: String? {
+        self.lock.withLock { (self.terminalError as? MeetingMemoryAudioError)?.localizedDescription }
+    }
 
     init(chunkSeconds: Double, maximumPendingSeconds: Double, initialChunkSeconds: Double?,
          recognition: Recognition,
@@ -286,6 +295,7 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             }
             self.expectedPTS = pts + CMTime(value: Int64(frameCount), timescale: 16_000)
             self.pendingFrames += frameCount
+            self.peakPendingFrames = max(self.peakPendingFrames, self.pendingFrames)
             var position = 0
             while position < frameCount {
                 if let intervalFrames = self.previewIntervalFrames {
@@ -373,8 +383,10 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
         }
     }
 
-    private func consumeJobs() async {
-        while let job = self.lock.withLock({ () -> Job? in
+    /// This async scope ends before checkpoint IO starts, so no Job, PCM array or
+    /// progressive window remains retained by the worker while it saves text.
+    private func recognizeNextJob() async throws -> (batch: MeetingPCMTranscriptBatch, start: TimeInterval, frames: Int, elapsed: Int)? {
+        guard let job = self.lock.withLock({ () -> Job? in
             guard self.terminalError == nil, !self.jobs.isEmpty else {
                 self.worker = nil
                 return nil
@@ -382,37 +394,41 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             let job = self.jobs.removeFirst()
             self.activeProgressiveWindow = job.progressiveWindow
             return job
-        }) {
-            let started = ProcessInfo.processInfo.systemUptime
-            do {
-                try Task.checkCancellation()
-                let batch: MeetingPCMTranscriptBatch
-                switch (self.recognition, job) {
-                case (.sealed(let recognize), .sealed(let samples, let start)):
-                    batch = try await recognize(samples, start)
-                case (.progressive(_, let recognize), .progressive(let window, let start)):
-                    batch = try await recognize(window, start)
-                    guard window.consumedFinal else { throw MeetingMemoryAudioError.invalidPCM }
-                default: throw MeetingMemoryAudioError.invalidPCM
+        }) else { return nil }
+        let started = ProcessInfo.processInfo.systemUptime
+        try Task.checkCancellation()
+        let batch: MeetingPCMTranscriptBatch
+        switch (self.recognition, job) {
+        case (.sealed(let recognize), .sealed(let samples, let start)):
+            batch = try await recognize(samples, start)
+        case (.progressive(_, let recognize), .progressive(let window, let start)):
+            batch = try await recognize(window, start)
+            guard window.consumedFinal else { throw MeetingMemoryAudioError.invalidPCM }
+        default: throw MeetingMemoryAudioError.invalidPCM
+        }
+        try Task.checkCancellation()
+        return (batch, job.start, job.frameCount, Int((ProcessInfo.processInfo.systemUptime - started) * 1000))
+    }
+
+    private func consumeJobs() async {
+        do {
+            while let result = try await self.recognizeNextJob() {
+                self.lock.withLock {
+                    self.pendingFrames = max(0, self.pendingFrames - result.frames)
+                    self.activeProgressiveWindow = nil
                 }
                 try Task.checkCancellation()
                 let recognized = ProcessInfo.processInfo.systemUptime
-                try await self.checkpoint(batch)
-                let pending = self.lock.withLock { () -> Int in
-                    self.pendingFrames = max(0, self.pendingFrames - job.frameCount)
-                    self.activeProgressiveWindow = nil
-                    return self.pendingFrames
-                }
+                try await self.checkpoint(result.batch)
+                let pending = self.lock.withLock { (self.pendingFrames, self.peakPendingFrames) }
                 let checkpointMs = Int((ProcessInfo.processInfo.systemUptime - recognized) * 1000)
-                let operationMs = Int((recognized - started) * 1000)
                 // A growing-window callback also waits for future capture, unlike sealed ASR.
                 let timingLabel = self.previewIntervalFrames == nil ? "inferenceMs" : "windowMs"
-                self.diagnostic("window offset=\(job.start) frames=\(job.frameCount) \(timingLabel)=\(operationMs) checkpointMs=\(checkpointMs) pendingFrames=\(pending) budgetFrames=\(self.maximumPendingFrames)")
-            } catch {
-                self.fail(error)
-                self.lock.withLock { self.activeProgressiveWindow = nil; self.worker = nil }
-                return
+                self.diagnostic("window offset=\(result.start) frames=\(result.frames) \(timingLabel)=\(result.elapsed) checkpointMs=\(checkpointMs) pendingFrames=\(pending.0) peakPendingFrames=\(pending.1) budgetFrames=\(self.maximumPendingFrames)")
             }
+        } catch {
+            self.fail(error)
+            self.lock.withLock { self.activeProgressiveWindow = nil; self.worker = nil }
         }
     }
 
@@ -444,5 +460,73 @@ private final nonisolated class MeetingPipelineMemoryAudioConsumer: MeetingMemor
             self.diagnostic("stopped errorKind=\(kind) pendingFrames=\(pending.0) queuedWindows=\(pending.1) budgetFrames=\(self.maximumPendingFrames)")
             self.failure(error)
         }
+    }
+}
+
+/// The recording owns its RAM archive independently of optional live recognition. A slow or
+/// failed recognizer can catch up after Stop without stopping capture or losing accepted audio.
+/// Only archive/PCM errors reject capture. This does not create a file fallback.
+final nonisolated class MeetingArchivedMemoryAudioConsumer: MeetingMemoryAudioConsuming, @unchecked Sendable {
+    private let lock = NSLock()
+    private let archive: MeetingMemoryAudioArchive
+    private let speech: any MeetingMemoryAudioConsuming
+    private var accepting = true
+    private var rejectedSpeech = false
+    private var archiveFailure: Error?
+    private var expectedPTS: CMTime?
+    private var finishing: Task<Void, Error>?
+
+    init(archive: MeetingMemoryAudioArchive, speech: any MeetingMemoryAudioConsuming) {
+        self.archive = archive
+        self.speech = speech
+    }
+
+    var requiresSpeechReplay: Bool { self.lock.withLock { self.rejectedSpeech } }
+    var rejectionReason: String? { self.lock.withLock { self.archiveFailure?.localizedDescription } }
+
+    func enqueue(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        self.lock.withLock {
+            guard self.accepting, self.archiveFailure == nil else { return false }
+            do {
+                let frames = CMSampleBufferGetNumSamples(sampleBuffer)
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                guard frames > 0, frames <= 65_536, pts.isNumeric, pts >= .zero,
+                      let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+                      let contract = try? MeetingPCMFormatContract(formatDescription: description),
+                      contract.sampleRate == 16_000, contract.channelCount == 1,
+                      let copied = MeetingLiveSampleCopy.copy(sampleBuffer),
+                      let data = copied.buffer.floatChannelData?[0] else { throw MeetingMemoryAudioError.invalidPCM }
+                if let expectedPTS, abs(CMTimeGetSeconds(pts - expectedPTS)) > 1.0 / 16_000 {
+                    throw MeetingMemoryAudioError.timelineDiscontinuity
+                }
+                try self.archive.append(UnsafeBufferPointer(start: data, count: Int(copied.buffer.frameLength)))
+                self.expectedPTS = pts + CMTime(value: Int64(frames), timescale: 16_000)
+                if !self.rejectedSpeech, !self.speech.enqueue(sampleBuffer) { self.rejectedSpeech = true }
+                return true
+            } catch {
+                self.archiveFailure = error
+                self.accepting = false
+                return false
+            }
+        }
+    }
+
+    func finish() async throws {
+        let task = self.lock.withLock { () -> Task<Void, Error> in
+            if let finishing { return finishing }
+            self.accepting = false
+            let task = Task { [self] in
+                do { try self.archive.seal() }
+                catch { self.lock.withLock { self.archiveFailure = self.archiveFailure ?? error } }
+                // Join inference even when archive sealing failed. An ASR/privacy failure
+                // requests a fresh, complete replay after Stop, never raw-text publication.
+                do { try await self.speech.finish() }
+                catch { self.lock.withLock { self.rejectedSpeech = true } }
+                if let failure = self.lock.withLock({ self.archiveFailure }) { throw failure }
+            }
+            self.finishing = task
+            return task
+        }
+        try await task.value
     }
 }

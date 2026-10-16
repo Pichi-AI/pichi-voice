@@ -1264,6 +1264,8 @@ nonisolated struct MeetingProcessingCheckpoint: Codable, Equatable, Sendable {
     /// Immutable identity of the diarization implementation used to produce persisted speaker
     /// state. A dependency or configuration change must update this value so stale checkpoints
     /// cannot be resumed with different clustering behavior.
+    // Legacy compatibility uses the offline diarizer. Registered backends freeze
+    // their own artifact identity in MeetingFinalProcessingConfiguration.
     static let currentDiarizationFingerprint =
         "FluidAudio-offline-v1@3fd63887eef1dc25edea8263ce4b44aa854d898b;config=community-default-v1"
 

@@ -51,6 +51,25 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
                                                             duration: 5, units: [unit]))
     }
 
+    func testConfirmedOwnerUsesExistingSpeakerIdentityAndKeepsStableParticipantAliases() throws {
+        let track = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let owner = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let other = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-1")
+        let units = [owner, other].enumerated().map { index, token in
+            MeetingFinalTextUnit(id: "owner-fixture:\(index)", trackID: track, analysisEpochID: epoch,
+                precision: .utterance, text: "Synthetic meeting voice", analysisStart: Double(index * 6),
+                analysisEnd: Double(index * 6 + 6), speaker: .assigned(token), analysisSpanIDs: [])
+        }
+        let assembler = MeetingTranscriptAssembler()
+        let result = try assembler.assemblePCMWindow(attemptID: UUID(), epoch: epoch, offset: 0,
+            duration: 12, units: units, confirmedLocalUserTokens: [owner])
+        XCTAssertEqual(result.speakers.count, 2)
+        XCTAssertEqual(result.speakers.filter(\.isLocalUser).map(\.displayName), ["Speaker 1"])
+        XCTAssertEqual(result.speakers.filter { !$0.isLocalUser }.map(\.displayName), ["Speaker 2"])
+        XCTAssertTrue(result.segments.allSatisfy { $0.speakerID != nil })
+    }
+
     func testPCMInvalidWordTimingPreservesCompleteUntimedTextWithUncertainAttribution() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")

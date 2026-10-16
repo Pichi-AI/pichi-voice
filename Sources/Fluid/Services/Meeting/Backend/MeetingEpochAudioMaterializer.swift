@@ -77,8 +77,17 @@ nonisolated enum MeetingEpochMaterializationError: LocalizedError, Equatable {
 }
 
 /// Epoch materialization is backend work, injectable so backend tests exercise orchestration
-/// without real audio; the production implementation below is the single file-touching one.
+/// without real audio; eager fixture reads and bounded retained replay share this boundary.
 nonisolated protocol MeetingEpochAudioMaterializing: Sendable {
+    /// Replayable analysis audio. Production stages a bounded conversion to an owned temporary
+    /// file; the compatibility implementation is restricted to short injected fixtures.
+    func makeReplay(
+        epoch: MeetingAnalysisEpochRecord,
+        track: MeetingAnalysisTrackManifest,
+        manifest: MeetingAnalysisManifest,
+        sessionDirectory: URL
+    ) async throws -> MeetingEpochAudioReplay
+
     func materialize(
         epoch: MeetingAnalysisEpochRecord,
         track: MeetingAnalysisTrackManifest,
@@ -88,10 +97,9 @@ nonisolated protocol MeetingEpochAudioMaterializing: Sendable {
 }
 
 nonisolated struct MeetingEpochAudioMaterializer: MeetingEpochAudioMaterializing {
-    /// 256M mono Float32 samples occupies 1 GiB, allowing about 140 minutes across two
-    /// continuous 16 kHz tracks. This bounds retained PCM, not total process memory: decoding
-    /// and conversion need additional buffers. Replace with a scoped immutable disk working
-    /// store before production retention requirements grow further.
+    /// Safety bound for the eager compatibility API. Production retained-meeting processing
+    /// uses makeReplay, whose scoped disk derivative keeps conversion and inference bounded.
+    /// The eager API still refuses unbounded fixture/caller allocations.
     static let conservativeSampleLimit = 256 * 1024 * 1024
     let sampleRate: Double
 

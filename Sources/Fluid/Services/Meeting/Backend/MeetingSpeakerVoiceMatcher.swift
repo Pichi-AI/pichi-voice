@@ -177,7 +177,7 @@ nonisolated enum MeetingSpeakerVoiceMatcher {
         }
     }
 
-    private static func distance(_ left: MeetingSpeakerVoiceProfile, _ right: MeetingSpeakerVoiceProfile) -> Float? {
+    static func distance(_ left: MeetingSpeakerVoiceProfile, _ right: MeetingSpeakerVoiceProfile) -> Float? {
         guard left.embeddings.count == 2, right.embeddings.count == 2 else { return nil }
         var worst: Float = 0
         for lhs in left.embeddings {
@@ -309,6 +309,73 @@ nonisolated enum MeetingSpeakerVoiceMatcher {
                     }
                     clusters.append([observation])
                 }
+            }
+        }
+        return result
+    }
+}
+
+extension MeetingSpeakerVoiceSamples {
+    /// The stopped archive is replayable, so owner verification needs only two bounded,
+    /// disjoint three-second excerpts per global slot after the diarizer releases its weights.
+    /// No Float buffer or voice evidence grows with meeting duration.
+    nonisolated static func collect(
+        epoch: MeetingAnalysisEpochID, source: any MeetingPCMReplaySource,
+        segments: [MeetingNemotronSpeakerSegment]
+    ) async throws -> [Self] {
+        let duration = Double(source.totalSampleCount) / Double(self.sampleRate)
+        let valid = segments.filter {
+            (0..<8).contains($0.slotIndex) && $0.start.isFinite && $0.end.isFinite
+                && $0.start >= 0 && $0.end > $0.start && $0.end <= duration + 1e-6
+        }
+        var result: [Self] = []
+        for slot in Set(valid.map(\.slotIndex)).sorted() {
+            try Task.checkCancellation()
+            let candidates = valid.filter { $0.slotIndex == slot }
+                .sorted { $0.end - $0.start > $1.end - $1.start }.prefix(16)
+            var ranges: [Range<Int>] = []
+            for segment in candidates {
+                var pieces = [MeetingAnalysisInterval(start: segment.start, end: segment.end)]
+                for other in valid where other.slotIndex != slot {
+                    pieces = pieces.flatMap { piece -> [MeetingAnalysisInterval] in
+                        guard other.start < piece.end, other.end > piece.start else { return [piece] }
+                        var remaining: [MeetingAnalysisInterval] = []
+                        if other.start > piece.start { remaining.append(.init(start: piece.start, end: other.start)) }
+                        if other.end < piece.end { remaining.append(.init(start: other.end, end: piece.end)) }
+                        return remaining
+                    }
+                }
+                for piece in pieces {
+                    let start = max(0, Int(((piece.start + 0.16) * Double(self.sampleRate)).rounded(.up)))
+                    let end = min(source.totalSampleCount, Int(((piece.end - 0.16) * Double(self.sampleRate)).rounded(.down)))
+                    if end - start >= self.sampleRate / 2 { ranges.append(start..<end) }
+                }
+            }
+            var clips: [[Float]] = []
+            var pending: [Float] = []
+            var consumedEnd = 0
+            for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+                var start = max(consumedEnd, range.lowerBound)
+                while start < range.upperBound, clips.count < 2 {
+                    try Task.checkCancellation()
+                    let end = min(range.upperBound, start + 3 * self.sampleRate - pending.count)
+                    let samples = try await source.readSamples(in: start..<end)
+                    guard samples.count == end - start, samples.allSatisfy(\.isFinite) else {
+                        throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+                    }
+                    let energy = samples.reduce(Double.zero) { $0 + Double($1) * Double($1) }
+                    if energy / Double(samples.count) > 1e-8 { pending.append(contentsOf: samples) }
+                    start = end
+                    if pending.count == 3 * self.sampleRate {
+                        clips.append(pending)
+                        pending.removeAll(keepingCapacity: true)
+                    }
+                }
+                consumedEnd = max(consumedEnd, range.upperBound)
+                if clips.count == 2 { break }
+            }
+            if clips.count == 2 {
+                result.append(Self(token: .init(analysisEpochID: epoch, label: "slot-\(slot)"), clips: clips))
             }
         }
         return result
