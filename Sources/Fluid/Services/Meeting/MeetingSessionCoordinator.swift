@@ -1421,6 +1421,7 @@ final class MeetingSessionCoordinator: ObservableObject {
               self.isSafeToSweep(sessionID: session.id),
               let directory = try? await self.store.existingSessionDirectory(for: session.id)
         else { return }
+        guard self.isSafeToSweep(sessionID: session.id) else { return }
         if session.retention.audioDeletedAt == nil {
             // Completion is already durable. A crash before cache removal must not retain
             // sensitive working text indefinitely under a never-delete-audio policy.
