@@ -130,9 +130,9 @@ python3 tools/meeting-native-eval/score.py \
   --split development --output /absolute/private/development-weak-analysis.json
 ```
 
-The eight synthetic scorer oracles check unknown and assigned denominators, incorrect assigned
+The nine synthetic scorer oracles check unknown and assigned denominators, incorrect assigned
 labels, undefined selective disagreement, exact collars, fixed mapping, interval duplication,
-text-free diagnostic output and aggregate count weighting. The scorer validates frozen reference
+text-free diagnostic output, aggregate count weighting and verified historical-derivative lineage. The scorer validates frozen reference
 hashes and original native evidence hashes before comparing policies.
 
 Reports retain strict weak-reference and exact 1-second/2-second collar profiles. The collars
@@ -182,3 +182,9 @@ replay and array hashes and says explicitly that no new model inference occurred
 The helper refuses existing outputs and never rewrites its historical input. A final actual
 end-to-end model rerun requires an independent native output directory; it is separate evidence
 from this deterministic postprocessing replay.
+
+A comparison may contain an old version 1 replay and a version 2 replay only when the supplied
+native document is the explicit offline derivative. The scorer reconstructs that derivative from
+the original historical bytes and requires exact equality before accepting either evidence hash.
+It rejects altered source arrays or unverifiable provenance rather than silently trusting a changed
+word timeline. This lineage allowance is confined to the offline scorer.

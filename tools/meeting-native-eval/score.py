@@ -22,12 +22,33 @@ TIMELINE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = TIMELINE
 SPEC.loader.exec_module(TIMELINE)
 S = TIMELINE.Segment
+MIGRATION_SPEC = importlib.util.spec_from_file_location('native_offline_migration', Path(__file__).with_name('migrate_replay_v2.py'))
+MIGRATION = importlib.util.module_from_spec(MIGRATION_SPEC)
+sys.modules[MIGRATION_SPEC.name] = MIGRATION
+MIGRATION_SPEC.loader.exec_module(MIGRATION)
 
 def read(path):
     return json.loads(Path(path).read_text())
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+def evidence_lineage_hashes(path, evidence):
+    """Accept old replay hashes only for the explicit byte-preserving historical derivative."""
+    original_hashes = {sha(path)}
+    provenance = evidence.get('offlineReplayMigration')
+    if provenance:
+        source_path = Path(provenance['originalEvidencePath'])
+        source = source_path.read_bytes()
+        if hashlib.sha256(source).hexdigest() != provenance['originalEvidenceSHA256']:
+            raise ValueError('Historical source evidence changed')
+        expected, _ = MIGRATION.derive(source, evidence['nativeProjectionPolicy'], source_path,
+                                       provenance['replayBuildManifestSHA256'])
+        if expected != Path(path).read_bytes():
+            raise ValueError('Derivative does not preserve exact original native arrays/provenance')
+        original_hashes.add(provenance['originalEvidenceSHA256'])
+    return original_hashes
+
 
 def union(intervals):
     values = []
@@ -209,6 +230,7 @@ def main():
         clip_id = clip['clip_id']
         evidence_path = args.native_directory / 'evidence' / (clip_id + '.json')
         evidence = read(evidence_path)
+        lineage_hashes = evidence_lineage_hashes(evidence_path, evidence)
         if evidence['audioSHA256'] != clip['audio_sha256'] or evidence['sampleCount'] != round(clip['duration_seconds']*evidence['sampleRate']):
             raise ValueError('Native evidence differs from frozen corpus')
         if sha(clip['weak_reference_path']) != clip['weak_reference_sha256']:
@@ -223,7 +245,7 @@ def main():
         case = {'clip_id': clip_id, 'meeting_id': clip['meeting_id'], 'split': clip['split'],
                 'weak_speaker_count': clip['observed_weak_speaker_count'], 'language_condition': clip['language_condition'],
                 'source_start_fraction': source_fraction, 'source_fraction_stratum': 'early' if source_fraction < 1/3 else 'middle' if source_fraction < 2/3 else 'late',
-                'native_words': len(units), 'native_word_seconds': sum(u['analysisEnd']-u['analysisStart'] for u in units),
+                'evidence_lineage_sha256': sorted(lineage_hashes), 'native_words': len(units), 'native_word_seconds': sum(u['analysisEnd']-u['analysisStart'] for u in units),
                 'native_activity_intervals': len(evidence['activity']), 'native_active_slot_count':len({s.speaker for s in activity}),
                 'native_model_unvoiced_fraction': 1-duration([(s.start,s.end) for s in activity])/clip['duration_seconds'],
                 'frozen_native_to_weak_reference_mapping': mapping, 'mapping_proof':mapping_proof,
@@ -238,7 +260,7 @@ def main():
             if run_manifest['status'] != 'complete' or run_manifest['corpus_manifest_sha256'] != sha(args.manifest):
                 raise ValueError('Replay run not completed against this frozen corpus')
             replay = read(Path(directory)/(clip_id+'.json'))
-            if replay['evidenceSHA256'] != sha(evidence_path) or not replay['deterministicRepeatEqual']:
+            if replay['evidenceSHA256'] not in lineage_hashes or not replay['deterministicRepeatEqual']:
                 raise ValueError('Policy replay not pinned to exact native source evidence')
             decisions = {decision['unitID']: decision for decision in replay['resolution']['decisions']}
             if set(decisions) != {unit['id'] for unit in units} or len(decisions) != len(replay['resolution']['decisions']):
