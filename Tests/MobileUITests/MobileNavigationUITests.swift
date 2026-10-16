@@ -294,6 +294,40 @@ final class MobileNavigationUITests: XCTestCase {
     }
 
 
+    func testRetainedProcessingRecoveryActionsInBothLanguagesAndThemes() throws {
+        let fixtureID = "2C920909-152B-4050-9ACB-454E82411015"
+        for (language, appearance, historyTitle, restartTitle) in [
+            ("en", "light", "History", "Start processing again"),
+            ("ru", "dark", "История", "Начать обработку заново")
+        ] {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            waitForOrientation(portrait: true)
+            openNavigation("history", title: historyTitle)
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            guard meeting.waitForExistence(timeout: 5) else {
+                throw XCTSkip("Stage the synthetic RetainedRecoveryMeeting.json and silent audio in the simulator store")
+            }
+            meeting.tap()
+            capture("retained-recovery-\(language)-opened")
+            let retry = app.buttons["meeting.retry"]
+            let restart = app.buttons["meeting.restartProcessing"]
+            XCTAssertTrue(retry.waitForExistence(timeout: 5))
+            XCTAssertTrue(restart.waitForExistence(timeout: 5))
+            XCTAssertEqual(restart.label, restartTitle)
+            XCTAssertTrue(retry.isHittable && restart.isHittable,
+                          "Continue and restart must both be reachable without covering each other")
+            XCTAssertTrue(retry.frame.intersection(restart.frame).isEmpty)
+            capture("retained-recovery-\(language)-portrait-actions")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            XCTAssertTrue(retry.isHittable && restart.isHittable)
+            capture("retained-recovery-\(language)-landscape-actions")
+        }
+    }
+
     func testNativeRussianGlyphCoverage() throws {
         let letters = Array("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя".utf16)
         let designs: [UIFontDescriptor.SystemDesign] = [.default, .serif, .rounded, .monospaced]
