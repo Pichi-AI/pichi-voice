@@ -2,13 +2,19 @@ import Foundation
 @testable import FluidVoice_Debug
 import XCTest
 
-private struct SyntheticPersonRedactor: TranscriptTextRedacting {
+private actor SyntheticPersonRedactor: TranscriptTextRedacting {
+    let approvesPreview: Bool
+    private(set) var inputs: [String] = []
+    init(approvesPreview: Bool = false) { self.approvesPreview = approvesPreview }
+
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        self.inputs.append(text)
         let input = text as NSString
         let range = input.range(of: "Анна Тестова")
         guard range.location != NSNotFound else { return TranscriptTextRedaction(text: text, spans: []) }
         return TranscriptTextRedaction(text: input.replacingCharacters(in: range, with: "[PERSON]"),
-                                       spans: [.init(range: range, replacement: "[PERSON]")])
+                                       spans: [.init(range: range, replacement: "[PERSON]")],
+                                       provisionalSafeUTF16: self.approvesPreview ? input.length : nil)
     }
 }
 
@@ -20,18 +26,42 @@ private struct SyntheticFailingRedactor: TranscriptTextRedacting {
 final class MeetingPrivacyPublicationTests: XCTestCase {
     func testLivePartialUsesPriorPhraseContextWithoutChangingIdentityOrTiming() async throws {
         let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: "Анна", start: 0, end: 1)
-        let partial = MeetingLivePartial(id: UUID(), text: "Тестова просит копию.", start: 1)
+        var partial = MeetingLivePartial(id: UUID(), text: "Тестова просит копию.", start: 1, end: 3)
         var snapshot = MeetingLiveTranscriptSnapshot.empty
         snapshot.utterances = [utterance]
         snapshot.partials = [.you: partial]
-        let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: SyntheticPersonRedactor())
-        XCTAssertEqual(safe.utterances[0].text, "[PERSON]")
-        XCTAssertEqual(safe.partials[.you]?.text, "[PERSON] просит копию.")
-        XCTAssertEqual(safe.utterances[0].id, utterance.id)
-        XCTAssertEqual(safe.utterances[0].start, utterance.start)
-        XCTAssertEqual(safe.partials[.you]?.id, partial.id)
-        XCTAssertEqual(safe.partials[.you]?.start, partial.start)
-        XCTAssertEqual(snapshot.utterances[0].text, "Анна")
+        let approvedRedactor = SyntheticPersonRedactor(approvesPreview: true)
+        let unstable = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: approvedRedactor)
+        XCTAssertTrue(unstable.utterances.isEmpty)
+        XCTAssertTrue(unstable.partials.isEmpty)
+        let unstableInputs = await approvedRedactor.inputs
+        XCTAssertEqual(unstableInputs, ["Анна"], "An unstable partial cannot enter privacy inference")
+
+        partial.stableUTF16Count = partial.text.utf16.count
+        snapshot.partials[.you] = partial
+        let unapproved = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: SyntheticPersonRedactor())
+        XCTAssertTrue(unapproved.utterances.isEmpty)
+        XCTAssertTrue(unapproved.partials.isEmpty, "Stable recognition does not itself authorize publication")
+
+        // Explicit adapter approval exercises projection only. The real detector's bounded
+        // lexical admission and canonical finish are covered in MeetingPrivacyContextTests.
+        let safe = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: approvedRedactor)
+        XCTAssertEqual(safe.utterances.count, 1)
+        let safeUtterance = try XCTUnwrap(safe.utterances.first)
+        let safePartial = try XCTUnwrap(safe.partials[.you])
+        XCTAssertEqual(safeUtterance.text, "[PERSON]")
+        XCTAssertEqual(safePartial.text, "[PERSON] просит копию.")
+        XCTAssertEqual(safeUtterance.id, utterance.id)
+        XCTAssertEqual(safeUtterance.speaker, utterance.speaker)
+        XCTAssertEqual(safeUtterance.start, utterance.start)
+        XCTAssertEqual(safeUtterance.end, utterance.end)
+        XCTAssertFalse(safeUtterance.hasIncompleteTextCoverage)
+        XCTAssertEqual(safePartial.id, partial.id)
+        XCTAssertEqual(safePartial.start, partial.start)
+        XCTAssertEqual(safePartial.end, partial.end)
+        XCTAssertNil(safePartial.stableUTF16Count, "Raw offsets do not describe redacted text")
+        XCTAssertEqual(snapshot.utterances, [utterance])
+        XCTAssertEqual(snapshot.partials[.you], partial)
     }
 
     func testUtteranceKeepsUnrelatedTextAndTimingAfterPIIRedaction() async throws {

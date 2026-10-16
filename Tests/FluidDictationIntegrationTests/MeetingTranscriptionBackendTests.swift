@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import PichiGigaAM
 import PichiTextPrivacy
 @testable import FluidVoice_Debug
 import Foundation
@@ -1385,11 +1386,25 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
                             languages: Set<String> = ["en"], tracks: Set<MeetingAudioTrackKind> = [.microphone],
                             contract: MeetingBackendResultContract = .canonicalEvidence,
                             sampleRate: Double = 16_000,
-                            inputs: Set<MeetingBackendInputKind> = [.recordedChunks, .boundedMicrophonePCM]) -> MeetingBackendDescriptor {
+                            inputs: Set<MeetingBackendInputKind> = [.recordedChunks, .boundedMicrophonePCM],
+                            restrictions: [MeetingPCMAdmissionRestriction] = []) -> MeetingBackendDescriptor {
         MeetingBackendDescriptor(id: id, version: version, execution: .local,
             supportedLanguageCodes: languages, supportedTrackKinds: tracks, supportedFinalPrecisions: [.utterance],
             resultContract: contract, knownLimits: [], analysisSampleRate: sampleRate,
-            diarizationDependencies: [.speakerSeparation, .voiceMatching], supportedInputs: inputs)
+            diarizationDependencies: [.speakerSeparation, .voiceMatching], supportedInputs: inputs,
+            pcmAdmissionRestrictions: restrictions)
+    }
+
+    /// An injected policy exercises exact restriction matching independently of the production
+    /// registrations. The former capture-time GigaAM workload restriction was retired when
+    /// speaker analysis moved to the post-Stop RAM replay operation.
+    private func restrictedDescriptor() -> MeetingBackendDescriptor {
+        self.descriptor(id: .gigaam, languages: ["ru"], restrictions: [
+            .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10",
+                asrArtifactFingerprint: "synthetic-restricted-export", speakerLabelsEnabled: true,
+                piiRedactionEnabled: true, modelDisplayName: "Synthetic restricted model",
+                alternativeModelDisplayName: "Synthetic alternative model")
+        ])
     }
 
     private func session(backendID: MeetingBackendID = backendID, language: String = "en",
@@ -1649,11 +1664,11 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         XCTAssertEqual(probe.service, 0)
     }
 
-    func testMeasuredPCMRestrictionIsExactAndPreservesNeighborConfigurations() throws {
-        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: PichiMeetingProviderFactory.gigaamModelID))
+    func testRegisteredPCMRestrictionIsExactAndPreservesNeighborConfigurations() throws {
+        let descriptor = self.restrictedDescriptor()
         let restriction = try XCTUnwrap(descriptor.pcmAdmissionRestrictions.first)
         XCTAssertEqual(descriptor.pcmAdmissionRestrictions.count, 1)
-        XCTAssertTrue(restriction.asrArtifactFingerprint.contains("gigaam-v3-e2e-ctc-int8"))
+        XCTAssertEqual(restriction.asrArtifactFingerprint, "synthetic-restricted-export")
         let configuration = MeetingFinalProcessingConfiguration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
             asrArtifactFingerprint: restriction.asrArtifactFingerprint, languageCode: "ru", speakerLabelsEnabled: true)
         let context = MeetingPCMAdmissionContext(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: true)
@@ -1691,15 +1706,19 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         }
     }
 
-    func testFrozenPublicExportAndPIIRejectBeforeResourcePreparation() async throws {
-        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: PichiMeetingProviderFactory.gigaamModelID))
+    func testFrozenRegisteredRestrictionRejectsBeforeResourcePreparation() async throws {
+        let descriptor = self.restrictedDescriptor()
         let restriction = try XCTUnwrap(descriptor.pcmAdmissionRestrictions.first)
         let probe = Probe()
+        let registry = MeetingTranscriptionBackendRegistry()
+        registry.register(descriptor.id, descriptor: descriptor) { context in
+            PCMBackend(descriptor: descriptor, context: context, probe: probe)
+        }
         let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
             probe.service += 1; XCTFail("Admission must precede ASR residency"); return ASRService()
         }, managesModelResidency: false, pcmAdmissionContextProvider: { pii in
             .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: pii)
-        }, backendRegistry: .makeDefault(), meetingRuntimeFactory: { _ in
+        }, backendRegistry: registry, meetingRuntimeFactory: { _ in
             probe.runtime += 1; throw RuntimeReached()
         }, prepareDiarizationDependencies: { _ in probe.dependencies += 1 })
         var session = self.session(backendID: .gigaam, language: "ru")
@@ -1708,6 +1727,69 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
         session.recordingASRArtifactFingerprint = restriction.asrArtifactFingerprint
         await self.reject(pipeline, session: session,
             expected: .unsupportedPCMConfiguration(backend: descriptor.id, restriction: restriction), probe: probe)
+    }
+
+    func testFrozenPublicExportAndA1PrivacyAdmissionPreserveTheRegisteredRoute() async throws {
+        struct UnusedRedactor: TranscriptTextRedacting {
+            func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+                XCTFail("Admission cannot transcribe or redact text")
+                return .init(text: text, spans: [])
+            }
+        }
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: PichiMeetingProviderFactory.gigaamModelID))
+        let fingerprint = GigaAMModelCatalog.downloadableModel.fingerprint
+        // The new text-privacy resource is independent of ASR/backend identity. This is
+        // admission coverage only; the injected adapter never claims native A1 inference.
+        XCTAssertEqual(PichiTranscriptPrivacyModelStore.descriptor, PIIModelDescriptor.russianA1)
+        XCTAssertTrue(descriptor.pcmAdmissionRestrictions.isEmpty)
+        for privacyAvailable in [false, true] {
+            let probe = Probe()
+            var frozenRequest: MeetingBackendRequest?
+            var privacyLookups = 0
+            let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
+                probe.service += 1; XCTFail("Admission marker precedes ASR residency"); return ASRService()
+            }, managesModelResidency: false, privacyRedactorProvider: {
+                privacyLookups += 1
+                return privacyAvailable ? UnusedRedactor() : nil
+            }, pcmAdmissionContextProvider: { pii in
+                .init(physicalDeviceModel: "iPad7,1", operatingSystemVersion: "17.7.10", piiRedactionEnabled: pii)
+            }, backendRegistry: .makeDefault(), meetingRuntimeFactory: { request in
+                frozenRequest = request
+                probe.runtime += 1
+                throw RuntimeReached()
+            }, prepareDiarizationDependencies: { _ in probe.dependencies += 1 })
+            var session = self.session(backendID: .gigaam, language: "ru")
+            session.piiRedactionEnabled = true
+            session.speakerLabelsEnabled = true
+            session.recordingASRArtifactFingerprint = fingerprint
+            do {
+                try await pipeline.prepareMemoryAudio(session: session,
+                    sessionDirectory: URL(fileURLWithPath: "/synthetic-uncreated-session"),
+                    checkpoint: { _ in XCTFail("Admission cannot publish") })
+                XCTFail("An unavailable privacy adapter or runtime marker must stop preparation")
+            } catch is RuntimeReached {
+                XCTAssertTrue(privacyAvailable)
+            } catch {
+                XCTAssertFalse(privacyAvailable)
+                guard let privacyError = error as? MeetingPrivacyPublicationError,
+                      case .redactorUnavailable = privacyError else {
+                    XCTFail("Unexpected admission error: \(error)")
+                    continue
+                }
+            }
+            XCTAssertEqual(probe.dependencies, 1)
+            XCTAssertEqual(privacyLookups, 1)
+            XCTAssertEqual(probe.runtime, privacyAvailable ? 1 : 0)
+            XCTAssertEqual(probe.service, 0)
+            XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+            if privacyAvailable {
+                let request = try XCTUnwrap(frozenRequest)
+                XCTAssertEqual(request.session, session)
+                XCTAssertEqual(request.configuration.asrModel, PichiMeetingProviderFactory.gigaamModelID)
+                XCTAssertEqual(request.configuration.asrArtifactFingerprint, fingerprint)
+                XCTAssertTrue(request.configuration.speakerLabelsEnabled)
+            } else { XCTAssertNil(frozenRequest) }
+        }
     }
 }
 
