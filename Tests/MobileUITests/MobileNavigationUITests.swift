@@ -284,7 +284,9 @@ final class MobileNavigationUITests: XCTestCase {
             // A phone in landscape may virtualize the paragraph below its header. Scroll
             // it into the accessibility tree before asking for an off-screen element's frame.
             if !paragraph.exists {
-                scroll.swipeUp()
+                let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+                let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+                from.press(forDuration: 0.05, thenDragTo: to)
                 capture("\(step)-reveal-\(attempt)")
                 continue
             }
