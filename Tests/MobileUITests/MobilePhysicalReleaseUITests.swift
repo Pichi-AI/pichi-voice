@@ -470,6 +470,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try require(sixtySecondTimer >= thirtySecondTimer + 25, "The visible timer must keep advancing during the second speech interval")
             try await visibleCheckpoint("08-recording-60-seconds", app: app, revision: revision, directory: checkpoints)
             print("[VISIBLE_UI_RECORDING] timerBeforeSpeech=\(beforeSpeechTimer) timerAtSpeech=\(speechStartTimer) timerAt30=\(thirtySecondTimer) timerAt60=\(sixtySecondTimer) liveCharacters=\(liveTextCharacterCount(in: app))")
+            try require(liveTextCharacterCount(in: app) > 0, "Audible input must produce actual visible live text before Stop")
 
             player.stop()
             try require(!player.isPlaying, "Stop the owned speech player before stopping capture")
@@ -580,6 +581,9 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             if app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isEnabled {
                 try verifyVisibleRecording(in: app)
                 return
+            }
+            if app.buttons["meeting.recording"].exists {
+                throw verificationFailure("The recording container identifier replaced the Stop button identifier")
             }
             if app.alerts.count > 0 || app.buttons["meeting.retry"].exists {
                 throw verificationFailure("The real Start action exposed an alert or failed attempt")
