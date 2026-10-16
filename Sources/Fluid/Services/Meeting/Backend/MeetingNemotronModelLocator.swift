@@ -173,14 +173,13 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
         var manifestSHA256 = ""
         var entryMetadata: [(path: String, size: Int, modified: TimeInterval)] = []
 
-        guard let enumerator = manager.enumerator(
-            at: url,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: []
-        ) else {
+        // Enumerate relative names. URL enumeration can return /private/var children for a
+        // /var root, so slicing absolute paths by the root's string length corrupts names.
+        guard let enumerator = manager.enumerator(atPath: url.path) else {
             throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packageUnreadable")
         }
-        for case let entry as URL in enumerator {
+        for case let relativePath as String in enumerator {
+            let entry = url.appendingPathComponent(relativePath)
             let values = try resourceValues(entry)
             if values.isSymbolicLink == true {
                 throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packageContainsSymlink")
@@ -195,7 +194,6 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
             guard totalByteCount <= Self.maximumTotalByteCount else {
                 throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "packageTooLarge")
             }
-            let relativePath = String(entry.path.dropFirst(url.path.count + 1))
             entryMetadata.append((
                 path: relativePath,
                 size: logicalSize,
