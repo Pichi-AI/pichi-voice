@@ -151,3 +151,34 @@ An optional ASR edit diagnostic compares only complete, non-clipped automatic re
 native words in their actual intervals. It is separate from speaker policy and remains a weak
 text disagreement measure, not human-annotated WER. It excludes entire reference turns at clipped
 window edges rather than inventing alignment or using their out-of-window text.
+
+## Explicit historical-policy replay derivative
+
+Policy version 2 changes ownership semantics, so production decoders correctly reject a version 1
+policy. Historical native evidence remains immutable. The offline helper below creates a new,
+explicitly identified derivative and does not weaken the production decoder:
+
+```sh
+python3 tools/meeting-native-eval/test_migrate_replay_v2.py
+python3 tools/meeting-native-eval/migrate_replay_v2.py \
+  --source-evidence /absolute/private/original-v1/clip.json \
+  --derivative-evidence /absolute/private/derivative-v2/clip.json \
+  --replay-output /absolute/private/replayed-v2/clip.json \
+  --migration-report /absolute/private/migration/clip.json \
+  --runner "$PWD/.build/meeting-native-eval/runner" \
+  --build-manifest "$PWD/.build/meeting-native-eval/build-manifest.json"
+```
+
+The current native executable exports its own standard policy with `write-policy`. The helper
+permits only schema 1 to 2 and otherwise identical numerical policy values. It replaces only the
+top-level policy object and inserts provenance containing the original full source hash, original
+policy, new policy and replay build hash. The `units`, `activity`, historical baseline assignment
+arrays and original acoustic projection arrays retain their exact original UTF-8 JSON bytes. The
+historical model-inference metadata remains unchanged and still describes the original inference.
+The actual current Swift core must reproduce every original acoustic assignment exactly, then
+record the new version 2 fingerprint. The output migration report includes source, derivative,
+replay and array hashes and says explicitly that no new model inference occurred.
+
+The helper refuses existing outputs and never rewrites its historical input. A final actual
+end-to-end model rerun requires an independent native output directory; it is separate evidence
+from this deterministic postprocessing replay.

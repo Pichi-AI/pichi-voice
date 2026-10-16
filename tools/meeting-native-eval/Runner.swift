@@ -148,7 +148,11 @@ nonisolated struct ReplayResult: Codable {
     static func main() async throws {
         let args = CommandLine.arguments
         guard args.count >= 2 else { fatalError("Use infer WAV GIGAAM_DIR FAST32_DIR OUTPUT CLIP_ID COMPUTE or replay EVIDENCE OUTPUT [POLICY].") }
-        if args[1] == "infer" {
+        if args[1] == "write-policy" {
+            guard args.count == 3 else { fatalError("write-policy expects one new output path") }
+            try self.write(MeetingSpeakerAttributionPolicy.standard, to: args[2])
+            print("PASS exported current native policy version=\(MeetingSpeakerAttributionPolicy.currentVersion)")
+        } else if args[1] == "infer" {
             guard args.count == 8 else { fatalError("infer expects six arguments") }
             let source = try WAVSource(path: args[2])
             let gigaDirectory = URL(fileURLWithPath: args[3], isDirectory: true)
