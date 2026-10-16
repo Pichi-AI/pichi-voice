@@ -75,19 +75,42 @@ private struct CombinedMeetingReference: Decodable {
     let sensitiveAliases: [[String]] // each row describes one entity's ASR spellings
     let textAnchors: [String] // reviewed non-sensitive words that privacy must preserve
 
-    func validate(duration: Double) throws {
+    private enum CodingKeys: String, CodingKey { case provenance, turns, sensitiveAliases, textAnchors }
+    init(provenance: String, turns: [Turn], sensitiveAliases: [[String]], textAnchors: [String]) {
+        self.provenance = provenance; self.turns = turns
+        self.sensitiveAliases = sensitiveAliases; self.textAnchors = textAnchors
+    }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(provenance: try values.decode(String.self, forKey: .provenance),
+                  turns: try values.decode([Turn].self, forKey: .turns),
+                  sensitiveAliases: try values.decodeIfPresent([[String]].self, forKey: .sensitiveAliases) ?? [],
+                  textAnchors: try values.decodeIfPresent([String].self, forKey: .textAnchors) ?? [])
+    }
+    var containsOverlap: Bool {
+        var end = 0.0
+        for turn in turns.sorted(by: { $0.start < $1.start }) {
+            if turn.start < end { return true }
+            end = max(end, turn.end)
+        }
+        return false
+    }
+    func validate(duration: Double, privateEvaluation: Bool = false) throws {
         guard ["synthetic", "human-reviewed", "weak-fathom"].contains(provenance),
-              turns.count >= 2, turns.count <= 512,
-              Set(turns.map(\.speaker)).count >= 2, Set(turns.map(\.speaker)).count <= 6,
-              textAnchors.count >= 2, textAnchors.count <= 32,
+              duration.isFinite, duration > 0,
+              turns.count >= (privateEvaluation ? 1 : 2), turns.count <= 512,
+              Set(turns.map(\.speaker)).count >= (privateEvaluation ? 1 : 2),
+              Set(turns.map(\.speaker)).count <= (privateEvaluation ? 8 : 6),
+              textAnchors.count >= (privateEvaluation ? 0 : 2), textAnchors.count <= 32,
               textAnchors.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf16.count <= 128 }),
-              !sensitiveAliases.isEmpty, sensitiveAliases.count <= 64,
+              (privateEvaluation || !sensitiveAliases.isEmpty), sensitiveAliases.count <= 64,
               sensitiveAliases.allSatisfy({ !$0.isEmpty && $0.count <= 16 && $0.allSatisfy {
                   !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf16.count <= 256
               } }) else { throw NSError(domain: "InvalidCombinedMeetingReference", code: 1) }
         var previousEnd = 0.0
         for turn in turns {
-            guard turn.start.isFinite, turn.end.isFinite, turn.start >= previousEnd,
+            guard turn.start.isFinite, turn.end.isFinite, turn.start >= 0,
+                  (privateEvaluation || turn.start >= previousEnd),
                   turn.end > turn.start, turn.end <= duration else {
                 throw NSError(domain: "InvalidCombinedMeetingReference", code: 2)
             }
@@ -229,6 +252,106 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
     }
 }
 
+/// Private controls are separate from the legacy simulator visual-review gate.
+private nonisolated struct CombinedEvaluationOptions {
+    let privateEvaluation: Bool
+    let repetitions: Int
+    init(environment: [String: String]) throws {
+        privateEvaluation = environment["PICHI_COMBINED_MEETING_PRIVATE_EVALUATION"] == "1"
+        guard let count = Int(environment["PICHI_COMBINED_MEETING_REPETITIONS"] ?? "1"),
+              (1...3).contains(count), privateEvaluation || count == 1 else {
+            throw NSError(domain: "CombinedMeetingEvaluationOptions", code: 1)
+        }
+        repetitions = count
+    }
+}
+
+/// Reads the process counter off MainActor. The caller owns and joins its sampling Task.
+private nonisolated final class CombinedResourceSamples: @unchecked Sendable {
+    struct Sample: Sendable {
+        let phase: String
+        let elapsed: Double
+        let bytes: UInt64
+        let thermalState: Int
+        var json: [String: Any] {
+            ["phase": phase, "elapsedSeconds": elapsed, "footprintBytes": bytes, "thermalState": thermalState]
+        }
+    }
+    struct Snapshot: Sendable {
+        let samples: [Sample]
+        let missing: Int
+        let omitted: Int
+        let maximumGap: Double
+        let missedIntervals: Int
+        let maximumThermalState: Int
+    }
+    private let lock = NSLock()
+    private let limit: Int
+    private var phase = "preparation"
+    private var rows: [Sample] = []
+    private var missing = 0
+    private var omitted = 0
+    private var previousElapsed: Double?
+    private var maximumGap = 0.0
+    private var missedIntervals = 0
+    private var maximumThermalState = 0
+    init(limit: Int = 10_000) { self.limit = limit }
+    func setPhase(_ value: String) { lock.withLock { phase = value } }
+    func capture(since started: Double) {
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        let bytes = Self.footprintBytes()
+        record(elapsed: elapsed, bytes: bytes, thermalState: ProcessInfo.processInfo.thermalState.rawValue)
+    }
+    func record(elapsed: Double, bytes: UInt64?, thermalState: Int) {
+        lock.withLock {
+            if let previousElapsed {
+                let gap = max(0, elapsed - previousElapsed)
+                maximumGap = max(maximumGap, gap)
+                missedIntervals += max(0, Int((gap / 0.25).rounded(.down)) - 1)
+            }
+            previousElapsed = elapsed
+            maximumThermalState = max(maximumThermalState, thermalState)
+            guard let bytes else { missing += 1; return }
+            guard rows.count < limit else { omitted += 1; return }
+            rows.append(.init(phase: phase, elapsed: elapsed, bytes: bytes, thermalState: thermalState))
+        }
+    }
+    func snapshot() -> Snapshot {
+        lock.withLock { .init(samples: rows, missing: missing, omitted: omitted, maximumGap: maximumGap,
+                             missedIntervals: missedIntervals, maximumThermalState: maximumThermalState) }
+    }
+    static func footprintBytes() -> UInt64? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return status == KERN_SUCCESS ? info.phys_footprint : nil
+    }
+}
+
+/// Only post-privacy product values. No embeddings, contact identities, human names,
+/// originalText or source audio are exported by this test helper.
+private nonisolated enum CombinedProtectedEvaluation {
+    static func values(segments: [MeetingTranscriptSegment], speakers: [MeetingSessionSpeaker]) throws -> [String: Any] {
+        guard segments.count <= 100_000, speakers.count <= 512,
+              segments.reduce(0, { $0 + $1.text.utf16.count }) <= 4_194_304 else {
+            throw NSError(domain: "CombinedMeetingProtectedEvidenceSize", code: 1)
+        }
+        let encoder = JSONEncoder()
+        let sanitized = segments.map { value in var copy = value; copy.originalText = nil; return copy }
+        let rows: [[String: Any]] = speakers.enumerated().map { index, speaker in
+            var row: [String: Any] = ["id": speaker.id.uuidString, "displayName": "Speaker \(index + 1)",
+                                     "trackKind": speaker.trackKind.rawValue, "isLocalUser": speaker.isLocalUser]
+            if let merged = speaker.mergedIntoSpeakerID { row["mergedIntoSpeakerID"] = merged.uuidString }
+            return row
+        }
+        return ["segments": try JSONSerialization.jsonObject(with: encoder.encode(sanitized)), "speakers": rows]
+    }
+}
+
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
     /// No audio, preparation, or model downloads occur without this separate gate.
@@ -239,6 +362,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         guard environment["PICHI_COMBINED_MEETING_E2E"] == "1" else {
             throw XCTSkip("Explicitly enable combined Russian fixture inference")
         }
+        let options = try CombinedEvaluationOptions(environment: environment)
+        // Same XCTest process, fresh service compositions. This does not prove warm residency.
+        for repetition in 1...options.repetitions {
+            try Task.checkCancellation()
+            try await runCombinedRussianMeeting(environment: environment, options: options, repetition: repetition)
+        }
+    }
+
+    private func runCombinedRussianMeeting(environment: [String: String], options: CombinedEvaluationOptions,
+                                           repetition: Int) async throws {
         let asrModel = try XCTUnwrap(SettingsStore.SpeechModel(rawValue:
             environment["PICHI_COMBINED_MEETING_ASR"] ?? SettingsStore.SpeechModel.whisperTiny.rawValue),
             "An explicit ASR identifier must resolve without a model fallback")
@@ -268,7 +401,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             throw NSError(domain: "CombinedMeetingPCMFormatOrDuration", code: 1)
         }
         let duration = Double(input.length) / 16_000
-        try reference.validate(duration: duration)
+        try reference.validate(duration: duration, privateEvaluation: options.privateEvaluation)
         let baseline = try XCTUnwrap(physicalFootprintBytes())
         let name = "CombinedMeetingProbe.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -293,17 +426,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let coordinator = services.meetingSessionCoordinator
         var phase = "preparation"
         let started = ProcessInfo.processInfo.systemUptime
-        var samples: [[String: Any]] = []
-        var missingFootprintSamples = 0
-        var omittedFootprintSamples = 0
-        let sampler = Task { @MainActor in
+        let processCPUStarted = DiagnosticProcessCPUTime.capture()
+        let thermalStateStarted = ProcessInfo.processInfo.thermalState.rawValue
+        let resourceSamples = CombinedResourceSamples()
+        resourceSamples.capture(since: started)
+        let sampler = Task.detached(priority: .utility) {
             while !Task.isCancelled {
-                if let bytes = self.physicalFootprintBytes() {
-                    if samples.count < 10_000 {
-                        samples.append(["phase": phase, "elapsedSeconds": ProcessInfo.processInfo.systemUptime - started,
-                                        "footprintBytes": bytes])
-                    } else { omittedFootprintSamples += 1 }
-                } else { missingFootprintSamples += 1 }
+                resourceSamples.capture(since: started)
                 do { try await Task.sleep(nanoseconds: 250_000_000) } catch { break }
             }
         }
@@ -313,17 +442,21 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try await services.asr.downloadModel(asrModel)
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Combined Russian probe")
             let privacyReady = await privacy.isReady
+            let preparationSeconds = ProcessInfo.processInfo.systemUptime - started
             XCTAssertTrue(privacyReady)
             XCTAssertEqual(PichiTranscriptPrivacyModelStore.descriptor.id, "ru-pii-ner-a1-int8", "Combined evidence requires the A1 descriptor verified and loaded by privacy.prepare")
             phase = "privacyReady"
+            resourceSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 300_000_000)
             let recording = try await coordinator.startRecording(configuration: configuration)
             XCTAssertEqual(recording.audioStorageMode, .memoryOnly)
             XCTAssertEqual(recording.piiRedactionEnabled, true)
             phase = "capture"
+            resourceSamples.setPhase(phase)
             let captureStart = ProcessInfo.processInfo.systemUptime
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 1_600))
             var offset = 0
+            var firstProtectedTextSeconds: Double?
             // Bounded file reads and real-time delivery preserve backpressure. No
             // whole-meeting PCM array or unbounded synthetic enqueue burst is used.
             while offset < Int(input.length) {
@@ -333,15 +466,24 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 let pcm = Array(UnsafeBufferPointer(start: try XCTUnwrap(buffer.floatChannelData?[0]), count: Int(buffer.frameLength)))
                 try await microphone.deliver(pcm, startingAt: offset)
                 offset += pcm.count
+                if firstProtectedTextSeconds == nil {
+                    let live = coordinator.liveTranscript
+                    if live.utterances.contains(where: { !$0.text.isEmpty }) || live.partials.values.contains(where: { !$0.text.isEmpty }) {
+                        firstProtectedTextSeconds = ProcessInfo.processInfo.systemUptime - captureStart
+                    }
+                }
                 XCTAssertTrue(coordinator.isRecording, "Capture must remain active for the complete fixture")
                 let remaining = captureStart + Double(offset) / 16_000 - ProcessInfo.processInfo.systemUptime
                 if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
             }
             phase = "postStop"
+            resourceSamples.setPhase(phase)
             let stopStart = ProcessInfo.processInfo.systemUptime
             let completed = try await coordinator.stopAndTranscribe()
             let stopSeconds = ProcessInfo.processInfo.systemUptime - stopStart
+            let completedWallSeconds = ProcessInfo.processInfo.systemUptime - started
             phase = "completedPrivacyReady"
+            resourceSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 300_000_000)
             XCTAssertEqual(completed.state, .completed)
             let diarizationModels = completed.processingAttempts.compactMap(\.diarizationModel)
@@ -358,8 +500,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             let protectedText = completed.transcriptSegments.map(\.text).joined(separator: " ")
             let matchedAnchors = reference.textAnchors.filter { protectedText.range(of: $0, options: [.caseInsensitive]) != nil }.count
-            let agreement = reference.agreement(segments: completed.transcriptSegments)
-            let assertsReferenceQuality = reference.provenance != "weak-fathom"
+            let agreementAvailable = !reference.containsOverlap
+            let agreement = agreementAvailable ? reference.agreement(segments: completed.transcriptSegments) : 0
+            let assertsReferenceQuality = reference.provenance != "weak-fathom" && !options.privateEvaluation
             if assertsReferenceQuality {
                 XCTAssertEqual(matchedAnchors, reference.textAnchors.count, "Reviewed Russian ASR anchors must survive recognition and privacy")
                 XCTAssertGreaterThanOrEqual(agreement, 0.8, "Reference speaker-time assignment must agree after global label permutation; speaker count alone is insufficient")
@@ -367,7 +510,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                                "Unrecognized source PII is unscored, not successfully redacted; provide approved ASR aliases or review fixture recognition")
                 XCTAssertEqual(observations.fullyMasked.count, reference.sensitiveAliases.count,
                                "Every expected source entity needs actual fully covering privacy spans")
-            } else {
+            } else if !options.privateEvaluation {
                 XCTAssertGreaterThan(matchedAnchors, 0, "Weak diagnostics still require recognized source anchors; unmatched anchors remain reported")
             }
             XCTAssertEqual(observations.unmaskedPublishableObservations, 0, "Recognized expected PII must never pass the privacy publication boundary unmasked")
@@ -392,18 +535,33 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let privacyStillReady = await privacy.isReady
             XCTAssertFalse(privacyStillReady)
             phase = "cleanup"
+            resourceSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 500_000_000)
             sampler.cancel()
             await sampler.value
-            let peak = samples.compactMap { $0["footprintBytes"] as? UInt64 }.max() ?? baseline
+            resourceSamples.capture(since: started)
+            let resources = resourceSamples.snapshot()
+            let peak = resources.samples.map(\.bytes).max() ?? baseline
+            let totalWallSeconds = ProcessInfo.processInfo.systemUptime - started
+            let cpuMilliseconds = processCPUStarted.flatMap { DiagnosticProcessCPUTime.capture()?.milliseconds(since: $0) }
+            let policies = Array(Set(completed.transcriptSegments.compactMap { $0.speakerAttribution?.policyFingerprint })).sorted()
+            let nativeWordCount = completed.transcriptSegments.filter { $0.nativePrecision == .word }.count
+            let runIdentity: [String: Any] = [
+                "runIndex": repetition, "repetitions": options.repetitions,
+                "processID": ProcessInfo.processInfo.processIdentifier,
+                "repeatCondition": repetition == 1 ? "firstRunFreshService" : "sameProcessFreshServiceRepeat",
+                "modelResidencyVerified": false,
+                "privateEvaluationEnabled": options.privateEvaluation,
+                "legacySimulatorReviewEnabled": Self.isSimulator && environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1"
+            ]
             if let limit = environment["PICHI_COMBINED_MEETING_MAX_FOOTPRINT_MIB"] {
                 let maximum = try XCTUnwrap(UInt64(limit))
                 XCTAssertLessThanOrEqual(Double(peak) / 1_048_576, Double(maximum), "Whole-process sampled peak exceeds the explicitly configured budget")
             }
-            XCTAssertEqual(missingFootprintSamples, 0)
-            XCTAssertEqual(omittedFootprintSamples, 0, "A bounded diagnostic buffer must cover the entire completed attempt")
+            XCTAssertEqual(resources.missing, 0)
+            XCTAssertEqual(resources.omitted, 0, "A bounded diagnostic buffer must cover the entire completed attempt")
             let report: [String: Any] = [
-                "schema": 1, "physicalDevice": !Self.isSimulator, "referenceProvenance": reference.provenance,
+                "schema": 2, "physicalDevice": !Self.isSimulator, "referenceProvenance": reference.provenance,
                 "strongReferenceQualityAssertionsApplied": assertsReferenceQuality,
                 "audioSHA256": audioDigest, "referenceSHA256": referenceDigest,
                 "testedRevision": environment["PICHI_COMBINED_MEETING_TESTED_REVISION"] ?? "unrecorded",
@@ -411,10 +569,40 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "privacyModel": PichiTranscriptPrivacyModelStore.descriptor.id,
                 "diarizationModels": diarizationModels,
                 "audioSeconds": duration, "postStopSeconds": stopSeconds,
+                "totalWallSeconds": totalWallSeconds, "completedWallSeconds": completedWallSeconds,
+                "wallClockOrigin": "service composition ready, before model preparation; excludes fixture hashing",
+                "totalWallIncludesDiagnosticHolds": true,
+                "preparationSeconds": preparationSeconds, "captureWallSeconds": stopStart - captureStart,
+                "postStopToAudioRatio": stopSeconds / duration,
+                "processCPUMilliseconds": cpuMilliseconds as Any? ?? NSNull(),
+                "firstProtectedTextSeconds": firstProtectedTextSeconds as Any? ?? NSNull(),
+                "firstProtectedTextClock": "captureStart; polled after paced PCM blocks",
+                "runIdentity": runIdentity,
+                "asrArtifactFingerprints": completed.processingAttempts.compactMap(\.asrArtifactFingerprint),
+                "pipelineVersions": Array(Set(completed.processingAttempts.map(\.pipelineVersion))).sorted(),
+                "observedAttributionPolicyFingerprints": policies,
+                "policyObservation": policies.isEmpty ? "no product decision fingerprint" : "protected product decisions",
+                "nativeWordSegmentCount": nativeWordCount,
+                "nativeTimingSegmentCount": completed.transcriptSegments.filter { $0.nativeTiming != nil }.count,
+                "nativeSpeakerAssignmentSegmentCount": completed.transcriptSegments.filter { $0.nativeSpeakerAssignment != nil }.count,
+                "presentationDecisionSegmentCount": completed.transcriptSegments.filter { $0.speakerAttribution != nil }.count,
+                "deviceModel": UIDevice.current.model, "osVersion": UIDevice.current.systemVersion,
+                "physicalMemoryBytes": ProcessInfo.processInfo.physicalMemory,
+                "lowPowerModeEnabled": ProcessInfo.processInfo.isLowPowerModeEnabled,
+                "batteryMonitoringEnabled": UIDevice.current.isBatteryMonitoringEnabled,
+                "batteryLevel": UIDevice.current.batteryLevel, "batteryState": UIDevice.current.batteryState.rawValue,
+                "thermalStateStart": thermalStateStarted, "thermalStateEnd": ProcessInfo.processInfo.thermalState.rawValue,
+                "maximumSampledThermalState": resources.maximumThermalState,
                 "baselineFootprintBytes": baseline, "peakFootprintBytes": peak,
                 "cleanupFootprintDeltaBytes": Int64(physicalFootprintBytes() ?? baseline) - Int64(baseline),
-                "sampleIntervalSeconds": 0.25, "footprintSamples": samples, "omittedFootprintSamples": omittedFootprintSamples,
-                "attributionAgreement": agreement, "referenceTurns": reference.turns.count,
+                "sampleIntervalSeconds": 0.25, "footprintSamples": resources.samples.map(\.json),
+                "omittedFootprintSamples": resources.omitted, "missingFootprintSamples": resources.missing,
+                "maximumSampleGapSeconds": resources.maximumGap, "missedSampleIntervals": resources.missedIntervals,
+                "attributionAgreement": agreementAvailable ? agreement as Any : NSNull(),
+                "attributionAgreementAvailable": agreementAvailable,
+                "attributionAgreementMetric": "Legacy single-speaker segment-time agreement after label permutation; not DER or word accuracy",
+                "overlapReferenceMetric": reference.containsOverlap ? "unavailable; score native words offline" : "not present",
+                "referenceSpeakerCount": Set(reference.turns.map(\.speaker)).count, "referenceTurns": reference.turns.count,
                 "expectedSensitiveCases": reference.sensitiveAliases.count,
                 "observedSensitiveCases": observations.observed.count,
                 "fullyMaskedSensitiveCases": observations.fullyMasked.count,
@@ -424,28 +612,36 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "limitations": "Sampled process footprint, not system-wide peak. Transcript attribution agreement is not DER. PCM injection excludes microphone, background and power validation. Idle ASR caches may remain resident."
             ]
             let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
-            attachment.name = "Combined-Russian-meeting-metadata-only"
+            attachment.name = "Combined-Russian-meeting-metadata-only" + (options.repetitions > 1 ? "-run-\(repetition)" : "")
             attachment.lifetime = .keepAlways
             add(attachment)
-            // A separate simulator-only opt-in is used for an explicitly requested
-            // private visual review. Ordinary and physical probes remain counts-only.
-            if Self.isSimulator, environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1" {
-                let encoder = JSONEncoder()
-                let visualReview: [String: Any] = [
-                    "schema": 1, "physicalDevice": false,
-                    "purpose": "Explicit private visual review; not the original physical-device output",
+            // Physical private evaluation is separately gated. Legacy visual review
+            // retains its simulator-only meaning; neither exports pre-privacy text.
+            if options.privateEvaluation || (Self.isSimulator && environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1") {
+                var visualReview: [String: Any] = [
+                    "schema": 2, "physicalDevice": !Self.isSimulator,
+                    "purpose": options.privateEvaluation ? "Private protected evaluation from this actual run" : "Fresh simulator private visual review",
+                    "runIdentity": runIdentity,
+                    "observedAttributionPolicyFingerprints": policies,
+                    "nativeWordSegmentCount": nativeWordCount,
                     "testedRevision": environment["PICHI_COMBINED_MEETING_TESTED_REVISION"] ?? "unrecorded",
                     "audioSHA256": audioDigest, "referenceSHA256": referenceDigest,
                     "asr": asrModel.rawValue, "privacyModel": PichiTranscriptPrivacyModelStore.descriptor.id,
                     "diarizationModels": diarizationModels, "audioSeconds": duration,
-                    "attributionAgreement": agreement,
-                    "segments": try JSONSerialization.jsonObject(with: encoder.encode(completed.transcriptSegments)),
-                    "speakers": try JSONSerialization.jsonObject(with: encoder.encode(completed.speakers)),
-                    "limitations": "Fresh simulator replay. Protected text only. Native ASR timing precision is preserved; no invented word timings."
+                    "attributionAgreement": agreementAvailable ? agreement as Any : NSNull(),
+                    "attributionAgreementAvailable": agreementAvailable,
+                    "referenceContainsOverlap": reference.containsOverlap,
+                    "asrArtifactFingerprints": completed.processingAttempts.compactMap(\.asrArtifactFingerprint),
+                    "limitations": "Post-privacy product values only; metadata may be absent or privacy-coarsened. No invented word timings, audio, embeddings, contact identities or source-separated overlap words. WER/CER and overlap scoring require offline reference."
                 ]
-                let review = XCTAttachment(data: try JSONSerialization.data(withJSONObject: visualReview,
-                    options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
-                review.name = "Combined-Russian-meeting-private-visual-review"
+                visualReview.merge(try CombinedProtectedEvaluation.values(segments: completed.transcriptSegments, speakers: completed.speakers)) { _, new in new }
+                let reviewData = try JSONSerialization.data(withJSONObject: visualReview, options: [.prettyPrinted, .sortedKeys])
+                guard reviewData.count <= 16 * 1_048_576 else {
+                    throw NSError(domain: "CombinedMeetingProtectedEvidenceSize", code: 2)
+                }
+                let review = XCTAttachment(data: reviewData, uniformTypeIdentifier: "public.json")
+                review.name = (options.privateEvaluation ? "Combined-Russian-meeting-private-protected-evaluation" : "Combined-Russian-meeting-private-visual-review")
+                    + (options.repetitions > 1 ? "-run-\(repetition)" : "")
                 review.lifetime = .keepAlways
                 add(review)
             }
@@ -454,7 +650,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try? await privacy.unload()
             sampler.cancel()
             await sampler.value
-            let failed = try JSONSerialization.data(withJSONObject: ["phase": phase, "footprintSamples": samples], options: [.sortedKeys])
+            let failed = try JSONSerialization.data(withJSONObject: ["phase": phase, "runIndex": repetition,
+                "footprintSamples": resourceSamples.snapshot().samples.map(\.json)], options: [.sortedKeys])
             let attachment = XCTAttachment(data: failed, uniformTypeIdentifier: "public.json")
             attachment.name = "Combined-Russian-meeting-failure-resource-samples"
             attachment.lifetime = .keepAlways
@@ -469,6 +666,103 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         #else
         false
         #endif
+    }
+
+    func testCombinedPrivateEvaluationOptionsAreBoundedAndSeparatelyGated() throws {
+        let legacy = try CombinedEvaluationOptions(environment: [:])
+        XCTAssertFalse(legacy.privateEvaluation)
+        XCTAssertEqual(legacy.repetitions, 1)
+        XCTAssertThrowsError(try CombinedEvaluationOptions(environment: ["PICHI_COMBINED_MEETING_REPETITIONS": "2"]))
+        for raw in ["0", "4", "NaN", ""] {
+            XCTAssertThrowsError(try CombinedEvaluationOptions(environment: [
+                "PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1", "PICHI_COMBINED_MEETING_REPETITIONS": raw]))
+        }
+        let repeated = try CombinedEvaluationOptions(environment: [
+            "PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1", "PICHI_COMBINED_MEETING_REPETITIONS": "3"])
+        XCTAssertTrue(repeated.privateEvaluation)
+        XCTAssertEqual(repeated.repetitions, 3)
+        let visualOnly = try CombinedEvaluationOptions(environment: ["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW": "1"])
+        XCTAssertFalse(visualOnly.privateEvaluation)
+    }
+
+    func testCombinedPrivateReferenceAllowsMissingPrivacyCasesWithoutWeakeningLegacy() throws {
+        let data = Data(#"{"provenance":"human-reviewed","turns":[{"start":0,"end":2,"speaker":0},{"start":1,"end":3,"speaker":1}]}"#.utf8)
+        let reference = try JSONDecoder().decode(CombinedMeetingReference.self, from: data)
+        XCTAssertThrowsError(try reference.validate(duration: 3))
+        XCTAssertNoThrow(try reference.validate(duration: 3, privateEvaluation: true))
+        XCTAssertTrue(reference.containsOverlap)
+        XCTAssertTrue(reference.sensitiveAliases.isEmpty)
+        let adjacent = CombinedMeetingReference(provenance: "synthetic", turns: [
+            .init(start: 0, end: 1, speaker: 0), .init(start: 1, end: 2, speaker: 1)
+        ], sensitiveAliases: [["Synthetic123!"]], textAnchors: ["слово", "пример"])
+        XCTAssertNoThrow(try adjacent.validate(duration: 2))
+        XCTAssertFalse(adjacent.containsOverlap)
+        XCTAssertThrowsError(try adjacent.validate(duration: .nan, privateEvaluation: true))
+        let invalid = CombinedMeetingReference(provenance: "human-reviewed", turns: [
+            .init(start: -1, end: 1, speaker: 0)
+        ], sensitiveAliases: [], textAnchors: [])
+        XCTAssertThrowsError(try invalid.validate(duration: 2, privateEvaluation: true))
+    }
+
+    func testCombinedProtectedEvaluationFiltersOriginalTextAndVoiceIdentityData() throws {
+        let speakerID = UUID(), trackID = UUID()
+        var segment = MeetingTranscriptSegment(id: UUID(), start: .init(value: 1, timescale: 10),
+            end: .init(value: 3, timescale: 10), sourceTrackID: trackID, speakerID: speakerID,
+            text: "[ИМЯ] работает", originalText: "Private pre-edit wording", revision: 1,
+            status: .final, overlap: .none, completeness: .complete)
+        segment.nativePrecision = .word
+        segment.nativeTiming = .init(start: 0.1, end: 0.3)
+        segment.nativeUnitID = "synthetic-word"
+        let epoch = MeetingAnalysisEpochID(trackID: trackID, ordinal: 0, generation: 0)
+        let firstToken = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let secondToken = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-1")
+        segment.nativeSpeakerAssignment = .assigned(firstToken)
+        let decision = try XCTUnwrap(MeetingSpeakerAttribution.resolve(units: [
+            .init(id: "synthetic-word", trackID: trackID, analysisEpochID: epoch, precision: .word,
+                  text: "[ИМЯ] работает", analysisStart: 0.1, analysisEnd: 0.3,
+                  speaker: .assigned(firstToken), analysisSpanIDs: ["synthetic-span"])
+        ], activity: [.init(token: firstToken, start: 0.1, end: 0.3),
+                      .init(token: secondToken, start: 0.15, end: 0.25)]).first)
+        segment.speakerAttribution = .init(decision: decision, speakerIDs: [firstToken: speakerID])
+        var speaker = MeetingSessionSpeaker(id: speakerID, displayName: "Private person name",
+            diarizationClusterID: "synthetic-cluster", trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        speaker.diarizationEmbedding = [0.12345, 0.6789]
+        let values = try CombinedProtectedEvaluation.values(segments: [segment], speakers: [speaker])
+        let bytes = try JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
+        let json = String(decoding: bytes, as: UTF8.self)
+        XCTAssertFalse(json.contains("originalText"))
+        XCTAssertFalse(json.contains("Private pre-edit wording"))
+        XCTAssertFalse(json.contains("Private person name"))
+        XCTAssertFalse(json.contains("diarizationEmbedding"))
+        XCTAssertFalse(json.contains("identityCandidates"))
+        let rows = try XCTUnwrap(values["segments"] as? [[String: Any]])
+        XCTAssertEqual(rows.first?["nativePrecision"] as? String, "word")
+        XCTAssertNotNil(rows.first?["nativeTiming"])
+        XCTAssertNotNil(rows.first?["nativeSpeakerAssignment"])
+        let presentation = try XCTUnwrap(rows.first?["speakerAttribution"] as? [String: Any])
+        XCTAssertEqual(presentation["policyFingerprint"] as? String, decision.policyFingerprint)
+        XCTAssertEqual((presentation["candidates"] as? [[String: Any]])?.count, 2)
+        XCTAssertEqual(rows.first?["text"] as? String, "[ИМЯ] работает")
+        XCTAssertEqual(segment.originalText, "Private pre-edit wording", "Export must not mutate product values")
+        let people = try XCTUnwrap(values["speakers"] as? [[String: Any]])
+        XCTAssertEqual(people.first?["displayName"] as? String, "Speaker 1")
+    }
+
+    func testCombinedResourceSamplesBoundStorageAndExposeActualGaps() throws {
+        let sampler = CombinedResourceSamples(limit: 2)
+        sampler.record(elapsed: 0, bytes: 10, thermalState: 0)
+        sampler.setPhase("capture")
+        sampler.record(elapsed: 0.25, bytes: 20, thermalState: 1)
+        sampler.record(elapsed: 1.0, bytes: nil, thermalState: 2)
+        sampler.record(elapsed: 1.25, bytes: 30, thermalState: 3)
+        let result = sampler.snapshot()
+        XCTAssertEqual(result.samples.count, 2)
+        XCTAssertEqual(result.samples.last?.phase, "capture")
+        XCTAssertEqual(result.missing, 1)
+        XCTAssertEqual(result.omitted, 1)
+        XCTAssertEqual(result.maximumGap, 0.75, accuracy: 0.000001)
+        XCTAssertEqual(result.missedIntervals, 2)
+        XCTAssertEqual(result.maximumThermalState, 3)
     }
 
     func testCombinedSpeakerAgreementRequiresCorrectAssignments() throws {
@@ -730,16 +1024,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         add(attachment)
     }
 
-    private func physicalFootprintBytes() -> UInt64? {
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
-        let status = withUnsafeMutablePointer(to: &info) { pointer in
-            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
-            }
-        }
-        return status == KERN_SUCCESS ? info.phys_footprint : nil
-    }
+    private func physicalFootprintBytes() -> UInt64? { CombinedResourceSamples.footprintBytes() }
 
     func testPhysicalMicrophoneThroughLiveGigaAMPrivacyAndExport() async throws {
         #if targetEnvironment(simulator)
