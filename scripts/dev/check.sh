@@ -50,5 +50,8 @@ python3 -S Tests/run_diarization_repeatability_tests.py
 python3 -S Tests/test_meeting_diarization_eval.py
 python3 -B -S -m unittest discover -s tools -p test_meeting_asr_text_eval.py
 python3 -S tools/meeting-native-eval/test_batch_preflight.py
+python3 -B -S tools/meeting-native-eval/test_weak_score.py
+python3 -B -S tools/meeting-native-eval/test_migrate_replay_v2.py
+python3 -B -S tools/meeting-native-eval/test_report.py
 bash Tests/run_upstream_sync_tests.sh
 printf '%s\n' 'Portable checks passed. macOS build and audio checks are separate.'
