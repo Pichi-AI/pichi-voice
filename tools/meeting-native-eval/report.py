@@ -162,6 +162,17 @@ def build(index_path, candidate, output, status, physical_path=None, copy_audio=
     index, index_sha = read_verified(index_path)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
+    manifest, manifest_sha = read_verified(index['corpus_manifest_path'], index['corpus_manifest_sha256'])
+    frozen = {c['clip_id']: c for c in manifest['clips']}
+    ids = [c['clip_id'] for c in index['cases']]
+    if len(set(ids)) != len(ids):
+        raise ValueError('Duplicate clip IDs in report index')
+    for case in index['cases']:
+        source = frozen[case['clip_id']]
+        for key in ['meeting_id', 'split', 'language_condition', 'duration_seconds', 'source_start_seconds',
+                    'source_end_seconds', 'audio_sha256', 'weak_reference_sha256']:
+            if source[key] != case[key]:
+                raise ValueError(f'Report/frozen corpus mismatch: {case["clip_id"]}/{key}')
     cases = [make_case(c, candidate, output, copy_audio) for c in index['cases']]
     if not cases:
         raise ValueError('Report has no actual cases')
@@ -171,7 +182,8 @@ def build(index_path, candidate, output, status, physical_path=None, copy_audio=
         raise ValueError('Final report requires at least 20 actual cases')
     if len({c['policyFingerprint'] for c in cases}) != 1:
         raise ValueError('Freeze one candidate policy across the corpus')
-    manifest, manifest_sha = read_verified(index['corpus_manifest_path'], index['corpus_manifest_sha256'])
+    if status == 'final' and set(ids) != set(frozen):
+        raise ValueError('Final report must include every frozen corpus case')
     physical = None
     physical_sha = None
     if physical_path:

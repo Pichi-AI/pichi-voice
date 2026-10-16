@@ -37,6 +37,7 @@ class ReportPackaging(unittest.TestCase):
                    'source_start_seconds':0,'source_end_seconds':1,'audio_path':str(self.audio),'audio_sha256':report.digest(self.audio),'native_evidence_path':str(ep),
                    'native_evidence_sha256':report.digest(ep),'weak_reference_path':str(ref),'weak_reference_sha256':report.digest(ref),'core_replay_paths':{'v2':str(rp)},
                    'frozen_native_to_weak_reference_mapping':{'0':'0'},'case_metrics':{'variants':{n:{'all_unknown_words':0,'profiles':{p:{'counts':{},'eligible_words':1,'excluded_words':0} for p in ['strictWeak','interior1s','interior2s']}} for n in ['baseline4484','v2']}}}
+        manifest=self.write('manifest.json',{'clips':[self.case.copy()],'participant_disjoint':False})
         self.index={'cases':[self.case],'aggregate':{},'corpus_manifest_path':str(manifest),'corpus_manifest_sha256':report.digest(manifest)}
         self.index_path=self.write('index.json',self.index)
 
@@ -59,10 +60,10 @@ class ReportPackaging(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'20 actual'):self.build('final')
     def test_digest_mismatch_is_not_silently_viewed(self):
         self.case['audio_sha256']='0'*64;self.write('index.json',self.index)
-        with self.assertRaisesRegex(ValueError,'Audio SHA'):self.build()
+        with self.assertRaisesRegex(ValueError,'frozen corpus mismatch'):self.build()
     def test_duplicate_meeting_is_rejected(self):
         self.index['cases']*=2;self.write('index.json',self.index)
-        with self.assertRaisesRegex(ValueError,'different recordings'):self.build()
+        with self.assertRaisesRegex(ValueError,'Duplicate clip'):self.build()
     def test_replay_must_bind_exact_evidence(self):
         p=Path(self.case['core_replay_paths']['v2']);r=json.loads(p.read_text());r['evidenceSHA256']='0'*64;p.write_text(json.dumps(r))
         with self.assertRaisesRegex(ValueError,'Replay/evidence'):self.build()
