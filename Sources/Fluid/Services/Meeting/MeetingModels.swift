@@ -816,6 +816,21 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     var mergedIntoSpeakerID: SessionSpeakerID? = nil
 }
 
+/// Product continuity inference is separate from the diarizer's raw evidence. The original
+/// uncertainty and anchor IDs survive persistence so a contextual guess is never a model score.
+nonisolated struct MeetingSpeakerAttributionInference: Codable, Equatable, Sendable {
+    enum Rule: String, Codable, Sendable {
+        case surroundingSpeaker
+        case incomingSpeaker
+    }
+
+    let rule: Rule
+    let originalState: MeetingTranscriptAttributionState?
+    let originalOverlap: MeetingTranscriptOverlap
+    let precedingSegmentID: MeetingTranscriptSegmentID
+    let followingSegmentID: MeetingTranscriptSegmentID
+}
+
 nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, Sendable {
     var id: MeetingTranscriptSegmentID
     var start: MeetingMediaTime
@@ -833,6 +848,8 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var isLikelyEcho: Bool? = nil
     /// Optional so pre-fix manifests still decode; a non-optional default would `keyNotFound`.
     var attributionState: MeetingTranscriptAttributionState? = nil
+    /// Additive and optional: older manifests and older readers retain their existing schema.
+    var speakerAttributionInference: MeetingSpeakerAttributionInference? = nil
 
     var isEcho: Bool {
         self.isLikelyEcho == true

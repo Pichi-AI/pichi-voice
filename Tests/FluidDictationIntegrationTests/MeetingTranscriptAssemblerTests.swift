@@ -1,4 +1,8 @@
+#if os(iOS)
+@testable import PichiVoiceMobile
+#else
 @testable import FluidVoice_Debug
+#endif
 import Foundation
 import XCTest
 
@@ -405,6 +409,28 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let spans = try XCTUnwrap(manifest.track(mic.id)?.spans)
         XCTAssertEqual(spans.count, 2)
         return (plan, manifest, spans)
+    }
+
+    func testRetainedContinuityFillsProductGapWithoutChangingRawSidecar() throws {
+        let (plan, manifest, spans) = try self.twoEpochMicrophone()
+        let span = spans[0]
+        let a = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
+        let b = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-1")
+        let units = [
+            self.unit(id: "before", span: span, text: "one two three four five six seven eight nine ten",
+                      analysisStart: 0, analysisEnd: 1, speaker: .assigned(a)),
+            self.unit(id: "unknown", span: span, text: "hello", analysisStart: 1, analysisEnd: 1.2,
+                      speaker: .ambiguous([a, b])),
+            self.unit(id: "after", span: span, text: "one two three four five six seven eight nine ten",
+                      analysisStart: 1.2, analysisEnd: 3, speaker: .assigned(b))]
+        let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+            evidence: self.evidence(plan: plan, units: units), coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) })))
+        XCTAssertEqual(result.segments[1].speakerID, result.segments[2].speakerID)
+        XCTAssertEqual(result.segments[1].speakerAttributionInference?.rule, .incomingSpeaker)
+        XCTAssertEqual(result.sidecar.units.first { $0.id == "unknown" }?.speaker, .ambiguous([a, b]))
+        XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == "unknown" }?.disposition, .ambiguousUnassigned)
+        XCTAssertNoThrow(try result.sidecar.validated())
     }
 
     func testContinuousDiarizerLinksOnlyTheSameSlotAcrossEpochs() throws {
