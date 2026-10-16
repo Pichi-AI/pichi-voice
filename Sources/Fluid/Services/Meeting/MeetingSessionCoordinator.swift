@@ -1413,14 +1413,25 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.scheduleRetentionTimer(nextDeadline: nextDeadline)
     }
 
-    /// An empty recreated `tracks/` is not crash-window residue — heal only real content.
+    /// An empty recreated tracks directory alone is not crash residue. Working-state files
+    /// can outlive tracks after interruption and must also trigger the existing cleanup.
     private func healLeftoverAudio(for session: MeetingSession) async {
-        guard session.retention.audioDeletedAt != nil,
+        let fullyCompleted = session.state == .completed && session.transcriptIsComplete == true
+        guard session.retention.audioDeletedAt != nil || fullyCompleted,
+              self.isSafeToSweep(sessionID: session.id),
               let directory = try? await self.store.existingSessionDirectory(for: session.id)
         else { return }
+        if session.retention.audioDeletedAt == nil {
+            // Completion is already durable. A crash before cache removal must not retain
+            // sensitive working text indefinitely under a never-delete-audio policy.
+            try? MeetingRetainedProcessingCheckpoint.remove(in: directory)
+            return
+        }
         let tracksPath = directory.appendingPathComponent("tracks", isDirectory: true).path
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: tracksPath), !contents.isEmpty
-        else { return }
+        let hasAudio = (try? FileManager.default.contentsOfDirectory(atPath: tracksPath).isEmpty == false) ?? false
+        let hasWorkingState = (try? MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory)) ?? false
+        let hasLegacyCheckpoint = FileManager.default.fileExists(atPath: directory.appendingPathComponent("checkpoint.json").path)
+        guard hasAudio || hasWorkingState || hasLegacyCheckpoint else { return }
         try? await self.store.deleteAudioFiles(for: session.id)
     }
 

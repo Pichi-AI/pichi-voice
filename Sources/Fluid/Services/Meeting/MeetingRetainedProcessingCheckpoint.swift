@@ -110,9 +110,27 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
     }
 
     static func remove(in directory: URL) throws {
-        for name in [Self.fileName, Self.keyFileName] {
+        let present = try Self.workingFileNames(in: directory)
+        // Remove the decryption key before ciphertext, including an atomic write interrupted
+        // before its temporary file could be renamed or removed by defer.
+        let temporary = present.filter { $0 != Self.fileName && $0 != Self.keyFileName }.sorted()
+        for name in [Self.keyFileName, Self.fileName] + temporary {
             let url = directory.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+        }
+    }
+
+    static func hasWorkingState(in directory: URL) throws -> Bool {
+        try !Self.workingFileNames(in: directory).isEmpty
+    }
+
+    private static func workingFileNames(in directory: URL) throws -> [String] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        let prefix = ".processing-resume-", suffix = ".tmp"
+        return try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { name in
+            if name == Self.fileName || name == Self.keyFileName { return true }
+            guard name.hasPrefix(prefix), name.hasSuffix(suffix) else { return false }
+            return UUID(uuidString: String(name.dropFirst(prefix.count).dropLast(suffix.count))) != nil
         }
     }
 

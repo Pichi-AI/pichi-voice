@@ -93,9 +93,16 @@ struct MeetingSessionStoreCheckpointTests {
         do { try await cancelled.value; preconditionFailure("Cancelled work must not publish") }
         catch is CancellationError { checks += 1 }
         check(try Data(contentsOf: checkpointURL) == ciphertext, "Cancelled checkpoint preserves the last complete generation")
+        let abandoned = retainedDirectory.appendingPathComponent(".processing-resume-\(UUID().uuidString).tmp")
+        let unrelated = retainedDirectory.appendingPathComponent(".processing-resume-user-note.tmp")
+        try Data(repeating: 7, count: 32).write(to: abandoned)
+        try Data("unrelated file".utf8).write(to: unrelated)
         try await store.deleteAudioFiles(for: retained.id)
         check(!manager.fileExists(atPath: checkpointURL.path) && !manager.fileExists(atPath: keyURL.path),
               "Deleting retained audio removes ciphertext and key")
+        check(!manager.fileExists(atPath: abandoned.path), "Deleting audio removes interrupted atomic checkpoint writes")
+        check(manager.fileExists(atPath: unrelated.path), "Cleanup only removes owned temporary names")
+        check(try !MeetingRetainedProcessingCheckpoint.hasWorkingState(in: retainedDirectory), "No retained working-state residue survives deletion")
         check(try await store.load(id: retained.id) != nil, "Audio cleanup preserves the meeting manifest")
         try await store.delete(id: retained.id)
         let compact = try Data(contentsOf: manifestURL)

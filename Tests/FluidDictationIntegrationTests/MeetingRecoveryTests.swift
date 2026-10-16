@@ -4385,6 +4385,63 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: tracksURL.path))
     }
 
+    func testSweepHealsDeletedAudioWorkingStateWithoutTrackContent() async throws {
+        for missingTracks in [false, true] {
+            for residue in [MeetingRetainedProcessingCheckpoint.fileName,
+                            MeetingRetainedProcessingCheckpoint.keyFileName,
+                            ".processing-resume-\(UUID().uuidString).tmp"] {
+                let dir = self.makeTempDirectory()
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let store = MeetingSessionStore(rootDirectory: dir)
+                var session = self.makeSession(state: .interrupted, endedAt: Date(),
+                    audioTracks: [self.makeMicrophoneTrack(chunks: [])])
+                session.retention.audioDeletedAt = Date()
+                try await store.create(session)
+                let directory = try await store.sessionDirectory(for: session.id)
+                let tracks = directory.appendingPathComponent("tracks", isDirectory: true)
+                if missingTracks { try FileManager.default.removeItem(at: tracks) }
+                try Data("synthetic interrupted cleanup".utf8).write(to: directory.appendingPathComponent(residue))
+                let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                    processing: StubProcessingController(), audioArbiter: StubArbiter())
+                await coordinator.sweepExpiredAudio()
+                XCTAssertFalse(try MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory))
+                let preserved = try await store.load(id: session.id)
+                XCTAssertNotNil(preserved?.retention.audioDeletedAt)
+            }
+        }
+    }
+
+    func testSweepHealsCompletedWorkingStateWithoutDeletingRetainedAudio() async throws {
+        try await self.withRetentionPolicy(.never) {
+            for complete in [false, true] {
+                let dir = self.makeTempDirectory()
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let store = MeetingSessionStore(rootDirectory: dir)
+                var session = self.makeSession(state: .completed, endedAt: Date(),
+                    audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+                session.transcriptIsComplete = complete
+                try await store.create(session)
+                let directory = try await store.sessionDirectory(for: session.id)
+                let audio = directory.appendingPathComponent("tracks/preserved.caf")
+                let audioBytes = Data("synthetic retained audio".utf8)
+                try audioBytes.write(to: audio)
+                for name in [MeetingRetainedProcessingCheckpoint.fileName,
+                             MeetingRetainedProcessingCheckpoint.keyFileName,
+                             ".processing-resume-\(UUID().uuidString).tmp"] {
+                    try Data("synthetic working state".utf8).write(to: directory.appendingPathComponent(name))
+                }
+                let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                    processing: StubProcessingController(), audioArbiter: StubArbiter())
+                await coordinator.sweepExpiredAudio()
+                XCTAssertEqual(try MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory), !complete,
+                    "An incomplete result must retain progress; a durable complete result must discard it")
+                XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
+                let preserved = try await store.load(id: session.id)
+                XCTAssertNil(preserved?.retention.audioDeletedAt)
+            }
+        }
+    }
+
     /// O9: a `tracks/` directory recreated empty by `store.save`/`sessionDirectory` is not a
     /// leftover from the manifest-first crash window and must not trigger a heal.
     func testSweepDoesNotHealAnEmptyRecreatedTracksDirectory() async throws {
