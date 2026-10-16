@@ -904,35 +904,20 @@ nonisolated enum MeetingPCMRecordingAttribution {
                   && $0.start >= 0 && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
             throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
         }
-        let orderedActivity = activity.sorted { $0.start < $1.start }
-        var cursor = 0
-        var active: [MeetingBackendSpeakerActivity] = []
-        var assignments: [Int: MeetingBackendSpeakerAssignment] = [:]
-        // Long meetings must not compare every word with the entire recording timeline.
-        // Keep only intervals that can overlap the current accepted text unit.
-        for index in transcript.segments.indices.sorted(by: {
-            transcript.segments[$0].start < transcript.segments[$1].start
-        }) {
-            try Task.checkCancellation()
-            let segment = transcript.segments[index]
-            let start = segment.nativeTiming?.start ?? segment.start.seconds
-            let end = segment.nativeTiming?.end ?? segment.end.seconds
-            active.removeAll { $0.end <= start }
-            while cursor < orderedActivity.count, orderedActivity[cursor].start < end {
-                if orderedActivity[cursor].end > start { active.append(orderedActivity[cursor]) }
-                cursor += 1
-            }
-            // Only explicitly preserved native word timings permit acoustic dominance.
-            // Legacy segment envelopes keep conservative utterance precision.
-            assignments[index] = MeetingParakeetNemotronBackend.assignment(
-                start: start, end: end, activity: active, allowDominance: segment.nativePrecision == .word)
-        }
-        let units = transcript.segments.enumerated().map { index, segment in
+        let rawUnits = transcript.segments.map { segment in
             MeetingFinalTextUnit(id: segment.nativeUnitID ?? segment.speakerAttribution?.unitID ?? "post-stop:\(segment.id)", trackID: epoch.trackID,
                 analysisEpochID: epoch, precision: segment.nativePrecision ?? .utterance, text: segment.text,
                 analysisStart: segment.nativeTiming?.start ?? segment.start.seconds,
                 analysisEnd: segment.nativeTiming?.end ?? segment.end.seconds,
-                speaker: assignments[index] ?? .unassigned, analysisSpanIDs: [], confidence: nil)
+                speaker: .unassigned, analysisSpanIDs: [], confidence: nil)
+        }
+        let assignments = try MeetingSpeakerAttribution.acousticAssignments(units: rawUnits,
+            activity: activity, policy: speakerAttributionPolicy ?? .standard)
+        let units = try rawUnits.map { unit in
+            guard let assignment = assignments[unit.id] else {
+                throw MeetingSpeakerAttributionError.invalidUnit(unit.id)
+            }
+            return unit.assigningSpeaker(assignment)
         }
         // Canonical media times round to milliseconds. The last accepted boundary can
         // exceed the physical frame duration by at most that rounding quantum.

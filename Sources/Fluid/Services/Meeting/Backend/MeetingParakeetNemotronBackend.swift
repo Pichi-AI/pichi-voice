@@ -673,7 +673,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             phaseB.outputs.map { ($0.epochID, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let activityByEpoch = Dictionary(grouping: phaseA.activity, by: { $0.token.analysisEpochID })
         var failures = phaseA.failures
         failures.merge(phaseB.failures) { first, _ in first }
 
@@ -692,21 +691,33 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 receipts.append(Self.receipt(for: span, status: .processed))
             }
             guard let output = outputsByEpoch[work.epoch.id] else { continue }
-            let epochActivity = activityByEpoch[work.epoch.id] ?? []
             units.append(contentsOf: Self.units(
                 for: output,
                 work: work,
-                activity: epochActivity,
                 attemptID: request.attemptID
             ))
         }
 
+        let activity = phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil }
+        if !activity.isEmpty, !units.isEmpty {
+            // One scoped index serves the entire batch, including nested utterance envelopes.
+            // Contextual reading rules run later in the common assembler, never in this phase.
+            let assignments = try MeetingSpeakerAttribution.acousticAssignments(units: units,
+                activity: activity, policy: request.configuration.speakerAttributionPolicy ?? .standard)
+            units = try units.map { unit in
+                guard let assignment = assignments[unit.id] else {
+                    throw MeetingSpeakerAttributionError.invalidUnit(unit.id)
+                }
+                return unit.assigningSpeaker(assignment)
+            }
+        }
+        try Task.checkCancellation()
         return MeetingCanonicalResultBundle(
             evidence: MeetingFinalTranscriptEvidence(
                 backendID: backendID,
                 attemptID: request.attemptID,
                 units: units,
-                speakerActivity: phaseA.activity.filter { failures[$0.token.analysisEpochID] == nil },
+                speakerActivity: activity,
                 speakerSlotsContinueAcrossEpochs: true
             ),
             coverageReceipts: receipts,
@@ -737,8 +748,10 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         epoch: MeetingAnalysisEpochID,
         duration: TimeInterval,
         activity: [MeetingBackendSpeakerActivity],
-        identityTokens: Set<MeetingBackendSpeakerToken>
-    ) -> [MeetingFinalTextUnit] {
+        identityTokens: Set<MeetingBackendSpeakerToken>,
+        speakerAttributionPolicy: MeetingSpeakerAttributionPolicy = .standard
+    ) throws -> [MeetingFinalTextUnit] {
+        try Task.checkCancellation()
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
         let usable = words.count <= 8_192 && !words.isEmpty && words.allSatisfy {
@@ -746,40 +759,50 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
                 && $0.end > $0.start && $0.end <= duration + 1e-6
         }
-        func admitted(_ assignment: MeetingBackendSpeakerAssignment) -> MeetingBackendSpeakerAssignment {
-            if case let .assigned(token) = assignment, !identityTokens.contains(token) { return .unassigned }
-            return assignment
-        }
-        guard usable else {
+        let units: [MeetingFinalTextUnit]
+        if usable {
+            units = words.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { index, word in
+                MeetingFinalTextUnit(id: "pcm:\(epoch):\(index)", trackID: epoch.trackID,
+                    analysisEpochID: epoch, precision: .word,
+                    text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                    analysisStart: word.start, analysisEnd: word.end, speaker: .unassigned,
+                    analysisSpanIDs: [], confidence: nil)
+            }
+        } else {
             let segments = ASRSegmentTiming.validated(result.segmentTimings, text: text, duration: duration)
             if !segments.isEmpty {
-                return segments.enumerated().map { index, segment in
+                units = segments.enumerated().map { index, segment in
                     MeetingFinalTextUnit(id: "pcm:\(epoch):segment:\(index)", trackID: epoch.trackID,
                         analysisEpochID: epoch, precision: .utterance,
                         text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                        analysisStart: segment.start, analysisEnd: segment.end,
-                        speaker: admitted(Self.assignment(start: segment.start, end: segment.end,
-                            activity: activity, allowDominance: false)),
+                        analysisStart: segment.start, analysisEnd: segment.end, speaker: .unassigned,
                         analysisSpanIDs: [], confidence: nil)
                 }
+            } else {
+                units = [MeetingFinalTextUnit(id: "pcm:\(epoch):utterance", trackID: epoch.trackID,
+                    analysisEpochID: epoch, precision: .utterance, text: text,
+                    analysisStart: 0, analysisEnd: duration, speaker: .unassigned,
+                    analysisSpanIDs: [], confidence: nil)]
             }
-            return [MeetingFinalTextUnit(
-                id: "pcm:\(epoch):utterance", trackID: epoch.trackID, analysisEpochID: epoch,
-                precision: .utterance, text: text, analysisStart: 0, analysisEnd: duration,
-                speaker: admitted(Self.assignment(start: 0, end: duration, activity: activity, allowDominance: false)),
-                analysisSpanIDs: [], confidence: nil
-            )]
         }
-        return words.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map { index, word in
-            let coverage = Self.assignment(start: word.start, end: word.end, activity: activity, allowDominance: true)
-            let assignment = admitted(coverage)
-            return MeetingFinalTextUnit(
-                id: "pcm:\(epoch):\(index)", trackID: epoch.trackID, analysisEpochID: epoch,
-                precision: .word, text: word.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                analysisStart: word.start, analysisEnd: word.end, speaker: assignment,
-                analysisSpanIDs: [], confidence: nil
-            )
+        try Task.checkCancellation()
+        guard !activity.isEmpty else { return units }
+        guard activity.allSatisfy({ $0.token.analysisEpochID == epoch
+            && $0.start.isFinite && $0.end.isFinite && $0.start >= 0
+            && $0.end > $0.start && $0.end <= duration + 1e-6 }) else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
         }
+        let assignments = try MeetingSpeakerAttribution.acousticAssignments(
+            units: units, activity: activity, policy: speakerAttributionPolicy)
+        let assignedUnits = try units.map { unit in
+            guard var assignment = assignments[unit.id] else {
+                throw MeetingSpeakerAttributionError.invalidUnit(unit.id)
+            }
+            if case let .assigned(token) = assignment, !identityTokens.contains(token) { assignment = .unassigned }
+            return unit.assigningSpeaker(assignment)
+        }
+        try Task.checkCancellation()
+        return assignedUnits
     }
 
     /// Timed units for one successful epoch. Provider times are seconds into the epoch's
@@ -789,7 +812,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
     private nonisolated static func units(
         for output: MeetingParakeetEpochOutput,
         work: EpochWork,
-        activity: [MeetingBackendSpeakerActivity],
         attemptID: UUID,
         fallbackRange: Range<Int>? = nil,
         idSuffix: String = ""
@@ -834,12 +856,6 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             guard end > start else { continue }
             guard let spanIDs = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
             else { continue }
-            let speaker = Self.assignment(
-                start: start,
-                end: end,
-                activity: activity,
-                allowDominance: true
-            )
             wordUnits.append(MeetingFinalTextUnit(
                 id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):\(index)",
                 trackID: work.track.id,
@@ -848,7 +864,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 text: text,
                 analysisStart: start,
                 analysisEnd: end,
-                speaker: speaker,
+                speaker: .unassigned,
                 analysisSpanIDs: spanIDs,
                 confidence: nil
             ))
@@ -857,7 +873,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             let bounded = MeetingParakeetEpochOutput(epochID: output.epochID, text: chunk.text, words: [],
                 segmentTimings: chunk.segmentTimings, sampleRate: output.sampleRate,
                 sampleCount: output.sampleCount, spanSamples: output.spanSamples)
-            wordUnits.append(contentsOf: Self.units(for: bounded, work: work, activity: activity,
+            wordUnits.append(contentsOf: Self.units(for: bounded, work: work,
                 attemptID: attemptID, fallbackRange: chunk.sampleRange, idSuffix: ":chunk-\(index)"))
         }
         if !wordUnits.isEmpty {
@@ -884,7 +900,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     analysisEpochID: work.epoch.id, precision: .utterance,
                     text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
                     analysisStart: start, analysisEnd: end,
-                    speaker: Self.assignment(start: start, end: end, activity: activity, allowDominance: false),
+                    speaker: .unassigned,
                     analysisSpanIDs: ids, confidence: nil))
             }
             if !segmentUnits.isEmpty { return segmentUnits }
@@ -899,7 +915,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             text: text,
             analysisStart: epochStart,
             analysisEnd: physicalEnd,
-            speaker: Self.assignment(start: epochStart, end: physicalEnd, activity: activity, allowDominance: false),
+            speaker: .unassigned,
             analysisSpanIDs: spanIDs,
             confidence: nil
         )]
@@ -990,8 +1006,8 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         static let minimumLeaderToRunnerUpRatio: Double = 2.0
     }
 
-    /// The cadence floor scaled down for short words, so an 80ms boundary hop can never be
-    /// discarded outright from a 150ms word: never more than 20% of the unit's own duration.
+    /// Legacy single-query test seam. Production projection uses the shared indexed batch.
+    /// The floor scales with actual acoustic support, so silence cannot change admission.
     private nonisolated static func boundaryNoiseThresholdSeconds(duration: TimeInterval) -> TimeInterval {
         min(self.nemotronCadenceMaximumFloorSeconds, 0.2 * duration)
     }

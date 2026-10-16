@@ -2012,9 +2012,9 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(tokens.map(\.label), ["slot-0", "slot-1"])
     }
 
-    func testPCMRawAssignmentsNeverCascadeInferredHandoffAnchors() {
+    func testPCMRawAssignmentsNeverCascadeInferredHandoffAnchors() throws {
         let (slot0, slot1) = self.attributionTokens()
-        let units = MeetingParakeetNemotronBackend.pcmUnits(
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(
             result: .init(text: "first mixed another"),
             words: [.init(text: "first", start: 0, end: 0.5),
                     .init(text: "mixed", start: 1, end: 1.4),
@@ -2036,6 +2036,37 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
         XCTAssertTrue(decisions.allSatisfy { $0 == decisions[0] })
         XCTAssertEqual(decisions[0], .ambiguous([slot0, slot1]))
+    }
+
+    func testPCMIndexedBatchPreserves8192NativeWordsAndHonorsFrozenPolicy() throws {
+        let (first, second) = self.attributionTokens()
+        let count = 8_192
+        let words = (0..<count).map { index in
+            ASRWordTiming(text: "native-\(index)", start: Double(index * 2), end: Double(index * 2 + 1))
+        }
+        let activity = (0..<count).flatMap { index in [
+            MeetingBackendSpeakerActivity(token: first, start: Double(index * 2), end: Double(index * 2 + 1)),
+            MeetingBackendSpeakerActivity(token: second, start: Double(index * 2 + 1), end: Double(index * 2 + 2))]
+        }
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Native words"),
+            words: words, epoch: first.analysisEpochID, duration: Double(count * 2),
+            activity: activity, identityTokens: [first, second])
+        XCTAssertEqual(units.count, count)
+        XCTAssertEqual(units.map(\.text), words.map(\.text))
+        XCTAssertEqual(units.map(\.analysisStart), words.map(\.start))
+        XCTAssertEqual(units.map(\.analysisEnd), words.map(\.end))
+        XCTAssertEqual(Set(units.map(\.id)).count, count)
+        XCTAssertTrue(units.allSatisfy { $0.precision == .word && $0.speaker == .assigned(first) })
+        let mixedActivity: [MeetingBackendSpeakerActivity] = [
+            .init(token: first, start: 0, end: 1), .init(token: second, start: 0.2, end: 0.3)]
+        func classify(_ policy: MeetingSpeakerAttributionPolicy) throws -> MeetingBackendSpeakerAssignment {
+            try XCTUnwrap(MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "word"),
+                words: [.init(text: "word", start: 0, end: 1)], epoch: first.analysisEpochID,
+                duration: 1, activity: mixedActivity, identityTokens: [first, second],
+                speakerAttributionPolicy: policy).first?.speaker)
+        }
+        XCTAssertEqual(try classify(.standard), .assigned(first))
+        XCTAssertEqual(try classify(.init(enableDominance: false)), .ambiguous([first, second]))
     }
 
     private func attributionTokens() -> (MeetingBackendSpeakerToken, MeetingBackendSpeakerToken) {

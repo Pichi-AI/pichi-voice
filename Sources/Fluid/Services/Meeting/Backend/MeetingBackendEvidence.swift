@@ -198,6 +198,14 @@ nonisolated struct MeetingFinalTextUnit: Equatable, Identifiable {
         self.analysisSpanIDs = analysisSpanIDs
         self.confidence = confidence
     }
+
+    /// Initial acoustic projection changes only the assignment, preserving native source facts.
+    func assigningSpeaker(_ assignment: MeetingBackendSpeakerAssignment) -> Self {
+        Self(id: self.id, trackID: self.trackID, analysisEpochID: self.analysisEpochID,
+            precision: self.precision, text: self.text, analysisStart: self.analysisStart,
+            analysisEnd: self.analysisEnd, speaker: assignment, analysisSpanIDs: self.analysisSpanIDs,
+            confidence: self.confidence)
+    }
 }
 
 /// Optional supporting evidence, in the same per-track analysis-time domain as the text units.

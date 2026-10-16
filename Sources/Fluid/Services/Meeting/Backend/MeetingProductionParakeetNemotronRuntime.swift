@@ -490,7 +490,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
     private func pcmSpeechObservation(output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID,
                                       offset: TimeInterval, duration: TimeInterval,
                                       attemptID: UUID, isFinal: Bool = true) throws -> MeetingPCMTranscriptBatch {
-        let units = MeetingParakeetNemotronBackend.pcmUnits(
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(
             result: ASRTranscriptionResult(text: output.text, segmentTimings: output.segmentTimings),
             words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [])
         var observation = try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat)
@@ -552,9 +552,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         guard !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return MeetingPCMTranscriptBatch(segments: [])
         }
-        let units = MeetingParakeetNemotronBackend.pcmUnits(
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(
             result: ASRTranscriptionResult(text: output.text, segmentTimings: output.segmentTimings),
-            words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [])
+            words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [],
+            speakerAttributionPolicy: configuration.speakerAttributionPolicy ?? .standard)
         return try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat)
             .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: offset,
                 duration: duration, units: units, priorSpeakers: priorSpeakers,

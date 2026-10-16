@@ -73,7 +73,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
     func testPCMInvalidWordTimingPreservesCompleteUntimedTextWithUncertainAttribution() throws {
         let epoch = MeetingAnalysisEpochID(trackID: UUID(), ordinal: 0)
         let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
-        let units = MeetingParakeetNemotronBackend.pcmUnits(
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(
             result: ASRTranscriptionResult(text: "Keep the complete phrase"),
             words: [.init(text: "Keep", start: 0, end: 0.5), .init(text: "invalid", start: 20, end: 21)],
             epoch: epoch, duration: 6,
@@ -190,6 +190,55 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         XCTAssertEqual(decision.rule, .barrier)
         XCTAssertNil(decision.selectedToken)
         XCTAssertEqual(result.sidecar.units, units.sorted { $0.id < $1.id })
+    }
+
+    func testPostStopIndexedBatchHandlesNestedUtteranceWithoutMovingNativeWords() throws {
+        let attempt = UUID(), track = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+        let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")
+        let count = 2_000
+        let duration = Double(count * 2)
+        let coarse = MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(0), end: self.mediaTime(duration),
+            sourceTrackID: track, speakerID: nil, text: "Synthetic coarse utterance", revision: 0,
+            status: .final, overlap: .none, completeness: .complete, nativePrecision: .utterance,
+            nativeUnitID: "coarse", nativeTiming: .init(start: 0, end: duration))
+        let words = (0..<count).map { index in
+            MeetingTranscriptSegment(id: UUID(), start: self.mediaTime(Double(index * 2)),
+                end: self.mediaTime(Double(index * 2 + 1)), sourceTrackID: track, speakerID: nil,
+                text: "word-\(index)", revision: 0, status: .final, overlap: .none, completeness: .complete,
+                nativePrecision: .word, nativeUnitID: "native-\(index)",
+                nativeTiming: .init(start: Double(index * 2), end: Double(index * 2 + 1)))
+        }
+        let transcript = MeetingPCMTranscriptBatch(segments: [coarse] + words)
+        let activity = (0..<count).flatMap { index in [
+            MeetingBackendSpeakerActivity(token: first, start: Double(index * 2), end: Double(index * 2 + 1)),
+            MeetingBackendSpeakerActivity(token: second, start: Double(index * 2 + 1), end: Double(index * 2 + 2))]
+        }
+        let result = try MeetingPCMRecordingAttribution.assemble(transcript: transcript, activity: activity,
+            epoch: epoch, attemptID: attempt, duration: duration, speakerNameFormat: "Speaker %lld")
+        XCTAssertEqual(result.segments.map(\.id), transcript.segments.map(\.id))
+        XCTAssertEqual(result.segments.map(\.text), transcript.segments.map(\.text))
+        XCTAssertEqual(result.segments.map(\.nativeTiming), transcript.segments.map(\.nativeTiming))
+        XCTAssertEqual(result.segments.map(\.nativePrecision), transcript.segments.map(\.nativePrecision))
+        XCTAssertEqual(result.segments[0].speakerAttribution?.rawAssignment, .ambiguous([first, second]))
+        XCTAssertNil(result.segments[0].speakerID)
+        XCTAssertTrue(result.segments.dropFirst().allSatisfy { $0.speakerID != nil })
+    }
+
+    func testCancelledSidecarReplayPreservesCancellationInsteadOfReportingCorruptAttribution() async throws {
+        let (plan, manifest, span) = try self.onlineMicFixture()
+        let unit = self.unit(id: "native", span: span, analysisStart: 1, analysisEnd: 2)
+        let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
+            evidence: self.evidence(plan: plan, units: [unit]), coverageReceipts: self.receipts(for: manifest),
+            echoVerdicts: [unit.id: .notEcho]))
+        let replay = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try result.sidecar.validated()
+        }
+        do { _ = try await replay.value; XCTFail("Cancelled replay must not publish a result") }
+        catch is CancellationError { }
+        catch { XCTFail("Cancellation was converted into a different error: \(error)") }
     }
 
     // MARK: - Session/manifest fixtures

@@ -312,6 +312,7 @@ nonisolated extension MeetingResultSidecar {
     /// of units and receipts against the manifest's spans is the assembler's job.
     @discardableResult
     func validated() throws -> Self {
+        try Task.checkCancellation()
         let visibleIDs = Set(self.dispositions.filter { $0.disposition == .emitted }.map(\.unitID))
         let visibleTokens = Set(self.units.compactMap { unit -> MeetingBackendSpeakerToken? in
             guard visibleIDs.contains(unit.id), case let .assigned(token) = unit.speaker else { return nil }
@@ -514,10 +515,12 @@ nonisolated extension MeetingResultSidecar {
             expected = try MeetingTranscriptAssembler.attributionDecisions(
                 units: self.units, activity: self.speakerActivity, policy: self.speakerAttributionPolicy,
                 dispositions: self.dispositions, manifest: self.analysisManifest)
-        } catch { throw MeetingResultSidecarError.invalidSpeakerAttribution }
+        } catch is CancellationError { throw CancellationError() }
+        catch { throw MeetingResultSidecarError.invalidSpeakerAttribution }
         guard expected == self.speakerAttributionDecisions else {
             throw MeetingResultSidecarError.invalidSpeakerAttribution
         }
+        try Task.checkCancellation()
         return self
     }
 }
