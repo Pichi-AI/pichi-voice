@@ -29,10 +29,11 @@ struct MeetingSpeakerAttributionTests {
     static func resolve(
         _ units: [MeetingFinalTextUnit], _ activity: [MeetingBackendSpeakerActivity],
         policy: MeetingSpeakerAttributionPolicy = .standard, barriers: Set<String> = [],
-        epochs: Set<MeetingAnalysisEpochID> = []
+        epochs: Set<MeetingAnalysisEpochID> = [],
+        contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = []
     ) throws -> [MeetingSpeakerAttributionDecision] {
         try MeetingSpeakerAttribution.resolve(units: units, activity: activity, policy: policy,
-                                              barrierUnitIDs: barriers, contextualBarrierEpochIDs: epochs)
+                                              barrierUnitIDs: barriers, contextualBarrierEpochIDs: epochs, contextualBarriers: contextualBarriers)
     }
 
     static func expectError(_ body: () throws -> Void) {
@@ -47,6 +48,7 @@ struct MeetingSpeakerAttributionTests {
         try self.neighbors()
         try self.interruptions()
         try self.scopeAndChronology()
+        try self.contextBarrierIntervals()
         try self.invalidInputsAndCoding()
         try self.metamorphic()
         try self.exactBoundaries()
@@ -250,6 +252,85 @@ struct MeetingSpeakerAttributionTests {
         self.check(nestedOutput.first { $0.unitID == "unknown" }?.selectedToken == nil)
         let validBarrier = [base[0], self.unit("excluded", 0.22, 0.25), base[1], base[2]]
         self.check(try self.resolve(validBarrier, activity, barriers: ["excluded"]).first { $0.unitID == "unknown" }?.selectedToken == nil)
+    }
+
+    static func contextBarrierIntervals() throws {
+        let a = self.token("a"), b = self.token("b")
+        let words = [self.unit("left", 5.6, 6, .assigned(a)), self.unit("unknown", 6.1, 6.2),
+                     self.unit("right", 6.3, 6.5, .assigned(b))]
+        let activity = [self.activity("a", 5.6, 6), self.activity("b", 6.3, 6.5)]
+        let gap = MeetingSpeakerAttributionContextBarrier(analysisEpochID: Self.epoch, interval: .init(start: 6, end: 6.1))
+        let baseline = try self.resolve(words, activity)
+        let blocked = try self.resolve(words, activity, contextualBarriers: [gap])
+        self.check(baseline[1].rule == .incomingSpeaker && blocked[1].selectedToken == nil,
+                   "Neighbor inference crossed a proven missing-audio interval")
+        self.check(zip(baseline, blocked).allSatisfy { lhs, rhs in
+            lhs.rawAssignment == rhs.rawAssignment && lhs.candidates == rhs.candidates
+                && lhs.activeSupportSeconds == rhs.activeSupportSeconds && lhs.relation == rhs.relation
+        }, "A context barrier altered native acoustic evidence")
+        self.check(blocked[0] == baseline[0] && blocked[2] == baseline[2])
+        let later = [self.unit("later-left", 8, 8.2, .assigned(a)), self.unit("later-unknown", 8.3, 8.5),
+                     self.unit("later-right", 8.6, 8.8, .assigned(b))]
+        let local = try self.resolve(words + later, activity + [self.activity("a", 8, 8.2), self.activity("b", 8.6, 8.8)], contextualBarriers: [gap])
+        self.check(local.first { $0.unitID == "unknown" }?.selectedToken == nil)
+        self.check(local.first { $0.unitID == "later-unknown" }?.rule == .incomingSpeaker,
+                   "One small discontinuity disabled an entire otherwise valid epoch")
+        let mixedWords = [self.unit("left", 5.6, 6, .assigned(a)), self.unit("mixed", 6.1, 6.8, .ambiguous([a, b])),
+                          self.unit("right", 6.9, 7.2, .assigned(a))]
+        let mixedActivity = [self.activity("a", 5.6, 7.2), self.activity("b", 6.3, 6.6)]
+        let mixedBaseline = try self.resolve(mixedWords, mixedActivity)
+        let mixedBlocked = try self.resolve(mixedWords, mixedActivity, contextualBarriers: [gap])
+        self.check(mixedBaseline[1].rule == .briefInterruption && mixedBlocked[1].rule != .briefInterruption)
+        self.check(mixedBlocked[1].selectedToken == nil && mixedBlocked[1].candidates == mixedBaseline[1].candidates,
+                   "Interruption roles crossed a gap before the first mixed word")
+        let otherTrack = MeetingAnalysisEpochID(trackID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!, ordinal: 0)
+        let unrelated = [otherTrack, MeetingAnalysisEpochID(trackID: Self.epoch.trackID, ordinal: 1),
+                         MeetingAnalysisEpochID(trackID: Self.epoch.trackID, ordinal: 0, generation: 1)].map {
+            MeetingSpeakerAttributionContextBarrier(analysisEpochID: $0, interval: gap.interval)
+        }
+        self.check(try self.resolve(words, activity, contextualBarriers: unrelated) == baseline)
+        self.check(try self.resolve(mixedWords, mixedActivity, contextualBarriers: unrelated) == mixedBaseline)
+        let touching = [MeetingSpeakerAttributionContextBarrier(analysisEpochID: Self.epoch, interval: .init(start: 5.5, end: 5.6)),
+                        MeetingSpeakerAttributionContextBarrier(analysisEpochID: Self.epoch, interval: .init(start: 6.5, end: 6.6))]
+        self.check(try self.resolve(words, activity, contextualBarriers: touching) == baseline,
+                   "Half-open barrier endpoints falsely intersected the cue path")
+        let mixedTouching = [touching[0], MeetingSpeakerAttributionContextBarrier(analysisEpochID: Self.epoch, interval: .init(start: 7.2, end: 7.3))]
+        self.check(try self.resolve(mixedWords, mixedActivity, contextualBarriers: mixedTouching) == mixedBaseline)
+        let fragmented = [MeetingSpeakerAttributionContextBarrier(analysisEpochID: Self.epoch, interval: .init(start: 6, end: 6.04)),
+                          MeetingSpeakerAttributionContextBarrier(analysisEpochID: Self.epoch, interval: .init(start: 6.04, end: 6.1)), gap]
+        self.check(try self.resolve(words, activity, contextualBarriers: fragmented.reversed()) == blocked)
+        self.check(try self.resolve(mixedWords, mixedActivity, contextualBarriers: fragmented + fragmented) == mixedBlocked)
+        let roundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionContextBarrier.self, from: JSONEncoder().encode(gap))
+        self.check(roundTrip == gap)
+        for bounds in [(Double.nan, 6.1), (6, Double.infinity), (-1, 6), (6, 6), (6.1, 6)] {
+            self.expectError {
+                _ = try self.resolve(words, activity, contextualBarriers: [.init(analysisEpochID: Self.epoch,
+                                                                                 interval: .init(start: bounds.0, end: bounds.1))])
+            }
+        }
+        self.expectError {
+            _ = try self.resolve(words, activity, contextualBarriers: [.init(analysisEpochID: .init(trackID: Self.epoch.trackID, ordinal: -1), interval: gap.interval)])
+        }
+        let count = 5_000
+        var manyWords: [MeetingFinalTextUnit] = [], manyActivity: [MeetingBackendSpeakerActivity] = []
+        var manyBarriers: [MeetingSpeakerAttributionContextBarrier] = []
+        for position in 0..<count {
+            let start = Double(position) * 2
+            manyWords += [self.unit("l\(position)", start, start + 0.2, .assigned(a)),
+                          self.unit("u\(position)", start + 0.3, start + 0.5),
+                          self.unit("r\(position)", start + 0.6, start + 0.8, .assigned(b))]
+            manyActivity += [self.activity("a", start, start + 0.2), self.activity("b", start + 0.6, start + 0.8)]
+            let gapStart = start + (position.isMultiple(of: 2) ? 0.2 : 1.2)
+            manyBarriers.append(.init(analysisEpochID: Self.epoch, interval: .init(start: gapStart, end: gapStart + 0.05)))
+        }
+        let began = Date()
+        let indexed = try self.resolve(manyWords, manyActivity, contextualBarriers: manyBarriers)
+        let indexedByID = Dictionary(uniqueKeysWithValues: indexed.map { ($0.unitID, $0) })
+        self.check((0..<count).allSatisfy { position in
+            let decision = indexedByID["u\(position)"]!
+            return position.isMultiple(of: 2) ? decision.selectedToken == nil : decision.rule == .incomingSpeaker
+        })
+        print("ATTRIBUTION_CONTEXT_BARRIERS units=\(manyWords.count) barriers=\(count) elapsed=\(Date().timeIntervalSince(began))")
     }
 
     static func invalidInputsAndCoding() throws {

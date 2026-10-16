@@ -154,6 +154,13 @@ nonisolated struct MeetingSpeakerAttributionInterval: Codable, Equatable, Sendab
     var duration: Double { self.end - self.start }
 }
 
+/// A proven discontinuity in the canonical analysis-time domain. It blocks contextual speaker
+/// inference across missing or inadmissible evidence without inventing a text unit or identity.
+nonisolated struct MeetingSpeakerAttributionContextBarrier: Codable, Equatable, Sendable {
+    let analysisEpochID: MeetingAnalysisEpochID
+    let interval: MeetingSpeakerAttributionInterval
+}
+
 nonisolated struct MeetingSpeakerAttributionCandidateSupport: Codable, Equatable, Sendable {
     let token: MeetingBackendSpeakerToken
     /// Positive half-open support, clipped to the original text envelope, unioned per token.
@@ -223,6 +230,7 @@ nonisolated enum MeetingSpeakerAttributionError: Error, Equatable {
     case preassignedAcousticUnit(String)
     case unknownBarrierUnit(String)
     case invalidBarrierEpoch
+    case invalidContextBarrier(Int)
 }
 
 nonisolated struct MeetingSpeakerAttributionDiagnostics: Codable, Equatable, Sendable {
@@ -300,24 +308,28 @@ nonisolated enum MeetingSpeakerAttribution {
     static func resolve(
         units: [MeetingFinalTextUnit], activity: [MeetingBackendSpeakerActivity],
         policy: MeetingSpeakerAttributionPolicy = .standard, barrierUnitIDs: Set<String> = [],
-        contextualBarrierEpochIDs: Set<MeetingAnalysisEpochID> = []
+        contextualBarrierEpochIDs: Set<MeetingAnalysisEpochID> = [],
+        contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = []
     ) throws -> [MeetingSpeakerAttributionDecision] {
         try self.resolveWithDiagnostics(units: units, activity: activity, policy: policy,
                                         barrierUnitIDs: barrierUnitIDs,
-                                        contextualBarrierEpochIDs: contextualBarrierEpochIDs).decisions
+                                        contextualBarrierEpochIDs: contextualBarrierEpochIDs,
+                                        contextualBarriers: contextualBarriers).decisions
     }
 
     static func resolveWithDiagnostics(
         units: [MeetingFinalTextUnit], activity: [MeetingBackendSpeakerActivity],
         policy: MeetingSpeakerAttributionPolicy = .standard, barrierUnitIDs: Set<String> = [],
-        contextualBarrierEpochIDs: Set<MeetingAnalysisEpochID> = []
+        contextualBarrierEpochIDs: Set<MeetingAnalysisEpochID> = [],
+        contextualBarriers: [MeetingSpeakerAttributionContextBarrier] = []
     ) throws -> MeetingSpeakerAttributionResolution {
         _ = try policy.validated()
         try self.validate(units: units, activity: activity, barriers: barrierUnitIDs,
-                          epochBarriers: contextualBarrierEpochIDs)
+                          epochBarriers: contextualBarrierEpochIDs, contextualBarriers: contextualBarriers)
         try Task.checkCancellation()
         var diagnostics = MeetingSpeakerAttributionDiagnostics()
         let indexes = try self.makeIndexes(activity: activity, diagnostics: &diagnostics)
+        let contextIndexes = try self.makeContextBarrierIndexes(contextualBarriers)
         let fingerprint = policy.fingerprint
         var partitions: [MeetingAnalysisEpochID: [MeetingFinalTextUnit]] = [:]
         for (position, unit) in units.enumerated() {
@@ -347,12 +359,12 @@ nonisolated enum MeetingSpeakerAttribution {
                 }
                 if policy.enableNeighborResolution {
                     try self.resolveNeighbors(units: ordered, decisions: &decisions, anchors: anchors,
-                                          temporalBarriers: temporalBarriers, policy: policy)
+                                          temporalBarriers: temporalBarriers, contextBarriers: contextIndexes[epoch], policy: policy)
                 }
                 if policy.enableBriefInterruption {
                     try self.resolveInterruptions(
                         units: ordered, decisions: &decisions, anchors: anchors,
-                        temporalBarriers: temporalBarriers, index: index, policy: policy,
+                        temporalBarriers: temporalBarriers, contextBarriers: contextIndexes[epoch], index: index, policy: policy,
                         diagnostics: &diagnostics
                     )
                 }
@@ -379,7 +391,8 @@ nonisolated enum MeetingSpeakerAttribution {
 
     private static func validate(
         units: [MeetingFinalTextUnit], activity: [MeetingBackendSpeakerActivity], barriers: Set<String>,
-        epochBarriers: Set<MeetingAnalysisEpochID>
+        epochBarriers: Set<MeetingAnalysisEpochID>,
+        contextualBarriers: [MeetingSpeakerAttributionContextBarrier]
     ) throws {
         var ids = Set<String>()
         for unit in units {
@@ -406,6 +419,12 @@ nonisolated enum MeetingSpeakerAttribution {
         }
         if let unknown = barriers.subtracting(ids).sorted().first {
             throw MeetingSpeakerAttributionError.unknownBarrierUnit(unknown)
+        }
+        for (position, barrier) in contextualBarriers.enumerated() {
+            try self.checkCancellation(at: position)
+            guard self.valid(epoch: barrier.analysisEpochID),
+                  MeetingEvidenceInterval.isValid(start: barrier.interval.start, end: barrier.interval.end)
+            else { throw MeetingSpeakerAttributionError.invalidContextBarrier(position) }
         }
         guard epochBarriers.allSatisfy({ self.valid(epoch: $0) }) else {
             throw MeetingSpeakerAttributionError.invalidBarrierEpoch
@@ -442,6 +461,38 @@ nonisolated enum MeetingSpeakerAttribution {
             } else { output.append(value) }
         }
         return output
+    }
+
+    /// Unioned intervals are disjoint and ordered by both start and end. Every cue path needs
+    /// only one lower-bound search, independent of how many earlier coverage gaps exist.
+    private struct ContextBarrierIndex {
+        let intervals: [Interval]
+
+        func intersects(start: Double, end: Double) -> Bool {
+            var low = 0, high = self.intervals.count
+            while low < high {
+                let middle = low + (high - low) / 2
+                if self.intervals[middle].end <= start { low = middle + 1 } else { high = middle }
+            }
+            return low < self.intervals.count && self.intervals[low].start < end
+        }
+    }
+
+    private static func makeContextBarrierIndexes(_ barriers: [MeetingSpeakerAttributionContextBarrier]) throws
+        -> [MeetingAnalysisEpochID: ContextBarrierIndex]
+    {
+        var intervals: [MeetingAnalysisEpochID: [Interval]] = [:]
+        for (position, barrier) in barriers.enumerated() {
+            try self.checkCancellation(at: position)
+            intervals[barrier.analysisEpochID, default: []].append(barrier.interval)
+        }
+        var indexes: [MeetingAnalysisEpochID: ContextBarrierIndex] = [:]
+        for (epoch, values) in intervals {
+            try Task.checkCancellation()
+            indexes[epoch] = .init(intervals: try self.unionValid(values))
+        }
+        try Task.checkCancellation()
+        return indexes
     }
 
     private struct IndexedActivity {
@@ -709,7 +760,8 @@ nonisolated enum MeetingSpeakerAttribution {
 
     private static func resolveNeighbors(
         units: [MeetingFinalTextUnit], decisions: inout [Decision], anchors: [Bool],
-        temporalBarriers: Set<String>, policy: MeetingSpeakerAttributionPolicy
+        temporalBarriers: Set<String>, contextBarriers: ContextBarrierIndex?,
+        policy: MeetingSpeakerAttributionPolicy
     ) throws {
         var position = 0
         while position < units.count {
@@ -727,7 +779,9 @@ nonisolated enum MeetingSpeakerAttribution {
             guard first > 0, position < units.count, anchors[first - 1], anchors[position],
                   units[last].analysisEnd - units[first].analysisStart <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
                   let previous = decisions[first - 1].selectedToken,
-                  let next = decisions[position].selectedToken
+                  let next = decisions[position].selectedToken,
+                  contextBarriers?.intersects(start: units[first - 1].analysisStart,
+                                              end: units[position].analysisEnd) != true
             else { continue }
             let range = (first...position)
             guard range.allSatisfy({ index in
@@ -758,7 +812,8 @@ nonisolated enum MeetingSpeakerAttribution {
 
     private static func resolveInterruptions(
         units: [MeetingFinalTextUnit], decisions: inout [Decision], anchors: [Bool],
-        temporalBarriers: Set<String>, index: ActivityIndex, policy: MeetingSpeakerAttributionPolicy,
+        temporalBarriers: Set<String>, contextBarriers: ContextBarrierIndex?,
+        index: ActivityIndex, policy: MeetingSpeakerAttributionPolicy,
         diagnostics: inout MeetingSpeakerAttributionDiagnostics
     ) throws {
         var position = 0
@@ -794,6 +849,8 @@ nonisolated enum MeetingSpeakerAttribution {
             position = max(first + 1, stop)
             guard !mixed.isEmpty, stop < units.count, anchors[stop],
                   decisions[stop].selectedToken == main,
+                  contextBarriers?.intersects(start: units[first - 1].analysisStart,
+                                              end: units[stop].analysisEnd) != true,
                   units[stop].analysisStart + policy.comparisonTolerance >= units[stop - 1].analysisEnd,
                   units[stop].analysisStart - units[stop - 1].analysisEnd <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance,
                   let bout = try index.briefBout(token: other, start: units[first].analysisStart,
