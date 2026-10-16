@@ -1204,6 +1204,33 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Rendering must not change saved meeting or audio-device preferences")
     }
 
+    func testMacRecoveryRestartDispatchesExistingActionOnlyForRetainedAudio() {
+        var retained = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        retained.audioStorageMode = .retainedFiles
+        var restartedIDs: [MeetingSessionID] = []
+        func canvas(_ session: MeetingSession, busy: Bool = false) -> MeetingFailureCanvas {
+            MeetingFailureCanvas(session: session, message: "Synthetic failed checkpoint", isRetrying: busy,
+                onRetrySession: { _ in XCTFail("Restart must not dispatch the resume callback") },
+                onRestartSession: { restartedIDs.append($0.id) },
+                onRevealAudio: { _ in XCTFail("Restart must not reveal or rewrite audio") },
+                onRecordAgain: { _ in XCTFail("Restart must not start a new recording") }, onClose: nil)
+        }
+        let recovery = canvas(retained)
+        XCTAssertTrue(recovery.canRestartProcessing)
+        recovery.restartProcessing()
+        XCTAssertEqual(restartedIDs, [retained.id])
+        canvas(retained, busy: true).restartProcessing()
+        XCTAssertEqual(restartedIDs, [retained.id], "An active operation disables restart dispatch")
+        var strict = retained; strict.audioStorageMode = .memoryOnly
+        XCTAssertFalse(canvas(strict).canRestartProcessing)
+        canvas(strict).restartProcessing()
+        var deleted = retained; deleted.retention.audioDeletedAt = Date()
+        XCTAssertFalse(canvas(deleted).canRestartProcessing)
+        canvas(deleted).restartProcessing()
+        XCTAssertEqual(restartedIDs, [retained.id], "Missing or strict input never reaches the durable restart service")
+    }
+
     func testFluidMeetSetupReadinessStatesRenderWithoutSideEffects() throws {
         let preferences = MeetingUIPreferences()
         let actions = MeetingUIActionRecorder()

@@ -874,6 +874,7 @@ struct MeetingFailureCanvas: View {
     let message: String
     let isRetrying: Bool
     let onRetrySession: (MeetingSession) -> Void
+    var onRestartSession: ((MeetingSession) -> Void)? = nil
     let onRevealAudio: (MeetingSession) -> Void
     let onRecordAgain: (MeetingSession) -> Void
     let onClose: (() -> Void)?
@@ -882,6 +883,15 @@ struct MeetingFailureCanvas: View {
 
     private var hasRecoverableAudio: Bool {
         self.session?.hasRetryableAudio == true
+    }
+
+    var canRestartProcessing: Bool {
+        self.hasRecoverableAudio && self.session?.audioStorageMode == .retainedFiles && self.onRestartSession != nil
+    }
+
+    func restartProcessing() {
+        guard self.canRestartProcessing, !self.isRetrying, let session else { return }
+        self.onRestartSession?(session)
     }
 
     private var title: String {
@@ -938,6 +948,12 @@ struct MeetingFailureCanvas: View {
                             .foregroundStyle(self.theme.palette.success)
                     }
                     .fixedSize(horizontal: false, vertical: true)
+                    if self.canRestartProcessing {
+                        Text(PichiLocalization.text("Retry continues from the last saved step. Starting again discards processing progress and keeps your audio."))
+                            .font(self.theme.typography.caption)
+                            .foregroundStyle(self.theme.palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             FluidGlassControlGroup {
@@ -964,6 +980,12 @@ struct MeetingFailureCanvas: View {
             }
             .meetingGlassAction(prominent: true)
             .disabled(self.isRetrying)
+            if self.canRestartProcessing {
+                Button(PichiLocalization.text("Start processing again"), systemImage: "arrow.counterclockwise", action: self.restartProcessing)
+                    .meetingGlassAction()
+                    .disabled(self.isRetrying)
+                    .accessibilityIdentifier("meeting.restartProcessing")
+            }
             Button("Show audio", systemImage: "folder", action: { self.onRevealAudio(session) })
                 .meetingGlassAction()
         }
