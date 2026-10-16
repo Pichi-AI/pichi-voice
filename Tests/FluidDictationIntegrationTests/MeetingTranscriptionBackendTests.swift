@@ -1752,18 +1752,23 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
         }
         private nonisolated func batch(frames: Int, offset: Double, track: UUID, provisional: Bool) -> MeetingPCMTranscriptBatch {
             let text = "обсудим документ сегодня. продолжим встречу после перерыва. Иван Тестов просит копию документа после встречи."
-            return .init(segments: [.init(id: sourceID,
+            var output = MeetingPCMTranscriptBatch(segments: [.init(id: sourceID,
                 start: .init(value: Int64((offset * 16_000).rounded()), timescale: 16_000),
                 end: .init(value: Int64((offset * 16_000).rounded()) + Int64(frames), timescale: 16_000),
                 sourceTrackID: track, speakerID: nil, text: text, originalText: text, revision: 0,
                 status: provisional ? .provisional : .final, overlap: .none, completeness: .complete)],
                 isComplete: !provisional)
+            output.speechObservationIsFinal = !provisional
+            return output
         }
         nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: UUID, attemptID: UUID,
             configuration: MeetingFinalProcessingConfiguration,
             preview: (nonisolated(nonsending) @Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
             record(progressive: false, configuration: configuration)
-            if let preview { try await preview(batch(frames: samples.count, offset: offset, track: trackID, provisional: true)) }
+            if let preview {
+                try await preview(batch(frames: samples.count, offset: offset, track: trackID, provisional: true))
+                try await preview(batch(frames: samples.count, offset: offset, track: trackID, provisional: false))
+            }
             return batch(frames: samples.count, offset: offset, track: trackID, provisional: false)
         }
         nonisolated func recognizePCM(window: MeetingPCMProgressiveWindow, offset: TimeInterval,
@@ -1776,7 +1781,12 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
                 if !update.samples.isEmpty, let preview {
                     try await preview(batch(frames: frames, offset: offset, track: trackID, provisional: true))
                 }
-                if update.isFinal { return batch(frames: frames, offset: offset, track: trackID, provisional: false) }
+                if update.isFinal {
+                    // Mirror the real runtime: sealing admits the final hypothesis without
+                    // waiting for a second inference on an already complete PCM window.
+                    if let preview { try await preview(batch(frames: frames, offset: offset, track: trackID, provisional: false)) }
+                    return batch(frames: frames, offset: offset, track: trackID, provisional: false)
+                }
             }
             throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
         }
@@ -1849,12 +1859,12 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
                 XCTFail("Disabled speaker labels cannot prepare speaker weights")
             })
         let capture = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic", languageCode: "auto",
-            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"))
+            microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic"),
+            audioStorageMode: .memoryOnly, speakerLabelsEnabled: false, piiRedactionEnabled: privacy)
         var session = MeetingSession(configuration: capture, timebase: .init(startedHostTime: 0,
             machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
-        session.audioStorageMode = .memoryOnly; session.recordingBackendID = MeetingBackendID.whisperTiny.rawValue
+        session.recordingBackendID = MeetingBackendID.whisperTiny.rawValue
         session.recordingASRArtifactFingerprint = "synthetic-pinned-artifact"
-        session.speakerLabelsEnabled = false; session.piiRedactionEnabled = privacy
         let sessionID = session.id
         addTeardownBlock { await pipeline.cancelMemoryAudio(sessionID: sessionID) }
         let track = MeetingAudioTrack(id: UUID(), kind: .microphone, sourceIdentifier: "synthetic",
@@ -1864,13 +1874,9 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
         settings.selectedSpeechModel = .gigaam
         let consumer = try await pipeline.memoryConsumer(for: session.id, track: track, eventHandler: { _ in })
         XCTAssertTrue(consumer.enqueue(try sample()))
-        do {
-            try await consumer.finish()
-            if refusingPrivacy { XCTFail("A failed redactor must prevent all publication") }
-        } catch {
-            if !refusingPrivacy { throw error }
-            XCTAssertTrue(error is RefusingRedactor.Refused)
-        }
+        // The archive owns complete RAM audio even if optional live privacy fails.
+        // Such a failure is joined here and retried by process after Stop.
+        try await consumer.finish()
         let progressiveCalls = runtime.progressiveCalls
         let sealedCalls = runtime.sealedCalls
         XCTAssertEqual(progressiveCalls, policy && capability ? 1 : 0)
@@ -1879,8 +1885,29 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
         XCTAssertEqual(configurations.count, 1)
         XCTAssertEqual(configurations.first?.asrModel, "whisper-tiny")
         XCTAssertEqual(configurations.first?.asrArtifactFingerprint, "synthetic-pinned-artifact")
+        if privacy {
+            XCTAssertFalse(observations.previews.isEmpty)
+            XCTAssertNil(observations.previews.first.flatMap { $0 },
+                "The first unconfirmed hypothesis must not bypass the stability guard")
+        }
         if refusingPrivacy {
-            XCTAssertTrue(observations.previews.isEmpty)
+            XCTAssertTrue(observations.previews.compactMap { $0 }.isEmpty,
+                "A nil preview clears the UI; no protected or raw text may be published")
+            XCTAssertTrue(observations.checkpoints.isEmpty)
+            XCTAssertTrue(pipeline.memoryAttempts[session.id]?.recordingConsumer?.requiresSpeechReplay == true)
+            session.audioTracks = [track]
+            do {
+                _ = try await pipeline.process(session: session,
+                    sessionDirectory: URL(fileURLWithPath: "/synthetic-never-created"), progress: { _ in })
+                XCTFail("A persistent privacy failure must reject the complete post-Stop replay")
+            } catch {
+                XCTAssertTrue(error is RefusingRedactor.Refused)
+            }
+            XCTAssertEqual(runtime.sealedCalls, 1, "Post-Stop privacy failure must come from an actual replay")
+            XCTAssertTrue(runtime.configurations.allSatisfy {
+                $0.asrModel == "whisper-tiny" && $0.asrArtifactFingerprint == "synthetic-pinned-artifact"
+            }, "Replay must retain the admitted model after global selection changes")
+            XCTAssertTrue(observations.previews.compactMap { $0 }.isEmpty)
             XCTAssertTrue(observations.checkpoints.isEmpty)
         } else if privacy {
             let shown = observations.previews.compactMap { $0?.text }
