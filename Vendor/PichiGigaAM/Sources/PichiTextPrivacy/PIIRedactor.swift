@@ -251,7 +251,10 @@ public enum PIIRedactor {
                 // Keep placeholders idempotent and avoid ordinary instructions.
                 if PIIKind.allCases.contains(where: { value == $0.placeholder }) { continue }
                 let word = value.trimmingCharacters(in: .punctuationCharacters).lowercased()
-                if range == match.range(at: 3), prose.contains(word) { continue }
+                let prefix = source.substring(with: NSRange(location: match.range.location,
+                    length: range.location - match.range.location))
+                let explicitlyDelimited = prefix.contains(":") || prefix.contains("=")
+                if range == match.range(at: 3), !explicitlyDelimited, prose.contains(word) { continue }
                 guard kind == .secret || value.contains(where: { $0.isLetter || $0.isNumber }) else { continue }
                 result.append(.init(range: range, kind: kind, contextual: true, resolvedContextRange: match.range))
             }

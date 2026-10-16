@@ -468,7 +468,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let root = try self.assets()
         let samples = try self.pcm("two-voices", in: root)
         let speakerRoot = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
-        let package = speakerRoot.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let package = speakerRoot.appendingPathComponent("nemotron/\(MeetingNemotronModelLocator.cacheVersion)/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
         let voicePackage = speakerRoot.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
         let store = MeetingDiarizationModelStore(
             canDownload: { true },
@@ -556,7 +556,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let root = try self.assets()
         let samples = try self.pcm("two-voices", in: root)
         let speakerRoot = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
-        let package = speakerRoot.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let package = speakerRoot.appendingPathComponent("nemotron/\(MeetingNemotronModelLocator.cacheVersion)/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
         let voicePackage = speakerRoot.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
         let store = MeetingDiarizationModelStore(
             canDownload: { true }, validate: { try MeetingModelInstaller.validate(package) },
@@ -642,7 +642,7 @@ final class MobileRegisteredModelInferenceTests: XCTestCase {
         let source = try self.pcm("two-voices", in: root)
         XCTAssertFalse(source.isEmpty)
         let resources = root.appendingPathComponent("models/speaker-resources", isDirectory: true)
-        let package = resources.appendingPathComponent("nemotron/v1/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
+        let package = resources.appendingPathComponent("nemotron/\(MeetingNemotronModelLocator.cacheVersion)/\(MeetingNemotronModelLocator.packageFileName)", isDirectory: true)
         let voice = resources.appendingPathComponent("voice/\(MeetingSpeakerVoiceModelArtifacts.packageName)", isDirectory: true)
         let installed = try await self.installedConfiguration(model: .gigaam, assets: root)
         let configuration = MeetingFinalProcessingConfiguration(asrModel: installed.asrModel,

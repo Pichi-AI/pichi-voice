@@ -146,7 +146,7 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
     func testNativeLivePIIRetagsCompletedRowsAcrossPartialUpdates() async throws {
         let assets = try MobileInferenceTestAssets.resolve()
         let models = assets.appendingPathComponent("models/privacy", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: models.appendingPathComponent(PichiTranscriptPrivacyModelStore.descriptor.id).appendingPathComponent("model_int8.onnx").path) else { throw XCTSkip("Stage public privacy model under models/privacy/rubert-tiny-news-int8") }
+        guard FileManager.default.fileExists(atPath: models.appendingPathComponent(PichiTranscriptPrivacyModelStore.descriptor.id).appendingPathComponent("model_int8.onnx").path) else { throw XCTSkip("Stage the pinned privacy descriptor under models/privacy/\(PichiTranscriptPrivacyModelStore.descriptor.id)") }
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: models))
         try await privacy.prepare()
         let cases: [(String, [String], [String], String)] = [
@@ -197,7 +197,7 @@ final class MobilePrivacyPersistenceTests: XCTestCase {
         let models = assets.appendingPathComponent("models/privacy", isDirectory: true)
         let installed = models.appendingPathComponent(PichiTranscriptPrivacyModelStore.descriptor.id, isDirectory: true)
         guard FileManager.default.fileExists(atPath: installed.appendingPathComponent("model_int8.onnx").path) else {
-            throw XCTSkip("Stage public privacy model under models/privacy/rubert-tiny-news-int8")
+            throw XCTSkip("Stage the pinned privacy descriptor under models/privacy/\(PichiTranscriptPrivacyModelStore.descriptor.id)")
         }
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: models))
         try await privacy.prepare()

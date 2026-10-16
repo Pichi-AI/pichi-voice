@@ -52,7 +52,7 @@ extension PIIRedactor {
                 }
             }
         }
-        for span in ner where !["O", "LOC", "ORG"].contains(span.label) {
+        for span in ner where PIIKind(rawValue: span.label) != nil {
             // A candidate dropped by durable precision guards is still unsafe in
             // an unfinished preview, including short and mixed-script fragments.
             guard valid(span.range), span.score.isFinite, (0...1).contains(span.score) else {

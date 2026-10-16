@@ -30,6 +30,9 @@ final class PIIContactRulesTests: XCTestCase {
             ("пароль ", "Synthetic!Secret42", .secret),
             ("пароль: ", "!?#$", .secret),
             ("пароль: ", "[СЕКРЕТ]tail!", .secret),
+            ("password: ", "reset", .secret),
+            ("пароль: ", "нужно!", .secret),
+            ("логин = ", "should", .login),
             ("пароль для входа: ", "x!", .secret),
             ("api key = ", "token/a+b=c?d!", .secret),
             ("пароль ", String(repeating: "abc!", count: 40), .secret),
@@ -79,6 +82,13 @@ final class PIIContactRulesTests: XCTestCase {
     }
 
     func testPreviewResolvesWholeQualifiedCredentialsAndHoldsPartialTypedSpans() throws {
+        let ordinary = "Мы обсуждаем проект в Москве. Затем обсуждаем результаты работы и план на следующий месяц."
+        let unchanged = try PIIRedactor.redact(ordinary, ner: [])
+        let baseline = try PIIRedactor.provisionalSafePrefix(in: ordinary, ner: [], redactedSpans: unchanged.spans)
+        for label in ["CITY", "COUNTRY", "REGION", "DISTRICT", "STREET"] {
+            let location = PIINERSpan(range: (ordinary as NSString).range(of: "Москве"), label: label, score: 1)
+            XCTAssertEqual(try PIIRedactor.provisionalSafePrefix(in: ordinary, ner: [location], redactedSpans: unchanged.spans), baseline, label)
+        }
         let text = "логин для входа sample_user обсудим инструкцию и уточним вопросы после встречи."
         let result = try PIIRedactor.redact(text, ner: [])
         let limit = try XCTUnwrap(PIIRedactor.provisionalSafePrefix(in: text, ner: [], redactedSpans: result.spans))
