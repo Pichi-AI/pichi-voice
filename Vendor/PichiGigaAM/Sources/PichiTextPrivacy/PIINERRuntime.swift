@@ -26,6 +26,7 @@ public actor PIINERRuntime {
     private var tokenizer: PIIWordPieceTokenizer?
     private var labels: [String] = []
     private var loadedFingerprint: String?
+    private var inferenceFormat = PIIInferenceFormat.tokenBIO
     public init() {}
     public var isReady: Bool { session != nil }
 
@@ -38,26 +39,48 @@ public actor PIINERRuntime {
             try descriptor.verify(in: directory)
             if loadedFingerprint == descriptor.fingerprint, session != nil { return }
             unload()
-            struct Config: Decodable { let id2label: [String: String] }
-            let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: directory.appendingPathComponent("config.json")))
-            let labels = try (0..<config.id2label.count).map { i -> String in
-                guard let label = config.id2label[String(i)], label == "O" || label.hasPrefix("B-") || label.hasPrefix("I-") else {
-                    throw TextPrivacyError.incompatibleModel
+            let labels: [String]
+            let tokenizer: PIIWordPieceTokenizer
+            switch descriptor.inferenceFormat {
+            case .tokenBIO:
+                struct Config: Decodable { let id2label: [String: String] }
+                let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: directory.appendingPathComponent("config.json")))
+                labels = try (0..<config.id2label.count).map { i -> String in
+                    guard let label = config.id2label[String(i)], label == "O" || label.hasPrefix("B-") || label.hasPrefix("I-") else {
+                        throw TextPrivacyError.incompatibleModel
+                    }
+                    return label
                 }
-                return label
+                guard labels.contains("B-PER"), labels.contains("I-PER") else { throw TextPrivacyError.incompatibleModel }
+                tokenizer = try PIIWordPieceTokenizer(vocabulary: String(contentsOf: directory.appendingPathComponent("vocab.txt"), encoding: .utf8))
+            case .independentBIO:
+                struct Model: Decodable { let types: [String] }
+                struct Config: Decodable {
+                    let types: [String]
+                    let max_length: Int
+                    let stride: Int
+                    let bio_order: [String]
+                    let output: String
+                }
+                let model = try JSONDecoder().decode(Model.self, from: Data(contentsOf: directory.appendingPathComponent("model.json")))
+                let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: directory.appendingPathComponent("inference_config.json")))
+                guard model.types.count == 25, Set(model.types).count == 25, config.types == model.types,
+                      config.max_length == 256, config.stride == 64, config.bio_order == ["O", "B", "I"],
+                      config.output == "ner_logits" else { throw TextPrivacyError.incompatibleModel }
+                labels = model.types
+                tokenizer = try PIIWordPieceTokenizer(tokenizerJSON: Data(contentsOf: directory.appendingPathComponent("tokenizer.json")))
             }
-            guard labels.contains("B-PER"), labels.contains("I-PER") else { throw TextPrivacyError.incompatibleModel }
-            let tokenizer = try PIIWordPieceTokenizer(vocabulary: String(contentsOf: directory.appendingPathComponent("vocab.txt"), encoding: .utf8))
             let environment = try ORTEnv(loggingLevel: .error)
             let options = try ORTSessionOptions()
             try options.setIntraOpNumThreads(1)
             try options.setGraphOptimizationLevel(.all)
             let session = try ORTSession(env: environment, modelPath: directory.appendingPathComponent("model_int8.onnx").path, sessionOptions: options)
             guard Set(try session.inputNames()) == Set(["input_ids", "attention_mask", "token_type_ids"]),
-                  Set(try session.outputNames()).contains("logits") else { throw TextPrivacyError.incompatibleModel }
+                  Set(try session.outputNames()).contains(descriptor.inferenceFormat == .tokenBIO ? "logits" : "ner_logits") else { throw TextPrivacyError.incompatibleModel }
             try Task.checkCancellation()
             self.environment = environment; self.session = session; self.tokenizer = tokenizer
             self.labels = labels; self.loadedFingerprint = descriptor.fingerprint
+            self.inferenceFormat = descriptor.inferenceFormat
         }
     }
 
@@ -70,6 +93,7 @@ public actor PIINERRuntime {
     public func tag(_ text: String) throws -> [PIINERSpan] {
         try Task.checkCancellation()
         guard let session, let tokenizer else { throw TextPrivacyError.notPrepared }
+        if inferenceFormat == .independentBIO { return try tagIndependent(text, session: session, tokenizer: tokenizer) }
         let words = try tokenizer.words(text)
         var predictions: [PIIWordPrediction] = []
         predictions.reserveCapacity(words.count)
@@ -102,6 +126,36 @@ public actor PIINERRuntime {
         }
         try Task.checkCancellation()
         return Self.spans(predictions)
+    }
+
+    private func tagIndependent(_ text: String, session: ORTSession, tokenizer: PIIWordPieceTokenizer) throws -> [PIINERSpan] {
+        var spans: [PIINERSpan] = []
+        for window in try tokenizer.independentWindows(text) {
+            try Task.checkCancellation()
+            spans += try autoreleasepool {
+                func tensor(_ values: [Int64]) throws -> ORTValue {
+                    let bytes = values.withUnsafeBytes { NSMutableData(bytes: $0.baseAddress!, length: $0.count) }
+                    return try ORTValue(tensorData: bytes, elementType: .int64, shape: [1, NSNumber(value: values.count)])
+                }
+                let outputs = try session.run(withInputs: [
+                    "input_ids": try tensor(window.ids),
+                    "attention_mask": try tensor(Array(repeating: 1, count: window.ids.count)),
+                    "token_type_ids": try tensor(Array(repeating: 0, count: window.ids.count)),
+                ], outputNames: ["ner_logits"], runOptions: nil)
+                // Joined synchronous inference: cancellation never abandons tensors.
+                try Task.checkCancellation()
+                guard let output = outputs["ner_logits"] else { throw TextPrivacyError.invalidOutput }
+                let info = try output.tensorTypeAndShapeInfo()
+                guard info.elementType == .float, info.shape.map(\.intValue) == [1, window.ids.count, labels.count, 3] else {
+                    throw TextPrivacyError.invalidOutput
+                }
+                let bytes = try output.tensorData() as Data
+                let logits = bytes.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+                return try Self.decodeIndependent(logits: logits, labels: labels, window: window)
+            }
+        }
+        try Task.checkCancellation()
+        return Self.mergeIndependent(spans)
     }
 
     static func decode(logits: [Float], labels: [String], window: PIIEncodedWindow) throws -> [PIIWordPrediction] {

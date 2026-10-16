@@ -35,11 +35,11 @@ struct TranscriptPrivacyResourceTests {
         let cancelledContents = try FileManager.default.contentsOfDirectory(atPath: cancelledFolder.path)
         precondition(cancelledContents.isEmpty)
 
-        if let source = ProcessInfo.processInfo.environment["PICHI_PII_TEST_MODEL_DIRECTORY"] {
+        if let source = ProcessInfo.processInfo.environment["PICHI_PII_A1_TEST_MODEL_DIRECTORY"] {
             let sourceRoot = URL(fileURLWithPath: source, isDirectory: true)
             let installedRoot = root.appendingPathComponent("valid")
             let model = PichiTranscriptPrivacyModelStore(directory: installedRoot) { url, _, progress in
-                let artifact = PIIModelDescriptor.russianTiny.artifacts.first { $0.remotePath.split(separator: "/").last.map(String.init) == url.lastPathComponent }!
+                let artifact = PichiTranscriptPrivacyModelStore.descriptor.artifacts.first { $0.remotePath.split(separator: "/").last.map(String.init) == url.lastPathComponent }!
                 let temporary = root.appendingPathComponent(UUID().uuidString)
                 try FileManager.default.copyItem(at: sourceRoot.appendingPathComponent(artifact.filename), to: temporary)
                 progress(artifact.byteCount, artifact.byteCount)

@@ -5,7 +5,7 @@ import PichiTextPrivacy
 /// privacy metadata, never a fourth speech model or an AI-enhancement provider.
 actor PichiTranscriptPrivacyModelStore {
     typealias Download = @Sendable (URL, Int64, @escaping @Sendable (Int64, Int64) -> Void) async throws -> (URL, URLResponse)
-    static let descriptor = PIIModelDescriptor.russianTiny
+    static let descriptor = PIIModelDescriptor.russianA1
     private let root: URL
     private let download: Download
     private var installation: Task<URL, Error>?
@@ -142,7 +142,7 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
         do {
             let directory = try await modelStore.ensureInstalled(progress: progress)
             try Task.checkCancellation()
-            try await runtime.load(directory: directory)
+            try await runtime.load(descriptor: PichiTranscriptPrivacyModelStore.descriptor, directory: directory)
             try Task.checkCancellation()
         } catch {
             // A preparation cancelled after native loading must still release
