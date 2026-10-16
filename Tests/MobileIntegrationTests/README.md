@@ -87,3 +87,10 @@ Missing ASR values are counted as unscored and fail the complete-quality gate.
 Unmasked publishable observations and remaining source aliases also fail it.
 Speaker-time agreement uses final transcript intervals and a 100 ms grid; it is not
 acoustic DER, WER, overlap accuracy or a general Russian-language benchmark.
+
+For an explicitly requested private visual review, the additional simulator-only
+`PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW=1` gate attaches the actual protected
+transcript segments and speakers. This contains user text: keep the result bundle
+and any derived HTML in ignored private storage. Physical probes ignore this gate.
+This is a fresh simulator replay and must never be presented as recovered text or
+speaker intervals from an earlier metadata-only physical-device run.

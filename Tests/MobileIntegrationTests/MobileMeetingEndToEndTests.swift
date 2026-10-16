@@ -427,6 +427,28 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             attachment.name = "Combined-Russian-meeting-metadata-only"
             attachment.lifetime = .keepAlways
             add(attachment)
+            // A separate simulator-only opt-in is used for an explicitly requested
+            // private visual review. Ordinary and physical probes remain counts-only.
+            if Self.isSimulator, environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1" {
+                let encoder = JSONEncoder()
+                let visualReview: [String: Any] = [
+                    "schema": 1, "physicalDevice": false,
+                    "purpose": "Explicit private visual review; not the original physical-device output",
+                    "testedRevision": environment["PICHI_COMBINED_MEETING_TESTED_REVISION"] ?? "unrecorded",
+                    "audioSHA256": audioDigest, "referenceSHA256": referenceDigest,
+                    "asr": asrModel.rawValue, "privacyModel": PichiTranscriptPrivacyModelStore.descriptor.id,
+                    "diarizationModels": diarizationModels, "audioSeconds": duration,
+                    "attributionAgreement": agreement,
+                    "segments": try JSONSerialization.jsonObject(with: encoder.encode(completed.transcriptSegments)),
+                    "speakers": try JSONSerialization.jsonObject(with: encoder.encode(completed.speakers)),
+                    "limitations": "Fresh simulator replay. Protected text only. Native ASR timing precision is preserved; no invented word timings."
+                ]
+                let review = XCTAttachment(data: try JSONSerialization.data(withJSONObject: visualReview,
+                    options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+                review.name = "Combined-Russian-meeting-private-visual-review"
+                review.lifetime = .keepAlways
+                add(review)
+            }
         } catch {
             await coordinator.shutdownForTermination()
             try? await privacy.unload()
