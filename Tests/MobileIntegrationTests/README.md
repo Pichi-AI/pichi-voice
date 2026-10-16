@@ -52,6 +52,11 @@ Aliases describe recognized spellings of one source entity, not fabricated conta
 reconstruction. Use 2 to 6 speakers, 2 to 512 ordered non-overlapping speech turns,
 1 to 64 sensitive cases, and 2 to 32 harmless anchors. References with missing or
 weak speaker gold cannot establish diarization quality; do not label them reviewed.
+For existing Fathom starts without reviewed ends, set `provenance` to
+`weak-fathom`. This mode reports approximate assignment and unscored ASR cases;
+it does not apply the complete-quality assertions or turn a passing execution
+test into proof of speaker accuracy or complete redaction. Actual observed leaks,
+failed storage invariants and missing Russian transcription still fail the probe.
 
 The actual shared AppServices, coordinator, pipeline, model preparation, speaker
 matching, privacy and strict storage run behind the existing capture seam. File
@@ -68,7 +73,8 @@ The baseline and cleanup delta include runtime/ASR caching, so they do not estab
 a leak or prove that all model memory was freed. Set optional
 `PICHI_COMBINED_MEETING_MAX_FOOTPRINT_MIB` for an explicit whole-process budget.
 
-Quality requires nonempty Russian ASR, all harmless anchors, at least 80% reference
+For synthetic or human-reviewed references, quality requires nonempty Russian ASR,
+all harmless anchors, at least 80% reference
 speaker-time assignment after a global one-to-one label permutation, and actual
 privacy spans covering all letters/digits of expected recognized sensitive values.
 Missing ASR values are counted as unscored and fail the complete-quality gate.

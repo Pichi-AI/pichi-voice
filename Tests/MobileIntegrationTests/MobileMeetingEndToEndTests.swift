@@ -70,13 +70,13 @@ private struct CombinedMeetingReference: Decodable {
         let end: Double
         let speaker: Int
     }
-    let provenance: String // synthetic or human-reviewed
+    let provenance: String // synthetic, human-reviewed, or explicitly weak Fathom metadata
     let turns: [Turn]     // non-overlapping speech intervals, fixture-relative seconds
     let sensitiveAliases: [[String]] // each row describes one entity's ASR spellings
     let textAnchors: [String] // reviewed non-sensitive words that privacy must preserve
 
     func validate(duration: Double) throws {
-        guard ["synthetic", "human-reviewed"].contains(provenance),
+        guard ["synthetic", "human-reviewed", "weak-fathom"].contains(provenance),
               turns.count >= 2, turns.count <= 512,
               Set(turns.map(\.speaker)).count >= 2, Set(turns.map(\.speaker)).count <= 6,
               textAnchors.count >= 2, textAnchors.count <= 32,
@@ -352,11 +352,14 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let matchedAnchors = reference.textAnchors.filter { protectedText.range(of: $0, options: [.caseInsensitive]) != nil }.count
             XCTAssertEqual(matchedAnchors, reference.textAnchors.count, "Reviewed Russian ASR anchors must survive recognition and privacy")
             let agreement = reference.agreement(segments: completed.transcriptSegments)
-            XCTAssertGreaterThanOrEqual(agreement, 0.8, "Reference speaker-time assignment must agree after global label permutation; speaker count alone is insufficient")
-            XCTAssertEqual(observations.observed.count, reference.sensitiveAliases.count,
-                           "Unrecognized source PII is unscored, not successfully redacted; provide approved ASR aliases or review fixture recognition")
-            XCTAssertEqual(observations.fullyMasked.count, reference.sensitiveAliases.count,
-                           "Every expected source entity needs actual fully covering privacy spans")
+            let assertsReferenceQuality = reference.provenance != "weak-fathom"
+            if assertsReferenceQuality {
+                XCTAssertGreaterThanOrEqual(agreement, 0.8, "Reference speaker-time assignment must agree after global label permutation; speaker count alone is insufficient")
+                XCTAssertEqual(observations.observed.count, reference.sensitiveAliases.count,
+                               "Unrecognized source PII is unscored, not successfully redacted; provide approved ASR aliases or review fixture recognition")
+                XCTAssertEqual(observations.fullyMasked.count, reference.sensitiveAliases.count,
+                               "Every expected source entity needs actual fully covering privacy spans")
+            }
             XCTAssertEqual(observations.unmaskedPublishableObservations, 0, "Recognized expected PII must never pass the privacy publication boundary unmasked")
             XCTAssertEqual(observations.remainingCases(in: protectedText), 0, "Protected output must contain none of the expected source aliases")
             let saved = try await store.load(id: completed.id)
@@ -391,6 +394,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(omittedFootprintSamples, 0, "A bounded diagnostic buffer must cover the entire completed attempt")
             let report: [String: Any] = [
                 "schema": 1, "physicalDevice": !Self.isSimulator, "referenceProvenance": reference.provenance,
+                "strongReferenceQualityAssertionsApplied": assertsReferenceQuality,
                 "audioSHA256": audioDigest, "referenceSHA256": referenceDigest,
                 "testedRevision": environment["PICHI_COMBINED_MEETING_TESTED_REVISION"] ?? "unrecorded",
                 "asr": SettingsStore.SpeechModel.whisperTiny.rawValue,
