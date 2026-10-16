@@ -10,12 +10,26 @@ trap 'rm -rf "$task_test_dir"' EXIT HUP INT TERM
 sed '/^nonisolated final class BrandPackageStore:/,$d' Sources/Fluid/Branding/BrandPackage.swift > "$task_test_dir/BrandPackageTypes.swift"
 # Compile the production dashboard geometry without app/service dependencies.
 sed '/^struct DashboardSetupStatus/,$d' Sources/Fluid/UI/DashboardView.swift > "$task_test_dir/DashboardLayout.swift"
+# Compile the complete shared theme boundary used by toolbar actions, without
+# admitting the adaptive app shell or installed settings into this pure probe.
+python3 - "$task_test_dir/ThemeEnvironment.swift" <<'PY_THEME'
+from pathlib import Path
+import sys
+source = Path('Sources/Fluid/Theme/ThemeEnvironment.swift').read_text()
+marker = 'struct AdaptiveAppTheme<'
+assert source.count(marker) == 1
+Path(sys.argv[1]).write_text(source[:source.index(marker)])
+PY_THEME
 xcrun swiftc -parse-as-library \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Branding/AppBrand.swift \
     "$task_test_dir/BrandPackageTypes.swift" \
     Tests/Support/StandaloneBrandPackageStore.swift \
     Sources/Fluid/Branding/BrandDistribution.swift \
+    Sources/Fluid/Theme/FluidTypography.swift \
+    Sources/Fluid/Theme/AppTheme.swift \
+    "$task_test_dir/ThemeEnvironment.swift" \
+    Sources/Fluid/Theme/Components/FluidOutlinedButtonStyle.swift \
     Sources/Fluid/UI/AppNavigationState.swift \
     Sources/Fluid/Theme/Components/FluidPageLayout.swift \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift \
