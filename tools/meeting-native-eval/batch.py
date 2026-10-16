@@ -127,6 +127,8 @@ def main():
             evidence = read(evidence_path)
             if evidence['clipID'] != name or evidence['audioSHA256'] != clip['audio_sha256']:
                 raise ValueError('Evidence cache does not match this corpus clip')
+            if evidence['metadata']['requestedComputeUnits'] != args.compute:
+                raise ValueError('Cached inference used a different frozen compute policy')
             result_path = pass_dir / (name + '.json')
             replay = [BUILD / 'runner', 'replay', evidence_path, result_path]
             if args.policy:
