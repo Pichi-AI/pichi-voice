@@ -350,15 +350,17 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             let protectedText = completed.transcriptSegments.map(\.text).joined(separator: " ")
             let matchedAnchors = reference.textAnchors.filter { protectedText.range(of: $0, options: [.caseInsensitive]) != nil }.count
-            XCTAssertEqual(matchedAnchors, reference.textAnchors.count, "Reviewed Russian ASR anchors must survive recognition and privacy")
             let agreement = reference.agreement(segments: completed.transcriptSegments)
             let assertsReferenceQuality = reference.provenance != "weak-fathom"
             if assertsReferenceQuality {
+                XCTAssertEqual(matchedAnchors, reference.textAnchors.count, "Reviewed Russian ASR anchors must survive recognition and privacy")
                 XCTAssertGreaterThanOrEqual(agreement, 0.8, "Reference speaker-time assignment must agree after global label permutation; speaker count alone is insufficient")
                 XCTAssertEqual(observations.observed.count, reference.sensitiveAliases.count,
                                "Unrecognized source PII is unscored, not successfully redacted; provide approved ASR aliases or review fixture recognition")
                 XCTAssertEqual(observations.fullyMasked.count, reference.sensitiveAliases.count,
                                "Every expected source entity needs actual fully covering privacy spans")
+            } else {
+                XCTAssertGreaterThan(matchedAnchors, 0, "Weak diagnostics still require recognized source anchors; unmatched anchors remain reported")
             }
             XCTAssertEqual(observations.unmaskedPublishableObservations, 0, "Recognized expected PII must never pass the privacy publication boundary unmasked")
             XCTAssertEqual(observations.remainingCases(in: protectedText), 0, "Protected output must contain none of the expected source aliases")

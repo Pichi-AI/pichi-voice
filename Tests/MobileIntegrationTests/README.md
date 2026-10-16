@@ -55,8 +55,9 @@ weak speaker gold cannot establish diarization quality; do not label them review
 For existing Fathom starts without reviewed ends, set `provenance` to
 `weak-fathom`. This mode reports approximate assignment and unscored ASR cases;
 it does not apply the complete-quality assertions or turn a passing execution
-test into proof of speaker accuracy or complete redaction. Actual observed leaks,
-failed storage invariants and missing Russian transcription still fail the probe.
+test into proof of speaker accuracy or complete redaction. It still requires
+Russian transcription and at least one source anchor; all anchor misses remain
+reported. Actual observed leaks and failed storage invariants still fail the probe.
 
 The actual shared AppServices, coordinator, pipeline, model preparation, speaker
 matching, privacy and strict storage run behind the existing capture seam. File
