@@ -3,8 +3,15 @@
 import CoreMedia
 import Foundation
 
-/// iPad/iPhone adapter for the existing meeting lifecycle. Only the microphone is captured;
-/// another application's presentation audio is never represented as a system-audio track.
+/// A hardware or explicit DEBUG file producer shares the same capture lifecycle and sinks.
+nonisolated protocol IOSMeetingCaptureRuntime: Sendable {
+    func start() async throws
+    func stop() async throws
+    func healthSnapshot() -> MeetingTrackHealth
+}
+
+/// iPad/iPhone adapter for the existing meeting lifecycle. Shipping builds capture only the
+/// microphone; another application's presentation audio is never a system-audio track.
 actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     typealias MemoryConsumerFactory = @MainActor @Sendable (
         MeetingSession, MeetingCaptureConfiguration, MeetingAudioTrack, @escaping @Sendable (MeetingCaptureEvent) -> Void
@@ -12,13 +19,17 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
 
     private struct Capture: Sendable {
         let sessionID: MeetingSessionID
-        let runtime: IOSMeetingMicrophoneRuntime
+        let runtime: any IOSMeetingCaptureRuntime
         let writer: MeetingAudioChunkWriter?
         let memoryConsumer: (any MeetingMemoryAudioConsuming)?
         var track: MeetingAudioTrack
     }
 
     private let memoryConsumerFactory: MemoryConsumerFactory?
+#if DEBUG
+    // The source selection is frozen when the real application composes its capture owner.
+    private let debugFileInput = Result { try IOSMeetingDebugFileInput.requested() }
+#endif
     private var active: Capture?
     private var starting = false
     private var terminating = false
@@ -30,6 +41,9 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     }
 
     func preflightPermissions() async throws {
+#if DEBUG
+        if let input = try self.debugFileInput.get() { try input.validateFile(); return }
+#endif
         switch AVAudioApplication.shared.recordPermission {
         case .granted: return
         case .denied: throw MeetingCaptureError.microphonePermissionDenied
@@ -74,7 +88,13 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
         guard configuration.mode == .inRoom, configuration.application == nil else {
             throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("Only in-room microphone capture is available on this platform."))
         }
-        guard AVAudioApplication.shared.recordPermission == .granted else {
+#if DEBUG
+        let debugInput = try self.debugFileInput.get()
+        let requiresMicrophonePermission = debugInput == nil
+#else
+        let requiresMicrophonePermission = true
+#endif
+        guard !requiresMicrophonePermission || AVAudioApplication.shared.recordPermission == .granted else {
             throw MeetingCaptureError.microphonePermissionDenied
         }
         self.starting = true
@@ -105,9 +125,21 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
             writer = nil
             memoryConsumer = try await memoryConsumerFactory(session, configuration, track, eventHandler)
         }
-        let runtime = try IOSMeetingMicrophoneRuntime(trackID: track.id, microphone: configuration.microphone,
-                                                     writer: writer, memoryConsumer: memoryConsumer,
-                                                     eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+        func microphoneRuntime() throws -> IOSMeetingMicrophoneRuntime {
+            try IOSMeetingMicrophoneRuntime(trackID: track.id, microphone: configuration.microphone,
+                writer: writer, memoryConsumer: memoryConsumer,
+                eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+        }
+        let runtime: any IOSMeetingCaptureRuntime
+#if DEBUG
+        if let debugInput {
+            runtime = try IOSMeetingDebugFileRuntime(input: debugInput, trackID: track.id,
+                originHostTime: session.timebase.startedHostTime, writer: writer,
+                memoryConsumer: memoryConsumer, eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+        } else { runtime = try microphoneRuntime() }
+#else
+        runtime = try microphoneRuntime()
+#endif
         do {
             try Task.checkCancellation()
             guard !self.terminating else { throw CancellationError() }
@@ -167,6 +199,12 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     /// Input discovery uses the same identity value as macOS. The selected UID is frozen in
     /// configuration; capture refuses silent substitution if a wired/Bluetooth input disappears.
     @MainActor static func microphoneSnapshot() async -> MeetingMicrophoneCatalogSnapshot {
+#if DEBUG
+        if IOSMeetingDebugFileInput.isRequested {
+            return .init(identities: [IOSMeetingDebugFileInput.identity],
+                         defaultCoreAudioUID: IOSMeetingDebugFileInput.identity.coreAudioUID)
+        }
+#endif
         let session = AVAudioSession.sharedInstance()
 #if DEBUG
         let traceID = UUID().uuidString
@@ -209,6 +247,9 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
     }
 
     @MainActor static func defaultMicrophone(preferredUID: String? = nil) async throws -> MeetingMicrophoneIdentity {
+#if DEBUG
+        if IOSMeetingDebugFileInput.isRequested { return IOSMeetingDebugFileInput.identity }
+#endif
         let snapshot = await self.microphoneSnapshot()
         return try self.resolveDefaultMicrophone(in: snapshot, preferredUID: preferredUID)
     }
@@ -250,7 +291,7 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
 }
 
 /// Shared microphone runtime, also used for explicit RAM-only voice enrollment.
-final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
+final nonisolated class IOSMeetingMicrophoneRuntime: IOSMeetingCaptureRuntime, @unchecked Sendable {
     private struct OwnedInput: @unchecked Sendable {
         let buffer: AVAudioPCMBuffer
         let pts: CMTime

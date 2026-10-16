@@ -110,6 +110,7 @@ Sources/Fluid/Services/Meeting/MeetingVPIOAcousticMetrics.swift
 Sources/Fluid/Services/Meeting/MeetingVPIOAcousticStimulus.swift
 Sources/Fluid/Services/Meeting/PichiMeetingProviderFactory.swift
 Sources/Fluid/Services/Meeting/Platform/IOSMeetingCaptureEngine.swift
+Sources/Fluid/Services/Meeting/Platform/IOSMeetingDebugFileInput.swift
 Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift
 Sources/Fluid/Services/Meeting/Platform/MeetingMemoryAudioArchive.swift
 Sources/Fluid/Services/ParakeetRealtimeProvider.swift
