@@ -25,7 +25,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
     static let defaultLanguageCode = "en"
     /// Mirrors `MeetingProcessingPipeline.pipelineVersion`; that class is `@MainActor`, so a
     /// MainActor test guards this literal against drift instead of referencing it here.
-    static let defaultPipelineVersion = 13
+    static let defaultPipelineVersion = 14
 
     let asrModel: String
     let asrArtifactFingerprint: String?
@@ -38,6 +38,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
     let diarizationFingerprint: String
     let pipelineVersion: Int
     let speakerLabelsEnabled: Bool
+    /// Nil identifies an older configuration and retains its legacy presentation policy.
+    let speakerAttributionPolicy: MeetingSpeakerAttributionPolicy?
 
     init(
         asrModel: String? = nil,
@@ -50,7 +52,8 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         experimentalUnifiedFinalEnabled: Bool = false,
         diarizationFingerprint: String = MeetingProcessingCheckpoint.currentDiarizationFingerprint,
         pipelineVersion: Int = Self.defaultPipelineVersion,
-        speakerLabelsEnabled: Bool = true
+        speakerLabelsEnabled: Bool = true,
+        speakerAttributionPolicy: MeetingSpeakerAttributionPolicy? = .standard
     ) {
         self.asrModel = asrModel ?? (languageCode == Self.defaultLanguageCode ? Self.defaultASRModel : "parakeet-tdt")
         self.asrArtifactFingerprint = asrArtifactFingerprint
@@ -63,6 +66,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
         self.diarizationFingerprint = diarizationFingerprint
         self.pipelineVersion = pipelineVersion
         self.speakerLabelsEnabled = speakerLabelsEnabled
+        self.speakerAttributionPolicy = speakerAttributionPolicy
     }
 
     /// Identity of this inert configuration snapshot only. It does not by itself prove the runtime
@@ -78,6 +82,7 @@ nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Send
             ("diarizer", self.diarizationFingerprint),
             ("pipeline", String(self.pipelineVersion)),
             ("speakerLabels", String(self.speakerLabelsEnabled)),
+            ("speakerAttribution", self.speakerAttributionPolicy?.fingerprint ?? "legacy-raw"),
         ]
         if let asrArtifactFingerprint { pairs.append(("asrArtifact", asrArtifactFingerprint)) }
         return MeetingConfigFingerprintEncoding.encode(pairs)

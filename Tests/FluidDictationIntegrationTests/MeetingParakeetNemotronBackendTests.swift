@@ -1855,16 +1855,16 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
         XCTAssertEqual(tokenA.label, "slot-0")
 
-        guard case let .assigned(tokenB) = try XCTUnwrap(unitsByText["b"]).speaker else {
-            return XCTFail("word b should inherit the continuing incumbent in the handoff pass")
+        guard case let .ambiguous(tokensB) = try XCTUnwrap(unitsByText["b"]).speaker else {
+            return XCTFail("Raw backend evidence must preserve two voices without a context guess")
         }
-        XCTAssertEqual(tokenB.label, "slot-0")
+        XCTAssertEqual(tokensB.map(\.label), ["slot-0", "slot-1"])
 
         guard case .unassigned = try XCTUnwrap(unitsByText["c"]).speaker else {
             return XCTFail("word c overlaps no activity")
         }
 
-        // Assembly keeps the resolved handoff on the existing product speaker.
+        // Presentation may resolve only through the shared audited policy; native ambiguity remains.
         let assembly = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
             plan: plan,
             manifest: manifest,
@@ -1874,7 +1874,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(assembly.segments.map(\.text), ["a", "b"])
         XCTAssertEqual(assembly.speakers.count, 1, "only the unambiguous assigned slot mints a speaker")
         let resolved = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["b"]?.id })
-        XCTAssertEqual(resolved.disposition, .emitted)
+        XCTAssertEqual(resolved.disposition, .ambiguousUnassigned)
         let outside = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["c"]?.id })
         XCTAssertEqual(outside.disposition, .outsideActivity)
     }
@@ -1893,7 +1893,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(tokens.map(\.label), ["slot-0", "slot-1"])
     }
 
-    func testAllCandidatesAtOrBelowScaledFloorAreUnassigned() {
+    func testShortMaterialCandidatesSurviveSilentEnvelopePadding() {
         let (slot0, slot1) = self.attributionTokens()
         let decision = MeetingParakeetNemotronBackend.assignment(
             start: 0,
@@ -1904,7 +1904,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             ],
             allowDominance: true
         )
-        guard case .unassigned = decision else { return XCTFail("sub-frame evidence must not assign a speaker") }
+        guard case .ambiguous = decision else { return XCTFail("Silence must not raise the candidate support threshold") }
     }
 
     func testSoleAboveFloorCandidateAssigns() {
@@ -1914,7 +1914,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             end: 1,
             activity: [
                 MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 0.2),
-                MeetingBackendSpeakerActivity(token: slot1, start: 0.95, end: 1),
+                MeetingBackendSpeakerActivity(token: slot1, start: 0.96, end: 1),
             ],
             allowDominance: true
         )
@@ -1961,7 +1961,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
     func testClearLeaderAndExactDominanceBoundaryAssign() {
         let (slot0, slot1) = self.attributionTokens()
         for leaderEnd in [0.8, 0.5] {
-            let runnerEnd = leaderEnd == 0.5 ? 0.2 : 0.15
+            let runnerEnd = leaderEnd == 0.5 ? 0.1 : 0.15
             let decision = MeetingParakeetNemotronBackend.assignment(
                 start: 0,
                 end: 1,
@@ -2012,62 +2012,30 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(tokens.map(\.label), ["slot-0", "slot-1"])
     }
 
-    func testHandoffAssignsNewEntrantWhoseActivityStartsWithShortWord() {
+    func testPCMRawAssignmentsNeverCascadeInferredHandoffAnchors() {
         let (slot0, slot1) = self.attributionTokens()
-        let decision = MeetingParakeetNemotronBackend.handoffAssignment(
-            .ambiguous([slot0, slot1]),
-            start: 1,
-            end: 1.4,
-            activity: [
-                MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 1.4),
-                MeetingBackendSpeakerActivity(token: slot1, start: 1, end: 1.4),
-            ],
-            previousAssignedWord: (slot0, 0.95)
-        )
-        guard case let .assigned(token) = decision else { return XCTFail("new onset should win the handoff") }
-        XCTAssertEqual(token, slot1)
+        let units = MeetingParakeetNemotronBackend.pcmUnits(
+            result: .init(text: "first mixed another"),
+            words: [.init(text: "first", start: 0, end: 0.5),
+                    .init(text: "mixed", start: 1, end: 1.4),
+                    .init(text: "another", start: 1.4, end: 1.8)],
+            epoch: slot0.analysisEpochID, duration: 2,
+            activity: [.init(token: slot0, start: 0, end: 2), .init(token: slot1, start: 1, end: 2)],
+            identityTokens: [slot0, slot1])
+        XCTAssertEqual(units[0].speaker, .assigned(slot0))
+        XCTAssertEqual(units[1].speaker, .ambiguous([slot0, slot1]))
+        XCTAssertEqual(units[2].speaker, .ambiguous([slot0, slot1]))
     }
 
-    func testHandoffKeepsIncumbentWhenOtherSpeakerDidNotStartAtBoundary() {
+    func testAcousticDecisionIsInvariantWhenOnlySilenceExtendsWordEnvelope() {
         let (slot0, slot1) = self.attributionTokens()
-        let decision = MeetingParakeetNemotronBackend.handoffAssignment(
-            .ambiguous([slot0, slot1]),
-            start: 1,
-            end: 1.4,
-            activity: [
-                MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 1.4),
-                MeetingBackendSpeakerActivity(token: slot1, start: 0.2, end: 1.4),
-            ],
-            previousAssignedWord: (slot0, 0.95)
-        )
-        guard case let .assigned(token) = decision else { return XCTFail("continuing incumbent should own the word") }
-        XCTAssertEqual(token, slot0)
-    }
-
-    func testHandoffVetoesMissingContextLongWordsLargeGapsAndMoreThanTwoCandidates() {
-        let (slot0, slot1) = self.attributionTokens()
-        let epoch = slot0.analysisEpochID
-        let slot2 = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-2")
-        let activity = [
-            MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 2),
-            MeetingBackendSpeakerActivity(token: slot1, start: 1, end: 2),
-            MeetingBackendSpeakerActivity(token: slot2, start: 1, end: 2),
-        ]
-
-        for (assignment, start, end, previous) in [
-            (MeetingBackendSpeakerAssignment.ambiguous([slot0, slot1]), 1.0, 1.4, nil),
-            (.ambiguous([slot0, slot1]), 1.0, 2.0, (token: slot0, end: 0.95)),
-            (.ambiguous([slot0, slot1]), 1.0, 1.4, (token: slot0, end: 0.0)),
-            (.ambiguous([slot0, slot1, slot2]), 1.0, 1.4, (token: slot0, end: 0.95)),
-        ] {
-            guard case .ambiguous = MeetingParakeetNemotronBackend.handoffAssignment(
-                assignment,
-                start: start,
-                end: end,
-                activity: activity,
-                previousAssignedWord: previous
-            ) else { return XCTFail("handoff veto must preserve ambiguity") }
+        let activity: [MeetingBackendSpeakerActivity] = [
+            .init(token: slot0, start: 0, end: 0.3), .init(token: slot1, start: 0.2, end: 0.3)]
+        let decisions = [0.4, 0.6, 0.8].map {
+            MeetingParakeetNemotronBackend.assignment(start: 0, end: $0, activity: activity, allowDominance: true)
         }
+        XCTAssertTrue(decisions.allSatisfy { $0 == decisions[0] })
+        XCTAssertEqual(decisions[0], .ambiguous([slot0, slot1]))
     }
 
     private func attributionTokens() -> (MeetingBackendSpeakerToken, MeetingBackendSpeakerToken) {

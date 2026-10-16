@@ -2,6 +2,21 @@
 import XCTest
 
 final class MeetingProcessingConfigurationTests: XCTestCase {
+    func testAttributionPolicyIsFrozenAndLegacyConfigurationsDecodeWithoutIt() throws {
+        let configured = MeetingFinalProcessingConfiguration()
+        XCTAssertEqual(configured.speakerAttributionPolicy, .standard)
+        XCTAssertNotEqual(configured.identityFingerprint,
+            MeetingFinalProcessingConfiguration(speakerAttributionPolicy: nil).identityFingerprint)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(configured)) as? [String: Any])
+        object.removeValue(forKey: "speakerAttributionPolicy")
+        object["pipelineVersion"] = 13
+        let legacy = try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(legacy.speakerAttributionPolicy)
+        XCTAssertEqual(legacy.pipelineVersion, 13)
+        XCTAssertNotEqual(legacy.identityFingerprint, configured.identityFingerprint)
+    }
+
     func testASRArtifactChangesInvalidateConfigurationWithoutChangingLegacyDefaults() {
         let first = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", asrArtifactFingerprint: "v5:hash-a", languageCode: "ru")
         let second = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", asrArtifactFingerprint: "v3:hash-b", languageCode: "ru")

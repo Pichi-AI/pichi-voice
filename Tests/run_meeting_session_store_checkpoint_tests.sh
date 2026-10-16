@@ -27,12 +27,15 @@ nonisolated struct MeetingResultSidecarStore {
     }
 }
 SWIFT
+python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift"
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O \
     -module-cache-path "$task_test_dir/module-cache" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
+    "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \
     Sources/Fluid/Services/Meeting/MeetingSessionStore.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift \

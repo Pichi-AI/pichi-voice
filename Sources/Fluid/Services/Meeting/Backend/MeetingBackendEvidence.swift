@@ -35,7 +35,7 @@ nonisolated enum MeetingEvidenceInterval {
     }
 }
 
-nonisolated enum MeetingTextUnitPrecision: String, Codable {
+nonisolated enum MeetingTextUnitPrecision: String, Codable, Sendable {
     case word
     case utterance
 }
@@ -44,7 +44,7 @@ nonisolated enum MeetingTextUnitPrecision: String, Codable {
 /// discontinuity, a microphone device replacement or an inadmissible microphone interval, so
 /// timing is never mapped across one. Speaker identity crosses an epoch only through an explicit
 /// link. Encoding the track here is what makes the token-scoping check below meaningful.
-nonisolated struct MeetingAnalysisEpochID: Hashable, Codable, CustomStringConvertible {
+nonisolated struct MeetingAnalysisEpochID: Hashable, Codable, CustomStringConvertible, Sendable {
     let trackID: MeetingAudioTrackID
     let ordinal: Int
     /// Changes when this epoch's model evidence is replayed under the same attempt. Product
@@ -70,12 +70,12 @@ nonisolated struct MeetingAnalysisEpochGenerationKey: Hashable {
 
 /// Anonymous, backend-local speaker slot. Never a `SessionSpeakerID`: only the assembler creates
 /// product speaker IDs, and never by slot equality across tracks or epochs.
-nonisolated struct MeetingBackendSpeakerToken: Hashable, Codable {
+nonisolated struct MeetingBackendSpeakerToken: Hashable, Codable, Sendable {
     let analysisEpochID: MeetingAnalysisEpochID
     let label: String
 }
 
-nonisolated enum MeetingBackendSpeakerAssignment: Equatable {
+nonisolated enum MeetingBackendSpeakerAssignment: Equatable, Sendable {
     case assigned(MeetingBackendSpeakerToken)
     /// Two or more candidate slots the backend could not separate. Ambiguity is reported, never
     /// resolved by picking one.

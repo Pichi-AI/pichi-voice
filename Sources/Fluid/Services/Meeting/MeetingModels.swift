@@ -816,6 +816,63 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     var mergedIntoSpeakerID: SessionSpeakerID? = nil
 }
 
+/// Product references resolve identity separately from immutable backend-local tokens.
+nonisolated struct MeetingTranscriptSpeakerReference: Codable, Equatable, Sendable {
+    let token: MeetingBackendSpeakerToken
+    let speakerID: SessionSpeakerID?
+}
+
+/// A reading decision, never replacement acoustic evidence or separated ASR text.
+/// Detailed supports and the complete frozen policy live once in the result sidecar.
+nonisolated struct MeetingTranscriptSpeakerAttribution: Codable, Equatable, Sendable {
+    let unitID: String
+    let rawAssignment: MeetingBackendSpeakerAssignment
+    let selectedToken: MeetingBackendSpeakerToken?
+    let selectedSpeakerID: SessionSpeakerID?
+    let candidates: [MeetingTranscriptSpeakerReference]
+    let background: [MeetingTranscriptSpeakerReference]
+    let relation: MeetingSpeakerAttributionRelation
+    let rule: MeetingSpeakerAttributionRule
+    let policyVersion: Int
+    let policyFingerprint: String
+
+    static func readingSummary(
+        decision: MeetingSpeakerAttributionDecision, speakerIDs: [MeetingBackendSpeakerToken: SessionSpeakerID]
+    ) -> Self? {
+        let unresolvedIdentity = decision.selectedToken.map { speakerIDs[$0] == nil } ?? false
+        let nativeChanged: Bool
+        switch decision.rawAssignment {
+        case let .assigned(token): nativeChanged = decision.selectedToken != token
+        case .unassigned: nativeChanged = decision.selectedToken != nil
+        case .ambiguous: nativeChanged = true
+        }
+        guard decision.rule.isHeuristic || decision.candidates.count > 1
+            || decision.candidates.contains(where: \.isSuppressed) || nativeChanged || unresolvedIdentity
+            || decision.relation == .conflict else { return nil }
+        return Self(decision: decision, speakerIDs: speakerIDs)
+    }
+
+    init(decision: MeetingSpeakerAttributionDecision, speakerIDs: [MeetingBackendSpeakerToken: SessionSpeakerID]) {
+        self.unitID = decision.unitID
+        self.rawAssignment = decision.rawAssignment
+        self.selectedToken = decision.selectedToken
+        self.selectedSpeakerID = decision.selectedToken.flatMap { speakerIDs[$0] }
+        self.candidates = decision.candidates.map { .init(token: $0.token, speakerID: speakerIDs[$0.token]) }
+        self.background = decision.backgroundTokens.map { .init(token: $0, speakerID: speakerIDs[$0]) }
+        self.relation = decision.relation
+        self.rule = decision.rule
+        self.policyVersion = decision.policyVersion
+        self.policyFingerprint = decision.policyFingerprint
+    }
+}
+
+/// Exact native boundaries mapped into meeting presentation seconds. UI media times can
+/// round to milliseconds; subsequent attribution must use the unchanged native envelope.
+nonisolated struct MeetingTranscriptNativeTiming: Codable, Equatable, Sendable {
+    let start: TimeInterval
+    let end: TimeInterval
+}
+
 nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, Sendable {
     var id: MeetingTranscriptSegmentID
     var start: MeetingMediaTime
@@ -833,6 +890,11 @@ nonisolated struct MeetingTranscriptSegment: Codable, Identifiable, Equatable, S
     var isLikelyEcho: Bool? = nil
     /// Optional so pre-fix manifests still decode; a non-optional default would `keyNotFound`.
     var attributionState: MeetingTranscriptAttributionState? = nil
+    /// Native precision is explicit; legacy segment envelopes remain utterances.
+    var nativePrecision: MeetingTextUnitPrecision? = nil
+    var nativeUnitID: String? = nil
+    var nativeTiming: MeetingTranscriptNativeTiming? = nil
+    var speakerAttribution: MeetingTranscriptSpeakerAttribution? = nil
 
     var isEcho: Bool {
         self.isLikelyEcho == true
@@ -1005,8 +1067,10 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         else {
             throw MeetingDomainError.speakerNotFound
         }
-        guard self.transcriptSegments[segmentIndex].speakerID != speakerID else { return }
+        guard self.transcriptSegments[segmentIndex].speakerID != speakerID
+            || self.transcriptSegments[segmentIndex].speakerAttribution != nil else { return }
         self.transcriptSegments[segmentIndex].speakerID = speakerID
+        self.transcriptSegments[segmentIndex].speakerAttribution = nil
         self.transcriptSegments[segmentIndex].attributionState = .assigned
         self.transcriptSegments[segmentIndex].overlap = .none
         self.transcriptSegments[segmentIndex].revision += 1
@@ -1045,6 +1109,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         ))
         self.transcriptSegments[segmentIndex].speakerID = speakerID
         self.transcriptSegments[segmentIndex].overlap = .none
+        self.transcriptSegments[segmentIndex].speakerAttribution = nil
         self.transcriptSegments[segmentIndex].attributionState = .assigned
         self.transcriptSegments[segmentIndex].revision += 1
         self.updatedAt = Date()
@@ -1067,6 +1132,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         }
         for index in self.transcriptSegments.indices where self.transcriptSegments[index].speakerID == sourceID {
             self.transcriptSegments[index].speakerID = targetID
+            self.transcriptSegments[index].speakerAttribution = nil
             self.transcriptSegments[index].revision += 1
         }
         self.speakers[sourceIndex].mergedIntoSpeakerID = targetID
@@ -1151,9 +1217,12 @@ nonisolated enum MeetingModelValidationError: LocalizedError, Equatable {
     case duplicateSegmentID
     case missingSegmentTrack
     case missingSegmentSpeaker
+    case invalidSpeakerAttribution
 
     var errorDescription: String? {
         switch self {
+        case .invalidSpeakerAttribution:
+            return PichiLocalization.text("The transcript contains inconsistent speaker attribution metadata.")
         case let .unsupportedSchema(version):
             return "Unsupported meeting schema version \(version)."
         case .unsupportedLanguage:
@@ -1360,6 +1429,29 @@ nonisolated extension MeetingSession {
             }
             if let speakerID = segment.speakerID, !speakerIDs.contains(speakerID) {
                 throw MeetingModelValidationError.missingSegmentSpeaker
+            }
+            if let timing = segment.nativeTiming {
+                guard timing.start.isFinite, timing.end.isFinite, timing.start >= 0, timing.end > timing.start,
+                      abs(timing.start - segment.start.seconds) <= 0.001,
+                      abs(timing.end - segment.end.seconds) <= 0.001 else {
+                    throw MeetingModelValidationError.invalidTimeRange
+                }
+            }
+            if let attribution = segment.speakerAttribution {
+                let references = attribution.candidates + attribution.background
+                let tokens = attribution.rawAssignment.tokens + references.map(\.token)
+                    + (attribution.selectedToken.map { [$0] } ?? [])
+                let epoch = tokens.first?.analysisEpochID
+                guard !attribution.unitID.isEmpty, attribution.policyVersion > 0,
+                      !attribution.policyFingerprint.isEmpty,
+                      attribution.selectedSpeakerID == segment.speakerID,
+                      attribution.selectedSpeakerID == nil || attribution.selectedToken != nil,
+                      Set(attribution.candidates.map(\.token)).count == attribution.candidates.count,
+                      tokens.allSatisfy({ $0.analysisEpochID == epoch
+                          && $0.analysisEpochID.trackID == segment.sourceTrackID
+                          && !$0.label.isEmpty && $0.analysisEpochID.ordinal >= 0 && $0.analysisEpochID.generation >= 0 }),
+                      references.allSatisfy({ $0.speakerID.map { speakerIDs.contains($0) } ?? true })
+                else { throw MeetingModelValidationError.invalidSpeakerAttribution }
             }
         }
     }

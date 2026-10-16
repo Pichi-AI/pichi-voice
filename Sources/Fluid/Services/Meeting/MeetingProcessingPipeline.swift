@@ -670,8 +670,8 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    /// Version 13: short ambiguous words receive the opted-in turn-handoff second pass.
-    static let pipelineVersion = 13
+    /// Version 14: frozen shared attribution policy, native word precision and non-cascading acoustic evidence.
+    static let pipelineVersion = 14
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1722,7 +1722,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             evidence: publishedEvidence,
             coverageReceipts: bundle.coverageReceipts,
             echoVerdicts: echoVerdicts,
-            confirmedLocalUserTokens: bundle.confirmedLocalUserTokens
+            confirmedLocalUserTokens: bundle.confirmedLocalUserTokens,
+            speakerAttributionPolicy: request.configuration.speakerAttributionPolicy
         )
         let assemblyTask = Task.detached(priority: .userInitiated) {
             try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(assemblyInput)
@@ -1866,7 +1867,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 let nextKey = Self.canonicalSegmentMergeKey(next)
                 let gap = next.start.seconds - current.end.seconds
                 let combinedDuration = max(current.end.seconds, next.end.seconds) - current.start.seconds
-                if nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
+                if current.nativePrecision != .word, next.nativePrecision != .word,
+                   current.speakerAttribution == nil, next.speakerAttribution == nil,
+                   current.nativeTiming == nil, next.nativeTiming == nil,
+                   nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
                     current.end = Self.mediaTime(max(current.end.seconds, next.end.seconds))
                     current.text = Self.joinTranscriptText(current.text, next.text)
                     memberIDs.append(next.id)

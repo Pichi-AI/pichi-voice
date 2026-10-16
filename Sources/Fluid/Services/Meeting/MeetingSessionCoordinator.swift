@@ -196,6 +196,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousSpeakerID: SessionSpeakerID?,
             previousOverlap: MeetingTranscriptOverlap,
             previousAttributionState: MeetingTranscriptAttributionState?,
+            previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
             previousRevision: Int
         )
         case nameUnknown(
@@ -203,12 +204,13 @@ final class MeetingSessionCoordinator: ObservableObject {
             createdSpeakerID: SessionSpeakerID,
             previousOverlap: MeetingTranscriptOverlap,
             previousAttributionState: MeetingTranscriptAttributionState?,
+            previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
             previousRevision: Int
         )
         case merge(
             sourceID: SessionSpeakerID,
             targetID: SessionSpeakerID,
-            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int)]
+            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?)]
         )
         case renameBatch([(speakerID: SessionSpeakerID, previousName: String)])
     }
@@ -1184,6 +1186,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 previousSpeakerID: previousSpeakerID,
                 previousOverlap: previousOverlap,
                 previousAttributionState: previousAttributionState,
+                previousSpeakerAttribution: segment.speakerAttribution,
                 previousRevision: previousRevision
             )
         }
@@ -1205,6 +1208,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 createdSpeakerID: speakerID,
                 previousOverlap: segment.overlap,
                 previousAttributionState: segment.attributionState,
+                previousSpeakerAttribution: segment.speakerAttribution,
                 previousRevision: segment.revision
             )
         }
@@ -1215,7 +1219,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         try await self.performCorrection(sessionID: sessionID) { session in
             let movedSegments = session.transcriptSegments
                 .filter { $0.speakerID == source }
-                .map { (id: $0.id, previousRevision: $0.revision) }
+                .map { (id: $0.id, previousRevision: $0.revision, previousSpeakerAttribution: $0.speakerAttribution) }
             try session.mergeSpeakers(source, into: targetID)
             return .merge(sourceID: source, targetID: targetID, movedSegments: movedSegments)
         }
@@ -1492,10 +1496,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousSpeakerID,
             previousOverlap,
             previousAttributionState,
+            previousSpeakerAttribution,
             previousRevision
         ):
             guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
             session.transcriptSegments[index].speakerID = previousSpeakerID
+            session.transcriptSegments[index].speakerAttribution = previousSpeakerAttribution
             session.transcriptSegments[index].overlap = previousOverlap
             session.transcriptSegments[index].attributionState = previousAttributionState
             session.transcriptSegments[index].revision = previousRevision
@@ -1505,6 +1511,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             createdSpeakerID,
             previousOverlap,
             previousAttributionState,
+            previousSpeakerAttribution,
             previousRevision
         ):
             guard let segmentIndex = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }),
@@ -1513,6 +1520,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             else { return false }
             session.speakers.remove(at: speakerIndex)
             session.transcriptSegments[segmentIndex].speakerID = nil
+            session.transcriptSegments[segmentIndex].speakerAttribution = previousSpeakerAttribution
             session.transcriptSegments[segmentIndex].overlap = previousOverlap
             session.transcriptSegments[segmentIndex].attributionState = previousAttributionState
             session.transcriptSegments[segmentIndex].revision = previousRevision
@@ -1520,11 +1528,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         case let .merge(sourceID, _, movedSegments):
             guard let index = session.speakers.firstIndex(where: { $0.id == sourceID }) else { return false }
             session.speakers[index].mergedIntoSpeakerID = nil
-            let previousRevisionByID = Dictionary(uniqueKeysWithValues: movedSegments.map { ($0.id, $0.previousRevision) })
+            let previousByID = Dictionary(uniqueKeysWithValues: movedSegments.map { ($0.id, $0) })
             for segmentIndex in session.transcriptSegments.indices {
-                guard let previousRevision = previousRevisionByID[session.transcriptSegments[segmentIndex].id] else { continue }
+                guard let previous = previousByID[session.transcriptSegments[segmentIndex].id] else { continue }
                 session.transcriptSegments[segmentIndex].speakerID = sourceID
-                session.transcriptSegments[segmentIndex].revision = previousRevision
+                session.transcriptSegments[segmentIndex].speakerAttribution = previous.previousSpeakerAttribution
+                session.transcriptSegments[segmentIndex].revision = previous.previousRevision
             }
             return true
         case let .renameBatch(entries):

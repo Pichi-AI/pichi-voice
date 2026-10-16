@@ -557,7 +557,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             words: output.words, epoch: epoch, duration: duration, activity: [], identityTokens: [])
         return try MeetingTranscriptAssembler(speakerNameFormat: self.pcmSpeakerNameFormat)
             .assemblePCMWindow(attemptID: attemptID, epoch: epoch, offset: offset,
-                duration: duration, units: units, priorSpeakers: priorSpeakers)
+                duration: duration, units: units, priorSpeakers: priorSpeakers,
+                speakerAttributionPolicy: configuration.speakerAttributionPolicy)
     }
 
     func diarizePCMRecording(
@@ -610,7 +611,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                 let batch = try MeetingPCMRecordingAttribution.assemble(transcript: transcript,
                     activity: phase.activity, epoch: epoch, attemptID: attemptID,
                     duration: Double(source.totalSampleCount) / 16_000,
-                    speakerNameFormat: self.pcmSpeakerNameFormat, confirmedLocalUserTokens: confirmedOwner)
+                    speakerNameFormat: self.pcmSpeakerNameFormat, confirmedLocalUserTokens: confirmedOwner,
+                    speakerAttributionPolicy: configuration.speakerAttributionPolicy)
                 try Task.checkCancellation()
                 return batch
             }

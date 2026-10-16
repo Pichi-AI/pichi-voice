@@ -52129,6 +52129,118 @@
           }
         }
       }
+    },
+    "Unidentified voice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unidentified voice"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Неопознанный голос"
+          }
+        }
+      }
+    },
+    "Estimated speaker: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estimated speaker: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Предположительно: %@"
+          }
+        }
+      }
+    },
+    "%@ (interrupting; background: %@)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (interrupting; background: %@)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (перебивает; фон: %@)"
+          }
+        }
+      }
+    },
+    "Simultaneous speech: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simultaneous speech: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Одновременная речь: %@"
+          }
+        }
+      }
+    },
+    "Several speakers: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Several speakers: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Несколько говорящих: %@"
+          }
+        }
+      }
+    },
+    "Speaker evidence conflicts: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Speaker evidence conflicts: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Противоречивые данные о голосах: %@"
+          }
+        }
+      }
+    },
+    "The transcript contains inconsistent speaker attribution metadata.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The transcript contains inconsistent speaker attribution metadata."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "В расшифровке противоречивые метаданные привязки говорящих."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

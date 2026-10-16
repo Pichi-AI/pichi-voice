@@ -65,6 +65,7 @@ Sources/Fluid/Services/Meeting/Backend/MeetingProductionParakeetNemotronRuntime.
 Sources/Fluid/Services/Meeting/Backend/MeetingProviderBackedBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingResultSidecar.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingResultSidecarStore.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceModelArtifacts.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingTranscriptAssembler.swift

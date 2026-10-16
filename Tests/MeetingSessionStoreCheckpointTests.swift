@@ -68,6 +68,19 @@ struct MeetingSessionStoreCheckpointTests {
         let value = MeetingRetainedProcessingCheckpoint.Value(pin: pin, inputFingerprint: "synthetic-source-sha",
             ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText)
         try working.write(value, session: retained)
+        let obsoleteConfig = MeetingFinalProcessingConfiguration(languageCode: retained.languageCode,
+            pipelineVersion: 13, speakerAttributionPolicy: nil)
+        let obsoletePin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: retained.id,
+            backendID: pin.backendID, backendVersion: pin.backendVersion, configuration: obsoleteConfig,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        do {
+            try working.write(.init(pin: obsoletePin, inputFingerprint: value.inputFingerprint,
+                ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText), session: retained)
+            preconditionFailure("The writer's read-back must reject obsolete processing semantics")
+        } catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration { checks += 1 }
+        do { _ = try working.read(session: retained); preconditionFailure("Old attribution semantics must not resume under a new pipeline") }
+        catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration { checks += 1 }
+        try working.write(value, session: retained)
         let checkpointURL = retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)
         let keyURL = retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.keyFileName)
         let ciphertext = try Data(contentsOf: checkpointURL)
@@ -191,6 +204,49 @@ struct MeetingSessionStoreCheckpointTests {
         check(try self.indexIDs(at: indexURL) == [sibling.id.uuidString], "Deletion preserves sibling membership")
         let all = try await MeetingSessionStore(rootDirectory: root).loadAll()
         check(all == [sibling], "Fresh discovery and index loading retain every surviving complete record")
+        // Measure serialized transcript storage using actual production models and core.
+        // This is a Mac serializer measurement, not a physical iPad memory benchmark.
+        let footprintCount = 10_000
+        let epoch = MeetingAnalysisEpochID(trackID: track.id, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-voice")
+        let units = (0..<footprintCount).map { index in
+            MeetingFinalTextUnit(id: "synthetic-native-\(index)", trackID: track.id, analysisEpochID: epoch,
+                precision: .word, text: "Synthetic", analysisStart: Double(index * 2),
+                analysisEnd: Double(index * 2 + 1), speaker: .assigned(token), analysisSpanIDs: [])
+        }
+        let decisions = try MeetingSpeakerAttribution.resolve(units: units,
+            activity: [.init(token: token, start: 0, end: Double(footprintCount * 2))])
+        let baseline = Array(session.transcriptSegments.prefix(footprintCount))
+        let compactNative = baseline.enumerated().map { index, original in
+            var copy = original
+            copy.nativePrecision = .word
+            copy.nativeUnitID = units[index].id
+            copy.nativeTiming = .init(start: units[index].analysisStart, end: units[index].analysisEnd)
+            copy.speakerAttribution = MeetingTranscriptSpeakerAttribution.readingSummary(
+                decision: decisions[index], speakerIDs: [token: speaker.id])
+            return copy
+        }
+        let verboseNative = compactNative.enumerated().map { index, original in
+            var copy = original
+            copy.speakerAttribution = .init(decision: decisions[index], speakerIDs: [token: speaker.id])
+            return copy
+        }
+        var manual = session
+        manual.transcriptSegments[0] = verboseNative[0]
+        let originalRevision = manual.transcriptSegments[0].revision
+        try manual.reassignSegment(id: manual.transcriptSegments[0].id, to: speaker.id)
+        check(manual.transcriptSegments[0].speakerAttribution == nil,
+            "Explicit confirmation of the displayed person clears inferred attribution metadata")
+        check(manual.transcriptSegments[0].revision == originalRevision + 1,
+            "Manual confirmation records a revision even when the displayed person stays the same")
+        let footprintEncoder = JSONEncoder()
+        let baselineBytes = try footprintEncoder.encode(baseline).count
+        let compactNativeBytes = try footprintEncoder.encode(compactNative).count
+        let verboseNativeBytes = try footprintEncoder.encode(verboseNative).count
+        check(compactNative.allSatisfy { $0.speakerAttribution == nil }, "Routine direct words use compact metadata")
+        check(compactNativeBytes < verboseNativeBytes, "Routine summaries avoid repeated evidence and policy fingerprints")
+        print("Attribution serializer footprint: words=\(footprintCount) baselineBytes=\(baselineBytes) "
+            + "nativeCompactBytes=\(compactNativeBytes) repeatedSummaryBytes=\(verboseNativeBytes)")
         print("Meeting session checkpoint tests passed: \(checks) checks; \(segmentCount) segments; "
             + "compactBytes=\(compact.count) legacyBytes=\(legacy.count) "
             + "createSeconds=\(createSeconds) saveSeconds=\(saveSeconds) legacyEncodeSeconds=\(legacyEncodeSeconds)")

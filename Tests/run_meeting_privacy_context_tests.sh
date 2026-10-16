@@ -58,12 +58,15 @@ voice_source = Path('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceM
 voice_bound = next(line for line in voice_source.splitlines() if line.strip().startswith('static let maximumProfiles ='))
 source += 'nonisolated enum MeetingSpeakerVoiceSamples {\n' + voice_bound + '\n}\n'
 source += section('Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerVoiceMatcher.swift', 'nonisolated struct MeetingSpeakerVoiceProfile:', '/// Explicit identity evidence across resets.')
+config = Path('Sources/Fluid/Services/Meeting/MeetingProcessingConfiguration.swift').read_text()
+source += config[:config.index('/// Immutable value snapshot')]
 Path(sys.argv[1]).write_text(source)
 PY
 xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/module-cache" "${task_link_args[@]}" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingPCMTranscriptBatch.swift \
