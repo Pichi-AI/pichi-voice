@@ -15,4 +15,16 @@ const c={id:'synthetic',words:[1,2,3,4],metrics:{variants:{v:{all_unknown_words:
 const sum=math.sumMetrics([c,c],'v','p');
 assert.deepEqual(sum,{words:4,assigned_words:2,weak_agree_words:0,weak_disagree_words:2,eligible_words:4,excluded_words:4,all_native_words:8,all_unknown_words:2});
 assert.throws(()=>math.sumMetrics([c],'missing','p'),/Missing metric/);
-console.log('Report logic: 9 invariants passed');
+const source=(label,ordinal=0,generation=0,trackID='track')=>({label,analysisEpochID:{trackID,ordinal,generation}});
+const unresolved=(start,end,tokens,relation='simultaneous')=>({...word(start,end,null,'ambiguous'),decision:{rule:'ambiguous',relation,candidates:tokens.map(token=>({token}))}});
+assert.equal(math.groups([unresolved(0,.5,[source('A'),source('B')]),unresolved(.5,1,[source('A'),source('C')])]).length,2,'Different unresolved voices must not inherit the first label');
+assert.equal(math.groups([unresolved(0,.5,[source('A'),source('B')]),unresolved(.5,1,[source('B'),source('A')])]).length,1,'Order does not change an equivalent source set');
+for(const changed of [source('B',1),source('B',0,1),source('B',0,0,'another-track')])assert.equal(math.groups([unresolved(0,.5,[source('A'),source('B')]),unresolved(.5,1,[source('A'),changed])]).length,2,'Full source scope is significant');
+assert.equal(math.groups([unresolved(0,.5,[source('A'),source('B')]),unresolved(.5,1,[source('A'),source('B')],'consecutive')]).length,2,'Simultaneous and consecutive evidence stay distinct');
+const valid={distance:3,substitutions:1,deletions:1,insertions:1,reference_tokens:10,char_distance:4,reference_characters:40,scored_seconds:5,native_units_included:9,native_units_total:10,eligible_turns:2,reference_turns_total:3,weak_wer:.3,weak_cer:.1};
+const unscorable={reference_tokens:0,reference_characters:0,scored_seconds:0,native_units_included:0,native_units_total:7,eligible_turns:0,reference_turns_total:1,weak_wer:null,weak_cer:null};
+const mixed=math.sumTextQuality([valid,unscorable]);
+assert.equal(mixed.distance,3);assert.equal(mixed.weak_wer,.3);assert.equal(mixed.native_units_total,17);
+assert.equal(math.sumTextQuality([unscorable]).weak_wer,null);assert.equal(math.sumTextQuality([unscorable]).weak_cer,null);
+assert.throws(()=>math.sumTextQuality([{...valid,distance:undefined}]),/invalid text-quality count/,'Valid scored data cannot silently omit events');
+console.log('Report logic: grouping, source scopes, denominators and legacy-unscorable regressions passed');
