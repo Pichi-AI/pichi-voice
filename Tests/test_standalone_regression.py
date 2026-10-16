@@ -323,10 +323,16 @@ class StandaloneRunnerTests(unittest.TestCase):
             # cleanup ordering assertion inside the inspector.
             group_file = self.root / "worker-group"
             if group_file.exists():
+                group = int(group_file.read_text())
                 try:
-                    original_killpg(int(group_file.read_text()), signal.SIGKILL)
+                    original_killpg(group, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                except PermissionError:
+                    # Darwin can return EPERM while an already-killed group
+                    # disappears. Keep failures for live or unobservable groups.
+                    if original_live(group):
+                        raise
         self.assertFalse(sender.is_alive())
         self.assertEqual(status, 143)
         self.assertTrue(inspected_after_join)
