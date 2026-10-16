@@ -77,7 +77,7 @@ has no audio-file fallback, including when ASR is deferred or memory is exhauste
 
 ## Verification evidence
 
-Source baseline for this report: `446d33ef` on
+Source baseline for this report: `d379b83d` on
 `codex/tablet-long-session-memory-20261015`. Results below distinguish isolated,
 integrated and physical-device evidence; they are not interchangeable.
 
@@ -85,11 +85,15 @@ integrated and physical-device evidence; they are not interchangeable.
 | --- | --- |
 | Native AAC accelerated archive stress | Two synthetic eight-hour runs: each accepted 460,800,000 frames, produced 960 segments and retained 182,160,960 bytes; measured process footprint peaked near 213 MB on the first run and 120 MB on the second, returning to about 23 MB after clear |
 | Backend and materializer regression | 62/62 passed at `1aa59c71`; covers bounded replay and backend contracts, not eight-hour physical recording |
-| Independent integrated review | Four material P2 findings were corrected; follow-up review cleared `cc0c8e37`, before the later visible-test accessibility changes |
-| Product compilation | iOS Release and macOS builds passed earlier in this task; checks against the final combined source are still pending |
+| Independent integrated review | Four material P2 findings were corrected; follow-up reviews cleared the integrated source through `d379b83d`, including lifecycle, cancellation, bounded DEBUG input and existing extension points |
+| Product compilation | Exact iOS optimized Debug and Release `d379b83d` built; frozen Release passed strict signature verification and was installed after recovery; earlier macOS product build passed, but final combined macOS product build was not rerun |
+| Portable repository checks | Passed after correcting a test cleanup race for a disappearing Darwin process group; application code was unchanged by that test fix |
 | Physical native archive codec round trip | Passed on the iPad; does not validate complete recording, ASR or speaker quality |
-| Hosted post-stop minute scenario | Failed with `SessionDeactivationFailed`; `cc0c8e37` changes stop/reset, producer drain and session-deactivation ordering; a visible passing rerun remains required |
-| Actual app UI attempt | Start visibly entered recording and the timer reached 1:59, but the UI test could not address Stop because of iPadOS 17 identifier propagation; `446d33ef` corrects that accessibility issue |
+| Hosted post-stop minute scenario | Failed with `SessionDeactivationFailed`; after the stop/reset and session-order fix, the ordinary Release app completed the visible physical rerun below |
+| Actual app UI failure and fix | An earlier Start visibly entered recording, but the UI test could not address Stop because of iPadOS 17 identifier propagation; `446d33ef` corrects that accessibility issue |
+| Visible ordinary Release app rerun | Passed on the physical iPad: 3:45 meeting, 67 saved transcript segments, three speaker labels, completed processing, no failures and zero reported dropped samples |
+| Quiet full-meeting physical run | Optimized Debug `d379b83d`, actual Start/Stop UI, complete 59:05.421 input accepted and replayed; completed with 8,863 final segments, five speaker labels, no failures and zero dropped samples; the data-loss incident below limits the overall result |
+| Recovery verification | All 30 previous session manifests plus the new completed test were restored and verified by SHA-256 after device round trip; all 38 model files and the original preferences were restored; final Release history navigation passed 1/1 |
 
 Earlier hosted UI runs that only launched the app or played speech while idle are
 not successful recording tests. The failed actual-app run did not complete Stop,
@@ -97,15 +101,85 @@ post-processing and saved-result verification. A later test restart lost its
 RAM-only audio; partial saved text does not establish a completed meeting. The
 user subsequently confirmed pressing Stop for the requested test recording.
 
-### Pending visible final verification
+### Visible physical verification
 
-**PENDING: final integrated and visible-device results have not been recorded.**
-The repeat must inspect and save native screenshots after actual Start, advancing
-recording state, Stop, processing and the saved result, using the exact frozen,
-signed build. Speech playback must begin only after recording is visibly active.
-The repeat must confirm captured speech, post-stop global diarization, completion
-without a capture/session error, and no audio files when saving is disabled.
-The current rerun has no completed result in this report.
+The tested app is the frozen, development-signed ordinary Release product from
+`446d33ef`, without a hosted test service or injected app launch environment. Its
+executable SHA-256 is
+`2075eb8999dd7b197dea09ac423ee291f1d596f5947cffc122fd32c7c174be78`.
+The parent inspected the real iPad through QuickTime and saved native screenshots
+at the actual Start, advancing recording, Stop, speaker-processing and completed
+transcript checkpoints. The UI runner waited for an explicit parent ACK at each
+checkpoint before proceeding.
+
+In the first completed rerun, native diagnostics show ASR during recording and
+the first Nemotron phase only after Stop. Global processing completed in about
+38 seconds. Phase-sampled process footprint peaked near 296 MiB; those samples
+are not a continuous peak-memory measurement or a leak test. The saved manifest
+has `memoryOnly`, `transcriptIsComplete=true`, no failures, no audio chunks and
+zero reported dropped samples. Its session directory contains only `session.json`
+and an empty `tracks` directory. The existing model, save-audio, speaker-label and
+PII settings match the values read before testing.
+
+This rerun captured ambient speech. Runner playback did not establish recognition
+of the intended synthetic fixture, so it is not evidence of fixture accuracy or
+speaker quality. The subsequent loudspeaker scenario did not pass its fixture
+assertion and was stopped at the user's request. It is not counted as a pass.
+
+### Quiet full-meeting physical verification
+
+The user requested direct audio input without a loudspeaker. A DEBUG-only capture
+adapter incrementally decoded an existing local Fathom audio track into the actual
+capture owner and PCM sinks. It did not create a player or activate microphone
+capture. Release compilation excludes the adapter's entry point. The normal
+recording UI, RAM archive, processing pipeline and persistence remained in use.
+
+The complete input lasted 3,545.421 seconds and was fed at 1.8x speed in about
+32:49.680 wall time. Native recording screenshots were saved every 30 seconds;
+the parent inspected actual recording, processing and completion checkpoints.
+Both the producer and stopped-recording ASR accepted exactly 56,726,736 frames at
+16 kHz. The 178 replay windows cover the entire source, and the final transcript
+ends at 3,545.421 seconds. Accelerated input reached the live queue limit; live
+ASR deferred while recording continued, exercising full replay after Stop.
+
+The actual UI test passed 1/1 in about 67 minutes. The saved result is completed,
+has `transcriptIsComplete=true`, 8,863 final segments, five speaker labels, no
+failures, zero dropped samples and no audio chunks. Its timeline follows source
+audio time; the UI's 34:28 meeting duration follows wall time during accelerated
+input. These counts establish processing coverage, not transcription or speaker
+accuracy. Post-stop processing took 30:23, including 10:36.604 for one global
+Nemotron phase, exclusively after Stop.
+
+Scalar diagnostics sampled a maximum footprint of 313.86 MiB. Separate Activity
+Monitor samples at roughly one-second intervals during the latter 22 minutes of
+post-processing peaked at 312.10 MiB and ended near 40.14 MiB. Neither measurement
+establishes the complete run's instantaneous peak or proves absence of leaks.
+
+### Device data-loss incident and recovery
+
+During global diarization, the parent attempted to remove only its staged DEBUG
+input using `devicectl device copy to` with `--remove-existing-content true` and
+a narrow destination. CoreDevice instead cleared the AUT data container. This
+was an operator error, not an application crash. The user was informed promptly.
+The live application was preserved until it completed from RAM and saved the new
+result. This incident invalidates an unqualified end-to-end reliability claim
+for this run, despite the passing UI assertions and complete processing result.
+
+Local backups contained all 30 prior session manifests. These, plus the new
+completed result, were restored and verified byte-for-byte by SHA-256 after
+copying back from the iPad. All 38 production model files were likewise restored
+and verified. The original preferences were restored and compared. The ordinary
+Release build from `d379b83d` was then installed, and its history/current-meeting
+navigation test passed 1/1. Native screenshots were exported for inspection.
+No further recording or loudspeaker playback was started.
+
+Recovery is incomplete: four finalized CAF files from three short October 13
+microphone checks, totaling 112.074875 seconds, one unfinished CAF and three
+result sidecars have no accessible local copy. Their saved transcripts and
+speaker records were recovered. Finder backup storage exists on the Mac but
+macOS privacy denied shell enumeration; a usable device backup was not verified.
+Private recovery material remains in ignored local storage. Never use the
+CoreDevice removal flag for container subdirectory cleanup.
 
 ## Limits and remaining evidence
 
