@@ -1,0 +1,481 @@
+{
+  "schemaVersion": 1,
+  "id": "1AD3258B-41DC-426A-A9CA-0FB6531A9016",
+  "title": "Синтетическая проверка атрибуции",
+  "languageCode": "ru",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-16T12:00:00Z",
+  "endedAt": "2026-10-16T12:00:08Z",
+  "updatedAt": "2026-10-16T12:00:08Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "completed",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "memoryOnly",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": []
+    }
+  ],
+  "speakers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000065",
+      "displayName": "Анна",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000066",
+      "displayName": "Борис",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    }
+  ],
+  "transcriptSegments": [
+    {
+      "id": "00000000-0000-0000-0000-202610160001",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 0,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 300,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "Обсудим",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-1",
+      "nativeTiming": {
+        "start": 0,
+        "end": 0.3
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160002",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 300,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 600,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "план",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-2",
+      "nativeTiming": {
+        "start": 0.3,
+        "end": 0.6
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160003",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 600,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1000,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "встречи.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-3",
+      "nativeTiming": {
+        "start": 0.6,
+        "end": 1
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160004",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 1000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1200,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000066",
+      "text": "Да,",
+      "revision": 0,
+      "status": "final",
+      "overlap": "ambiguous",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-4",
+      "nativeTiming": {
+        "start": 1,
+        "end": 1.2
+      },
+      "speakerAttribution": {
+        "unitID": "synthetic-ui-4",
+        "rawAssignment": {
+          "kind": "ambiguous",
+          "candidates": [
+            {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-a"
+            },
+            {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-b"
+            }
+          ]
+        },
+        "selectedToken": {
+          "analysisEpochID": {
+            "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+            "ordinal": 0,
+            "generation": 0
+          },
+          "label": "synthetic-b"
+        },
+        "selectedSpeakerID": "00000000-0000-0000-0000-000000000066",
+        "candidates": [
+          {
+            "token": {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-a"
+            },
+            "speakerID": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "token": {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-b"
+            },
+            "speakerID": "00000000-0000-0000-0000-000000000066"
+          }
+        ],
+        "background": [
+          {
+            "token": {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-a"
+            },
+            "speakerID": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "relation": "simultaneous",
+        "rule": "briefInterruption",
+        "policyVersion": 1,
+        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160005",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 1200,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1500,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000066",
+      "text": "уточню.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "ambiguous",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-5",
+      "nativeTiming": {
+        "start": 1.2,
+        "end": 1.5
+      },
+      "speakerAttribution": {
+        "unitID": "synthetic-ui-5",
+        "rawAssignment": {
+          "kind": "ambiguous",
+          "candidates": [
+            {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-a"
+            },
+            {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-b"
+            }
+          ]
+        },
+        "selectedToken": {
+          "analysisEpochID": {
+            "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+            "ordinal": 0,
+            "generation": 0
+          },
+          "label": "synthetic-b"
+        },
+        "selectedSpeakerID": "00000000-0000-0000-0000-000000000066",
+        "candidates": [
+          {
+            "token": {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-a"
+            },
+            "speakerID": "00000000-0000-0000-0000-000000000065"
+          },
+          {
+            "token": {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-b"
+            },
+            "speakerID": "00000000-0000-0000-0000-000000000066"
+          }
+        ],
+        "background": [
+          {
+            "token": {
+              "analysisEpochID": {
+                "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+                "ordinal": 0,
+                "generation": 0
+              },
+              "label": "synthetic-a"
+            },
+            "speakerID": "00000000-0000-0000-0000-000000000065"
+          }
+        ],
+        "relation": "simultaneous",
+        "rule": "briefInterruption",
+        "policyVersion": 1,
+        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160006",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 1500,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 1900,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "Продолжим",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-6",
+      "nativeTiming": {
+        "start": 1.5,
+        "end": 1.9
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160007",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 1900,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 2500,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000065",
+      "text": "обсуждение.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-7",
+      "nativeTiming": {
+        "start": 1.9,
+        "end": 2.5
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160008",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 2600,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 2900,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000066",
+      "text": "Следующий",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-8",
+      "nativeTiming": {
+        "start": 2.6,
+        "end": 2.9
+      },
+      "speakerAttribution": {
+        "unitID": "synthetic-ui-8",
+        "rawAssignment": {
+          "kind": "unassigned"
+        },
+        "selectedToken": {
+          "analysisEpochID": {
+            "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+            "ordinal": 0,
+            "generation": 0
+          },
+          "label": "synthetic-b"
+        },
+        "selectedSpeakerID": "00000000-0000-0000-0000-000000000066",
+        "candidates": [],
+        "background": [],
+        "relation": "none",
+        "rule": "incomingSpeaker",
+        "policyVersion": 1,
+        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610160009",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 2900,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 3200,
+        "timescale": 1000
+      },
+      "speakerID": "00000000-0000-0000-0000-000000000066",
+      "text": "вопрос.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "nativePrecision": "word",
+      "nativeUnitID": "synthetic-ui-9",
+      "nativeTiming": {
+        "start": 2.9,
+        "end": 3.2
+      },
+      "speakerAttribution": {
+        "unitID": "synthetic-ui-9",
+        "rawAssignment": {
+          "kind": "unassigned"
+        },
+        "selectedToken": {
+          "analysisEpochID": {
+            "trackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+            "ordinal": 0,
+            "generation": 0
+          },
+          "label": "synthetic-b"
+        },
+        "selectedSpeakerID": "00000000-0000-0000-0000-000000000066",
+        "candidates": [],
+        "background": [],
+        "relation": "none",
+        "rule": "incomingSpeaker",
+        "policyVersion": 1,
+        "policyFingerprint": "speaker-attribution-v1:fe7cf221026d85d90fcff390b3569462466949335e355748fecb257c6632f510"
+      }
+    }
+  ],
+  "retention": {},
+  "processingAttempts": [],
+  "transcriptTimeDomain": "meetingRelative",
+  "transcriptIsComplete": true,
+  "speakerLabelsEnabled": true
+}

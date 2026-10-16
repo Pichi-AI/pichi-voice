@@ -1,0 +1,111 @@
+# Generalized meeting speaker attribution
+
+Attribution joins native ASR text intervals to anonymous diarizer activity. It does not separate
+mixed audio, recognize a person's name, or create word timestamps that an ASR provider did not
+return. These distinctions are necessary for short interruptions, uncertain turn boundaries and
+recovery after a restart.
+
+## Contracts and extension point
+
+The shared attribution stage consumes `MeetingFinalTextUnit`, `MeetingBackendSpeakerActivity`
+and scoped `MeetingBackendSpeakerToken` values. It belongs beside the existing canonical
+assembler. Engine adapters retain responsibility for probability decoding, model cadence,
+artifact selection, ASR timing generation and embedding extraction. No model switch belongs in
+the common coordinator.
+
+Keep three kinds of information separate:
+
+| Information | Meaning | Permitted use |
+| --- | --- | --- |
+| Native source evidence | Anonymous track, epoch, generation and slot; actual activity intervals; native ASR precision | Acoustic support and direct context anchors |
+| Identity evidence | Existing explicit identity links, confirmed owner evidence, or a separately marked tentative proposal | Resolve an admitted source to a product identity without changing its source token |
+| Attribution decision | A direct selection, contextual inference, foreground presentation choice or abstention | Display and text ownership, with the rule and supporting unit IDs retained |
+
+A relative embedding score is not a calibrated person-identification probability. A tentative
+identity proposal cannot become an acoustic anchor or index another slot's activity. Display
+names, language, model names and fixture-specific counts never participate in attribution.
+
+```mermaid
+flowchart TD
+    A[Native text and scoped activity] --> B[Validate scope and timing]
+    B --> C[Existing admission, coverage and echo gates]
+    C --> D[Union activity and compute interval intersections]
+    D --> E[Direct evidence and explicit ambiguity]
+    E --> F[Bounded contextual presentation policy]
+    F --> G[Product segments and grouped reading view]
+    E --> H[Sidecar with native evidence]
+    F --> H
+    I[Frozen attempt policy] --> F
+    J[Existing trusted identity links] --> G
+```
+
+## Decision rules
+
+All time intervals are half-open seconds in their declared analysis domain. Duplicate and
+fragmented intervals for one source are unioned before measuring support. True simultaneity is
+the intersection of actual activity from every participating source. Two voices occurring
+sequentially inside a coarse ASR interval do not establish simultaneous speech.
+
+Acoustic support duration, ASR envelope duration and presentation ownership are distinct.
+Extending only a silent ASR tail must not change acoustic membership or manufacture confidence.
+A brief interrupter who owns a mixed text fragment contributes only its actual voice activity
+to speaker admission, not the whole fragment's duration or all its words.
+
+Context is local to a track, epoch and generation. Quarantine, excluded capture, uncertain timing,
+echo and gaps remain barriers. Interleaving another track cannot change a same-track decision.
+Overlapping text units cannot act as sequential neighbors. Inferred decisions never become
+direct anchors for later decisions.
+
+The user-selected reading policy permits these bounded inferences:
+
+- A short unresolved run between direct A and A may inherit A.
+- A short unresolved run between direct A and B may inherit incoming B, provided actual evidence
+  does not contradict it. A real continuing tail from A takes precedence over blindly choosing B.
+- If direct A continues before and after a short, recognized B interruption, actual A/B activity
+  overlaps, and no third source or conflicting evidence exists, B may own the indivisible mixed
+  word fragment. A remains recorded as the background source.
+
+These are presentation heuristics, not separated ASR of the interrupting voice. Their duration,
+gap and residual tolerances are named, versioned policy parameters. They are not universal facts
+about human speech. Missing support, ambiguous roles, three or more simultaneous sources,
+conflicting evidence and utterances without word timing require explicit uncertainty rather
+than fabricated ownership. Native text, IDs and times remain unchanged.
+
+The policy is immutable for an attempt and participates in its configuration fingerprint.
+Resumed and uninterrupted processing of the same finalized evidence must use the same policy.
+Unsupported policy versions or incompatible checkpoints must fail explicitly.
+
+## Verification and quality claims
+
+Structural correctness and acoustic accuracy have different acceptance criteria.
+
+| Layer | Required checks |
+| --- | --- |
+| Evidence preservation | Original text, IDs, precision and timestamps; exact candidate support; no source-to-identity namespace substitution |
+| Determinism | Interval fragmentation and duplication, input ordering, slot renaming, time translation, transport chunking |
+| Boundaries | Track, epoch and generation isolation; gaps; nested words; exact touching endpoints; invalid numeric geometry; no inferred-anchor cascade |
+| Policy | Unknown runs, continuing tails, interruptions, sequential speech, three voices, absent background, contradictory or missing evidence |
+| Integration | Admission and echo precedence; old saved sessions; manual corrections; redaction; exporter consistency; frozen policy and recovery |
+| Scale | 10-minute, 1-hour and 8-hour synthetic timelines; many sequential source labels; dense overlap and long nested envelopes; cancellation |
+
+Measure indexed interval-query operations and scratch memory separately from required output
+storage. A fixed-density benchmark alone can hide a quadratic scan over all historical voices.
+
+To assess recognition quality, use independently human-annotated recordings. Keep complete
+recordings and their derived windows in the same split. Claims about unseen speakers also
+require participant-disjoint splits. Enrollment and identification require separate sessions
+and unknown-person probes.
+
+First evaluate policy with fixed reference text, timing and activity. Then evaluate the real
+pipeline. Report acoustic overlap-inclusive DER, overlap detection, identity false merges and
+splits, wrong confident word assignments, assignment coverage, abstention and ASR omissions
+separately. Accuracy on accepted words alone can improve simply by refusing difficult words.
+Use session-level uncertainty estimates rather than treating thousands of correlated words from
+one meeting as independent observations.
+
+The five-minute private comparison is a diagnostic fixture. Its Fathom labels are automatic,
+several examples have user feedback, and some original candidate identities and capture
+provenance were not exported. Replaying newer activity against those words does not establish
+end-to-end production accuracy, generalization to other recordings, or iPad memory consumption.
+Synthetic acceptance tests establish defined behavior under their inputs. They cannot prove
+the best possible diarization for every audio recording.
