@@ -40,23 +40,20 @@ private nonisolated struct MeetingArrayPCMReplay: MeetingPCMReplaySource {
     }
 }
 
-/// Its only mutable resource is a read handle protected by the lock. Destruction owns both
-/// handle closure and deletion, including inference failure and cancellation paths.
+/// Its only mutable resource is a read handle protected by the lock. The backing file is
+/// unlinked before the first audio write, so process termination also destroys the derivative.
 private final nonisolated class MeetingScopedPCMReplayFile: MeetingPCMReplaySource, @unchecked Sendable {
     let totalSampleCount: Int
-    private let url: URL
     private let handle: FileHandle
     private let lock = NSLock()
 
-    init(url: URL, sampleCount: Int) throws {
-        self.url = url
+    init(handle: FileHandle, sampleCount: Int) {
         self.totalSampleCount = sampleCount
-        self.handle = try FileHandle(forReadingFrom: url)
+        self.handle = handle
     }
 
     deinit {
         try? self.handle.close()
-        try? FileManager.default.removeItem(at: self.url)
     }
 
     func readSamples(in range: Range<Int>) async throws -> [Float] {
@@ -98,6 +95,11 @@ nonisolated extension MeetingEpochAudioMaterializer {
         defer { if !adopted { try? FileManager.default.removeItem(at: url) } }
         let writer = try FileHandle(forWritingTo: url)
         defer { try? writer.close() }
+        let readerHandle = try FileHandle(forReadingFrom: url)
+        defer { if !adopted { try? readerHandle.close() } }
+        // Both handles own the same inode before its name disappears. No raw sample is
+        // written while a durable path exists, including interruption during conversion.
+        try FileManager.default.removeItem(at: url)
         var sampleCount = 0
         var mappings: [MeetingMaterializedSpanSamples] = []
         var start = 0
@@ -138,7 +140,7 @@ nonisolated extension MeetingEpochAudioMaterializer {
         }
         try writer.synchronize()
         try writer.close()
-        let source = try MeetingScopedPCMReplayFile(url: url, sampleCount: sampleCount)
+        let source = MeetingScopedPCMReplayFile(handle: readerHandle, sampleCount: sampleCount)
         adopted = true
         return MeetingEpochAudioReplay(source: source, sampleRate: self.sampleRate, spanSamples: mappings)
     }

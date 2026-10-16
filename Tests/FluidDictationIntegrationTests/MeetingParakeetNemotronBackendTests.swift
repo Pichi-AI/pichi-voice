@@ -66,6 +66,81 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(boundary.analysisEnd, 20.5, accuracy: 1e-6)
     }
 
+    private func replayResult(seconds: Double, responses: [FakeASRSession.Response],
+                              speakers: [MeetingNemotronSpeakerSegment] = []) async throws
+        -> (bundle: MeetingCanonicalResultBundle, runtime: FakeRuntime) {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + seconds)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let runtime = FakeRuntime()
+        let materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: runtime, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: self.makeSession(mode: .inRoom, tracks: [track]),
+                                                     directory: self.makeTempSessionDirectory()))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: seconds)
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = Int(seconds * 16_000)
+        runtime.diarizerFactory.segmentsByEpoch[epoch.id] = speakers
+        runtime.asrSession.responses = responses
+        let outcome = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = outcome else { throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow }
+        return (bundle, runtime)
+    }
+
+    func testInvalidWordMetadataRetainsCoreTextWithoutInventingTiming() async throws {
+        for invalid in [ASRWordTiming(text: "bad", start: -1, end: 1),
+                        ASRWordTiming(text: "bad", start: 100, end: 101),
+                        ASRWordTiming(text: "bad", start: .nan, end: 1)] {
+            let result = try await self.replayResult(seconds: 45, responses: [
+                .init(text: "recovered phrase", words: [invalid]),
+                .init(text: "recovered phrase", words: [invalid]),
+                .init(text: "later", words: [.init(text: "later", start: 3, end: 4)]),
+            ])
+            XCTAssertEqual(Array(result.runtime.asrSession.callSampleCounts.prefix(3)), [22, 20, 24].map { $0 * 16_000 })
+            let units = result.bundle.evidence.units
+            XCTAssertEqual(units.map(\.text), ["recovered phrase", "later"])
+            XCTAssertEqual(units.map(\.precision), [.utterance, .word])
+            XCTAssertEqual(units[0].analysisStart, 0, accuracy: 1e-6)
+            XCTAssertEqual(units[0].analysisEnd, 20, accuracy: 1e-6)
+            XCTAssertEqual(units[1].analysisStart, 21, accuracy: 1e-6)
+        }
+    }
+
+    func testMixedTimedAndCoarseCoresKeepEachNativeBoundaryAndSpeaker() async throws {
+        let result = try await self.replayResult(seconds: 60, responses: [
+            .init(text: "first", words: [.init(text: "first", start: 1, end: 2)]),
+            .init(text: "coarse phrase", words: []),
+            .init(text: "coarse phrase", words: [], segmentTimings: [.init(text: "coarse phrase", start: 2, end: 3)]),
+            .init(text: "last", words: [.init(text: "last", start: 3, end: 4)]),
+        ], speakers: [
+            .init(slotIndex: 0, start: 0, end: 20), .init(slotIndex: 1, start: 20, end: 40),
+            .init(slotIndex: 2, start: 40, end: 60),
+        ])
+        let units = result.bundle.evidence.units
+        XCTAssertEqual(units.map(\.text), ["first", "coarse phrase", "last"])
+        XCTAssertEqual(units.map(\.precision), [.word, .utterance, .word])
+        XCTAssertEqual(units.map(\.analysisStart), [1, 22, 41])
+        XCTAssertEqual(units.map(\.analysisEnd), [2, 23, 42])
+        XCTAssertEqual(Set(units.map(\.id)).count, 3)
+        let labels = units.compactMap { unit -> String? in
+            guard case let .assigned(token) = unit.speaker else { return nil }
+            return token.label
+        }
+        XCTAssertEqual(labels, ["slot-0", "slot-1", "slot-2"])
+    }
+
+    func testSilenceDoesNotDisableLaterOverlappingContextOrDuplicateContextOnlyWords() async throws {
+        let result = try await self.replayResult(seconds: 60, responses: [
+            .init(text: "", words: []),
+            .init(text: "context only", words: [.init(text: "context only", start: 0.2, end: 0.8)]),
+            .init(text: "last", words: [.init(text: "last", start: 3, end: 4)]),
+        ])
+        XCTAssertEqual(result.runtime.asrSession.callSampleCounts, [22, 24, 22].map { $0 * 16_000 })
+        XCTAssertEqual(result.bundle.evidence.units.map(\.text), ["last"], "Real context words outside a core must not be copied into it")
+        XCTAssertEqual(result.bundle.evidence.units.first?.analysisStart, 41)
+    }
+
     // MARK: - Session fixtures
 
     private func makeChunk(

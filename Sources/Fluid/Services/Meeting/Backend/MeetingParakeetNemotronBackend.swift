@@ -416,30 +416,35 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         var start = 0
         var text: [String] = []
         var words: [ASRWordTiming] = []
-        var segments: [ASRSegmentTiming] = []
-        var coarse = false
-        var hasCoarseText = false
+        var untimedChunks: [MeetingUntimedASRChunk] = []
         while start < count {
             try Task.checkCancellation()
             let end = min(count, start + coreSamples)
-            var lower = coarse ? start : max(0, start - contextSamples)
-            var upper = coarse ? end : min(count, end + contextSamples)
+            var lower = max(0, start - contextSamples)
+            var upper = min(count, end + contextSamples)
             var output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
-            if output.words.isEmpty, (lower != start || upper != end) {
-                // Coarse text cannot safely be trimmed at a word boundary. Re-run only this
-                // bounded core, then keep subsequent cores contiguous as well.
-                coarse = true
+            func validWords() -> [ASRWordTiming] {
+                output.words.filter { word in
+                    !word.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && word.start.isFinite && word.end.isFinite && word.start >= 0
+                        && word.end > word.start && word.end <= Double(upper - lower) / audio.sampleRate + 1e-6
+                }
+            }
+            var physicalWords = validWords()
+            if physicalWords.isEmpty, !output.result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               lower != start || upper != end {
+                // Word timing can be unavailable or malformed for one core. Its actual text
+                // survives a bounded core-only retry; this says nothing about later cores.
                 lower = start; upper = end
                 output = try await asr.transcribeWithTimings(try await audio.source.readSamples(in: lower..<upper))
+                physicalWords = validWords()
             }
             let offset = Double(lower) / audio.sampleRate
-            let kept = output.words.filter { word in
-                guard word.start.isFinite, word.end.isFinite, word.start >= 0,
-                      word.end > word.start, word.end <= Double(upper - lower) / audio.sampleRate + 1e-6 else { return false }
-                let midpoint = (word.start + word.end) * audio.sampleRate / 2 + Double(lower)
-                return midpoint >= Double(start) && (midpoint < Double(end) || end == count)
-            }
-            if !output.words.isEmpty {
+            if !physicalWords.isEmpty {
+                let kept = physicalWords.filter { word in
+                    let midpoint = (word.start + word.end) * audio.sampleRate / 2 + Double(lower)
+                    return midpoint >= Double(start) && (midpoint < Double(end) || end == count)
+                }
                 words.append(contentsOf: kept.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) })
                 text.append(kept.map(\.text).joined(separator: " "))
             } else {
@@ -448,14 +453,15 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     text.append(value)
                     let native = ASRSegmentTiming.validated(output.result.segmentTimings, text: value,
                         duration: Double(upper - lower) / audio.sampleRate)
-                    hasCoarseText = true
-                    segments.append(contentsOf: native.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) })
+                    untimedChunks.append(.init(sampleRange: lower..<upper, text: value,
+                        segmentTimings: native.map { .init(text: $0.text, start: $0.start + offset, end: $0.end + offset) }))
                 }
             }
             start = end
         }
         return MeetingParakeetEpochOutput(epochID: epochID, text: text.filter { !$0.isEmpty }.joined(separator: " "),
-            words: hasCoarseText ? [] : words, segmentTimings: segments, sampleRate: audio.sampleRate, sampleCount: count, spanSamples: audio.spanSamples)
+            words: words, sampleRate: audio.sampleRate, sampleCount: count, spanSamples: audio.spanSamples,
+            untimedChunks: untimedChunks)
     }
 
     // MARK: - Units, assignment and receipts
@@ -597,11 +603,16 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         for output: MeetingParakeetEpochOutput,
         work: EpochWork,
         activity: [MeetingBackendSpeakerActivity],
-        attemptID: UUID
+        attemptID: UUID,
+        fallbackRange: Range<Int>? = nil,
+        idSuffix: String = ""
     ) -> [MeetingFinalTextUnit] {
-        let epochStart = work.epoch.analysisInterval.start
+        let epochStart = fallbackRange.flatMap {
+            Self.analysisTime(forMaterializedSeconds: Double($0.lowerBound) / output.sampleRate, boundary: .start,
+                sampleRate: output.sampleRate, sampleCount: output.sampleCount, spanSamples: output.spanSamples, spans: work.spans)
+        } ?? work.epoch.analysisInterval.start
         let physicalEnd = Self.analysisTime(
-            forMaterializedSeconds: Double(output.sampleCount) / output.sampleRate,
+            forMaterializedSeconds: Double(fallbackRange?.upperBound ?? output.sampleCount) / output.sampleRate,
             boundary: .end,
             sampleRate: output.sampleRate,
             sampleCount: output.sampleCount,
@@ -611,6 +622,15 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         guard physicalEnd > epochStart else { return [] }
 
         var wordUnits: [MeetingFinalTextUnit] = []
+        let untimedAnalysisIntervals = output.untimedChunks.compactMap { chunk -> MeetingAnalysisInterval? in
+            guard let start = Self.analysisTime(forMaterializedSeconds: Double(chunk.sampleRange.lowerBound) / output.sampleRate,
+                boundary: .start, sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                spanSamples: output.spanSamples, spans: work.spans),
+                  let end = Self.analysisTime(forMaterializedSeconds: Double(chunk.sampleRange.upperBound) / output.sampleRate,
+                boundary: .end, sampleRate: output.sampleRate, sampleCount: output.sampleCount,
+                spanSamples: output.spanSamples, spans: work.spans) else { return nil }
+            return MeetingAnalysisInterval(start: start, end: end)
+        }
         var previousAssignedWord: (token: MeetingBackendSpeakerToken, end: TimeInterval)?
         let sortedWords = output.words.enumerated()
             .sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
@@ -637,6 +657,9 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             guard end > start else { continue }
             guard let spanIDs = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
             else { continue }
+            if let previous = previousAssignedWord, untimedAnalysisIntervals.contains(where: {
+                $0.start < start && $0.end > previous.end
+            }) { previousAssignedWord = nil }
             let coverageAssignment = Self.assignment(
                 start: start,
                 end: end,
@@ -651,7 +674,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 previousAssignedWord: previousAssignedWord
             )
             wordUnits.append(MeetingFinalTextUnit(
-                id: "unit:\(attemptID.uuidString):\(work.epoch.id):\(index)",
+                id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):\(index)",
                 trackID: work.track.id,
                 analysisEpochID: work.epoch.id,
                 precision: .word,
@@ -669,7 +692,16 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                 previousAssignedWord = nil
             }
         }
-        if !wordUnits.isEmpty { return wordUnits }
+        for (index, chunk) in output.untimedChunks.enumerated() {
+            let bounded = MeetingParakeetEpochOutput(epochID: output.epochID, text: chunk.text, words: [],
+                segmentTimings: chunk.segmentTimings, sampleRate: output.sampleRate,
+                sampleCount: output.sampleCount, spanSamples: output.spanSamples)
+            wordUnits.append(contentsOf: Self.units(for: bounded, work: work, activity: activity,
+                attemptID: attemptID, fallbackRange: chunk.sampleRange, idSuffix: ":chunk-\(index)"))
+        }
+        if !wordUnits.isEmpty {
+            return wordUnits.sorted { ($0.analysisStart, $0.analysisEnd, $0.id) < ($1.analysisStart, $1.analysisEnd, $1.id) }
+        }
 
         let text = output.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return [] }
@@ -687,7 +719,7 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
                     let ids = Self.intersectingSpanIDs(start: start, end: end, spans: work.spans)
                 else { segmentUnits = []; break }
                 segmentUnits.append(MeetingFinalTextUnit(
-                    id: "unit:\(attemptID.uuidString):\(work.epoch.id):segment:\(index)", trackID: work.track.id,
+                    id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):segment:\(index)", trackID: work.track.id,
                     analysisEpochID: work.epoch.id, precision: .utterance,
                     text: segment.text.trimmingCharacters(in: .whitespacesAndNewlines),
                     analysisStart: start, analysisEnd: end,
@@ -696,10 +728,10 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
             }
             if !segmentUnits.isEmpty { return segmentUnits }
         }
-        let spanIDs = work.spans.map(\.id)
+        let spanIDs = Self.intersectingSpanIDs(start: epochStart, end: physicalEnd, spans: work.spans) ?? []
         guard !spanIDs.isEmpty else { return [] }
         return [MeetingFinalTextUnit(
-            id: "unit:\(attemptID.uuidString):\(work.epoch.id):utterance",
+            id: "unit:\(attemptID.uuidString):\(work.epoch.id)\(idSuffix):utterance",
             trackID: work.track.id,
             analysisEpochID: work.epoch.id,
             precision: .utterance,

@@ -311,7 +311,8 @@ final class MeetingEpochAudioMaterializerTests: XCTestCase {
         try await replay?.source.replay { actual.append(contentsOf: $0) }
         XCTAssertEqual(actual.count, expected.samples.count)
         XCTAssertLessThan(zip(actual, expected.samples).map { abs($0 - $1) }.max() ?? 0, 1e-6)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix(".analysis-replay-") }.count, 1)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix(".analysis-replay-") }.isEmpty,
+                      "The derivative is already unlinked while its handle remains readable; a process crash cannot leave raw PCM")
         replay = nil
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).filter { $0.hasPrefix(".analysis-replay-") }.isEmpty)
     }

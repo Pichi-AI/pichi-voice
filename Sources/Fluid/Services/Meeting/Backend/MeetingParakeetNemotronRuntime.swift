@@ -93,6 +93,14 @@ nonisolated struct MeetingNemotronPhaseResult: Sendable {
     var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
 }
 
+/// One bounded core whose provider could not supply usable word timing. Native segment
+/// times remain native; an absent segmentation falls back only to this input core's range.
+nonisolated struct MeetingUntimedASRChunk: Sendable {
+    let sampleRange: Range<Int>
+    let text: String
+    let segmentTimings: [ASRSegmentTiming]
+}
+
 nonisolated struct MeetingParakeetEpochOutput: Sendable {
     let epochID: MeetingAnalysisEpochID
     let text: String
@@ -101,10 +109,11 @@ nonisolated struct MeetingParakeetEpochOutput: Sendable {
     let sampleRate: Double
     let sampleCount: Int
     let spanSamples: [MeetingMaterializedSpanSamples]
+    let untimedChunks: [MeetingUntimedASRChunk]
 
     init(epochID: MeetingAnalysisEpochID, text: String, words: [ASRWordTiming],
          segmentTimings: [ASRSegmentTiming] = [], sampleRate: Double, sampleCount: Int,
-         spanSamples: [MeetingMaterializedSpanSamples]) {
+         spanSamples: [MeetingMaterializedSpanSamples], untimedChunks: [MeetingUntimedASRChunk] = []) {
         self.epochID = epochID
         self.text = text
         self.words = words
@@ -112,6 +121,7 @@ nonisolated struct MeetingParakeetEpochOutput: Sendable {
         self.sampleRate = sampleRate
         self.sampleCount = sampleCount
         self.spanSamples = spanSamples
+        self.untimedChunks = untimedChunks
     }
 }
 
