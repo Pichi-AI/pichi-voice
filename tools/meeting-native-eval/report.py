@@ -63,6 +63,21 @@ def assignment_token(assignment):
     return assignment.get('token') if assignment.get('kind') == 'assigned' else None
 
 
+def compact_metrics(metrics, candidate):
+    """Keep displayed denominators, not repeated per-word forensic listings."""
+    variants = {}
+    for name in dict.fromkeys(['baseline4484', candidate]):
+        source = metrics['variants'][name]
+        profiles = {}
+        for profile in ['strictWeak', 'interior1s', 'interior2s']:
+            value = source['profiles'][profile]
+            profiles[profile] = {k: value[k] for k in ['counts', 'eligible_words', 'excluded_words']}
+        variants[name] = {'all_unknown_words': source['all_unknown_words'], 'profiles': profiles,
+                          'rule_counts': source.get('rule_counts', {})}
+    return {'variants': variants,
+            'weak_activity_timeline_diagnostic': metrics.get('weak_activity_timeline_diagnostic', {})}
+
+
 def make_case(case, candidate, out, copy_audio):
     evidence, evidence_sha = read_verified(case['native_evidence_path'], case.get('native_evidence_sha256'))
     replay_path = case['core_replay_paths'][candidate]
@@ -135,7 +150,7 @@ def make_case(case, candidate, out, copy_audio):
             'waveform': waveform(audio_path), 'tokens': display, 'words': words,
             'activity': [{'start': a['start'], 'end': a['end'], 'token': token_key(a['token'])}
                          for a in evidence['activity']],
-            'reference': reference, 'metrics': case['case_metrics'],
+            'reference': reference, 'metrics': compact_metrics(case['case_metrics'], candidate),
             'policy': replay['policy'], 'policyFingerprint': replay['policyFingerprint'],
             'metadata': evidence['metadata'],
             'proof': {'evidenceSHA256': evidence_sha, 'replaySHA256': replay_sha,
@@ -180,8 +195,7 @@ def build(index_path, candidate, output, status, physical_path=None, copy_audio=
             'sourceCommit': index.get('native_source_commit'), 'coreSHA256': index.get('core_source_sha256'),
             'corpusSHA256': manifest_sha, 'corpusCount': len(manifest['clips']),
             'participantDisjoint': manifest.get('participant_disjoint'),
-            'cases': cases, 'aggregate': index['aggregate'],
-            'bySpeakerCount': index.get('by_weak_speaker_count'), 'byLanguage': index.get('by_language'),
+            'cases': cases,
             'host': index.get('host_measurement_summary'), 'physical': physical,
             'physicalSHA256': physical_sha, 'notes': notes, 'textQuality': text_quality, 'textQualitySHA256': text_quality_sha}
     css = (ASSETS / 'report.css').read_text()

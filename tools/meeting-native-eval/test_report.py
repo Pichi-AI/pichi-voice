@@ -36,7 +36,7 @@ class ReportPackaging(unittest.TestCase):
         self.case={'clip_id':'synthetic','meeting_id':'meeting1','split':'development','language_condition':'Russian','weak_speaker_count':1,'duration_seconds':1,
                    'source_start_seconds':0,'source_end_seconds':1,'audio_path':str(self.audio),'audio_sha256':report.digest(self.audio),'native_evidence_path':str(ep),
                    'native_evidence_sha256':report.digest(ep),'weak_reference_path':str(ref),'weak_reference_sha256':report.digest(ref),'core_replay_paths':{'v2':str(rp)},
-                   'frozen_native_to_weak_reference_mapping':{'0':'0'},'case_metrics':{}}
+                   'frozen_native_to_weak_reference_mapping':{'0':'0'},'case_metrics':{'variants':{n:{'all_unknown_words':0,'profiles':{p:{'counts':{},'eligible_words':1,'excluded_words':0} for p in ['strictWeak','interior1s','interior2s']}} for n in ['baseline4484','v2']}}}
         self.index={'cases':[self.case],'aggregate':{},'corpus_manifest_path':str(manifest),'corpus_manifest_sha256':report.digest(manifest)}
         self.index_path=self.write('index.json',self.index)
 
