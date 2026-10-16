@@ -92,10 +92,12 @@ private final nonisolated class Fast32NemotronDiarizerSession: MeetingResumableN
         var intervals = MeetingFast32SpeakerIntervals(speakerCount: self.config.numSpeakers)
         var offset = 0
         if let restoring {
-            let state = try MeetingFast32Checkpoint.decode(restoring, config: self.config, sourceSampleCount: count)
-            try diarizer.restoreStreamingSnapshot(state.diarizer, sampleCursor: state.sampleCursor)
-            intervals = state.intervals
-            offset = state.sampleCursor
+            do {
+                let state = try MeetingFast32Checkpoint.decode(restoring, config: self.config, sourceSampleCount: count)
+                try diarizer.restoreStreamingSnapshot(state.diarizer, sampleCursor: state.sampleCursor)
+                intervals = state.intervals
+                offset = state.sampleCursor
+            } catch { throw MeetingDiarizerCheckpointError.invalidCheckpoint }
         }
         var lastCheckpoint = offset
         while offset < count {

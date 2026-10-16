@@ -52047,6 +52047,88 @@
           }
         }
       }
+    },
+    "The processing checkpoint could not be saved safely.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The processing checkpoint could not be saved safely."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось надёжно сохранить контрольную точку обработки."
+          }
+        }
+      }
+    },
+    "The recording or processing models changed since the checkpoint. Restart processing with the retained audio.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recording or processing models changed since the checkpoint. Restart processing with the retained audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запись или модели обработки изменились после контрольной точки. Начните обработку сохранённого аудио заново."
+          }
+        }
+      }
+    },
+    "The saved processing checkpoint is damaged. Keep the recording and restart processing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The saved processing checkpoint is damaged. Keep the recording and restart processing."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сохранённая контрольная точка повреждена. Сохраните запись и начните обработку заново."
+          }
+        }
+      }
+    },
+    "Start processing again": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start processing again"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Начать обработку заново"
+          }
+        }
+      }
+    },
+    "Retry continues from the last saved step. Starting again discards processing progress and keeps your audio.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry continues from the last saved step. Starting again discards processing progress and keeps your audio."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторная попытка продолжает последний сохранённый этап. Запуск заново сбрасывает прогресс обработки и сохраняет аудио."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

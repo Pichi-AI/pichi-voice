@@ -9,6 +9,101 @@ import XCTest
 /// materializer and pipeline integration tests use real WAV files on disk.
 @MainActor
 final class MeetingParakeetNemotronBackendTests: XCTestCase {
+    func testRetainedNewAttemptRestoresCompletedASRCoresAndContinuousSpeakerEvidence() async throws {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 145)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        var session = self.makeSession(mode: .inRoom, tracks: [track])
+        let directory = try self.makeTempSessionDirectory()
+        let first = FakeRuntime(), materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: first, materializer: materializer)
+        let request = self.makeRequest(session: session, directory: directory)
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 45)
+        ]
+        let plan = try backend.plan(request)
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = 45 * 16_000
+        first.diarizerFactory.segmentsByEpoch[epoch.id] = [.init(slotIndex: 2, start: 0, end: 45)]
+        first.asrSession.responses = [.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1)])]
+        first.asrSession.cancellationCallIndices = [1]
+        do {
+            _ = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+            XCTFail("Expected interrupted second core")
+        } catch is CancellationError {}
+        XCTAssertEqual(first.asrSession.callSampleCounts.count, 2)
+        let oldAttempt = request.attemptID
+        session.processingAttempts = [] // A new process/retry has a fresh attempt identity.
+        let resumedRuntime = FakeRuntime()
+        resumedRuntime.asrSession.responses = [
+            .init(text: "second", words: [.init(text: "second", start: 2.5, end: 3)]),
+            .init(text: "third", words: [.init(text: "third", start: 2.5, end: 3)]),
+        ]
+        let resumedBackend = self.makeBackend(runtime: resumedRuntime, materializer: materializer)
+        let resumedRequest = self.makeRequest(session: session, directory: directory)
+        let resumedPlan = try resumedBackend.plan(resumedRequest)
+        let resumedManifest = try self.makeManifest(plan: resumedPlan, observations: observations)
+        let result = try await resumedBackend.execute(plan: resumedPlan, manifest: resumedManifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else { return XCTFail("Expected canonical result") }
+        XCTAssertNotEqual(bundle.evidence.attemptID, oldAttempt)
+        XCTAssertEqual(bundle.evidence.attemptID, resumedRequest.attemptID)
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["first", "second", "third"])
+        XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), [0.5, 20.5, 40.5])
+        XCTAssertEqual(Set(bundle.evidence.units.map(\.id)).count, 3, "Completed cores cannot be duplicated")
+        XCTAssertEqual(resumedRuntime.asrSession.callSampleCounts, [24, 7].map { $0 * 16_000 })
+        XCTAssertTrue(resumedRuntime.diarizerFactory.createdEpochs.isEmpty, "Completed diarization is restored, never repeated")
+        XCTAssertEqual(bundle.evidence.speakerActivity.map(\.token.label), ["slot-2"])
+    }
+
+    func testRetainedCheckpointRejectsASRModelDriftBeforeInference() async throws {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 145)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track])
+        let directory = try self.makeTempSessionDirectory()
+        let runtime = FakeRuntime(), materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: runtime, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory))
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 45)
+        ]
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = 45 * 16_000
+        runtime.asrSession.cancellationCallIndices = [0]
+        do { _ = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in }); XCTFail("Expected interruption") }
+        catch is CancellationError {}
+        let replacement = FakeRuntime()
+        let changed = self.makeBackend(runtime: replacement, materializer: materializer)
+        let changedPlan = try changed.plan(self.makeRequest(session: session, directory: directory,
+            configuration: .init(asrModel: "changed-model", languageCode: "en")))
+        do {
+            _ = try await changed.execute(plan: changedPlan,
+                manifest: self.makeManifest(plan: changedPlan, observations: observations), progress: { _ in })
+            XCTFail("Model drift must not mix completed state")
+        } catch is MeetingRetainedProcessingCheckpoint.Failure {}
+        XCTAssertEqual(replacement.diarizationScopeCount, 0)
+        XCTAssertTrue(replacement.asrAttemptIDs.isEmpty)
+    }
+
+    func testStrictModeNeverCreatesRetainedWorkingState() async throws {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 105)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        var session = self.makeSession(mode: .inRoom, tracks: [track]); session.audioStorageMode = .memoryOnly
+        let directory = try self.makeTempSessionDirectory()
+        let runtime = FakeRuntime(), materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: runtime, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 5)
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = 5 * 16_000
+        _ = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertFalse(names.contains(MeetingRetainedProcessingCheckpoint.fileName))
+        XCTAssertFalse(names.contains(MeetingRetainedProcessingCheckpoint.keyFileName))
+    }
+
     func testEightHourTrackUsesBoundedReplayAndASRWindows() async throws {
         let seconds = 8.0 * 60 * 60
         let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + seconds)
@@ -1448,6 +1543,38 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
     }
 
     // MARK: - Epoch isolation and unit assignment
+
+    func testTransientMissingEpochCannotCacheShortenedContinuousTrack() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let initial = FakeRuntime(), materializer = FakeMaterializer()
+        let firstBackend = self.makeBackend(runtime: initial, materializer: materializer)
+        let firstPlan = try firstBackend.plan(self.makeRequest(session: fixture.session, directory: directory))
+        let firstManifest = try self.makeManifest(plan: firstPlan, observations: fixture.observations)
+        let epochs = try XCTUnwrap(firstManifest.track(fixture.micTrack.id)?.epochs)
+        materializer.failingEpochs = [epochs[1].id]
+        initial.diarizerFactory.segmentsByEpoch[epochs[0].id] = [.init(slotIndex: 0, start: 0, end: 2)]
+        initial.asrSession.responses = [
+            .init(text: "first", words: [.init(text: "first", start: 0.2, end: 0.4)]),
+            .init(text: "remote", words: [.init(text: "remote", start: 0.2, end: 0.4)]),
+        ]
+        _ = try await firstBackend.execute(plan: firstPlan, manifest: firstManifest, progress: { _ in })
+        materializer.failingEpochs = []
+        let resumed = FakeRuntime()
+        resumed.diarizerFactory.segmentsByEpoch[epochs[0].id] = [
+            .init(slotIndex: 0, start: 0, end: 2), .init(slotIndex: 1, start: 2.5, end: 4.5),
+        ]
+        resumed.asrSession.responses = [.init(text: "second", words: [.init(text: "second", start: 0.2, end: 0.4)])]
+        let secondBackend = self.makeBackend(runtime: resumed, materializer: materializer)
+        let secondPlan = try secondBackend.plan(self.makeRequest(session: fixture.session, directory: directory))
+        let result = try await secondBackend.execute(plan: secondPlan,
+            manifest: self.makeManifest(plan: secondPlan, observations: fixture.observations), progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else { return XCTFail("Expected canonical result") }
+        XCTAssertEqual(resumed.diarizerFactory.createdEpochs, [epochs[0].id], "The shortened first track was not a valid complete-track checkpoint")
+        XCTAssertEqual(resumed.asrSession.callSampleCounts.count, 1, "Already completed epoch ASR still resumes without repetition")
+        let second = try XCTUnwrap(bundle.evidence.units.first { $0.text == "second" })
+        XCTAssertEqual(second.speaker, .assigned(.init(analysisEpochID: epochs[1].id, label: "slot-1")))
+    }
 
     private func plannedManifest(
         fixture: TwoEpochFixture,

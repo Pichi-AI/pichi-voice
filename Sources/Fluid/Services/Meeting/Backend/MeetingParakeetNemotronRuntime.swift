@@ -12,7 +12,7 @@ import Foundation
 /// One speaker-active interval from a single Nemotron epoch run, in seconds from that epoch's
 /// materialized audio start. Slot indices are Nemotron's own and are meaningful only inside the
 /// epoch that produced them.
-nonisolated struct MeetingNemotronSpeakerSegment: Equatable, Sendable {
+nonisolated struct MeetingNemotronSpeakerSegment: Codable, Equatable, Sendable {
     let slotIndex: Int
     let start: TimeInterval
     let end: TimeInterval
@@ -95,7 +95,7 @@ nonisolated struct MeetingNemotronPhaseResult: Sendable {
 
 /// One bounded core whose provider could not supply usable word timing. Native segment
 /// times remain native; an absent segmentation falls back only to this input core's range.
-nonisolated struct MeetingUntimedASRChunk: Sendable {
+nonisolated struct MeetingUntimedASRChunk: Codable, Sendable {
     let sampleRange: Range<Int>
     let text: String
     let segmentTimings: [ASRSegmentTiming]

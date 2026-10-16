@@ -20,7 +20,7 @@ nonisolated enum MeetingConfigFingerprintEncoding {
 /// Immutable value snapshot of meeting post-processing ASR configuration. The pipeline builds it
 /// once per attempt and the meeting preparation owner constructs a fixed provider from it, so an
 /// active run never follows later dictation-setting changes.
-nonisolated struct MeetingFinalProcessingConfiguration: Equatable, Sendable {
+nonisolated struct MeetingFinalProcessingConfiguration: Codable, Equatable, Sendable {
     static let defaultASRModel = "parakeet-tdt-v2"
     static let defaultLanguageCode = "en"
     /// Mirrors `MeetingProcessingPipeline.pipelineVersion`; that class is `@MainActor`, so a

@@ -1,5 +1,7 @@
 import Foundation
 
+nonisolated enum MeetingDiarizerCheckpointError: Error { case invalidCheckpoint }
+
 /// Optional, backend-owned continuation of one stopped recording's diarizer state.
 /// The owner binds the opaque bytes to the immutable recording and model artifact before
 /// storing or restoring them. Implementations validate their own format and source length.

@@ -1484,6 +1484,16 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
             throw MeetingProcessingError.noRecoverableAudio
         }
+        // Only explicitly retained audio has a durable inference input. Load and authenticate
+        // its frozen pin off-main before consulting mutable settings or acquiring model scopes.
+        let pinTask = Task.detached(priority: .utility) {
+            try MeetingRetainedProcessingCheckpoint(sessionDirectory: sessionDirectory).read(session: session)?.pin
+        }
+        let retainedPin = try await withTaskCancellationHandler { try await pinTask.value } onCancel: { pinTask.cancel() }
+        try Task.checkCancellation()
+        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
 
         // The selection is read exactly once, here, and every later decision in this attempt uses
         // the local copy. Re-reading the preference after an await could split one attempt across
@@ -1491,7 +1501,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let backendID: MeetingBackendID
         let usesRecordingPin = self.usesRecordingBackendPin && session.processingAttempts.count <= 1
             && session.processingAttempts.allSatisfy({ $0.completedAt == nil })
-        if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
+        if let retainedPin {
+            backendID = retainedPin.backendID
+        } else if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
             backendID = MeetingBackendID(rawValue: recordingBackendID)
         } else {
             backendID = self.backendIDProvider(session.languageCode)
@@ -1506,6 +1518,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
 
         let declaredDescriptor = self.backendRegistry.descriptor(for: backendID)
+        if let retainedPin, let declaredDescriptor, retainedPin.backendVersion != declaredDescriptor.version {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
         if let descriptor = declaredDescriptor, !descriptor.supportedInputs.contains(.recordedChunks) {
             throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
         }
@@ -1523,12 +1538,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
             sessionDirectory: sessionDirectory,
-            configuration: PichiMeetingProviderFactory.configuration(
+            configuration: retainedPin?.configuration ?? PichiMeetingProviderFactory.configuration(
                 backendID: backendID,
                 languageCode: session.languageCode,
                 artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
                 diarizationEnabled: session.speakerLabelsEnabled ?? true
-            )
+            ),
+            privacyFingerprint: attemptRedactor?.checkpointIdentity
         )
         let backend = try self.backendRegistry.makeBackend(
             id: backendID,
@@ -1559,6 +1575,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 }
             )
         )
+        if let retainedPin, retainedPin.backendVersion != backend.descriptor.version {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
         guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
         }

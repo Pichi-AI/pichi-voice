@@ -46,6 +46,58 @@ struct MeetingSessionStoreCheckpointTests {
         let start = ProcessInfo.processInfo.systemUptime
         try await store.create(session)
         let createSeconds = ProcessInfo.processInfo.systemUptime - start
+        // Working-state recovery is opt-in through the captured storage mode, never today's
+        // settings. Use the actual encryption/private-write implementation in this harness.
+        let strictWorking = MeetingRetainedProcessingCheckpoint(sessionDirectory: root.appendingPathComponent("must-not-exist"))
+        check(try strictWorking.read(session: session) == nil, "Strict mode does not read working-state files")
+        check(!manager.fileExists(atPath: root.appendingPathComponent("must-not-exist").path), "Strict mode creates no directory")
+        var retained = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic retained recovery",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture microphone")),
+            startedAt: session.startedAt, timebase: timebase)
+        retained.audioStorageMode = .retainedFiles
+        retained.piiRedactionEnabled = false
+        retained.transcriptSegments = []
+        try await store.create(retained)
+        let retainedDirectory = try await store.sessionDirectory(for: retained.id)
+        let working = MeetingRetainedProcessingCheckpoint(sessionDirectory: retainedDirectory)
+        let configuration = MeetingFinalProcessingConfiguration(languageCode: retained.languageCode)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: retained.id,
+            backendID: .init(rawValue: "synthetic-retained"), backendVersion: "1", configuration: configuration,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        let privateText = Data("synthetic working text never exported".utf8)
+        let value = MeetingRetainedProcessingCheckpoint.Value(pin: pin, inputFingerprint: "synthetic-source-sha",
+            ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText)
+        try working.write(value, session: retained)
+        let checkpointURL = retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)
+        let keyURL = retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.keyFileName)
+        let ciphertext = try Data(contentsOf: checkpointURL)
+        check(ciphertext.range(of: privateText) == nil, "Working ASR text is not plaintext in the checkpoint")
+        check(try MeetingRetainedProcessingCheckpoint(sessionDirectory: retainedDirectory).read(session: retained)?.payload == privateText,
+              "A fresh store authenticates and restores exact working-state bytes")
+        check(try manager.attributesOfItem(atPath: checkpointURL.path)[.posixPermissions] as? NSNumber == 0o600,
+              "Checkpoint permissions are private")
+        check(try manager.attributesOfItem(atPath: keyURL.path)[.posixPermissions] as? NSNumber == 0o600,
+              "Checkpoint key permissions are private")
+        var damaged = ciphertext; damaged[damaged.count / 2] ^= 1
+        try damaged.write(to: checkpointURL)
+        do { _ = try working.read(session: retained); preconditionFailure("Corruption must not resume") }
+        catch { checks += 1 }
+        try ciphertext.write(to: checkpointURL)
+        var drifted = retained; drifted.piiRedactionEnabled = true
+        do { _ = try working.read(session: drifted); preconditionFailure("Privacy policy drift must not resume") }
+        catch { checks += 1 }
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try working.write(value, session: retained)
+        }
+        do { try await cancelled.value; preconditionFailure("Cancelled work must not publish") }
+        catch is CancellationError { checks += 1 }
+        check(try Data(contentsOf: checkpointURL) == ciphertext, "Cancelled checkpoint preserves the last complete generation")
+        try await store.deleteAudioFiles(for: retained.id)
+        check(!manager.fileExists(atPath: checkpointURL.path) && !manager.fileExists(atPath: keyURL.path),
+              "Deleting retained audio removes ciphertext and key")
+        check(try await store.load(id: retained.id) != nil, "Audio cleanup preserves the meeting manifest")
+        try await store.delete(id: retained.id)
         let compact = try Data(contentsOf: manifestURL)
         check(!compact.contains(10), "Canonical JSON has no formatting newlines, while escaped user newlines remain data")
         let legacyEncoder = JSONEncoder()
