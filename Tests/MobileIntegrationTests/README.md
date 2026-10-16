@@ -19,7 +19,12 @@ Without the combined gate, the test skips before opening audio or preparing mode
 The ordinary service preparation operations may install missing public model files;
 stage them first when network-free execution is required. ASR and diarization use
 their normal stores; privacy uses `models/privacy` beneath the staged asset root.
-The probe asserts A1 and fast32 identities, while preserving Whisper Tiny as ASR.
+The probe asserts A1 and fast32 identities. ASR defaults to Whisper Tiny; set optional
+`PICHI_COMBINED_MEETING_ASR` to an existing registered speech-model identifier, such
+as `gigaam-v3-eou`, to evaluate the same composition with that engine. Unknown or
+unsupported identifiers fail before model work. The selected identity is fixed for
+the attempt, asserted against every completed attempt and included in the metadata.
+This setting affects only isolated probe preferences, not the user's selected model.
 
 Stage these two private files, never commit personal fixtures:
 

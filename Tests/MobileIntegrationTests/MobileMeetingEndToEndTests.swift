@@ -239,6 +239,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         guard environment["PICHI_COMBINED_MEETING_E2E"] == "1" else {
             throw XCTSkip("Explicitly enable combined Russian fixture inference")
         }
+        let asrModel = try XCTUnwrap(SettingsStore.SpeechModel(rawValue:
+            environment["PICHI_COMBINED_MEETING_ASR"] ?? SettingsStore.SpeechModel.whisperTiny.rawValue),
+            "An explicit ASR identifier must resolve without a model fallback")
+        guard PichiMeetingProviderFactory.registeredBackendDescriptor(for: asrModel.rawValue) != nil else {
+            throw NSError(domain: "CombinedMeetingUnsupportedASR", code: 1)
+        }
         let assets = try MobileInferenceTestAssets.resolve()
         let referenceURL = assets.appendingPathComponent("audio/combined-ru-reference.json")
         guard (try referenceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 131_072 else {
@@ -269,7 +275,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         defer { defaults.removePersistentDomain(forName: name); try? FileManager.default.removeItem(at: root) }
         let settings = SettingsStore(defaults: defaults)
-        settings.selectedSpeechModel = .whisperTiny // preserve the deployed iPad engine
+        settings.selectedSpeechModel = asrModel
         settings.meetingRecordingDefaults.languageCode = "ru"
         settings.meetingSaveAudio = false
         settings.meetingSpeakerLabelsEnabled = true
@@ -304,7 +310,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         defer { sampler.cancel() }
         do {
             // The same service operation used by Settings, with pinned artifacts.
-            try await services.asr.downloadModel(.whisperTiny)
+            try await services.asr.downloadModel(asrModel)
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Combined Russian probe")
             let privacyReady = await privacy.isReady
             XCTAssertTrue(privacyReady)
@@ -342,7 +348,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let expectedDiarization = "Nemotron3-fast32-split-w8a8@82eb4c1e0ab67e1c7d8de5092aa42a8f74cbd7b8;model=25a90f97f254428d4b30374b76af9c74fdee8327;weight=99e2ae43ac6a513abf99951b35a75fb6bc51d2287c3c1af48a9657d917e57aed;config=32-4-40-264"
             XCTAssertFalse(diarizationModels.isEmpty, "The completed attempt must record its actual frozen diarizer lineage")
             XCTAssertTrue(diarizationModels.allSatisfy { $0.hasPrefix(expectedDiarization) }, "Combined evidence requires fast32 W8A8, including its pinned runtime and weight identity")
-            XCTAssertTrue(completed.processingAttempts.contains { $0.asrModel == SettingsStore.SpeechModel.whisperTiny.rawValue })
+            XCTAssertTrue(completed.processingAttempts.contains { $0.asrModel == asrModel.rawValue })
+            XCTAssertTrue(completed.processingAttempts.allSatisfy { $0.asrModel == asrModel.rawValue },
+                          "Every attempt must retain the selected ASR identity")
             XCTAssertFalse(completed.transcriptSegments.isEmpty, "Actual ASR must produce final protected text")
             XCTAssertTrue(completed.transcriptSegments.contains { $0.text.range(of: "[А-Яа-яЁё]", options: .regularExpression) != nil },
                           "Actual ASR must produce Russian text")
@@ -399,7 +407,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "strongReferenceQualityAssertionsApplied": assertsReferenceQuality,
                 "audioSHA256": audioDigest, "referenceSHA256": referenceDigest,
                 "testedRevision": environment["PICHI_COMBINED_MEETING_TESTED_REVISION"] ?? "unrecorded",
-                "asr": SettingsStore.SpeechModel.whisperTiny.rawValue,
+                "asr": asrModel.rawValue,
                 "privacyModel": PichiTranscriptPrivacyModelStore.descriptor.id,
                 "diarizationModels": diarizationModels,
                 "audioSeconds": duration, "postStopSeconds": stopSeconds,
