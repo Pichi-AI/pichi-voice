@@ -24,6 +24,12 @@ class WeakTextTests(unittest.TestCase):
             self.assertEqual(scorer.char_distance(left, right), scorer.word_edits(list(left), list(right))['distance'])
         self.assertEqual(scorer.char_distance('kitten', 'sitting'), 3)
 
+    def test_character_distance_beyond_machine_word(self):
+        reference = "абвг" * 100
+        self.assertEqual(scorer.char_distance(reference, reference), 0)
+        self.assertEqual(scorer.char_distance(reference, reference[:200] + "x" + reference[200:]), 1)
+        self.assertEqual(scorer.char_distance(reference, reference[:200] + reference[201:]), 1)
+
     def test_complete_turn_guard_does_not_trim_reference_text(self):
         turns = [dict(start=0, end=2, text='outside', clipped_start=True),
                  dict(start=2, end=5, text='one two'), dict(start=5, end=8, text='three'),
@@ -59,6 +65,7 @@ class WeakTextTests(unittest.TestCase):
         native = dict(clipID='c', audioSHA256='sha', units=[])
         result = scorer.score_clip(clip, dict(turns=[dict(start=0, end=10, text='full')]), native)
         self.assertIsNone(result['profiles'][1]['weak_wer'])
+        self.assertEqual(result['profiles'][1]['distance'], 0)
         self.assertIsNone(scorer.aggregate([result])[1]['weak_cer'])
 
 

@@ -157,7 +157,10 @@ def score_clip(clip: dict, reference: dict, native: dict) -> dict:
     profiles = []
     for guard in GUARDS:
         runs, exclusions = reference_runs(turns, duration, guard)
-        counters = Counter()
+        counters = Counter({key: 0 for key in (
+            "distance", "substitutions", "deletions", "insertions", "reference_tokens", "hypothesis_tokens",
+            "char_distance", "reference_characters", "hypothesis_characters",
+            "boundary_crossing_native_units_included")})
         window_rows = []
         eligible_native_ids: set[int] = set()
         for run in runs:
