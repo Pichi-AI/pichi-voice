@@ -271,8 +271,8 @@ final class MobileNavigationUITests: XCTestCase {
             capture("word-timing-\(appearance)-portrait-paragraph")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
-            XCTAssertTrue(body.waitForExistence(timeout: 5))
             try revealParagraphAboveNavigation(body, step: "word-timing-\(appearance)-landscape-reading")
+            XCTAssertTrue(body.exists)
             capture("word-timing-\(appearance)-landscape-paragraph")
         }
     }
@@ -281,6 +281,15 @@ final class MobileNavigationUITests: XCTestCase {
         let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
         XCTAssertTrue(scroll.exists)
         for attempt in 0..<6 {
+            // A phone in landscape may virtualize the paragraph below its header. Scroll
+            // it into the accessibility tree before asking for an off-screen element's frame.
+            if !paragraph.exists {
+                let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.65))
+                let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
+                from.press(forDuration: 0.05, thenDragTo: to)
+                capture("\(step)-reveal-\(attempt)")
+                continue
+            }
             let top = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : app.windows.firstMatch.frame.minY
             let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.windows.firstMatch.frame.maxY
             if paragraph.isHittable && paragraph.frame.minY >= top && paragraph.frame.maxY <= bottom { return }

@@ -579,6 +579,49 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         XCTAssertEqual(overlapped.segments[0].text, original[0].text)
     }
 
+    func testPostStopContinuityUsesIncomingSpeakerAndRetainsOriginalAnchorIDs() throws {
+        let track = UUID(), attempt = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let b = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-1")
+        let ranges: [(Double, Double)] = [(0, 6), (6, 6.3), (6.3, 12), (12, 12.3), (12.3, 18.3)]
+        let original = ranges.enumerated().map { index, range in
+            MeetingTranscriptSegment(id: UUID(),
+                start: .init(value: Int64((range.0 * 1_000).rounded()), timescale: 1_000),
+                end: .init(value: Int64((range.1 * 1_000).rounded()), timescale: 1_000),
+                sourceTrackID: track, speakerID: nil, text: "protected-\(index)", originalText: "Synthetic <PERSON>",
+                revision: 2, status: .final, overlap: .none, completeness: .complete, attributionState: .unassigned)
+        }
+        let result = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: original),
+            activity: [.init(token: a, start: 0, end: 6), .init(token: a, start: 6.3, end: 12),
+                       .init(token: b, start: 12.3, end: 18.3)],
+            epoch: epoch, attemptID: attempt, duration: 18.3, speakerNameFormat: "Speaker %lld")
+        XCTAssertEqual(result.segments.map(\.id), original.map(\.id))
+        XCTAssertEqual(result.segments.map(\.text), original.map(\.text))
+        XCTAssertEqual(result.segments.map(\.originalText), original.map(\.originalText))
+        XCTAssertEqual(result.segments.map(\.revision), original.map(\.revision))
+        XCTAssertEqual(result.segments[1].speakerID, result.segments[0].speakerID)
+        XCTAssertEqual(result.segments[3].speakerID, result.segments[4].speakerID)
+        XCTAssertNotEqual(result.segments[3].speakerID, result.segments[2].speakerID)
+        XCTAssertEqual(result.segments[1].speakerAttributionInference?.rule, .surroundingSpeaker)
+        XCTAssertEqual(result.segments[3].speakerAttributionInference?.rule, .incomingSpeaker)
+        XCTAssertEqual(result.segments[1].speakerAttributionInference?.precedingSegmentID, original[0].id)
+        XCTAssertEqual(result.segments[1].speakerAttributionInference?.followingSegmentID, original[2].id)
+        XCTAssertEqual(result.segments[3].speakerAttributionInference?.precedingSegmentID, original[2].id)
+        XCTAssertEqual(result.segments[3].speakerAttributionInference?.followingSegmentID, original[4].id)
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic continuity export",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1))
+        session.transcriptSegments = result.segments
+        session.speakers = result.speakers
+        let data = try MeetingTranscriptExporter.json(for: session)
+        let document = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let exported = try XCTUnwrap(document["segments"] as? [[String: Any]])
+        let inference = try XCTUnwrap(exported[3]["speakerAttributionInference"] as? [String: Any])
+        XCTAssertEqual(inference["rule"] as? String, "incomingSpeaker")
+        XCTAssertEqual(inference["followingSegmentID"] as? String, original[4].id.uuidString)
+    }
+
     func testStoppedRecordingReplayUsesExactBoundedRangesAndRejectsCorruptAudio() async throws {
         let source = ReplayFixture(totalSampleCount: 32_137)
         var counts: [Int] = []

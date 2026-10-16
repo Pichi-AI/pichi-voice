@@ -154,7 +154,8 @@ nonisolated enum MeetingTranscriptExporter {
                     overlap: $0.overlap.rawValue,
                     completeness: $0.completeness.rawValue,
                     isLikelyEcho: $0.isEcho,
-                    attributionState: $0.attributionState?.rawValue
+                    attributionState: $0.attributionState?.rawValue,
+                    speakerAttributionInference: $0.speakerAttributionInference
                 )
             }
         let document = ExportedTranscript(
@@ -245,6 +246,7 @@ private struct ExportedSegment: Codable {
     var completeness: String
     var isLikelyEcho: Bool
     var attributionState: String?
+    var speakerAttributionInference: MeetingSpeakerAttributionInference?
 }
 
 private struct ExportedTranscript: Codable {
