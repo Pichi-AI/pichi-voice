@@ -17,6 +17,8 @@ struct FluidServeGroundedSummaryTests {
             checks += 1
         }
         try self.checkSpeakerTurnPresentation(check)
+        try self.checkSpeakerAttributionProjection(check, root: base.appendingPathComponent("AttributionMeetings"))
+        try self.checkLongWordManifest(check, root: base.appendingPathComponent("LongMeetings"))
         let ordinaryClocks: [(String, TimeInterval)] = [("90", 90), ("12:30", 750), ("1:02:03", 3723)]
         let overflowClocks = ["\(Int.max):59", "\(Int.max / 60):\(Int.max % 60 + 1)"]
         for (text, expected) in ordinaryClocks {
@@ -194,6 +196,149 @@ struct FluidServeGroundedSummaryTests {
             check(changed.0 == 1 && !changed.1.contains("Versioned \(language) synthetic template."), "Changed capture language requires template regeneration")
         }
         print("FluidServe grounded summary tests: \(checks) checks passed")
+    }
+
+    /// Compare the actual read-only command with the application's canonical reading projection.
+    private static func checkSpeakerAttributionProjection(_ check: (Bool, String) -> Void, root: URL) throws {
+        let manager = FileManager.default
+        let track = UUID(), first = UUID(), second = UUID(), mergedSecond = UUID()
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0, generation: 0)
+        let a = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "anonymous-a")
+        let b = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "anonymous-b")
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic attribution projection",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        session.state = .completed
+        session.endedAt = session.startedAt.addingTimeInterval(60)
+        session.audioTracks = [.init(id: track, kind: .microphone, sourceIdentifier: "fixture", sourceDisplayName: "Fixture",
+            format: nil, timebase: session.timebase, health: .waiting, chunks: [])]
+        session.speakers = [
+            .init(id: first, displayName: "First", diarizationClusterID: nil, trackKind: .microphone, isLocalUser: false, identityCandidates: []),
+            .init(id: second, displayName: "Saved owner alias", diarizationClusterID: nil, trackKind: .microphone, isLocalUser: true, identityCandidates: []),
+            .init(id: mergedSecond, displayName: "Merged anonymous slot", diarizationClusterID: nil,
+                  trackKind: .microphone, isLocalUser: false, identityCandidates: [], mergedIntoSpeakerID: second),
+        ]
+        func unit(_ index: Int, text: String, selected: MeetingBackendSpeakerToken?, raw: MeetingBackendSpeakerAssignment,
+                  relation: MeetingSpeakerAttributionRelation, rule: MeetingSpeakerAttributionRule,
+                  background: [MeetingBackendSpeakerToken] = []) -> MeetingTranscriptSegment {
+            let start = Double(index * 2)
+            let decision = MeetingSpeakerAttributionDecision(unitID: "native-unit-\(index)", rawAssignment: raw,
+                candidates: [a, b].map { .init(token: $0, intervals: [.init(start: start, end: start + 1)], supportSeconds: 1, isSuppressed: false) },
+                activeSupportSeconds: 1, simultaneousIntervals: [], relation: relation, selectedToken: selected,
+                rule: rule, cueUnitIDs: [], backgroundTokens: background, policyVersion: 1, policyFingerprint: "synthetic-policy")
+            return .init(id: UUID(), start: .init(value: Int64(start * 1000), timescale: 1000),
+                end: .init(value: Int64((start + 1) * 1000), timescale: 1000), sourceTrackID: track,
+                speakerID: selected == a ? first : selected == b ? mergedSecond : nil, text: text,
+                revision: 0, status: .final, overlap: selected == nil ? .ambiguous : .none, completeness: .complete,
+                attributionState: selected == nil ? .overlappingSpeakers : .assigned,
+                nativePrecision: .word, nativeUnitID: decision.unitID, nativeTiming: .init(start: start, end: start + 1),
+                speakerAttribution: .init(decision: decision, speakerIDs: [a: first, b: mergedSecond]))
+        }
+        let foreground = unit(0, text: "Foreground fixture.", selected: b, raw: .ambiguous([a, b]),
+                              relation: .simultaneous, rule: .briefInterruption, background: [a])
+        let estimated = unit(1, text: "Estimated fixture.", selected: a, raw: .unassigned,
+                             relation: .none, rule: .incomingSpeaker)
+        let multiple = unit(2, text: "Multiple fixture.", selected: nil, raw: .ambiguous([a, b]),
+                            relation: .simultaneous, rule: .ambiguous)
+        var corrected = foreground
+        corrected.id = UUID()
+        corrected.start = .init(value: 6000, timescale: 1000)
+        corrected.end = .init(value: 7000, timescale: 1000)
+        corrected.nativeTiming = .init(start: 6, end: 7)
+        corrected.nativeUnitID = "corrected-native-unit"
+        corrected.text = "Manually corrected fixture."
+        corrected.originalText = "Private initial text"
+        corrected.revision = 1
+        corrected.speakerID = first
+        corrected.speakerAttribution = nil
+        session.transcriptSegments = [foreground, estimated, multiple, corrected]
+        try session.validateTranscriptStructure()
+        let directory = root.appendingPathComponent(session.id.uuidString)
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let manifest = try encoder.encode(session)
+        let file = directory.appendingPathComponent("session.json")
+        try manifest.write(to: file)
+        let entries = try FluidServeMeetings.checkedEntries(root: root)
+        check(entries.count == 1, "Canonical attribution is admitted through the real persisted reader")
+        let meeting = entries[0].meeting
+        check(FluidServeMeetings.transcript(for: meeting) == MeetingTranscriptExporter.text(for: session),
+              "CLI text shares the application's foreground, estimate, multi-speaker and corrected labels")
+        let expectedLabels = ["You (interrupting; background: First)", "Estimated speaker: First", "Simultaneous speech: First + You", "First"]
+        check(meeting.turns.map { FluidServeMeetings.speakerLabel(for: $0, in: meeting) } == expectedLabels,
+              "Labels retain uncertainty, the known background and resolved owner/merged aliases")
+        let show = FluidServeCommand.run(arguments: ["meet", "show", "latest"], root: root, accessEnabled: true)
+        check(show.exitCode == 0 && show.output.hasSuffix(MeetingTranscriptExporter.text(for: session)),
+              "Actual CLI text uses the shared projection")
+        let searched = FluidServeCommand.run(arguments: ["meet", "search", "fixture"], root: root, accessEnabled: true)
+        check(searched.exitCode == 0 && expectedLabels.dropLast().allSatisfy { searched.output.contains($0) },
+              "Search results carry the same qualified labels")
+        let json = FluidServeCommand.run(arguments: ["meet", "show", "latest", "--json"], root: root, accessEnabled: true)
+        let document = try JSONSerialization.jsonObject(with: Data(json.output.utf8)) as! [String: Any]
+        let turns = document["turns"] as! [[String: Any]]
+        let exported = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: session)) as! [String: Any]
+        let canonical = exported["segments"] as! [[String: Any]]
+        check(json.exitCode == 0 && turns.count == session.transcriptSegments.count, "CLI JSON retains every native timed fragment")
+        for (index, turn) in turns.enumerated() {
+            var withoutLabel = turn
+            check(withoutLabel.removeValue(forKey: "speaker") as? String == expectedLabels[index], "JSON keeps the legacy speaker field with the qualified shared label")
+            check(NSDictionary(dictionary: withoutLabel).isEqual(to: canonical[index]), "All JSON native/provenance fields reuse the exact canonical export projection")
+        }
+        let foregroundMetadata = turns[0]["speakerAttribution"] as! [String: Any]
+        check(foregroundMetadata["selectedSpeakerID"] as? String == second.uuidString,
+              "JSON selected foreground resolves the merged speaker to the active identity")
+        check(turns[3]["speakerAttribution"] == nil && turns[3]["revision"] as? Int == 1,
+              "A manual correction is not relabeled by stale automatic provenance")
+        check(!json.output.contains("Private initial text"), "CLI JSON does not expose the prior corrected wording")
+        let range = try FluidServeMeetings.jsonTurns(for: meeting, from: 2, to: 4)
+        check(range.map { $0["text"] as! String } == [estimated.text, multiple.text], "JSON range retains native start filtering")
+        check(try Data(contentsOf: file) == manifest, "Text, JSON and search leave persisted evidence unchanged")
+    }
+
+    /// Genuine production codec payload, not whitespace padding: long word-level transcripts
+    /// with compact provenance must remain readable within explicit aggregate limits.
+    private static func checkLongWordManifest(_ check: (Bool, String) -> Void, root: URL) throws {
+        let track = UUID(), speaker = UUID()
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic long word transcript",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        session.state = .completed
+        session.endedAt = session.startedAt.addingTimeInterval(7200)
+        session.audioTracks = [.init(id: track, kind: .microphone, sourceIdentifier: "fixture", sourceDisplayName: "Fixture",
+            format: nil, timebase: session.timebase, health: .waiting, chunks: [])]
+        session.speakers = [.init(id: speaker, displayName: "Synthetic speaker", diarizationClusterID: nil,
+                                 trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
+        session.transcriptSegments = (0..<10_000).map { index in
+            let start = Double(index) * 0.6
+            return .init(id: UUID(), start: .init(value: Int64(index * 600), timescale: 1000),
+                end: .init(value: Int64(index * 600 + 400), timescale: 1000), sourceTrackID: track,
+                speakerID: speaker, text: index == 9999 ? "LongManifestLastWord" : "SyntheticWord\(index)",
+                revision: 0, status: .final, overlap: .none, completeness: .complete,
+                attributionState: .assigned, nativePrecision: .word,
+                nativeUnitID: "synthetic-native-word-\(index)", nativeTiming: .init(start: start, end: start + 0.4))
+        }
+        let directory = root.appendingPathComponent(session.id.uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        let bytes = try encoder.encode(session)
+        check(bytes.count > 4 * 1024 * 1024 && bytes.count < FluidServeMeetings.maximumManifestBytes,
+              "The real compact 10,000-word fixture exceeds the previous 4 MiB reader limit")
+        try bytes.write(to: directory.appendingPathComponent("session.json"))
+        let entries = try FluidServeMeetings.checkedEntries(root: root)
+        check(entries.count == 1 && entries[0].meeting.turns.count == 10_000, "Long native word transcripts remain fully readable")
+        let text = FluidServeCommand.run(arguments: ["meet", "show", "latest"], root: root, accessEnabled: true)
+        check(text.exitCode == 0 && text.output.contains("LongManifestLastWord"), "Long transcript text reaches the final native word")
+        let search = FluidServeCommand.run(arguments: ["meet", "search", "LongManifestLastWord"], root: root, accessEnabled: true)
+        check(search.exitCode == 0 && search.output.contains("LongManifestLastWord"), "Long transcript search remains available")
+        let json = FluidServeCommand.run(arguments: ["meet", "show", "latest", "--json"], root: root, accessEnabled: true)
+        let object = try JSONSerialization.jsonObject(with: Data(json.output.utf8)) as! [String: Any]
+        let turns = object["turns"] as! [[String: Any]]
+        check(json.exitCode == 0 && turns.count == 10_000 && turns.last?["text"] as? String == "LongManifestLastWord",
+              "Long JSON projection preserves every fragment and ends at the final word")
+        check(FluidServeMeetings.maximumManifestBytes <= FluidServeMeetings.maximumTotalReadBytes,
+              "A per-file allowance never bypasses the unchanged aggregate read budget")
     }
 
     /// Uses production codecs/projection/export without an app host, audio, models or user data.

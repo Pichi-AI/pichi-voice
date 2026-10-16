@@ -8,7 +8,7 @@ struct FluidServeContainmentTests {
     private static let foreignSentinel = "ForeignFixtureMustNeverBeServed7E6B"
     private static let transcriptSentinel = "ValidSyntheticTranscript35A2"
     private static let summarySentinel = "ValidSyntheticGroundedSummaryA89C"
-    private static let manifestLimit = 4 * 1024 * 1024
+    private static let manifestLimit = FluidServeMeetings.maximumManifestBytes
     private static let summaryLimit = 2 * 1024 * 1024
     private static let directoryLimit = 1024
     private static let sessionLimit = 256
