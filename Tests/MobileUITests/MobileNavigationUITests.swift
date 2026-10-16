@@ -305,13 +305,16 @@ final class MobileNavigationUITests: XCTestCase {
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
             app.launch()
             waitForOrientation(portrait: true)
+            capture("attribution-\(language)-ready")
             openNavigation("history", title: historyTitle)
+            capture("attribution-\(language)-history")
             let meeting = app.buttons["history.session.\(fixtureID)"]
             guard meeting.waitForExistence(timeout: 5) else {
                 throw XCTSkip("Stage the synthetic GeneralizedAttributionMeeting.json in the simulator meeting store")
             }
             meeting.tap()
             XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+            capture("attribution-\(language)-opened")
             let label = app.staticTexts[interruptionLabel].firstMatch
             XCTAssertTrue(label.waitForExistence(timeout: 5), "The foreground label must retain the background speaker")
             let mixedText = app.staticTexts["Да, уточню."].firstMatch
