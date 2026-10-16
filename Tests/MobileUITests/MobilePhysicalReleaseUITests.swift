@@ -395,7 +395,6 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         try require(player.duration.isFinite && player.duration >= 1, "The speech fixture must be valid")
         player.numberOfLoops = -1
         player.volume = 0.8
-        try require(player.prepareToPlay(), "The runner must prepare synthetic playback")
         let checkpoints = support.appendingPathComponent("VisibleRecordingUI", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: checkpoints, withIntermediateDirectories: true)
@@ -454,6 +453,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             changedPlaybackCategory = true
             try audioSession.setActive(true)
             ownsPlaybackSession = true
+            try require(player.prepareToPlay(), "The foreground runner must prepare synthetic playback")
             try require(player.play(), "The runner must start real synthetic speech playback")
             app.activate()
             try verifyVisibleRecording(in: app)
