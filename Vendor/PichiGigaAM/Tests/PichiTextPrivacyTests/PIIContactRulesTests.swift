@@ -87,5 +87,9 @@ final class PIIContactRulesTests: XCTestCase {
         let ner = [PIINERSpan(range: (partial as NSString).range(of: "synthetic"), label: "PHONE", score: 0.2)]
         let output = try PIIRedactor.redact(partial, ner: ner)
         XCTAssertLessThanOrEqual(try XCTUnwrap(PIIRedactor.provisionalSafePrefix(in: partial, ner: ner, redactedSpans: output.spans)), ner[0].range.location)
+        let punctuation = "обсуждаем !!! инструкцию и уточняем вопросы после встречи."
+        let secret = [PIINERSpan(range: (punctuation as NSString).range(of: "!!!"), label: "SECRET", score: 0.2)]
+        let secretOutput = try PIIRedactor.redact(punctuation, ner: secret)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(PIIRedactor.provisionalSafePrefix(in: punctuation, ner: secret, redactedSpans: secretOutput.spans)), secret[0].range.location)
     }
 }
