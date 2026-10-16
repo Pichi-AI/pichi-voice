@@ -258,8 +258,8 @@ final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
     }
 
     private let engine = AVAudioEngine()
-    private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.control", qos: .userInitiated)
-    private let pcmQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.pcm", qos: .userInitiated)
+    private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.control", qos: .userInitiated, autoreleaseFrequency: .workItem)
+    private let pcmQueue = DispatchQueue(label: "com.fluidvoice.meeting.ios.pcm", qos: .userInitiated, autoreleaseFrequency: .workItem)
     private let gate = MeetingPCMIntakeGate()
     private let producerGroup = DispatchGroup()
     private let lock = NSLock()
@@ -406,6 +406,7 @@ final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
             self.controlQueue.async {
                 self.engine.stop()
                 if self.installedTap { self.engine.inputNode.removeTap(onBus: 0); self.installedTap = false }
+                self.engine.reset()
                 for observer in self.observers { NotificationCenter.default.removeObserver(observer) }
                 self.observers.removeAll()
                 continuation.resume()
@@ -441,24 +442,28 @@ final nonisolated class IOSMeetingMicrophoneRuntime: @unchecked Sendable {
                         self.trace("runtime.restore.before")
 #endif
                         var restorationFailure: Error?
-                        func restore(_ operation: () throws -> Void) {
-                            do { try operation() } catch { restorationFailure = restorationFailure ?? error }
+                        func restore(_ stage: String, _ operation: () throws -> Void) {
+                            do { try operation() } catch {
+                                restorationFailure = restorationFailure ?? error
+                                DebugLogger.shared.warning("audio_restore_failed stage=\(stage) code=\((error as NSError).code)", source: "IOSMeetingCaptureEngine")
+                            }
                         }
                         // Attempt every restoration even when one setter fails. The engine/tap
                         // are already stopped, so restoring a vanished input to automatic is safe.
+                        // Deactivate before preference changes can start a hardware route change.
+                        restore("deactivate") { try session.setActive(false, options: .notifyOthersOnDeactivation) }
                         let priorInput = self.savedPreferredInput.flatMap { prior in
                             session.availableInputs?.first(where: { $0.uid == prior.uid })
                         }
-                        restore { try session.setPreferredInput(priorInput) }
+                        restore("preferred_input") { try session.setPreferredInput(priorInput) }
                         if let rate = self.savedPreferredSampleRate, rate > 0 {
-                            restore { try session.setPreferredSampleRate(rate) }
+                            restore("sample_rate") { try session.setPreferredSampleRate(rate) }
                         }
                         if let duration = self.savedPreferredIOBufferDuration, duration > 0 {
-                            restore { try session.setPreferredIOBufferDuration(duration) }
+                            restore("buffer_duration") { try session.setPreferredIOBufferDuration(duration) }
                         }
-                        restore { try session.setActive(false, options: .notifyOthersOnDeactivation) }
                         if let category = self.savedCategory, let mode = self.savedMode, let options = self.savedOptions {
-                            restore { try session.setCategory(category, mode: mode, options: options) }
+                            restore("category") { try session.setCategory(category, mode: mode, options: options) }
                         }
                         self.configuredSession = false
 #if DEBUG

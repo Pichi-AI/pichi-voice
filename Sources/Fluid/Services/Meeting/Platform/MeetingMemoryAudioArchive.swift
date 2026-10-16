@@ -75,19 +75,22 @@ final nonisolated class MeetingMemoryAudioArchive: MeetingPCMReplaySource, @unch
                                          channels: 1, interleaved: false),
               let tail = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(segmentSeconds * Self.sampleRate))
         else { throw MeetingMemoryAudioArchiveError.invalidConfiguration }
-        guard let compressed = AVAudioFormat(settings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
-                                                        AVSampleRateKey: Self.sampleRate, AVNumberOfChannelsKey: 1]),
-              let probe = AVAudioConverter(from: format, to: compressed) else {
-            throw MeetingMemoryAudioArchiveError.conversionFailed
-        }
-        let supported = Set((probe.applicableEncodeBitRates ?? []).map(\.intValue))
-        guard let bitRate = [48_000, 32_000].first(where: { supported.contains($0) }) else {
-            throw MeetingMemoryAudioArchiveError.conversionFailed
-        }
-        probe.bitRate = bitRate
-        probe.bitRateStrategy = AVAudioBitRateStrategy_Constant
-        guard probe.bitRate == bitRate, probe.maximumOutputPacketSize > 0, probe.maximumOutputPacketSize <= 4096 else {
-            throw MeetingMemoryAudioArchiveError.conversionFailed
+        let (compressed, bitRate): (AVAudioFormat, Int) = try autoreleasepool {
+            guard let compressed = AVAudioFormat(settings: [AVFormatIDKey: kAudioFormatMPEG4AAC,
+                                                            AVSampleRateKey: Self.sampleRate, AVNumberOfChannelsKey: 1]),
+                  let probe = AVAudioConverter(from: format, to: compressed) else {
+                throw MeetingMemoryAudioArchiveError.conversionFailed
+            }
+            let supported = Set((probe.applicableEncodeBitRates ?? []).map(\.intValue))
+            guard let bitRate = [48_000, 32_000].first(where: { supported.contains($0) }) else {
+                throw MeetingMemoryAudioArchiveError.conversionFailed
+            }
+            probe.bitRate = bitRate
+            probe.bitRateStrategy = AVAudioBitRateStrategy_Constant
+            guard probe.bitRate == bitRate, probe.maximumOutputPacketSize > 0, probe.maximumOutputPacketSize <= 4096 else {
+                throw MeetingMemoryAudioArchiveError.conversionFailed
+            }
+            return (compressed, bitRate)
         }
         self.maximumRetainedBytes = maximumRetainedBytes
         self.segmentSamples = segmentSeconds * Self.sampleRate
