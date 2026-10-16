@@ -18,7 +18,11 @@ import sys
 source = Path('Sources/Fluid/Theme/ThemeEnvironment.swift').read_text()
 marker = 'struct AdaptiveAppTheme<'
 assert source.count(marker) == 1
-Path(sys.argv[1]).write_text(source[:source.index(marker)])
+color_marker = '// MARK: - Color Hex Initializer'
+assert source.count(color_marker) == 1
+# The real color helpers read only this inert accent fixture, never installed preferences.
+fixture = '\nfinal class SettingsStore { static let shared = SettingsStore(); let accentColor: Color = .blue }\n'
+Path(sys.argv[1]).write_text(source[:source.index(marker)] + source[source.index(color_marker):] + fixture)
 PY_THEME
 xcrun swiftc -parse-as-library \
     Sources/Fluid/Localization/PichiLocalization.swift \
