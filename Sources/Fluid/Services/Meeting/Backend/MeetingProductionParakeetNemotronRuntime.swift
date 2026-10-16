@@ -638,6 +638,30 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         // before CoreML touches it (plan §5).
         let locator = self.modelLocator
         let compiledURL = try await self.compiledNemotron.compiledModel(for: artifact) { try locator.recheck($0) }
+        if artifact.compiledModelURL != nil {
+            // Keep the existing attempt/phase owner, ASR sequencing and per-track factory contract.
+            // CPU/GPU is supported without assuming an ANE (the A10X iPad has none).
+            // CoreML errors remain errors; this route never substitutes legacy weights.
+            let configuration = MLModelConfiguration()
+            configuration.computeUnits = .all
+            let loadBegan = MeetingPCMRuntimeDiagnostics.begin(.load)
+            let model = try MLModel(contentsOf: compiledURL, configuration: configuration)
+            try Task.checkCancellation()
+            let silence = try MeetingModelInstaller.validatedSilenceEmbedding(
+                at: MeetingModelInstaller.silenceEmbeddingURL(besides: artifact.packageURL))
+            let projectionData = try Data(contentsOf: artifact.packageURL.appendingPathComponent(MeetingNemotronModelLocator.projectionFileName))
+            guard projectionData.count == 1024 * 512 * MemoryLayout<Float>.size else { throw MeetingModelInstaller.InstallError.wrongPackage }
+            let projection = projectionData.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+            guard let config = Nemotron3Config.preset(named: "fast32-split-w8a8") else {
+                throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "runtimePresetMissing")
+            }
+            let models = try Nemotron3Models(config: config, model: model, silenceEmbedding: silence, preEncodeProjection: projection)
+            MeetingPCMRuntimeDiagnostics.completed(.load, since: loadBegan, sourceBytes: artifact.totalByteCount)
+            let factory = Fast32NemotronDiarizerFactory(config: config, models: models)
+            defer { factory.cleanup() }
+            try Task.checkCancellation()
+            return try await body(factory)
+        }
         // The checkpoint's trained cache settings: one silence frame per speaker, filled with its
         // learned silence embedding. Anything else splits one voice across several slots.
         let config = try SortformerConfig.nemotron(

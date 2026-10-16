@@ -25,10 +25,10 @@ final class MeetingDiarizationModelStore: ObservableObject {
 
     static let shared = MeetingDiarizationModelStore()
 
-    static let repositoryOwner = "altic-dev"
+    static let repositoryOwner = "FluidInference"
     static let repositoryName = "nemotron-3-diarization-coreml"
     /// Pinned so a later push to the repository can never change an installed app's model.
-    static let repositoryRevision = "8976c3c40a752cd6468a08f2aa08626770bc048f"
+    static let repositoryRevision = "25a90f97f254428d4b30374b76af9c74fdee8327"
 
     typealias Validate = @Sendable () throws -> MeetingNemotronModelArtifact
     typealias Install = @Sendable (_ progress: @escaping @Sendable (Double) -> Void) async throws
@@ -196,18 +196,24 @@ final class MeetingDiarizationModelStore: ObservableObject {
             repo: Self.repositoryName,
             revision: Self.repositoryRevision,
             requiredItems: [
-                .init(path: MeetingNemotronModelLocator.packageFileName, isDirectory: true),
-                .init(path: MeetingModelInstaller.silenceEmbeddingFileName, isDirectory: false),
+                .init(path: MeetingNemotronModelLocator.remoteModelPath, isDirectory: true),
+                .init(path: "learnable_sil_emb.bin", isDirectory: false),
+                .init(path: MeetingNemotronModelLocator.projectionFileName, isDirectory: false),
             ]
         )
         try await downloader.ensureModelsPresent(at: staging) { fraction, _ in progress(fraction) }
         let downloaded = staging.appendingPathComponent(MeetingNemotronModelLocator.packageFileName, isDirectory: true)
         do {
             let installed = try await Task.detached(priority: .utility) {
-                try MeetingModelInstaller.installSilenceEmbedding(
-                    from: staging.appendingPathComponent(MeetingModelInstaller.silenceEmbeddingFileName),
-                    besides: destination
-                )
+                // Publish weights and both host assets in one immutable atomic directory swap.
+                try? FileManager.default.removeItem(at: downloaded)
+                try FileManager.default.createDirectory(at: downloaded, withIntermediateDirectories: false)
+                try FileManager.default.copyItem(
+                    at: staging.appendingPathComponent(MeetingNemotronModelLocator.remoteModelPath),
+                    to: downloaded.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName))
+                for name in ["learnable_sil_emb.bin", MeetingNemotronModelLocator.projectionFileName] {
+                    try FileManager.default.copyItem(at: staging.appendingPathComponent(name), to: downloaded.appendingPathComponent(name))
+                }
                 return try MeetingModelInstaller.install(from: downloaded, to: destination)
             }.value
             try? FileManager.default.removeItem(at: staging)

@@ -35,6 +35,14 @@ actor MeetingNemotronCompiledModelOwner {
         guard try recheck(artifact) == artifact else {
             throw MeetingNemotronModelReadinessError.artifactChanged(path: artifact.packageURL.path)
         }
+        if let suppliedCompiledURL = artifact.compiledModelURL {
+            // The immutable bundle also owns its pinned host projection and silence embedding.
+            // It is installed storage, not our derivative: never remove it on cleanup.
+            try Self.validateDerivative(at: suppliedCompiledURL)
+            self.boundArtifact = artifact
+            try Task.checkCancellation()
+            return suppliedCompiledURL
+        }
         if let compiledURL {
             try Self.validateDerivative(at: compiledURL)
             try Task.checkCancellation()

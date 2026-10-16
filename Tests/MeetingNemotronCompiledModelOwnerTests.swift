@@ -89,6 +89,22 @@ struct MeetingNemotronCompiledModelOwnerTests {
             try require(try directories(in: base).isEmpty, "Terminal cleanup removes only owned derivatives")
             try require(FileManager.default.fileExists(atPath: artifact.packageURL.path), "Source remains installed")
         }
+        try await subtest(root, "author-compiled-bundle-never-recompiled-or-deleted") { base, _, _ in
+            let bundle = base.appendingPathComponent("source.nemotronbundle", isDirectory: true)
+            let model = bundle.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName, isDirectory: true)
+            try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
+            try Data("synthetic-mil".utf8).write(to: model.appendingPathComponent("model.mil"))
+            try Data("synthetic-compiled-descriptor".utf8).write(to: model.appendingPathComponent("coremldata.bin"))
+            let locator = MeetingNemotronModelLocator(injectedURL: bundle)
+            let artifact = try locator.locate()
+            let counter = Counter()
+            let owner = MeetingNemotronCompiledModelOwner(baseDirectory: base) { _, _ in _ = await counter.increment() }
+            let supplied = try await owner.compiledModel(for: artifact) { try locator.recheck($0) }
+            try require(supplied == model, "Author-compiled model must be passed directly")
+            try require(await counter.count == 0, "Author-compiled bundle cannot enter package compiler")
+            await owner.cancelAndCleanup()
+            try require(FileManager.default.fileExists(atPath: model.path), "Cleanup cannot delete installed compiled model")
+        }
         try await subtest(root, "concurrent-single-compile") { base, locator, artifact in
             let counter = Counter(); let latch = Latch()
             let owner = MeetingNemotronCompiledModelOwner(baseDirectory: base) { _, target in
@@ -232,6 +248,6 @@ struct MeetingNemotronCompiledModelOwnerTests {
             owner = nil
             try require(try directories(in: base).isEmpty, "Ending the joined runtime releases its temporary derivative")
         }
-        print("11 compiled model ownership tests passed")
+        print("12 compiled model ownership tests passed")
     }
 }
