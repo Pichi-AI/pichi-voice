@@ -420,6 +420,8 @@
 /* End Pichi mobile target */
 /* Begin PBXBuildFile section */
 		C15C00000000000000000001 /* MeetingTranscriptAssemblerTests.swift in Mobile Sources */ = {isa = PBXBuildFile; fileRef = C2B100000000000000000001 /* MeetingTranscriptAssemblerTests.swift */; };
+		24A860554AB74B359B42E774 /* MeetingTimelineMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55E25E8BC76432CBDAE083E /* MeetingTimelineMigrationTests.swift */; };
+		6C21B387644E4A79A2D75D6D /* MeetingAgentLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AF7F1D652B24F68848E7820 /* MeetingAgentLocalizationTests.swift */; };
 		A13F57000000000000000002 /* WaveformSimulationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13F57000000000000000001 /* WaveformSimulationTests.swift */; };
 		F111E0000000000000000002 /* FillerWordDefaultsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F111E0000000000000000001 /* FillerWordDefaultsTests.swift */; };
 		70D2A2BBCF1C4EE5A4182AAE /* MobileRegisteredModelInferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA4382B668441DE9211C10F /* MobileRegisteredModelInferenceTests.swift */; };
@@ -636,6 +638,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C55E25E8BC76432CBDAE083E /* MeetingTimelineMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingTimelineMigrationTests.swift; sourceTree = "<group>"; };
+		5AF7F1D652B24F68848E7820 /* MeetingAgentLocalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAgentLocalizationTests.swift; sourceTree = "<group>"; };
 		A13F57000000000000000001 /* WaveformSimulationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformSimulationTests.swift; sourceTree = "<group>"; };
 		F111E0000000000000000001 /* FillerWordDefaultsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FillerWordDefaultsTests.swift; sourceTree = "<group>"; };
 		DBA4382B668441DE9211C10F /* MobileRegisteredModelInferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRegisteredModelInferenceTests.swift; sourceTree = "<group>"; };
@@ -980,6 +984,8 @@
 				AB492EFF712C42EE91601003 /* MeetingSummaryDownloadTests.swift */,
 				AB492EFF712C42EE91601001 /* MeetingSummaryInputTests.swift */,
 				FD1100000000000000000001 /* PichiMeetingSummaryLifetimeTests.swift */,
+				C55E25E8BC76432CBDAE083E /* MeetingTimelineMigrationTests.swift */,
+				5AF7F1D652B24F68848E7820 /* MeetingAgentLocalizationTests.swift */,
 				F9D010000000000000000001 /* PichiMeetingSummaryTests.swift */,
 				EAA200000000000000000001 /* CloudTextProviderTests.swift */,
 				C71A40000000000000000001 /* OllamaChatTransportTests.swift */,
@@ -1416,6 +1422,8 @@
 				A51A30000000000000000002 /* GigaAMModelStoreDownloadTests.swift in Sources */,
 				AB492EFF712C42EE91601002 /* MeetingSummaryInputTests.swift in Sources */,
 				FD1100000000000000000002 /* PichiMeetingSummaryLifetimeTests.swift in Sources */,
+				24A860554AB74B359B42E774 /* MeetingTimelineMigrationTests.swift in Sources */,
+				6C21B387644E4A79A2D75D6D /* MeetingAgentLocalizationTests.swift in Sources */,
 				F9D010000000000000000002 /* PichiMeetingSummaryTests.swift in Sources */,
 				EAA200000000000000000002 /* CloudTextProviderTests.swift in Sources */,
 				C71A40000000000000000002 /* OllamaChatTransportTests.swift in Sources */,

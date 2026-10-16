@@ -10,6 +10,7 @@ final class SettingsStore: ObservableObject {
     let themePreference = ThemePreference()
     let accentColorOption = AccentColorOption.brand
     let accentColor = Color.purple
+    var userTypingWPM = 55 // Inert target for the exact WPM editor presentation.
 }
 
 // The appearance observer is real; this icon dependency never touches an app
@@ -242,8 +243,13 @@ struct UIContrastTests {
             try MeetingSpeakerPaletteContrastTests.run()
             return
         }
+        if CommandLine.arguments.contains("--native-input-presentations-only") {
+            try await NativeInputPresentationContrastTests.run(directory: directory)
+            return
+        }
         if CommandLine.arguments.contains("--participant-input-only") {
             try await ParticipantInputContrastTests.run(directory: directory)
+            try await NativeInputPresentationContrastTests.run(directory: directory)
             return
         }
         if CommandLine.arguments.contains("--segmented-only") {

@@ -467,6 +467,50 @@ Path(sys.argv[1]).with_name('SpeakerPaletteProductionSource.json').write_text(js
     'nativeMeetingPixelReplay': 'SKIP',
 }, indent=2) + '\n')
 
+# Each presentation owns its own native appearance. Keep the complete roots;
+# outside hosts deliberately pass only custom theme, never an appTheme mask.
+input_revision = os.environ.get('PICHI_NATIVE_INPUT_PRESENTATION_LEGACY_REVISION')
+input_paths = ['Sources/Fluid/UI/StatsView.swift', 'Sources/Fluid/UI/MeetingSessionCanvases.swift',
+               'Sources/Fluid/UI/CustomDictionaryView.swift',
+               'Sources/Fluid/UI/MeetingWorkspaceComponents.swift']
+input_sources = {path: subprocess.check_output(['git', 'show', f'{input_revision}:{path}'], text=True)
+                 if input_revision else Path(path).read_text() for path in input_paths}
+def input_part(path, start, end=None):
+    source = input_sources[path]
+    assert source.count(start) == 1, f'Presentation boundary changed: {start}'
+    first = source.index(start)
+    return source[first:source.index(end, first)] if end else source[first:]
+wpm_root = input_part(input_paths[0], '    private var wpmEditorPopover: some View {', '    // MARK: - Total Words Card')
+wpm_root = wpm_root.replace('private var wpmEditorPopover: some View', 'var body: some View', 1)
+transcript_root = input_part(input_paths[1], 'struct MeetingTranscriptTextEditor: View {')
+dictionary_root = input_part(input_paths[2], 'struct EditDictionaryEntrySheet: View {')
+dictionary_chrome = input_part(input_paths[2], 'private struct DictionaryInputChrome: ViewModifier {',
+                              'private struct DictionaryFocusDismissMonitor: NSViewRepresentable {')
+dictionary_preview = input_part(input_paths[2], 'private struct DictionaryReplacementPreview: View {', '// MARK: - Edit Entry Sheet')
+dictionary_parser = input_part(input_paths[2], 'enum CustomDictionaryManualEntry {', 'nonisolated enum DictionaryPronunciationRevisionPolicy {')
+meeting_actions = input_part(input_paths[3], '/// Pointer-only feedback;', 'enum MeetingDocumentSection:')
+metadata = Path('Sources/Fluid/Persistence/SettingsStoreMeetingPreferences.swift').read_text()
+first = metadata.index('    nonisolated struct CustomDictionaryEntry:')
+metadata = metadata[first:metadata.index('\n    var customDictionaryEntries:', first)]
+Path(sys.argv[1]).with_name('ProductionNativeInputPresentations.swift').write_text('import AppKit\nimport SwiftUI\n'
+    + 'extension SettingsStore {\n' + metadata + '\n}\n'
+    + 'struct ProductionWPMEditor: View {\n @Environment(\\.theme) private var theme\n'
+      ' @State private var editingWPM = "55"\n @State private var showWPMEditor = true\n'
+      ' private let settings = SettingsStore.shared\n' + wpm_root + '\n}\n'
+    + transcript_root + dictionary_root + dictionary_chrome + dictionary_preview + dictionary_parser + meeting_actions
+    + '\n// Service delivery and physical-input monitoring are excluded; no appearance logic is adapted.\n'
+      'extension View { func dictionaryDictationInput(focused: Bool) -> some View { self } }\n'
+      'private struct DictionaryFocusDismissMonitor: View { var body: some View { EmptyView() } }\n')
+Path(sys.argv[1]).with_name('NativeInputPresentationProductionSource.json').write_text(json.dumps({
+    'sourceSHA256': {path: hashlib.sha256(source.encode()).hexdigest() for path, source in input_sources.items()},
+    'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', input_revision], text=True).strip() if input_revision else None,
+    'adapters': ['WPM property renamed body, inert settings/state initialized to synthetic 55',
+                 'Exact dictionary metadata/parser; inert dictation delivery and physical input monitor',
+                 'Complete transcript and dictionary roots, input chrome and replacement preview',
+                 'Complete shared meeting hover and glass action implementations'],
+    'outsideTheme': 'environment(theme) only', 'nativeReachability': 'SKIP: parent-owned frozen app required',
+}, indent=2) + '\n')
+
 # Extract the complete production participant editor, not a parallel test field.
 participant_path = 'Sources/Fluid/UI/MeetingAssignSpeakersSheet.swift'
 participant_revision = os.environ.get('PICHI_PARTICIPANT_INPUT_LEGACY_REVISION')
@@ -694,15 +738,16 @@ xcrun swiftc -parse-as-library -module-cache-path "$task_test_dir/ModuleCache" \
     Tests/UIContrastTests.swift Tests/FluidSegmentedPickerTests.swift Tests/NativePaletteAppearanceTests.swift \
     Tests/NativeSidebarContrastTests.swift Tests/DashboardShortcutSurfaceTests.swift \
     Sources/Fluid/UI/StatsActivityPeriod.swift Sources/Fluid/UI/StatsChartInteraction.swift \
-    Tests/MeetingSpeakerPaletteContrastTests.swift Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift \
+    Tests/MeetingSpeakerPaletteContrastTests.swift Tests/NativeInkTransitionTests.swift Tests/ToolbarInkTests.swift Tests/SecondaryGlassInkTests.swift Tests/ParticipantInputContrastTests.swift Tests/NativeInputPresentationContrastTests.swift \
     "$task_test_dir/ProductionParticipantSheet.swift" "$task_test_dir/ProductionMeetingActions.swift" \
+    "$task_test_dir/ProductionNativeInputPresentations.swift" \
     "$task_test_dir/ToolbarPageLayout.swift" \
     Sources/Fluid/Theme/Components/ToolbarAppearanceTrace.swift \
     Sources/Fluid/Theme/Components/WindowSizingComponents.swift Sources/Fluid/Services/FileLogger.swift Sources/Fluid/Services/DebugLogger.swift -o "$task_test_dir/tests"
 # Keep the existing full-suite executable and its bundle context unchanged.
 # The focused caption pass uses the same binary with real compiled resources.
 case " $* " in
-    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*|"  ")
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*|*" --native-input-presentations-only "*|"  ")
         xcrun xcstringstool compile Sources/Fluid/Localization/Localizable.xcstrings \
             --output-directory "$task_test_dir/OverlayCaptionFixture.app/Contents/Resources" --language en --language ru
         cp "$task_test_dir/tests" "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests"
@@ -710,7 +755,7 @@ case " $* " in
         ;;
 esac
 case " $* " in
-    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*)
+    *" --overlay-captions-only "*|*" --native-ink-only "*|*" --toolbar-ink-only "*|*" --secondary-glass-ink-only "*|*" --participant-input-only "*|*" --native-input-presentations-only "*)
         "$task_test_dir/OverlayCaptionFixture.app/Contents/MacOS/tests" "$task_test_dir" "$@"
         ;;
     "  ")

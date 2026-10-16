@@ -167,6 +167,7 @@ struct StatsView: View {
         .frame(width: 220)
         .foregroundStyle(self.theme.palette.primaryText)
         .background(self.theme.palette.cardBackground)
+        .appTheme(self.theme)
     }
 
     // MARK: - Total Words Card

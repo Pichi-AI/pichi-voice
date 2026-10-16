@@ -4064,6 +4064,8 @@ struct EditDictionaryEntrySheet: View {
         .padding(20)
         .frame(minWidth: 400, idealWidth: 480, maxWidth: 560)
         .frame(minHeight: 360, idealHeight: 500, maxHeight: 600)
+        .background(self.theme.palette.windowBackground)
+        .appTheme(self.theme)
         .dismissTextFocusOnBackgroundTap()
         .onAppear {
             self.triggersText = self.entry.triggers.joined(separator: "\n")

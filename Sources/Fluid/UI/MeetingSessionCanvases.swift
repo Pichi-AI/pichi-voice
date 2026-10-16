@@ -1269,6 +1269,7 @@ struct MeetingTranscriptTextEditor: View {
         .frame(width: 560)
         .frame(minHeight: 400)
         .background(self.theme.palette.windowBackground)
+        .appTheme(self.theme)
         .interactiveDismissDisabled(self.isSaving)
     }
 }
