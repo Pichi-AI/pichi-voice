@@ -13,6 +13,7 @@ final class MeetingMemoryProcessingAttempt {
     let archive: MeetingMemoryAudioArchive
     var consumer: (any MeetingMemoryAudioConsuming)?
     var recordingConsumer: MeetingArchivedMemoryAudioConsumer?
+    var analysisTask: Task<MeetingProcessingResult, Error>?
     init(request: MeetingBackendRequest, descriptor: MeetingBackendDescriptor, runtime: any MeetingParakeetNemotronRunning,
          archive: MeetingMemoryAudioArchive,
          redactor: (any TranscriptTextRedacting)?,
@@ -242,14 +243,38 @@ extension MeetingProcessingPipeline {
 
     func cancelMemoryAudio(sessionID: MeetingSessionID) async {
         guard let attempt = self.memoryAttempts[sessionID] else { return }
+        // A post-stop replay can still own Nemotron or a prepared ASR scope. Join that
+        // task before releasing its archive or letting the coordinator retire its lease.
+        if let analysis = attempt.analysisTask {
+            analysis.cancel()
+            _ = try? await analysis.value
+        }
         try? await attempt.consumer?.finish()
         attempt.archive.clear()
         if self.memoryAttempts[sessionID] === attempt { self.memoryAttempts.removeValue(forKey: sessionID) }
     }
 
     func finishMemoryAudio(session: MeetingSession, progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
-        guard let attempt = self.memoryAttempts[session.id], let consumer = attempt.consumer else { throw MeetingProcessingError.noRecoverableAudio }
-        defer { attempt.archive.clear(); self.memoryAttempts.removeValue(forKey: session.id) }
+        guard let attempt = self.memoryAttempts[session.id], attempt.consumer != nil else { throw MeetingProcessingError.noRecoverableAudio }
+        let task: Task<MeetingProcessingResult, Error>
+        if let existing = attempt.analysisTask { task = existing }
+        else {
+            task = Task { @MainActor in
+                try await self.completeMemoryAudio(session: session, attempt: attempt, progress: progress)
+            }
+            attempt.analysisTask = task
+        }
+        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+    }
+
+    private func completeMemoryAudio(session: MeetingSession, attempt: MeetingMemoryProcessingAttempt,
+                                     progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        guard let consumer = attempt.consumer else { throw MeetingProcessingError.noRecoverableAudio }
+        defer {
+            attempt.archive.clear()
+            attempt.analysisTask = nil
+            if self.memoryAttempts[session.id] === attempt { self.memoryAttempts.removeValue(forKey: session.id) }
+        }
         progress(.transcribing)
         try await consumer.finish()
         try Task.checkCancellation()
@@ -266,9 +291,10 @@ extension MeetingProcessingPipeline {
             guard let track else { throw MeetingProcessingError.noRecoverableAudio }
             progress(.identifyingSpeakers)
             let service = self.asrServiceProvider()
+            let transcript = batch
             batch = try await service.withMeetingModelResidency(attemptID: attempt.request.attemptID,
                 acceptsCompletedCancellation: { _ in false }) {
-                try await attempt.runtime.diarizePCMRecording(source: attempt.archive, transcript: batch,
+                try await attempt.runtime.diarizePCMRecording(source: attempt.archive, transcript: transcript,
                     trackID: track.id, attemptID: attempt.request.attemptID,
                     configuration: attempt.request.configuration)
             }
