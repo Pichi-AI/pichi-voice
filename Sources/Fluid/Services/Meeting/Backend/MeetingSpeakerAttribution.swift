@@ -173,13 +173,14 @@ nonisolated enum MeetingSpeakerAttributionRelation: String, Codable, Sendable {
 }
 
 nonisolated enum MeetingSpeakerAttributionRule: String, Codable, Sendable {
-    case rawOnly, rawAssigned, singleAcousticSupport, acousticDominance, insufficientSupport
+    case rawOnly, rawAssigned, singleAcousticSupport, residualSuppression, acousticDominance, insufficientSupport
     case ambiguous, conflict, barrier, neighborAgreement, incomingSpeaker, boundaryContinuation
     case briefInterruption
 
     var isHeuristic: Bool {
         switch self {
-        case .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption: return true
+        case .neighborAgreement, .incomingSpeaker, .boundaryContinuation, .briefInterruption,
+             .residualSuppression, .acousticDominance: return true
         default: return false
         }
     }
@@ -241,6 +242,24 @@ nonisolated enum MeetingSpeakerAttribution {
     private typealias Interval = MeetingSpeakerAttributionInterval
     private typealias Token = MeetingBackendSpeakerToken
     private typealias Decision = MeetingSpeakerAttributionDecision
+    /// Cancellation cadence is a resource bound, not an acoustic or presentation threshold.
+    private static let cancellationStride = 1024
+
+    private static func checkCancellation(at position: Int) throws {
+        if position % self.cancellationStride == 0 { try Task.checkCancellation() }
+    }
+
+    private static func sorted<T>(_ values: [T], by less: (T, T) -> Bool) throws -> [T] {
+        try Task.checkCancellation()
+        var comparisons = 0
+        let result = try values.sorted { lhs, rhs in
+            try self.checkCancellation(at: comparisons)
+            comparisons += 1
+            return less(lhs, rhs)
+        }
+        try Task.checkCancellation()
+        return result
+    }
 
     static func resolve(
         units: [MeetingFinalTextUnit], activity: [MeetingBackendSpeakerActivity],
@@ -264,24 +283,28 @@ nonisolated enum MeetingSpeakerAttribution {
         var diagnostics = MeetingSpeakerAttributionDiagnostics()
         let indexes = try self.makeIndexes(activity: activity, diagnostics: &diagnostics)
         let fingerprint = policy.fingerprint
-        let partitions = Dictionary(grouping: units, by: \.analysisEpochID)
-        let orderedEpochs = partitions.keys.sorted(by: self.epochBefore)
+        var partitions: [MeetingAnalysisEpochID: [MeetingFinalTextUnit]] = [:]
+        for (position, unit) in units.enumerated() {
+            try self.checkCancellation(at: position)
+            partitions[unit.analysisEpochID, default: []].append(unit)
+        }
+        let orderedEpochs = try self.sorted(Array(partitions.keys), by: self.epochBefore)
         var output: [Decision] = []
         output.reserveCapacity(units.count)
         for epoch in orderedEpochs {
             try Task.checkCancellation()
-            let ordered = partitions[epoch]!.sorted(by: self.unitBefore)
-            let index = indexes[epoch] ?? ActivityIndex(entries: [])
+            let ordered = try self.sorted(partitions[epoch]!, by: self.unitBefore)
+            let index = try indexes[epoch] ?? ActivityIndex(entries: [])
             var decisions: [Decision] = []
             decisions.reserveCapacity(ordered.count)
             for unit in ordered {
                 try Task.checkCancellation()
-                let entries = index.query(start: unit.analysisStart, end: unit.analysisEnd, diagnostics: &diagnostics)
-                decisions.append(self.acousticDecision(unit: unit, entries: entries, hasActivity: !index.entries.isEmpty,
+                let entries = try index.query(start: unit.analysisStart, end: unit.analysisEnd, diagnostics: &diagnostics)
+                decisions.append(try self.acousticDecision(unit: unit, entries: entries, hasActivity: !index.entries.isEmpty,
                                                        policy: policy, fingerprint: fingerprint, barrier: barrierUnitIDs.contains(unit.id)))
             }
             if !contextualBarrierEpochIDs.contains(epoch) {
-                let temporalBarriers = self.overlappingUnits(ordered, tolerance: policy.comparisonTolerance)
+                let temporalBarriers = try self.overlappingUnits(ordered, tolerance: policy.comparisonTolerance)
                 let anchors = zip(ordered, decisions).map { unit, decision in
                     self.isOriginalAnchor(unit: unit, decision: decision, tolerance: policy.comparisonTolerance)
                         && !temporalBarriers.contains(unit.id) && !barrierUnitIDs.contains(unit.id)
@@ -300,6 +323,7 @@ nonisolated enum MeetingSpeakerAttribution {
             }
             output.append(contentsOf: decisions)
         }
+        try Task.checkCancellation()
         return .init(decisions: output, diagnostics: diagnostics)
     }
 
@@ -308,10 +332,13 @@ nonisolated enum MeetingSpeakerAttribution {
     static func unionedIntervals(_ intervals: [MeetingSpeakerAttributionInterval]) throws
         -> [MeetingSpeakerAttributionInterval]
     {
-        guard intervals.allSatisfy({ MeetingEvidenceInterval.isValid(start: $0.start, end: $0.end) }) else {
-            throw MeetingSpeakerAttributionError.invalidActivity(-1)
+        for (position, interval) in intervals.enumerated() {
+            try self.checkCancellation(at: position)
+            guard MeetingEvidenceInterval.isValid(start: interval.start, end: interval.end) else {
+                throw MeetingSpeakerAttributionError.invalidActivity(position)
+            }
         }
-        return self.unionValid(intervals)
+        return try self.unionValid(intervals)
     }
 
     private static func validate(
@@ -369,10 +396,11 @@ nonisolated enum MeetingSpeakerAttribution {
         return lhs.id < rhs.id
     }
 
-    private static func unionValid(_ intervals: [Interval]) -> [Interval] {
-        let sorted = intervals.sorted { $0.start == $1.start ? $0.end < $1.end : $0.start < $1.start }
+    private static func unionValid(_ intervals: [Interval]) throws -> [Interval] {
+        let sorted = try self.sorted(intervals) { $0.start == $1.start ? $0.end < $1.end : $0.start < $1.start }
         var output: [Interval] = []
-        for value in sorted {
+        for (position, value) in sorted.enumerated() {
+            try self.checkCancellation(at: position)
             if let last = output.last, value.start <= last.end {
                 output[output.count - 1] = .init(start: last.start, end: max(last.end, value.end))
             } else { output.append(value) }
@@ -394,50 +422,59 @@ nonisolated enum MeetingSpeakerAttribution {
         let nodes: [Node]
         let root: Int?
 
-        init(entries: [IndexedActivity]) {
-            self.entries = entries.sorted {
+        init(entries: [IndexedActivity]) throws {
+            self.entries = try MeetingSpeakerAttribution.sorted(entries) {
                 if $0.interval.start != $1.interval.start { return $0.interval.start < $1.interval.start }
                 if $0.interval.end != $1.interval.end { return $0.interval.end < $1.interval.end }
                 return MeetingSpeakerAttribution.tokenBefore($0.token, $1.token)
             }
-            self.byToken = Dictionary(grouping: self.entries, by: \.token).mapValues { $0.map(\.interval) }
+            var byToken: [Token: [Interval]] = [:]
+            for (position, entry) in self.entries.enumerated() {
+                try MeetingSpeakerAttribution.checkCancellation(at: position)
+                byToken[entry.token, default: []].append(entry.interval)
+            }
+            self.byToken = byToken
             var nodes: [Node] = []
             let values = self.entries
-            func build(_ low: Int, _ high: Int) -> Int? {
+            func build(_ low: Int, _ high: Int) throws -> Int? {
+                try MeetingSpeakerAttribution.checkCancellation(at: nodes.count)
                 guard low < high else { return nil }
                 let middle = low + (high - low) / 2
-                let left = build(low, middle)
-                let right = build(middle + 1, high)
+                let left = try build(low, middle)
+                let right = try build(middle + 1, high)
                 let end = max(values[middle].interval.end,
                               max(left.map { nodes[$0].maximumEnd } ?? 0, right.map { nodes[$0].maximumEnd } ?? 0))
                 nodes.append(.init(entry: values[middle], left: left, right: right, maximumEnd: end))
                 return nodes.count - 1
             }
-            self.root = build(0, values.count)
+            self.root = try build(0, values.count)
             self.nodes = nodes
+            try Task.checkCancellation()
         }
 
-        func query(start: Double, end: Double, diagnostics: inout MeetingSpeakerAttributionDiagnostics) -> [IndexedActivity] {
+        func query(start: Double, end: Double, diagnostics: inout MeetingSpeakerAttributionDiagnostics) throws -> [IndexedActivity] {
             diagnostics.intervalQueryCount += 1
             var result: [IndexedActivity] = []
-            func visit(_ position: Int?) {
+            func visit(_ position: Int?) throws {
+                try MeetingSpeakerAttribution.checkCancellation(at: diagnostics.visitedIntervalNodeCount)
                 guard let position else { return }
                 diagnostics.visitedIntervalNodeCount += 1
                 let node = self.nodes[position]
                 guard node.maximumEnd > start else { return }
-                visit(node.left)
+                try visit(node.left)
                 guard node.entry.interval.start < end else { return }
                 if node.entry.interval.end > start { result.append(node.entry) }
-                visit(node.right)
+                try visit(node.right)
             }
-            visit(self.root)
+            try visit(self.root)
             diagnostics.returnedIntervalCount += result.count
+            try Task.checkCancellation()
             return result
         }
 
         /// Full connected bout rather than its word-clipped remnant. Expansion stops as soon as
         /// the configured duration fails, so an hours-long fragmented speaker cannot rescan it.
-        func briefBout(token: Token, start: Double, end: Double, policy: MeetingSpeakerAttributionPolicy) -> Interval? {
+        func briefBout(token: Token, start: Double, end: Double, policy: MeetingSpeakerAttributionPolicy) throws -> Interval? {
             let values = self.byToken[token] ?? []
             var low = 0, high = values.count
             while low < high {
@@ -445,23 +482,30 @@ nonisolated enum MeetingSpeakerAttribution {
                 if values[middle].end <= start { low = middle + 1 } else { high = middle }
             }
             guard low < values.count, values[low].start < end else { return nil }
+            var iterations = 0
             var first = low, last = low
             var result = values[low]
             guard result.duration <= policy.maximumBriefInterruptionSeconds + policy.comparisonTolerance else { return nil }
             while first > 0, result.start - values[first - 1].end <= policy.maximumBriefInterruptionGapSeconds + policy.comparisonTolerance {
+                try MeetingSpeakerAttribution.checkCancellation(at: iterations); iterations += 1
                 first -= 1
                 result = .init(start: values[first].start, end: result.end)
                 guard result.duration <= policy.maximumBriefInterruptionSeconds + policy.comparisonTolerance else { return nil }
             }
             while last + 1 < values.count,
                   values[last + 1].start - result.end <= policy.maximumBriefInterruptionGapSeconds + policy.comparisonTolerance {
+                try MeetingSpeakerAttribution.checkCancellation(at: iterations); iterations += 1
                 last += 1
                 result = .init(start: result.start, end: values[last].end)
                 guard result.duration <= policy.maximumBriefInterruptionSeconds + policy.comparisonTolerance else { return nil }
             }
             // Two separate bouts within one word have ambiguous conversational roles.
             guard last + 1 == values.count || values[last + 1].start >= end else { return nil }
-            let support = values[first...last].reduce(0) { $0 + $1.duration }
+            var support = 0.0
+            for interval in values[first...last] {
+                try MeetingSpeakerAttribution.checkCancellation(at: iterations); iterations += 1
+                support += interval.duration
+            }
             guard support + policy.comparisonTolerance >= policy.minimumInterruptionSupportSeconds else { return nil }
             return result
         }
@@ -470,33 +514,47 @@ nonisolated enum MeetingSpeakerAttribution {
     private static func makeIndexes(
         activity: [MeetingBackendSpeakerActivity], diagnostics: inout MeetingSpeakerAttributionDiagnostics
     ) throws -> [MeetingAnalysisEpochID: ActivityIndex] {
-        let grouped = Dictionary(grouping: activity, by: \.token)
+        var grouped: [Token: [Interval]] = [:]
+        for (position, value) in activity.enumerated() {
+            try self.checkCancellation(at: position)
+            grouped[value.token, default: []].append(.init(start: value.start, end: value.end))
+        }
         var entries: [MeetingAnalysisEpochID: [IndexedActivity]] = [:]
         for (token, values) in grouped {
             try Task.checkCancellation()
-            let intervals = self.unionValid(values.map { .init(start: $0.start, end: $0.end) })
+            let intervals = try self.unionValid(values)
             diagnostics.normalizedIntervalCount += intervals.count
-            entries[token.analysisEpochID, default: []].append(contentsOf: intervals.map { .init(token: token, interval: $0) })
+            for (position, interval) in intervals.enumerated() {
+                try self.checkCancellation(at: position)
+                entries[token.analysisEpochID, default: []].append(.init(token: token, interval: interval))
+            }
         }
-        return entries.mapValues { ActivityIndex(entries: $0) }
+        var indexes: [MeetingAnalysisEpochID: ActivityIndex] = [:]
+        for (epoch, values) in entries {
+            try Task.checkCancellation()
+            indexes[epoch] = try ActivityIndex(entries: values)
+        }
+        try Task.checkCancellation()
+        return indexes
     }
 
     private static func acousticDecision(
         unit: MeetingFinalTextUnit, entries: [IndexedActivity], hasActivity: Bool,
         policy: MeetingSpeakerAttributionPolicy, fingerprint: String, barrier: Bool
-    ) -> Decision {
+    ) throws -> Decision {
         let grouped = Dictionary(grouping: entries, by: \.token)
         let tokens = Set(grouped.keys).union(unit.speaker.tokens).sorted(by: self.tokenBefore)
         // Membership is relative to actual unioned acoustic support, never the ASR envelope.
         // A whole 40 ms word inside a validated voice remains useful, while a 5 ms second voice
         // beside 500 ms of another voice can be retained as suppressed residual evidence.
-        let active = self.unionValid(entries.map {
+        let active = try self.unionValid(entries.map {
             .init(start: max($0.interval.start, unit.analysisStart), end: min($0.interval.end, unit.analysisEnd))
         }).reduce(0) { $0 + $1.duration }
         let noiseThreshold = min(policy.maximumCandidateNoiseSeconds,
                                  policy.maximumCandidateNoiseActiveFraction * active)
-        let candidates = tokens.map { token -> MeetingSpeakerAttributionCandidateSupport in
-            let intervals = self.unionValid((grouped[token] ?? []).map {
+        let candidates = try tokens.map { token -> MeetingSpeakerAttributionCandidateSupport in
+            try Task.checkCancellation()
+            let intervals = try self.unionValid((grouped[token] ?? []).map {
                 .init(start: max($0.interval.start, unit.analysisStart), end: min($0.interval.end, unit.analysisEnd))
             })
             let support = intervals.reduce(0) { $0 + $1.duration }
@@ -506,7 +564,7 @@ nonisolated enum MeetingSpeakerAttribution {
         let rawPositive = candidates.filter { $0.supportSeconds > 0 }
         let positive = rawPositive.filter { $0.supportSeconds > policy.comparisonTolerance }
         let eligible = candidates.filter { !$0.isSuppressed }
-        let intersections = self.intersections(candidates: rawPositive)
+        let intersections = try self.intersections(candidates: rawPositive)
         let conflict = hasActivity && unit.speaker.tokens.contains { token in
             !rawPositive.contains { $0.token == token }
         }
@@ -522,7 +580,7 @@ nonisolated enum MeetingSpeakerAttribution {
         } else if conflict { rule = .conflict }
         else if eligible.count == 1, positive.count <= 2 {
             selected = eligible[0].token
-            rule = .singleAcousticSupport
+            rule = positive.count > 1 ? .residualSuppression : .singleAcousticSupport
         } else if eligible.isEmpty {
             if case let .assigned(token) = unit.speaker { selected = token; rule = .rawAssigned }
             else { rule = .insufficientSupport }
@@ -547,23 +605,26 @@ nonisolated enum MeetingSpeakerAttribution {
     }
 
     private static func intersections(candidates: [MeetingSpeakerAttributionCandidateSupport])
-        -> [MeetingSpeakerAttributionIntersection]
+        throws -> [MeetingSpeakerAttributionIntersection]
     {
         struct Event { let time: Double; let token: Token; let isStart: Bool }
         var events: [Event] = []
         for candidate in candidates {
+            try Task.checkCancellation()
             for interval in candidate.intervals {
+                try self.checkCancellation(at: events.count)
                 events.append(.init(time: interval.start, token: candidate.token, isStart: true))
                 events.append(.init(time: interval.end, token: candidate.token, isStart: false))
             }
         }
-        events.sort {
+        events = try self.sorted(events) {
             if $0.time != $1.time { return $0.time < $1.time }
             if $0.isStart != $1.isStart { return !$0.isStart }
             return self.tokenBefore($0.token, $1.token)
         }
         var active = Set<Token>(), previous: Double?, result: [MeetingSpeakerAttributionIntersection] = []
-        for event in events {
+        for (position, event) in events.enumerated() {
+            try self.checkCancellation(at: position)
             if let previous, event.time > previous, active.count > 1 {
                 let tokens = active.sorted(by: self.tokenBefore)
                 if let last = result.last, last.tokens == tokens, last.interval.end == previous {
@@ -587,10 +648,11 @@ nonisolated enum MeetingSpeakerAttribution {
 
     /// An overlapping cluster is a contextual barrier, regardless of ID sort order. Words are
     /// still individually described, but equal or nested envelopes never establish chronology.
-    private static func overlappingUnits(_ units: [MeetingFinalTextUnit], tolerance: Double) -> Set<String> {
+    private static func overlappingUnits(_ units: [MeetingFinalTextUnit], tolerance: Double) throws -> Set<String> {
         var blocked = Set<String>(), cluster: [String] = [], maximumEnd = -Double.infinity
         var clusterIsBlocked = false
-        for unit in units {
+        for (position, unit) in units.enumerated() {
+            try self.checkCancellation(at: position)
             if unit.analysisStart < maximumEnd - tolerance {
                 if !clusterIsBlocked { blocked.formUnion(cluster); clusterIsBlocked = true }
                 blocked.insert(unit.id)
@@ -621,7 +683,10 @@ nonisolated enum MeetingSpeakerAttribution {
             }
             let first = position
             while position < units.count,
-                  self.canContextualize(units[position], decisions[position], blocked: temporalBarriers) { position += 1 }
+                  self.canContextualize(units[position], decisions[position], blocked: temporalBarriers) {
+                try self.checkCancellation(at: position)
+                position += 1
+            }
             let last = position - 1
             guard first > 0, position < units.count, anchors[first - 1], anchors[position],
                   units[last].analysisEnd - units[first].analysisStart <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
@@ -695,13 +760,21 @@ nonisolated enum MeetingSpeakerAttribution {
                   decisions[stop].selectedToken == main,
                   units[stop].analysisStart + policy.comparisonTolerance >= units[stop - 1].analysisEnd,
                   units[stop].analysisStart - units[stop - 1].analysisEnd <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance,
-                  let bout = index.briefBout(token: other, start: units[first].analysisStart,
+                  let bout = try index.briefBout(token: other, start: units[first].analysisStart,
                                             end: units[stop - 1].analysisEnd, policy: policy),
                   bout.start >= units[first - 1].analysisEnd, bout.end <= units[stop].analysisStart,
                   mixed.allSatisfy({ decisions[$0].simultaneousIntervals.contains { Set($0.tokens) == pair } })
             else { continue }
-            let context = index.query(start: units[first - 1].analysisStart,
+            let context = try index.query(start: units[first - 1].analysisStart,
                                       end: units[stop].analysisEnd, diagnostics: &diagnostics)
+            // Word envelopes may omit a third voice in an ASR gap. Conversational roles use
+            // the whole validated context window, not only support clipped to visible words.
+            let roleStart = units[first - 1].analysisStart
+            let roleEnd = units[stop].analysisEnd
+            guard !context.contains(where: {
+                !pair.contains($0.token)
+                    && min($0.interval.end, roleEnd) - max($0.interval.start, roleStart) > policy.comparisonTolerance
+            }) else { continue }
             let mainIntervals = context.filter { $0.token == main }.map(\.interval)
             guard mainIntervals.contains(where: { $0.start < bout.start && $0.end > units[first - 1].analysisStart }),
                   mainIntervals.contains(where: { $0.end > bout.end && $0.start < units[stop].analysisEnd })

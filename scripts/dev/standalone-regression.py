@@ -254,6 +254,7 @@ SHELL_PROBES = (
 )
 PYTHON_PROBES = (
     "diarization_repeatability", "dictionary_training_save", "local_api_lease", "local_api_live_harness", "meeting_audio_scope", "meeting_backup_refresh",
+    "meeting_speaker_attribution",
     "settings_backup_concurrency",
 )
 PROBES = tuple(sorted(

@@ -88,7 +88,15 @@ struct MeetingSpeakerAttributionTests {
         }
         self.check(padded.dropFirst().allSatisfy { $0 == padded[0] }, "Silent padding changed the acoustic decision")
         let dominant = try self.resolve([self.unit("x", 0, 2)], [self.activity("a", 0, 1), self.activity("b", 0.2, 0.3)])[0]
-        self.check(dominant.rule == .acousticDominance && dominant.selectedToken == a)
+        self.check(dominant.rule == .acousticDominance && dominant.selectedToken == a && dominant.rule.isHeuristic)
+        for assignment in [MeetingBackendSpeakerAssignment.unassigned, .assigned(b)] {
+            let residual = try self.resolve([self.unit("residual", 0, 0.1, assignment)],
+                                            [self.activity("a", 0, 0.095), self.activity("b", 0.095, 0.1)])[0]
+            self.check(residual.selectedToken == a && residual.rule == .residualSuppression && residual.rule.isHeuristic)
+            self.check(residual.rawAssignment == assignment && residual.relation == .consecutive)
+            self.check(residual.candidates.first { $0.token == b }?.supportSeconds ?? 0 > 0)
+        }
+        self.check(!simple.rule.isHeuristic, "Direct sole-source evidence was marked as a policy inference")
         let utterance = try self.resolve([self.unit("x", 0, 2, precision: .utterance)], [self.activity("a", 0, 1), self.activity("b", 0.2, 0.3)])[0]
         self.check(utterance.selectedToken == nil && utterance.rule == .ambiguous)
         let merged = try MeetingSpeakerAttribution.unionedIntervals([.init(start: 0, end: 1), .init(start: 1, end: 2), .init(start: 0.5, end: 1.5)])
@@ -148,6 +156,20 @@ struct MeetingSpeakerAttributionTests {
         let splitOutput = try self.resolve(split, activity)
         self.check(splitOutput[1].rule == .briefInterruption && splitOutput[2].rule == .briefInterruption)
         self.check(splitOutput[1].selectedToken == b && splitOutput[2].selectedToken == b)
+        let gapWords = [units[0], self.unit("gapmix1", 0.3, 0.45, .ambiguous([a, b])),
+                        self.unit("gapmix2", 0.6, 0.8, .ambiguous([a, b])), units[2]]
+        let gapActivity = [self.activity("a", 0, 1.1), self.activity("b", 0.35, 0.7)]
+        let noThird = try self.resolve(gapWords, gapActivity)
+        self.check(noThird[1].rule == .briefInterruption && noThird[2].rule == .briefInterruption)
+        let hiddenThird = try self.resolve(gapWords, gapActivity + [self.activity("c", 0.5, 0.55)])
+        self.check(hiddenThird[1].rule != .briefInterruption && hiddenThird[2].rule != .briefInterruption,
+                   "A third voice in the full bout was hidden by the gap between ASR words")
+        self.check(hiddenThird[1].selectedToken == nil && hiddenThird[2].selectedToken == nil)
+        self.check(hiddenThird[1].candidates == noThird[1].candidates && hiddenThird[2].candidates == noThird[2].candidates)
+        let contextThird = try self.resolve(gapWords, gapActivity + [self.activity("c", 0.22, 0.25)])
+        self.check(contextThird[1].rule != .briefInterruption && contextThird[2].rule != .briefInterruption)
+        let outsideThird = try self.resolve(gapWords, gapActivity + [self.activity("c", 1.2, 1.3)])
+        self.check(outsideThird[1].rule == .briefInterruption && outsideThird[2].rule == .briefInterruption)
         let nativeBMiddle = [units[0], self.unit("mix1", 0.3, 0.45, .ambiguous([a, b])), self.unit("bword", 0.45, 0.55, .assigned(b)), self.unit("mix2", 0.55, 0.8, .ambiguous([a, b])), units[2]]
         let nativeBActivity = [self.activity("a", 0, 0.45), self.activity("a", 0.55, 1.1), self.activity("b", 0.4, 0.6)]
         let nativeBOutput = try self.resolve(nativeBMiddle, nativeBActivity)
@@ -287,6 +309,37 @@ struct MeetingSpeakerAttributionTests {
         task.cancel()
         let cancelled = await task.value
         self.check(cancelled, "Cancelled work produced an attribution result")
+        // Exercise cancellation after entry into substantial work, including the empty-unit path
+        // that still indexes a million native intervals. Initial cancellation alone cannot cover
+        // the normalization, sorting, grouping and tree-construction loops.
+        let a = self.token("a")
+        let count = 1_000_000
+        let activity = (0..<count).map {
+            MeetingBackendSpeakerActivity(token: a, start: Double($0) * 0.001, end: Double($0) * 0.001 + 0.0005)
+        }
+        let began = Date()
+        let baseline = try MeetingSpeakerAttribution.resolveWithDiagnostics(units: [], activity: activity)
+        let baselineSeconds = Date().timeIntervalSince(began)
+        self.check(baseline.diagnostics.normalizedIntervalCount == count && baseline.decisions.isEmpty)
+        var cancelledDuringWork = 0
+        for fraction in [0.15, 0.4, 0.7] {
+            let task = Task.detached { () -> (String, Date) in
+                do {
+                    _ = try MeetingSpeakerAttribution.resolve(units: [], activity: activity)
+                    return ("success", Date())
+                } catch is CancellationError { return ("cancelled", Date()) }
+                catch { return ("unexpected", Date()) }
+            }
+            try await Task.sleep(for: .seconds(baselineSeconds * fraction))
+            let cancelledAt = Date()
+            task.cancel()
+            let (result, finishedAt) = await task.value
+            self.check(result == "cancelled" || (result == "success" && finishedAt < cancelledAt),
+                       "A cancellation during indexing returned success after cancellation")
+            if result == "cancelled" { cancelledDuringWork += 1 }
+            print("ATTRIBUTION_CANCEL intervals=\(count) baseline=\(baselineSeconds) fraction=\(fraction) result=\(result)")
+        }
+        self.check(cancelledDuringWork > 0, "The delayed cancellation probes never entered active work")
     }
 
     struct Random {

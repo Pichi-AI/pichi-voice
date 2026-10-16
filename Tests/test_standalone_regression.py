@@ -57,10 +57,14 @@ class StandaloneRunnerTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0].interpreter, "sh")
         self.assertFalse(pending[0].requires_ui)
-        self.assertEqual(len(RUNNER.PROBES), 59)
+        self.assertEqual(len(RUNNER.PROBES), 60)
         self.assertEqual(sum(probe.interpreter == "sh" for probe in RUNNER.PROBES), 47)
-        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 7)
+        self.assertEqual(sum(probe.interpreter == "python3" for probe in RUNNER.PROBES), 8)
         self.assertEqual(sum(probe.interpreter == "bash" for probe in RUNNER.PROBES), 5)
+        attribution = [probe for probe in RUNNER.PROBES if probe.name == "meeting_speaker_attribution"]
+        self.assertEqual(len(attribution), 1)
+        self.assertEqual(attribution[0].interpreter, "python3")
+        self.assertFalse(attribution[0].requires_ui)
         self.assertEqual([probe.name for probe in RUNNER.PROBES if probe.requires_ui], ["update_prompt"])
         self.assertTrue({"fluid_serve", "file_export", "file_error_localization", "ui_contrast", "participant_input_contrast", "file_transcript_relative_date", "command_ui_localization", "clipboard_backup_reproduction", "settings_owned_copy", "settings_viewport", "native_window_appearance", "local_api_live_harness", "meeting_audio_scope", "upstream_sync", "diarization_repeatability", "hotkey_initialization"}
                         .issubset({probe.name for probe in RUNNER.PROBES}))
