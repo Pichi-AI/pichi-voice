@@ -52030,6 +52030,23 @@
           }
         }
       }
+    },
+    "Live captions have not started.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live captions have not started."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Распознавание ещё не началось."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

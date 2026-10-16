@@ -424,6 +424,7 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
             try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
             try await visibleCheckpoint("01-meetings-idle", app: app, revision: revision, directory: checkpoints)
             try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
                         && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
                         "An existing recording or processing attempt is not owned by this test")
             if !app.buttons["meeting.start"].exists {
@@ -499,7 +500,11 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
                     app.activate()
                     try? self.saveVisibleCheckpoint("failure-owned-recording-foreground", app: app,
                                                     revision: revision, directory: checkpoints)
-                    let stop = app.buttons["meeting.stop"]
+                    // Older iPadOS can propagate the container identifier to an inset
+                    // button. Use that observed identifier only to clean up OUR failed
+                    // attempt; the success path still requires the correct Stop identity.
+                    let identifiedStop = app.buttons["meeting.stop"]
+                    let stop = identifiedStop.exists ? identifiedStop : app.buttons["meeting.recording"]
                     if stop.waitForExistence(timeout: 30), stop.isEnabled {
                         stop.tap()
                         try? self.saveVisibleCheckpoint("failure-owned-recording-stop", app: app,

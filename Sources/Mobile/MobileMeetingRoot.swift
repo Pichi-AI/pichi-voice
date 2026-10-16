@@ -310,6 +310,7 @@ struct MobileMeetingRoot: View {
                 }.padding(24).frame(maxWidth: 1000, alignment: .leading).frame(maxWidth: .infinity)
             }
         }
+        .accessibilityIdentifier("meeting.recording")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { run { _ = try await coordinator.stopAndTranscribe() } } label: {
                 Label(PichiLocalization.text("Stop & Transcribe"), systemImage: "stop.fill")
@@ -320,7 +321,6 @@ struct MobileMeetingRoot: View {
                 .padding(.horizontal, 24).padding(.vertical, 12)
                 .background(theme.palette.toolbarBackground)
         }
-        .accessibilityIdentifier("meeting.recording")
     }
 
     private func processing(_ session: MeetingSession, stage: MeetingProcessingStage) -> some View {
