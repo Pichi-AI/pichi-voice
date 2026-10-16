@@ -239,7 +239,7 @@ public enum PIIRedactor {
     private static func credentials(in text: String) throws -> [PIIDetection] {
         let source = text as NSString
         var result: [PIIDetection] = []
-        let prose = Set("нужно надо можно нельзя изменим сменим поменяем обсудим уточним забыли забыть изменить сменить поменять восстановить используется должен должна будет был была для от в не это нужен нужна требуется is should must needs required changed reset".split(separator: " ").map(String.init))
+        let prose = Set("нужно надо можно нельзя изменим сменим поменяем обсудим уточним забыли забыть изменить сменить поменять восстановить используется должен должна будет был была для от в не это нужен нужна требуется я мы вы ты он она они его её их сейчас is should must needs required changed reset".split(separator: " ").map(String.init))
         for (kind, cue) in [(PIIKind.login, loginCuePattern), (.secret, secretCuePattern)] {
             // A whole whitespace-delimited token is atomic. Length limits or
             // punctuation exclusions would expose the rest of a secret (A!b).
@@ -254,7 +254,11 @@ public enum PIIRedactor {
                 let prefix = source.substring(with: NSRange(location: match.range.location,
                     length: range.location - match.range.location))
                 let explicitlyDelimited = prefix.contains(":") || prefix.contains("=")
-                if range == match.range(at: 3), !explicitlyDelimited, prose.contains(word) { continue }
+                if range == match.range(at: 3), !explicitlyDelimited {
+                    // Sentence punctuation attached to the cue is not a value.
+                    // Quoted or explicitly delimited punctuation remains valid.
+                    if prefix.last?.isWhitespace != true || prose.contains(word) { continue }
+                }
                 guard kind == .secret || value.contains(where: { $0.isLetter || $0.isNumber }) else { continue }
                 result.append(.init(range: range, kind: kind, contextual: true, resolvedContextRange: match.range))
             }
