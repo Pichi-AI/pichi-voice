@@ -1761,6 +1761,16 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
             output.speechObservationIsFinal = !provisional
             return output
         }
+        nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: UUID,
+            attemptID: UUID, configuration: MeetingFinalProcessingConfiguration) async throws -> MeetingPCMTranscriptBatch {
+            // Post-Stop replay calls the final operation without a preview callback.
+            // The production pipeline reads at most one 20-second archive window.
+            guard !samples.isEmpty, samples.count <= 320_000 else {
+                throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+            }
+            return try await recognizePCM(samples: samples, offset: offset, trackID: trackID,
+                attemptID: attemptID, configuration: configuration, preview: nil)
+        }
         nonisolated func recognizePCM(samples: [Float], offset: TimeInterval, trackID: UUID, attemptID: UUID,
             configuration: MeetingFinalProcessingConfiguration,
             preview: (nonisolated(nonsending) @Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?) async throws -> MeetingPCMTranscriptBatch {
@@ -1901,7 +1911,8 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
                     sessionDirectory: URL(fileURLWithPath: "/synthetic-never-created"), progress: { _ in })
                 XCTFail("A persistent privacy failure must reject the complete post-Stop replay")
             } catch {
-                XCTAssertTrue(error is RefusingRedactor.Refused)
+                XCTAssertTrue(error is RefusingRedactor.Refused,
+                    "Unexpected replay failure type: \(type(of: error))")
             }
             XCTAssertEqual(runtime.sealedCalls, 1, "Post-Stop privacy failure must come from an actual replay")
             XCTAssertTrue(runtime.configurations.allSatisfy {
