@@ -1,22 +1,5 @@
 import Foundation
 
-/// Versioned, length-framed key/value encoding so arbitrary string fields cannot collide on
-/// delimiters (`asr=a@b,lang=c` vs `asr=a,lang=b@c`). Values stay human-readable; no hashing.
-/// Strings are canonicalized to precomposed form because Swift `==` treats canonically
-/// equivalent Unicode as equal while raw UTF8 lengths differ.
-nonisolated enum MeetingConfigFingerprintEncoding {
-    static let version = 1
-
-    static func encode(_ pairs: [(key: String, value: String)]) -> String {
-        let framed = pairs.map { pair in
-            let key = pair.key.precomposedStringWithCanonicalMapping
-            let value = pair.value.precomposedStringWithCanonicalMapping
-            return "\(key.utf8.count):\(key)=\(value.utf8.count):\(value)"
-        }
-        return (["v\(Self.version)"] + framed).joined(separator: ";")
-    }
-}
-
 /// Immutable value snapshot of meeting post-processing ASR configuration. The pipeline builds it
 /// once per attempt and the meeting preparation owner constructs a fixed provider from it, so an
 /// active run never follows later dictation-setting changes.
