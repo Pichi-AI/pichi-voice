@@ -287,16 +287,42 @@ class StandaloneRunnerTests(unittest.TestCase):
                     RUNNER.live_process_group(123456)
 
     def test_stalled_inspection_cannot_prevent_term_escalation_and_join(self):
+        self.assert_stalled_inspection_cleanup()
+
+    def test_stalled_inspection_does_not_signal_a_disappearing_group_twice(self):
+        original_killpg = RUNNER.os.killpg
+        killed_groups = set()
+        repeated_kills = []
+
+        def disappearing_group(group, number):
+            if number == signal.SIGKILL and group in killed_groups:
+                repeated_kills.append(group)
+                raise PermissionError(errno.EPERM, "synthetic disappearing process group")
+            result = original_killpg(group, number)
+            if number == signal.SIGKILL:
+                killed_groups.add(group)
+            return result
+
+        # Reproduce Darwin's disappearing-group error on every platform while
+        # retaining a real TERM-ignoring worker and the existing join proofs.
+        with patch.object(RUNNER.os, "killpg", side_effect=disappearing_group):
+            self.assert_stalled_inspection_cleanup()
+        self.assertTrue(killed_groups)
+        self.assertFalse(repeated_kills)
+
+    def assert_stalled_inspection_cleanup(self):
         probe = self.worker_probe()
         original_killpg = RUNNER.os.killpg
         original_live = RUNNER.live_process_group
         escalation = threading.Event()
+        successfully_killed_groups = set()
         inspected_after_join = []
         sender = threading.Thread(target=lambda: (self.wait_for_worker(), os.kill(os.getpid(), signal.SIGTERM)), daemon=True)
 
         def observe_kill(group, number):
             result = original_killpg(group, number)
             if number == signal.SIGKILL:
+                successfully_killed_groups.add(group)
                 escalation.set()
             return result
 
@@ -319,14 +345,17 @@ class StandaloneRunnerTests(unittest.TestCase):
                 status, report, _ = self.run_probes([probe, self.probe("later", "touch later-executed")])
         finally:
             sender.join(timeout=4)
-            # Keep this synthetic worker owned even when a mutation breaks the
-            # cleanup ordering assertion inside the inspector.
+            # Retain fallback cleanup if escalation failed. Once KILL succeeded,
+            # do not signal a reaped PGID again: Darwin may return EPERM, and the
+            # identifier could have been reused by an unrelated process group.
             group_file = self.root / "worker-group"
             if group_file.exists():
-                try:
-                    original_killpg(int(group_file.read_text()), signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                group = int(group_file.read_text())
+                if group not in successfully_killed_groups and original_live(group):
+                    try:
+                        original_killpg(group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
         self.assertFalse(sender.is_alive())
         self.assertEqual(status, 143)
         self.assertTrue(inspected_after_join)
