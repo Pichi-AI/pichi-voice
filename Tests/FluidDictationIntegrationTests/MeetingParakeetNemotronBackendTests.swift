@@ -1552,6 +1552,64 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
 
     // MARK: - Epoch isolation and unit assignment
 
+    func testShortenedTrackCannotInheritCachedOwnerConfirmationFromReassignedSlot() async throws {
+        let firstChunk = self.makePCMChunk(sequence: 0, start: 100, end: 108)
+        let secondChunk = self.makePCMChunk(sequence: 1, start: 111, end: 119)
+        let track = self.makeMicTrack(chunks: [firstChunk, secondChunk], eraStart: 100)
+        var session = self.makeSession(mode: .inRoom, tracks: [track])
+        let directory = try self.makeTempSessionDirectory()
+        let configuration = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: "synthetic-sha256", languageCode: "en")
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: track.id, chunkID: firstChunk.id): self.makeObserved(firstChunk, duration: 8),
+            .init(trackID: track.id, chunkID: secondChunk.id): self.makeObserved(secondChunk, duration: 8),
+        ]
+        var embedding = [Float](repeating: 0, count: 256); embedding[0] = 1
+        let owner = MeetingOwnerVoiceProfileSnapshot(metadata: .init(generation: UUID(), enrolledAt: Date()),
+            encoderFingerprint: MeetingOwnerVoiceProfileStore.encoderFingerprint, embeddings: [embedding, embedding])
+        let original = FakeRuntime(), materializer = FakeMaterializer()
+        materializer.sampleAmplitude = 0.1
+        original.ownerVoiceProfileSnapshot = owner
+        let backend = self.makeBackend(runtime: original, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory, configuration: configuration))
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let epochs = try XCTUnwrap(manifest.track(track.id)?.epochs)
+        XCTAssertEqual(epochs.count, 2)
+        original.diarizerFactory.segmentsByEpoch[epochs[0].id] = [
+            .init(slotIndex: 0, start: 0, end: 8),
+            .init(slotIndex: 0, start: 8.5, end: 12.5), .init(slotIndex: 1, start: 12.5, end: 16.5),
+        ]
+        original.voiceProfiles = [.init(token: .init(analysisEpochID: epochs[0].id, label: "slot-0"),
+                                        embeddings: [embedding, embedding])]
+        original.asrSession.responses = [
+            .init(text: "owner", words: [.init(text: "owner", start: 0.5, end: 1)]),
+            .init(text: "other", words: [.init(text: "other", start: 6, end: 6.5)]),
+        ]
+        let initial = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(initialBundle) = initial else { return XCTFail("Expected canonical result") }
+        let formerlyOwnedSlot = MeetingBackendSpeakerToken(analysisEpochID: epochs[1].id, label: "slot-0")
+        XCTAssertTrue(initialBundle.confirmedLocalUserTokens.contains(formerlyOwnedSlot), "The full original stream confirmed this slot as the owner")
+
+        // Simulate termination before the coordinator's completed-session save, then a
+        // transient read failure for the first epoch. The shortened stream swaps the slots.
+        session.processingAttempts = []
+        materializer.failingEpochs = [epochs[0].id]
+        let resumed = FakeRuntime(); resumed.ownerVoiceProfileSnapshot = owner
+        resumed.diarizerFactory.segmentsByEpoch[epochs[1].id] = [
+            .init(slotIndex: 1, start: 0, end: 4), .init(slotIndex: 0, start: 4, end: 8),
+        ]
+        let retry = self.makeBackend(runtime: resumed, materializer: materializer)
+        let retryPlan = try retry.plan(self.makeRequest(session: session, directory: directory, configuration: configuration))
+        let result = try await retry.execute(plan: retryPlan,
+            manifest: self.makeManifest(plan: retryPlan, observations: observations), progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else { return XCTFail("Expected canonical result") }
+        let other = try XCTUnwrap(bundle.evidence.units.first { $0.text == "other" })
+        XCTAssertEqual(other.speaker, .assigned(formerlyOwnedSlot), "The raw slot label can be reused for a different voice")
+        XCTAssertFalse(bundle.confirmedLocalUserTokens.contains(formerlyOwnedSlot), "A freshly assigned slot cannot inherit cached owner identity")
+        XCTAssertTrue(bundle.confirmedLocalUserTokens.isEmpty)
+        XCTAssertEqual(resumed.diarizerFactory.createdEpochs, [epochs[1].id])
+        XCTAssertTrue(resumed.asrSession.callSampleCounts.isEmpty, "Verified native ASR cores remain reusable independently of speaker identity")
+    }
+
     func testTransientMissingEpochCannotCacheShortenedContinuousTrack() async throws {
         let fixture = self.makeTwoEpochFixture()
         let directory = try self.makeTempSessionDirectory()
@@ -2339,6 +2397,7 @@ private final nonisolated class FakeRuntime: MeetingParakeetNemotronRunning, @un
     let asrSession = FakeASRSession()
     var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
     var voiceError: Error?
+    var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot?
     private(set) var diarizationScopeCount = 0
     private(set) var asrAttemptIDs: [UUID] = []
     private(set) var asrConfigurations: [MeetingFinalProcessingConfiguration] = []
@@ -2371,6 +2430,7 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
     var failingEpochs: Set<MeetingAnalysisEpochID> = []
     var customSpanSampleCounts: [MeetingAnalysisEpochID: [Int]] = [:]
     var replaySampleCounts: [MeetingAnalysisEpochID: Int] = [:]
+    var sampleAmplitude: Float = 0
     private(set) var maximumReplayRead = 0
 
     struct GeneratedSource: MeetingPCMReplaySource {
@@ -2428,7 +2488,7 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
         }
         return MeetingMaterializedEpoch(
             epochID: epoch.id,
-            samples: [Float](repeating: 0, count: cursor),
+            samples: [Float](repeating: self.sampleAmplitude, count: cursor),
             sampleRate: 16_000,
             spanSamples: ranges
         )

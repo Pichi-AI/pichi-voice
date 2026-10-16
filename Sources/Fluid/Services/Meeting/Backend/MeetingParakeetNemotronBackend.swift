@@ -478,7 +478,18 @@ final class MeetingParakeetNemotronBackend: MeetingTranscriptionBackend {
         try Task.checkCancellation()
         // Explicit owner identity is optional. The same bounded encoder runs after diarizer
         // weights drain and before ASR loads. Only confirmed token IDs leave this phase.
-        var ownerTokens = restored.confirmedOwnerTokens ?? Set<MeetingBackendSpeakerToken>()
+        // A transient missing epoch can force fresh diarization of a shortened track. Its
+        // numeric slots no longer have the identity of the saved complete-track intervals.
+        // Preserve cached owner confirmation only for tracks whose complete intervals were
+        // actually reused. Fresh/partial tracks stay unconfirmed unless verified below.
+        let reusedOwnerTrackIDs = Set(manifest.tracks.filter { track in
+            restored.completedTracks.contains(track.id) && restored.trackSegments[track.id] != nil
+                && track.epochs.allSatisfy { phaseA.failures[$0.id] == nil }
+        }.map(\.id))
+        let activeTokens = Set(phaseA.activity.map(\.token))
+        var ownerTokens = Set((restored.confirmedOwnerTokens ?? []).filter {
+            reusedOwnerTrackIDs.contains($0.analysisEpochID.trackID) && activeTokens.contains($0)
+        })
         if restored.confirmedOwnerTokens == nil, ownerProfile != nil, !phaseA.voiceSamples.isEmpty {
             do {
                 let profiles = try await runtime.speakerVoiceProfiles(samples: phaseA.voiceSamples)
