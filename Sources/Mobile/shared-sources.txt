@@ -51,6 +51,11 @@ Sources/Fluid/Services/Meeting/Backend/MeetingEpochAudioReplay.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingLegacyCompatibilityBackend.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingModelInstaller.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingNemotronCompiledModelOwner.swift
+Sources/Fluid/Services/Meeting/Backend/MeetingFast32NemotronDiarizer.swift
+Sources/Fluid/Services/Meeting/Backend/Nemotron3/Nemotron3Diarizer.swift
+Sources/Fluid/Services/Meeting/Backend/Nemotron3/Nemotron3Models.swift
+Sources/Fluid/Services/Meeting/Backend/Nemotron3/Nemotron3StateUpdater.swift
+Sources/Fluid/Services/Meeting/Backend/Nemotron3/Nemotron3Types.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingNemotronModelLocator.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift
 Sources/Fluid/Services/Meeting/Backend/MeetingParakeetNemotronBackend.swift

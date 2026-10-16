@@ -290,9 +290,9 @@ enum PichiMeetingProviderFactory {
     private static func availableDiarizationFingerprint(enabled: Bool) -> String {
         guard enabled else { return self.transcriptOnlyDiarizationFingerprint }
         #if arch(arm64)
-        guard (try? MeetingNemotronModelLocator().locate()) != nil,
+        guard let artifact = try? MeetingNemotronModelLocator().locate(),
               (try? MeetingSpeakerVoiceModelArtifacts.validate()) != nil else { return self.transcriptOnlyDiarizationFingerprint }
-        return MeetingProcessingCheckpoint.currentDiarizationFingerprint + ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision
+        return artifact.implementationFingerprint + ";voice=wespeaker@" + MeetingSpeakerVoiceModelArtifacts.revision
         #else
         return self.transcriptOnlyDiarizationFingerprint
         #endif

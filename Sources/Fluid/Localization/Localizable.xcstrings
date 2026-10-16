@@ -14848,19 +14848,19 @@
         }
       }
     },
-    "Downloads once (about 200 MB) and stays on this Mac. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities.": {
+    "Downloads once and stays on this Mac. Speaker identification runs locally after recording.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Downloads once (about 200 MB) and stays on this Mac. Parakeet transcription waits for it; GigaAM can finish with unknown speaker identities."
+            "value": "Downloads once and stays on this Mac. Speaker identification runs locally after recording."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Загружается один раз (около 200 МБ) и хранится на этом Mac. Для расшифровки Parakeet нужна эта модель; GigaAM может завершить расшифровку без определения участников."
+            "value": "Загружается один раз и хранится на этом Mac. Участники определяются локально после завершения записи."
           }
         }
       }
