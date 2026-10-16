@@ -1231,6 +1231,65 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(restartedIDs, [retained.id], "Missing or strict input never reaches the durable restart service")
     }
 
+    func testRetainedRecoveryCanvasNativeVisuals() throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_RETAINED_RECOVERY_VISUAL_DIR"] else {
+            throw XCTSkip("Opt-in native retained recovery visual check")
+        }
+        XCTAssertTrue(path.hasPrefix("/"), "The caller supplies an absolute ignored artifact directory")
+        let output = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let previousLanguage = ProcessInfo.processInfo.environment["PICHI_INTERFACE_LANGUAGE"]
+        defer {
+            if let previousLanguage { setenv("PICHI_INTERFACE_LANGUAGE", previousLanguage, 1) }
+            else { unsetenv("PICHI_INTERFACE_LANGUAGE") }
+        }
+        let preferences = MeetingUIPreferences()
+        var session = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        session.audioStorageMode = .retainedFiles
+        session.title = "Retained meeting Ёё"
+        session.failures = [.init(id: UUID(), occurredAt: Date(), domain: .processing,
+            code: "syntheticCheckpointFailure", message: "Synthetic interrupted processing", recoverable: true)]
+        try session.validateForPersistence()
+        var actions = 0
+        let cases: [(PichiInterfaceLanguage, ColorScheme)] = [(.english, .light), (.russian, .dark)]
+        for (language, scheme) in cases {
+            setenv("PICHI_INTERFACE_LANGUAGE", language.rawValue, 1)
+            XCTAssertEqual(PichiLocalization.language, language)
+            let view = MeetingFailureCanvas(session: session,
+                message: "The saved processing checkpoint is damaged. Keep the recording and restart processing.",
+                isRetrying: false, onRetrySession: { _ in actions += 1 }, onRestartSession: { _ in actions += 1 },
+                onRevealAudio: { _ in actions += 1 }, onRecordAgain: { _ in actions += 1 }, onClose: { actions += 1 })
+                .padding(32)
+                .frame(width: 760, height: 640, alignment: .topLeading)
+                .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme))
+                .environment(\.colorScheme, scheme)
+                .environment(\.locale, language.locale)
+            let host = NSHostingView(rootView: view)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 640),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            host.appearance = window.appearance
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            defer { window.orderOut(nil); window.close() }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            XCTAssertGreaterThanOrEqual(bitmap.pixelsWide, 760)
+            XCTAssertGreaterThanOrEqual(bitmap.pixelsHigh, 640)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            XCTAssertGreaterThan(png.count, 10_000, "The actual native canvas must produce a populated image")
+            try png.write(to: output.appendingPathComponent("retained-recovery-\(language.rawValue)-\(scheme).png"))
+        }
+        XCTAssertEqual(actions, 0, "Rendering cannot retry, reset progress, reveal audio or begin recording")
+        XCTAssertEqual(MeetingUIPreferences(), preferences, "Visual verification preserves meeting and audio preferences")
+    }
+
     func testFluidMeetSetupReadinessStatesRenderWithoutSideEffects() throws {
         let preferences = MeetingUIPreferences()
         let actions = MeetingUIActionRecorder()
