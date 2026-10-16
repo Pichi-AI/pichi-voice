@@ -2,7 +2,8 @@ import Foundation
 @testable import FluidVoice_Debug
 import XCTest
 
-private actor SyntheticPersonRedactor: TranscriptTextRedacting {
+@MainActor
+private final class SyntheticPersonRedactor: TranscriptTextRedacting {
     let approvesPreview: Bool
     private(set) var inputs: [String] = []
     init(approvesPreview: Bool = false) { self.approvesPreview = approvesPreview }
@@ -23,6 +24,7 @@ private struct SyntheticFailingRedactor: TranscriptTextRedacting {
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction { throw Failure() }
 }
 
+@MainActor
 final class MeetingPrivacyPublicationTests: XCTestCase {
     func testLivePartialUsesPriorPhraseContextWithoutChangingIdentityOrTiming() async throws {
         let utterance = MeetingLiveUtterance(id: UUID(), speaker: .you, text: "Анна", start: 0, end: 1)
@@ -34,7 +36,7 @@ final class MeetingPrivacyPublicationTests: XCTestCase {
         let unstable = try await MeetingTranscriptPrivacyPolicy.redactedLiveSnapshot(snapshot, using: approvedRedactor)
         XCTAssertTrue(unstable.utterances.isEmpty)
         XCTAssertTrue(unstable.partials.isEmpty)
-        let unstableInputs = await approvedRedactor.inputs
+        let unstableInputs = approvedRedactor.inputs
         XCTAssertEqual(unstableInputs, ["Анна"], "An unstable partial cannot enter privacy inference")
 
         partial.stableUTF16Count = partial.text.utf16.count
