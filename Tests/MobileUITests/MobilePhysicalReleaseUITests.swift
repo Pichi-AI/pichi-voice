@@ -369,6 +369,246 @@ final class MobilePhysicalReleaseUITests: XCTestCase {
         #endif
     }
 
+    /// Human-observed smoke flow. Every checkpoint pauses before the next UI action
+    /// until the parent has inspected the native screenshot and supplied its ACK.
+    @MainActor
+    func testReleaseVisibleOneMinuteRecordingWithParentCheckpoints() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Requires an explicitly authorized, visually observed physical-device audio lease")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_PHYSICAL_VISIBLE_UI"] == "1",
+              environment["PICHI_PHYSICAL_RELEASE_UI_AUDIO"] == "1" else {
+            throw XCTSkip("Enable visible physical recording and audible playback explicitly")
+        }
+        let revision = try XCTUnwrap(environment["PICHI_TEST_REVISION"])
+        try require(!revision.isEmpty && revision != "working-tree", "A concrete frozen AUT revision is required")
+        let runnerID = try XCTUnwrap(Bundle.main.bundleIdentifier)
+        try require(runnerID.hasSuffix(".xctrunner"), "Only the UI runner may own synthetic playback")
+        let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+        try require(backgroundModes.contains("audio"), "The frozen, validly signed runner must declare background audio")
+        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: true)
+        let fixture = support.appendingPathComponent("PhysicalReleaseUI/audio/ru.wav")
+        try require(FileManager.default.fileExists(atPath: fixture.path), "Stage the approved synthetic Russian WAV in the runner")
+        let player = try AVAudioPlayer(contentsOf: fixture)
+        try require(player.duration.isFinite && player.duration >= 1, "The speech fixture must be valid")
+        player.numberOfLoops = -1
+        player.volume = 0.8
+        try require(player.prepareToPlay(), "The runner must prepare synthetic playback")
+        let checkpoints = support.appendingPathComponent("VisibleRecordingUI", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: checkpoints, withIntermediateDirectories: true)
+        print("[VISIBLE_UI_RUN] directory=\(checkpoints.path) revision=\(revision) test=testReleaseVisibleOneMinuteRecordingWithParentCheckpoints")
+
+        let app = XCUIApplication(bundleIdentifier: "ai.pichi.voice.mobile")
+        app.launchArguments = []
+        app.launchEnvironment = [:]
+        let audioSession = AVAudioSession.sharedInstance()
+        let originalCategory = audioSession.category
+        let originalMode = audioSession.mode
+        let originalOptions = audioSession.categoryOptions
+        var ownsRecording = false
+        var changedPlaybackCategory = false
+        var ownsPlaybackSession = false
+        defer {
+            player.stop()
+            if ownsPlaybackSession { try? audioSession.setActive(false, options: .notifyOthersOnDeactivation) }
+            if changedPlaybackCategory {
+                try? audioSession.setCategory(originalCategory, mode: originalMode, options: originalOptions)
+            }
+        }
+        do {
+            app.activate()
+            try await visibleCheckpoint("00-foreground", app: app, revision: revision, directory: checkpoints)
+            try require(app.state == .runningForeground, "The ordinary Release AUT must be foreground")
+            try openNavigation(app, "meetings", titles: ["Meetings", "Встречи"], revision: revision)
+            try await visibleCheckpoint("01-meetings-idle", app: app, revision: revision, directory: checkpoints)
+            try require(!app.buttons["meeting.stop"].exists
+                        && !app.descendants(matching: .any)["meeting.processing"].firstMatch.exists,
+                        "An existing recording or processing attempt is not owned by this test")
+            if !app.buttons["meeting.start"].exists {
+                try tap(app.buttons["meeting.new"], "Create a fresh meeting view without deleting history")
+                try await visibleCheckpoint("02-new-meeting", app: app, revision: revision, directory: checkpoints)
+            }
+            try require(app.buttons["meeting.start"].waitForExistence(timeout: 15)
+                        && app.buttons["meeting.start"].isEnabled && app.buttons["meeting.start"].isHittable,
+                        "The real Start action must be ready")
+            try require(app.alerts.count == 0, "Resolve permission or readiness prompts through normal UI before testing")
+            try require(audioSession.outputVolume > 0.05, "The device speaker must already be audible")
+            try await visibleCheckpoint("03-ready", app: app, revision: revision, directory: checkpoints)
+
+            try tap(app.buttons["meeting.start"], "Tap the actual Release Start action before any speech playback")
+            ownsRecording = true
+            try await waitForVisibleRecording(in: app, timeout: 90)
+            let beforeSpeechTimer = try visibleTimerSeconds(in: app)
+            try await visibleCheckpoint("04-recording-before-speech", app: app, revision: revision, directory: checkpoints)
+            try verifyVisibleRecording(in: app)
+            try require(!player.isPlaying, "No speech may play before visually acknowledged recording")
+
+            let runner = XCUIApplication(bundleIdentifier: runnerID)
+            runner.activate()
+            try await visibleCheckpoint("05-playback-runner-foreground", app: runner, revision: revision, directory: checkpoints)
+            try require(runner.state == .runningForeground, "Initiate playback while its owning runner is foreground")
+            try audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
+            changedPlaybackCategory = true
+            try audioSession.setActive(true)
+            ownsPlaybackSession = true
+            try require(player.play(), "The runner must start real synthetic speech playback")
+            app.activate()
+            try verifyVisibleRecording(in: app)
+            try require(try visibleTimerSeconds(in: app) >= beforeSpeechTimer, "The same recording timer must survive the foreground change")
+            try await visibleCheckpoint("06-recording-with-speech", app: app, revision: revision, directory: checkpoints)
+            let speechStartTimer = try visibleTimerSeconds(in: app)
+            try await observeVisibleRecording(in: app, player: player, seconds: 30)
+            let thirtySecondTimer = try visibleTimerSeconds(in: app)
+            try require(thirtySecondTimer >= speechStartTimer + 25, "The visible timer must advance during the first speech interval")
+            try await visibleCheckpoint("07-recording-30-seconds", app: app, revision: revision, directory: checkpoints)
+            try await observeVisibleRecording(in: app, player: player, seconds: 30)
+            let sixtySecondTimer = try visibleTimerSeconds(in: app)
+            try require(sixtySecondTimer >= thirtySecondTimer + 25, "The visible timer must keep advancing during the second speech interval")
+            try await visibleCheckpoint("08-recording-60-seconds", app: app, revision: revision, directory: checkpoints)
+            print("[VISIBLE_UI_RECORDING] timerBeforeSpeech=\(beforeSpeechTimer) timerAtSpeech=\(speechStartTimer) timerAt30=\(thirtySecondTimer) timerAt60=\(sixtySecondTimer) liveCharacters=\(liveTextCharacterCount(in: app))")
+
+            player.stop()
+            try require(!player.isPlaying, "Stop the owned speech player before stopping capture")
+            try tap(app.buttons["meeting.stop"], "Tap the actual Stop and Transcribe action")
+            // A very short session may complete before the processing snapshot. Retain
+            // the observed state rather than requiring a transient spinner to linger.
+            try await waitForVisibleProcessingOrCompletion(in: app, timeout: 30)
+            try await visibleCheckpoint("09-processing", app: app, revision: revision, directory: checkpoints)
+            try await waitForCompletedTranscript(in: app, timeout: 300)
+            ownsRecording = false
+            try require(!app.buttons["meeting.stop"].exists, "Joined completion must remove the recording controls")
+            let paragraphs = app.descendants(matching: .any)
+                .matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.paragraph."))
+            try require(paragraphs.count > 0, "Completion must expose actual readable transcript paragraphs")
+            let speakers = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transcript.speaker."))
+            if speakers.count > 0 {
+                try require(speakers.allElementsBoundByIndex.allSatisfy { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty },
+                            "Every exposed speaker must have a readable label")
+            }
+            print("[VISIBLE_UI_COMPLETED] paragraphs=\(paragraphs.count) speakers=\(speakers.count) revision=\(revision)")
+            try await visibleCheckpoint("10-completed", app: app, revision: revision, directory: checkpoints)
+        } catch {
+            player.stop()
+            // Ownership begins only after this test taps Start. Never stop an
+            // unrelated meeting found in the initial foreground or idle checkpoint.
+            if ownsRecording {
+                let cleanup = Task { @MainActor in
+                    app.activate()
+                    try? self.saveVisibleCheckpoint("failure-owned-recording-foreground", app: app,
+                                                    revision: revision, directory: checkpoints)
+                    let stop = app.buttons["meeting.stop"]
+                    if stop.waitForExistence(timeout: 30), stop.isEnabled {
+                        stop.tap()
+                        try? self.saveVisibleCheckpoint("failure-owned-recording-stop", app: app,
+                                                        revision: revision, directory: checkpoints)
+                        do { try await self.waitForCompletedTranscript(in: app, timeout: 300) }
+                        catch { print("[VISIBLE_UI_CLEANUP] joined_completion_requires_parent_inspection") }
+                    } else if !app.buttons["transcript.more"].exists {
+                        print("[VISIBLE_UI_CLEANUP] stop_unavailable_requires_parent_inspection")
+                    }
+                    try? self.saveVisibleCheckpoint("failure-owned-recording-cleanup", app: app,
+                                                    revision: revision, directory: checkpoints)
+                }
+                await cleanup.value
+            } else {
+                try? saveVisibleCheckpoint("failure-current-state", app: app, revision: revision, directory: checkpoints)
+            }
+            throw error
+        }
+        #endif
+    }
+
+    @MainActor private func saveVisibleCheckpoint(_ step: String, app: XCUIApplication,
+                                                  revision: String, directory: URL) throws {
+        let screenshot = XCUIScreen.main.screenshot()
+        try screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(step).png"), options: .atomic)
+        let details = "test=\(name)\nstep=\(step)\nrevision=\(revision)\nuptime=\(ProcessInfo.processInfo.systemUptime)\nappState=\(app.state.rawValue)\n\n\(app.debugDescription)\n"
+        try details.write(to: directory.appendingPathComponent("\(step).txt"), atomically: true, encoding: .utf8)
+        let attachment = XCTAttachment(screenshot: screenshot)
+        attachment.name = "\(name)-\(step)-\(revision)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    @MainActor private func visibleCheckpoint(_ step: String, app: XCUIApplication,
+                                              revision: String, directory: URL) async throws {
+        try saveVisibleCheckpoint(step, app: app, revision: revision, directory: directory)
+        print("[VISIBLE_UI_CHECKPOINT] step=\(step) directory=\(directory.path) revision=\(revision)")
+        let acknowledgement = directory.appendingPathComponent("\(step).ack")
+        let deadline = ProcessInfo.processInfo.systemUptime + 120
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            try Task.checkCancellation()
+            if FileManager.default.fileExists(atPath: acknowledgement.path) {
+                print("[VISIBLE_UI_ACK] step=\(step)")
+                return
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw verificationFailure("Parent did not acknowledge native checkpoint \(step) within 120 seconds")
+    }
+
+    @MainActor private func verifyVisibleRecording(in app: XCUIApplication) throws {
+        try require(app.state == .runningForeground, "The recording AUT must remain visibly foreground")
+        try require(app.descendants(matching: .any)["meeting.recording"].firstMatch.exists
+                    && app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isEnabled
+                    && app.descendants(matching: .any)["meeting.timer"].firstMatch.exists,
+                    "Actual recording UI must expose its recording container, enabled Stop action and timer")
+        try require(app.alerts.count == 0 && !app.buttons["meeting.retry"].exists,
+                    "The actual recording must not show an error or permission alert")
+    }
+
+    @MainActor private func visibleTimerSeconds(in app: XCUIApplication) throws -> Int {
+        let timer = app.descendants(matching: .any)["meeting.timer"].firstMatch
+        try require(timer.exists, "The actual recording timer must exist")
+        let components = timer.label.split(separator: ":").map { Int($0) }
+        try require((2...3).contains(components.count) && components.allSatisfy { $0 != nil && $0! >= 0 },
+                    "The visible recording timer must use a readable timestamp")
+        return components.reduce(0) { $0 * 60 + $1! }
+    }
+
+    @MainActor private func waitForVisibleRecording(in app: XCUIApplication, timeout: TimeInterval) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if app.buttons["meeting.stop"].exists && app.buttons["meeting.stop"].isEnabled {
+                try verifyVisibleRecording(in: app)
+                return
+            }
+            if app.alerts.count > 0 || app.buttons["meeting.retry"].exists {
+                throw verificationFailure("The real Start action exposed an alert or failed attempt")
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw verificationFailure("The real Start action did not reach active recording")
+    }
+
+    @MainActor private func observeVisibleRecording(in app: XCUIApplication, player: AVAudioPlayer,
+                                                   seconds: TimeInterval) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + seconds
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            try verifyVisibleRecording(in: app)
+            try require(player.isPlaying, "Owned synthetic playback must remain active during recording")
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        try verifyVisibleRecording(in: app)
+    }
+
+    @MainActor private func waitForVisibleProcessingOrCompletion(in app: XCUIApplication,
+                                                                timeout: TimeInterval) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if app.descendants(matching: .any)["meeting.processing"].firstMatch.exists
+                || (app.buttons["transcript.more"].exists && !app.buttons["meeting.stop"].exists) { return }
+            if app.alerts.count > 0 || app.buttons["meeting.retry"].exists {
+                throw verificationFailure("The actual Stop action failed instead of processing")
+            }
+            try await Task.sleep(nanoseconds: 250_000_000)
+        }
+        throw verificationFailure("Stop did not enter processing or joined completion")
+    }
+
     @MainActor private func openNavigation(_ app: XCUIApplication, _ identifier: String, titles: [String], revision: String) throws {
         let sidebar = app.buttons["navigation.\(identifier)"]
         if sidebar.exists { try tap(sidebar, "Open \(identifier)") }
