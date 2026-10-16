@@ -112,3 +112,42 @@ word attribution, unknown coverage, overlap and false merge/split evidence separ
 Fathom agreement is not human-ground-truth DER or a measured confidence calibration. Inspect actual
 counterexamples before changing a policy; fewer unknown words alone does not establish better
 speaker attribution.
+
+## Weak-reference comparison
+
+`score.py` imports the existing timeline evaluator's tested exact interval/collar and global
+one-to-one assignment functions. It freezes one mapping from original native activity per
+recording and reuses that mapping for the historical baseline and every policy. It never remaps
+individual windows or tunes a mapping to make a policy appear better.
+
+```sh
+python3 tools/meeting-native-eval/test_weak_score.py
+python3 tools/meeting-native-eval/score.py \
+  --manifest /absolute/private/corpus.json \
+  --native-directory /absolute/private/native-evaluation \
+  --variant standard=/absolute/private/native-evaluation/baseline-development \
+  --variant candidate=/absolute/private/native-evaluation/candidate-development \
+  --split development --output /absolute/private/development-weak-analysis.json
+```
+
+The eight synthetic scorer oracles check unknown and assigned denominators, incorrect assigned
+labels, undefined selective disagreement, exact collars, fixed mapping, interval duplication,
+text-free diagnostic output and aggregate count weighting. The scorer validates frozen reference
+hashes and original native evidence hashes before comparing policies.
+
+Reports retain strict weak-reference and exact 1-second/2-second collar profiles. The collars
+exclude both sides of canonical reference speaker TURN changes and clip edges, after adjacent
+same-speaker phrases have been unioned. They are not only clip-edge filters. Whole native words
+that cross excluded/unknown reference geometry stay unscored, and excluded counts plus all-native
+word denominators remain explicit. No reference word timestamps are invented.
+
+Native activity and word attribution are separate diagnostics. All automatic Fathom results remain
+weak references, whose inferred turn ends include silence and whose single-speaker labels can omit
+short simultaneous speech. An intended foreground-interrupter choice can therefore disagree with
+Fathom's continuing main speaker. Such disagreement does not prove a diarization error. Unknown
+coverage, weak agreement, weak disagreement and overlap policy must be assessed together.
+
+An optional ASR edit diagnostic compares only complete, non-clipped automatic reference turns and
+native words in their actual intervals. It is separate from speaker policy and remains a weak
+text disagreement measure, not human-annotated WER. It excludes entire reference turns at clipped
+window edges rather than inventing alignment or using their out-of-window text.
