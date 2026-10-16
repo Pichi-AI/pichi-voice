@@ -78,8 +78,10 @@ struct MeetingSpeakerAttributionTests {
         self.check(three.selectedToken == nil && three.candidates.count == 3)
         self.check(three.simultaneousIntervals.contains { $0.tokens.count == 3 })
         let tiny = try self.resolve([self.unit("x", 0, 1)], [self.activity("a", 0.5, 0.51)])[0]
-        self.check(tiny.rule == .insufficientSupport && tiny.candidates.count == 1)
-        self.check(tiny.candidates[0].isSuppressed && tiny.candidates[0].supportSeconds > 0)
+        self.check(tiny.rule == .singleAcousticSupport && tiny.candidates.count == 1)
+        self.check(!tiny.candidates[0].isSuppressed && tiny.candidates[0].supportSeconds > 0)
+        let residual = try self.resolve([self.unit("x", 0, 1)], [self.activity("a", 0, 0.5), self.activity("b", 0.25, 0.255)])[0]
+        self.check(residual.candidates.first { $0.token == b }?.isSuppressed == true)
         var padded: [MeetingSpeakerAttributionDecision] = []
         for end in [0.4, 0.6, 0.8, 3.0] {
             padded.append(try self.resolve([self.unit("x", 0, end)], [self.activity("a", 0, 0.3), self.activity("b", 0.2, 0.3)])[0])
@@ -104,11 +106,11 @@ struct MeetingSpeakerAttributionTests {
         let agreement = try self.resolve(agreementUnits, [self.activity("a", 0, 0.2), self.activity("a", 0.6, 0.8)])[1]
         self.check(agreement.rule == .neighborAgreement && agreement.selectedToken == a)
         let boundary = try self.resolve(units, activity + [self.activity("a", 0.3, 0.32)])[1]
-        self.check(boundary.rule == .boundaryContinuation && boundary.selectedToken == a)
+        self.check(boundary.rule == .singleAcousticSupport && boundary.selectedToken == a)
         let multi = [units[0], self.unit("tail", 0.3, 0.5), self.unit("later", 0.6, 0.7), self.unit("right", 0.8, 1, .assigned(b))]
         let mixed = try self.resolve(multi, [self.activity("a", 0, 0.2), self.activity("a", 0.3, 0.32), self.activity("b", 0.8, 1)])
-        self.check(mixed[1].rule == .boundaryContinuation && mixed[1].selectedToken == a)
-        self.check(mixed[2].rule == .incomingSpeaker && mixed[2].selectedToken == b, "Outgoing tail cascaded into unsupported later word")
+        self.check(mixed[1].rule == .singleAcousticSupport && mixed[1].selectedToken == a)
+        self.check(mixed[2].selectedToken == nil, "A raw-unassigned outgoing tail became a contextual anchor")
         let blocked = try self.resolve(units, activity, barriers: ["unknown"])[1]
         self.check(blocked.rule == .barrier && blocked.selectedToken == nil)
         let scopeBlocked = try self.resolve(units, activity, epochs: [Self.epoch])[1]
@@ -131,7 +133,7 @@ struct MeetingSpeakerAttributionTests {
         let utterance = [units[0], self.unit("unknown", 0.3, 0.5, precision: .utterance), units[2]]
         self.check(try self.resolve(utterance, activity)[1].selectedToken == nil)
         let foreignWeak = try self.resolve(units, activity + [self.activity("c", 0.3, 0.32)])[1]
-        self.check(foreignWeak.selectedToken == nil)
+        self.check(foreignWeak.selectedToken == self.token("c") && foreignWeak.rule == .singleAcousticSupport)
     }
 
     static func interruptions() throws {
@@ -213,7 +215,7 @@ struct MeetingSpeakerAttributionTests {
         self.expectError { _ = try self.resolve([good], [], barriers: ["missing"]) }
         self.expectError { _ = try self.resolve([good], [], epochs: [.init(trackID: Self.epoch.trackID, ordinal: -1)]) }
         self.expectError { _ = try self.resolve([good], [], policy: .init(schemaVersion: 999)) }
-        self.expectError { _ = try self.resolve([good], [], policy: .init(minimumAcousticSupportSeconds: .nan)) }
+        self.expectError { _ = try self.resolve([good], [], policy: .init(maximumCandidateNoiseSeconds: .nan)) }
         self.expectError { _ = try self.resolve([good], [], policy: .init(dominanceMinRatio: 0)) }
         self.expectError { _ = try self.resolve([good], [], policy: .init(maximumUnknownRunSeconds: -1)) }
         self.expectError { _ = try MeetingSpeakerAttribution.unionedIntervals([.init(start: .nan, end: 1)]) }
@@ -221,7 +223,7 @@ struct MeetingSpeakerAttributionTests {
         let roundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(policy))
         self.check(roundTrip == policy && roundTrip.fingerprint == policy.fingerprint)
         self.check(policy.fingerprint.count < 100)
-        self.check(MeetingSpeakerAttributionPolicy(minimumAcousticSupportSeconds: -0.0).fingerprint == MeetingSpeakerAttributionPolicy(minimumAcousticSupportSeconds: 0).fingerprint)
+        self.check(MeetingSpeakerAttributionPolicy(maximumCandidateNoiseSeconds: -0.0).fingerprint == MeetingSpeakerAttributionPolicy(maximumCandidateNoiseSeconds: 0).fingerprint)
         self.check(MeetingSpeakerAttributionPolicy(maximumUnknownRunSeconds: 4).fingerprint != policy.fingerprint)
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         object["schemaVersion"] = 2
@@ -237,12 +239,20 @@ struct MeetingSpeakerAttributionTests {
     static func exactBoundaries() throws {
         let a = self.token("a"), b = self.token("b")
         for offset in [0.0, 10_000.0] {
-            let exact = try self.resolve([self.unit("x", offset, offset + 0.4)],
-                                         [self.activity("a", offset, offset + 0.08)])[0]
-            self.check(exact.rule == .singleAcousticSupport && exact.selectedToken == a)
-            let justBelow = try self.resolve([self.unit("x", offset, offset + 0.4)],
-                                             [self.activity("a", offset, offset + 0.079_999)])[0]
-            self.check(justBelow.rule == .insufficientSupport)
+            let exact = try self.resolve([self.unit("x", offset, offset + 0.5)],
+                                         [self.activity("a", offset, offset + 0.5), self.activity("b", offset, offset + 0.08)])[0]
+            self.check(exact.candidates.first { $0.token == b }?.isSuppressed == false)
+            let justBelow = try self.resolve([self.unit("x", offset, offset + 0.5)],
+                                             [self.activity("a", offset, offset + 0.5), self.activity("b", offset, offset + 0.079_999)])[0]
+            self.check(justBelow.candidates.first { $0.token == b }?.isSuppressed == true)
+            let shortWords = [self.unit("left", offset, offset + 0.04, .assigned(a)),
+                              self.unit("unknown", offset + 0.05, offset + 0.1),
+                              self.unit("right", offset + 0.11, offset + 0.15, .assigned(b))]
+            let shortActivity = [self.activity("a", offset, offset + 0.04), self.activity("b", offset + 0.11, offset + 0.15)]
+            let shortOutput = try self.resolve(shortWords, shortActivity)
+            self.check(shortOutput[0].rule == .singleAcousticSupport && shortOutput[2].rule == .singleAcousticSupport)
+            self.check(shortOutput[1].rule == .incomingSpeaker && shortOutput[1].selectedToken == b,
+                       "A whole short native word lost its voice merely because its envelope was short")
             let units = [self.unit("left", offset, offset + 0.2, .assigned(a)),
                          self.unit("unknown", offset + 0.3, offset + 3.8),
                          self.unit("right", offset + 3.9, offset + 4.1, .assigned(b))]
@@ -260,7 +270,7 @@ struct MeetingSpeakerAttributionTests {
         // create a second meaningful voice or a contextual anchor contradiction.
         let tiny = try self.resolve([self.unit("x", 0, 1)], [self.activity("a", 0, 1), self.activity("b", 0.5, 0.500_000_000_1)])[0]
         self.check(tiny.candidates.count == 2 && !tiny.simultaneousIntervals.isEmpty && tiny.relation == .single)
-        let zeroFloor = try self.resolve([self.unit("x", 0, 1)], [self.activity("b", 0.5, 0.500_000_000_1)], policy: .init(minimumAcousticSupportSeconds: 0))[0]
+        let zeroFloor = try self.resolve([self.unit("x", 0, 1)], [self.activity("b", 0.5, 0.500_000_000_1)], policy: .init(maximumCandidateNoiseSeconds: 0))[0]
         self.check(zeroFloor.selectedToken == nil && zeroFloor.candidates[0].isSuppressed)
     }
 

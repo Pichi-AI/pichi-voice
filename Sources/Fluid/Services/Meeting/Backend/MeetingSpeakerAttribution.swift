@@ -10,7 +10,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     let schemaVersion: Int
     /// Arithmetic slack only. It never expands intervals or creates positive overlap.
     let comparisonTolerance: Double
-    let minimumAcousticSupportSeconds: Double
+    let maximumCandidateNoiseSeconds: Double
+    let maximumCandidateNoiseActiveFraction: Double
+    let minimumInterruptionSupportSeconds: Double
     let dominanceMinLeaderFraction: Double
     let dominanceMaxRunnerFraction: Double
     let dominanceMinRatio: Double
@@ -27,7 +29,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     init(
         schemaVersion: Int = Self.currentVersion,
         comparisonTolerance: Double = 0.000_000_001,
-        minimumAcousticSupportSeconds: Double = 0.08,
+        maximumCandidateNoiseSeconds: Double = 0.08,
+        maximumCandidateNoiseActiveFraction: Double = 0.2,
+        minimumInterruptionSupportSeconds: Double = 0.08,
         dominanceMinLeaderFraction: Double = 0.5,
         dominanceMaxRunnerFraction: Double = 0.2,
         dominanceMinRatio: Double = 2,
@@ -43,7 +47,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     ) {
         self.schemaVersion = schemaVersion
         self.comparisonTolerance = comparisonTolerance
-        self.minimumAcousticSupportSeconds = minimumAcousticSupportSeconds
+        self.maximumCandidateNoiseSeconds = maximumCandidateNoiseSeconds
+        self.maximumCandidateNoiseActiveFraction = maximumCandidateNoiseActiveFraction
+        self.minimumInterruptionSupportSeconds = minimumInterruptionSupportSeconds
         self.dominanceMinLeaderFraction = dominanceMinLeaderFraction
         self.dominanceMaxRunnerFraction = dominanceMaxRunnerFraction
         self.dominanceMinRatio = dominanceMinRatio
@@ -67,7 +73,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         let canonical = MeetingConfigFingerprintEncoding.encode([
             ("attributionVersion", String(self.schemaVersion)),
             ("comparisonTolerance", bits(self.comparisonTolerance)),
-            ("minimumSupport", bits(self.minimumAcousticSupportSeconds)),
+            ("candidateNoiseCap", bits(self.maximumCandidateNoiseSeconds)),
+            ("candidateNoiseActiveFraction", bits(self.maximumCandidateNoiseActiveFraction)),
+            ("interruptionMinimumSupport", bits(self.minimumInterruptionSupportSeconds)),
             ("leaderFraction", bits(self.dominanceMinLeaderFraction)),
             ("runnerFraction", bits(self.dominanceMaxRunnerFraction)),
             ("leaderRatio", bits(self.dominanceMinRatio)),
@@ -89,12 +97,14 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         guard self.schemaVersion == Self.currentVersion else {
             throw MeetingSpeakerAttributionError.unsupportedPolicyVersion(self.schemaVersion)
         }
-        let nonnegative = [self.minimumAcousticSupportSeconds, self.maximumUnknownRunSeconds,
+        let nonnegative = [self.maximumCandidateNoiseSeconds, self.minimumInterruptionSupportSeconds, self.maximumUnknownRunSeconds,
                            self.maximumNeighborGapSeconds, self.maximumBoundaryResidualSeconds,
                            self.maximumBriefInterruptionSeconds, self.maximumInterruptionWordSeconds,
                            self.maximumBriefInterruptionGapSeconds]
         guard self.comparisonTolerance.isFinite, (0...0.000_001).contains(self.comparisonTolerance),
               nonnegative.allSatisfy({ $0.isFinite && $0 >= 0 }),
+              self.maximumCandidateNoiseActiveFraction.isFinite,
+              (0...1).contains(self.maximumCandidateNoiseActiveFraction),
               self.dominanceMinLeaderFraction.isFinite,
               (0...1).contains(self.dominanceMinLeaderFraction),
               self.dominanceMaxRunnerFraction.isFinite,
@@ -105,7 +115,8 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, comparisonTolerance, minimumAcousticSupportSeconds, dominanceMinLeaderFraction
+        case schemaVersion, comparisonTolerance, maximumCandidateNoiseSeconds, maximumCandidateNoiseActiveFraction
+        case minimumInterruptionSupportSeconds, dominanceMinLeaderFraction
         case dominanceMaxRunnerFraction, dominanceMinRatio, maximumUnknownRunSeconds
         case maximumNeighborGapSeconds, maximumBoundaryResidualSeconds, maximumBriefInterruptionSeconds
         case maximumInterruptionWordSeconds, maximumBriefInterruptionGapSeconds
@@ -117,7 +128,9 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         try self.init(
             schemaVersion: c.decode(Int.self, forKey: .schemaVersion),
             comparisonTolerance: c.decode(Double.self, forKey: .comparisonTolerance),
-            minimumAcousticSupportSeconds: c.decode(Double.self, forKey: .minimumAcousticSupportSeconds),
+            maximumCandidateNoiseSeconds: c.decode(Double.self, forKey: .maximumCandidateNoiseSeconds),
+            maximumCandidateNoiseActiveFraction: c.decode(Double.self, forKey: .maximumCandidateNoiseActiveFraction),
+            minimumInterruptionSupportSeconds: c.decode(Double.self, forKey: .minimumInterruptionSupportSeconds),
             dominanceMinLeaderFraction: c.decode(Double.self, forKey: .dominanceMinLeaderFraction),
             dominanceMaxRunnerFraction: c.decode(Double.self, forKey: .dominanceMaxRunnerFraction),
             dominanceMinRatio: c.decode(Double.self, forKey: .dominanceMinRatio),
@@ -449,7 +462,7 @@ nonisolated enum MeetingSpeakerAttribution {
             // Two separate bouts within one word have ambiguous conversational roles.
             guard last + 1 == values.count || values[last + 1].start >= end else { return nil }
             let support = values[first...last].reduce(0) { $0 + $1.duration }
-            guard support + policy.comparisonTolerance >= policy.minimumAcousticSupportSeconds else { return nil }
+            guard support + policy.comparisonTolerance >= policy.minimumInterruptionSupportSeconds else { return nil }
             return result
         }
     }
@@ -474,19 +487,26 @@ nonisolated enum MeetingSpeakerAttribution {
     ) -> Decision {
         let grouped = Dictionary(grouping: entries, by: \.token)
         let tokens = Set(grouped.keys).union(unit.speaker.tokens).sorted(by: self.tokenBefore)
+        // Membership is relative to actual unioned acoustic support, never the ASR envelope.
+        // A whole 40 ms word inside a validated voice remains useful, while a 5 ms second voice
+        // beside 500 ms of another voice can be retained as suppressed residual evidence.
+        let active = self.unionValid(entries.map {
+            .init(start: max($0.interval.start, unit.analysisStart), end: min($0.interval.end, unit.analysisEnd))
+        }).reduce(0) { $0 + $1.duration }
+        let noiseThreshold = min(policy.maximumCandidateNoiseSeconds,
+                                 policy.maximumCandidateNoiseActiveFraction * active)
         let candidates = tokens.map { token -> MeetingSpeakerAttributionCandidateSupport in
             let intervals = self.unionValid((grouped[token] ?? []).map {
                 .init(start: max($0.interval.start, unit.analysisStart), end: min($0.interval.end, unit.analysisEnd))
             })
             let support = intervals.reduce(0) { $0 + $1.duration }
             return .init(token: token, intervals: intervals, supportSeconds: support,
-                         isSuppressed: support + policy.comparisonTolerance < policy.minimumAcousticSupportSeconds || support <= policy.comparisonTolerance)
+                         isSuppressed: support + policy.comparisonTolerance < noiseThreshold || support <= policy.comparisonTolerance)
         }
         let rawPositive = candidates.filter { $0.supportSeconds > 0 }
         let positive = rawPositive.filter { $0.supportSeconds > policy.comparisonTolerance }
         let eligible = candidates.filter { !$0.isSuppressed }
         let intersections = self.intersections(candidates: rawPositive)
-        let active = self.unionValid(rawPositive.flatMap(\.intervals)).reduce(0) { $0 + $1.duration }
         let conflict = hasActivity && unit.speaker.tokens.contains { token in
             !rawPositive.contains { $0.token == token }
         }
