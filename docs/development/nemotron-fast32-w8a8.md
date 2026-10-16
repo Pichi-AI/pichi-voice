@@ -21,7 +21,7 @@ The author-compiled bundle bypasses compilation without becoming an owned tempor
 
 ## Hardware limits
 
-The pinned `model.mil` declares `main<ios17>`. Runtime loading uses CoreML `.all`, allowing its CPU/GPU placement on machines without an ANE. It never substitutes the legacy model after a load or inference failure. The A10X iPad Pro has no ANE; successful compilation on Apple Silicon or the model card's ANE measurements do not establish A10X compatibility, memory, speed or energy use. Run the exact frozen signed app on the physical iPad before claiming support.
+The pinned `model.mil` declares `main<ios17>`. Runtime loading queries CoreML compute devices and prefers `.cpuAndNeuralEngine` when available; otherwise it selects `.cpuAndGPU` for the same graph. The configured compute-unit choice is recorded in support logs. It never substitutes the legacy model after a load or inference failure. The A10X iPad Pro has no ANE; successful compilation on Apple Silicon or the model card's ANE measurements do not establish A10X compatibility, memory, speed or energy use. Run the exact frozen signed app on the physical iPad before claiming support.
 
 ## Verification
 

@@ -640,10 +640,13 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         let compiledURL = try await self.compiledNemotron.compiledModel(for: artifact) { try locator.recheck($0) }
         if artifact.compiledModelURL != nil {
             // Keep the existing attempt/phase owner, ASR sequencing and per-track factory contract.
-            // CPU/GPU is supported without assuming an ANE (the A10X iPad has none).
+            // Prefer the evaluated ANE route when CoreML reports that device. The A10X
+            // fallback uses CPU/GPU with the SAME graph and reports that choice in support logs.
             // CoreML errors remain errors; this route never substitutes legacy weights.
             let configuration = MLModelConfiguration()
-            configuration.computeUnits = .all
+            configuration.computeUnits = MeetingFast32ComputePolicy.preferredUnits
+            let computeName = configuration.computeUnits == .cpuAndNeuralEngine ? "cpuAndNeuralEngine" : "cpuAndGPU"
+            DebugLogger.shared.log("[meeting/pcm] model=fast32-w8a8 computeUnits=\(computeName)", source: "MeetingPCMRuntime")
             let loadBegan = MeetingPCMRuntimeDiagnostics.begin(.load)
             let model = try MLModel(contentsOf: compiledURL, configuration: configuration)
             try Task.checkCancellation()

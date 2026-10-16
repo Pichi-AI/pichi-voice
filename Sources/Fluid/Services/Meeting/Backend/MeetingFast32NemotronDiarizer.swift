@@ -1,5 +1,19 @@
 import Foundation
 #if arch(arm64)
+import CoreML
+
+nonisolated enum MeetingFast32ComputePolicy {
+    static var preferredUnits: MLComputeUnits {
+        self.units(hasNeuralEngine: MLComputeDevice.allComputeDevices.contains {
+            if case .neuralEngine = $0 { return true }
+            return false
+        })
+    }
+
+    static func units(hasNeuralEngine: Bool) -> MLComputeUnits {
+        hasNeuralEngine ? .cpuAndNeuralEngine : .cpuAndGPU
+    }
+}
 
 /// Adapter for the split graph's actual host projection and high-resolution output contract.
 /// Shared orchestration continues to consume MeetingNemotronDiarizerFactory.

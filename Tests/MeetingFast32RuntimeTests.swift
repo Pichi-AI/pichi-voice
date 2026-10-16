@@ -11,6 +11,8 @@ nonisolated struct MeetingFast32RuntimeTests {
     static func main() async throws {
         let config = Nemotron3Config.preset(named: "fast32-split-w8a8")!
         try require(config.splitGraph && config.packedFrames == 340 && config.chunkLen == 32, "Pinned split graph geometry")
+        try require(MeetingFast32ComputePolicy.units(hasNeuralEngine: true) == .cpuAndNeuralEngine, "Prefer evaluated ANE route when available")
+        try require(MeetingFast32ComputePolicy.units(hasNeuralEngine: false) == .cpuAndGPU, "A10X fallback preserves graph on CPU/GPU")
         var output = MeetingFast32SpeakerIntervals(speakerCount: 2)
         // Voice zero crosses a replay boundary; voice one overlaps and ends in the final tail.
         let first = (0..<30).flatMap { _ in [Float(0.9), Float(0.5)] }
