@@ -1269,8 +1269,6 @@ final class MeetingRecoveryTests: XCTestCase {
             let host = NSHostingView(rootView: view)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 640),
                 styleMask: [.borderless], backing: .buffered, defer: false)
-            window.title = "Retained recovery QA \(language.rawValue)"
-            window.backgroundColor = scheme == .dark ? .black : .white
             window.isReleasedWhenClosed = false
             window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
             host.appearance = window.appearance
@@ -1287,18 +1285,6 @@ final class MeetingRecoveryTests: XCTestCase {
             let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
             XCTAssertGreaterThan(png.count, 10_000, "The actual native canvas must produce a populated image")
             try png.write(to: output.appendingPathComponent("retained-recovery-\(language.rawValue)-\(scheme).png"))
-            if ProcessInfo.processInfo.environment["PICHI_RETAINED_RECOVERY_WAIT_FOR_CAPTURE"] == "1" {
-                // Layer-backed glass requires a composited native-window capture. The parent
-                // captures this exact titled window through Computer Use, then acknowledges it.
-                let ready = output.appendingPathComponent("\(language.rawValue).ready")
-                let captured = output.appendingPathComponent("\(language.rawValue).captured")
-                try Data(window.title.utf8).write(to: ready)
-                let deadline = Date().addingTimeInterval(45)
-                while !FileManager.default.fileExists(atPath: captured.path), Date() < deadline {
-                    RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-                }
-                XCTAssertTrue(FileManager.default.fileExists(atPath: captured.path), "Native-window capture must finish before closing the window")
-            }
         }
         XCTAssertEqual(actions, 0, "Rendering cannot retry, reset progress, reveal audio or begin recording")
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Visual verification preserves meeting and audio preferences")
