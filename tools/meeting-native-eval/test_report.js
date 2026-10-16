@@ -1,0 +1,18 @@
+'use strict';
+const assert = require('node:assert/strict');
+const math = require('./report_assets/report.js');
+const word=(start,end,selected,rule='singleAcousticSupport',background=[])=>({start,end,selected,background,decision:{relation:'single',rule}});
+const words=[word(0,.4,'A'),word(.5,.8,'A'),word(.8,1,'B','briefInterruption',['A']),word(1,1.2,'A'),word(1.2,1.5,'A','incomingSpeaker'),word(1.5,1.8,'A','neighborAgreement')];
+const original=JSON.stringify(words),groups=math.groups(words);
+assert.equal(groups.length,4);
+assert.deepEqual(groups.map(g=>g.words.length),[2,1,1,2]);
+assert.equal(JSON.stringify(words),original,'Presentation grouping must preserve native words');
+assert.deepEqual(math.active(words,.8),[words[2]],'Native intervals are half open');
+assert.equal(math.visible({start:1,end:2},2,3),false);
+assert.equal(math.groups([word(0,1,'A'),word(.5,1.5,'A')]).length,2,'Overlapping ASR words cannot merge');
+assert.equal(math.groups([word(0,1,'A'),word(2,3,'A')]).length,2,'Long silence cannot disappear');
+const c={id:'synthetic',words:[1,2,3,4],metrics:{variants:{v:{all_unknown_words:1,profiles:{p:{eligible_words:2,excluded_words:2,counts:{words:2,assigned_words:1,weak_agree_words:0,weak_disagree_words:1}}}}}}};
+const sum=math.sumMetrics([c,c],'v','p');
+assert.deepEqual(sum,{words:4,assigned_words:2,weak_agree_words:0,weak_disagree_words:2,eligible_words:4,excluded_words:4,all_native_words:8,all_unknown_words:2});
+assert.throws(()=>math.sumMetrics([c],'missing','p'),/Missing metric/);
+console.log('Report logic: 9 invariants passed');
