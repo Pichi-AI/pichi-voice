@@ -114,7 +114,7 @@ elif '--entitlements' in sys.argv and os.environ.get('TEST_SIGNING_FAILURE') == 
 
     def test_brand_names_and_spaces_resolve_from_xcode_settings(self):
         for name in ["Pichi Voice Debug.app", "FluidVoice Debug.app", "Example Voice Debug.app",
-                     "Example $(touch injected) Debug.app"]:
+                     "Example `touch injected` Debug.app"]:
             with self.subTest(name=name):
                 product = self.products / name
                 result = self._run(self._settings(name), product)
@@ -174,7 +174,7 @@ elif '--entitlements' in sys.argv and os.environ.get('TEST_SIGNING_FAILURE') == 
                 self._assert_rejected_before_signing(settings)
 
     def test_product_name_cannot_escape_the_build_directory(self):
-        for name in ["../Other.app", "/Applications/Other.app", "Other.framework"]:
+        for name in ["../Other.app", "/Applications/Other.app", "Other.framework", "$(touch injected).app", "${PRODUCT_NAME}.app", ".app"]:
             with self.subTest(name=name):
                 self._assert_rejected_before_signing(self._settings(name))
 

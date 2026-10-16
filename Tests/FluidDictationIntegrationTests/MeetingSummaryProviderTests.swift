@@ -230,7 +230,7 @@ final class MeetingSummaryProviderTests: XCTestCase {
         XCTAssertEqual(configuration.providerID, "custom-fixture")
         XCTAssertEqual(configuration.connectionOptions, ["project": "synthetic"])
         XCTAssertEqual(configuration.execution, .standard)
-        XCTAssertFalse(configuration.isOnDevice)
+        XCTAssertFalse(configuration.usesLoopbackEndpoint)
     }
 
     func testRouteRequiresProviderAndVerifiedModel() {

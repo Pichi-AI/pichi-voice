@@ -73,9 +73,7 @@ struct PichiMeetingSummaryView: View {
             .disabled(self.controller.generating)
 
             if let config = self.requestConfiguration {
-                Label(config.isOnDevice ? PichiLocalization.format("Transcript stays on this Mac · %@", config.modelID)
-                      : PichiLocalization.format("Transcript will be sent to %@ · %@", config.baseURL, config.modelID),
-                      systemImage: config.isOnDevice ? "lock" : "network")
+                Label(config.transcriptDestinationText(language: self.interfaceLanguage), systemImage: "network")
                     .font(self.theme.typography.caption)
                     .foregroundStyle(self.theme.palette.secondaryText)
                     .textSelection(.enabled)

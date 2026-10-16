@@ -60,6 +60,7 @@ run_public_build() {
     local development_team
     local signing_identity_hash
     local app_path
+    local build_settings
     local ctranscribe_framework
     local ctranscribe_versions
     local ctranscribe_version_a
@@ -119,45 +120,53 @@ EOF
         exit 1
     fi
 
-    echo "Running signed public FluidVoice build..."
-    xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}" build
+    # Resolve the owned application before building or postprocessing any bundle.
+    # JSON is data, including configurable brand names, never shell source.
+    build_args+=(build DEVELOPMENT_TEAM="${development_team}")
+    if ! build_settings="$(xcodebuild "${build_args[@]}" -showBuildSettings -json)"; then
+        echo "Unable to read signed build settings from Xcode." >&2
+        exit 1
+    fi
+    if ! app_path="$(printf '%s\n' "${build_settings}" | python3 -c '
+import json
+import os
+import sys
 
-    # Read the trusted application target's resolved settings, including brand overrides.
-    # JSON avoids evaluating build-setting text or guessing a product name from the brand.
-    app_path="$(xcodebuild "${build_args[@]}" DEVELOPMENT_TEAM="${development_team}" \
-        -showBuildSettings -json | python3 -c '
-import json, os, pathlib, sys
 try:
-    records = json.load(sys.stdin)
-    if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
-        raise ValueError("build settings must be an array of target records")
-    applications = []
-    for record in records:
-        if record.get("target") != "fluid":
-            continue
-        settings = record.get("buildSettings")
-        if not isinstance(settings, dict):
-            raise ValueError("application build settings must be an object")
-        if settings.get("PRODUCT_TYPE") == "com.apple.product-type.application":
-            applications.append(settings)
-    if len(applications) != 1:
-        raise ValueError("expected one application target")
-    settings = applications[0]
-    directory = settings["TARGET_BUILD_DIR"]
-    product = settings["FULL_PRODUCT_NAME"]
-    if not isinstance(directory, str) or not pathlib.Path(directory).is_absolute():
-        raise ValueError("TARGET_BUILD_DIR must be absolute")
-    if not isinstance(product, str) or product != pathlib.Path(product).name or not product.endswith(".app"):
-        raise ValueError("FULL_PRODUCT_NAME must name an application bundle")
+    entries = json.load(sys.stdin)
+    if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+        raise ValueError("Xcode build settings must be an array of target records")
+    targets = [entry for entry in entries if entry.get("target") == "fluid"]
+    if len(targets) != 1:
+        raise ValueError(f"Expected one build settings entry for target fluid; found {len(targets)}")
+    settings = targets[0].get("buildSettings")
+    if not isinstance(settings, dict) or settings.get("PRODUCT_TYPE") != "com.apple.product-type.application":
+        raise ValueError("Target fluid must describe an application")
+    build_dir = settings.get("TARGET_BUILD_DIR")
+    product_name = settings.get("FULL_PRODUCT_NAME")
+    for key, value in (("TARGET_BUILD_DIR", build_dir), ("FULL_PRODUCT_NAME", product_name)):
+        if not isinstance(value, str) or not value or any(token in value for token in ("$(", "${", "\n", "\r", "\0")):
+            raise ValueError(f"Target fluid has an unavailable or unresolved {key}")
+    if not os.path.isabs(build_dir):
+        raise ValueError("Target fluid TARGET_BUILD_DIR must be absolute")
+    if os.path.basename(product_name) != product_name or not product_name.endswith(".app") or product_name == ".app":
+        raise ValueError("Target fluid FULL_PRODUCT_NAME must name an app bundle")
     root = os.path.realpath(sys.argv[1])
-    path = os.path.join(directory, product)
+    path = os.path.join(build_dir, product_name)
     if os.path.commonpath([root, os.path.realpath(path)]) != root:
-        raise ValueError("application bundle escapes DerivedData")
+        raise ValueError("Application bundle escapes DerivedData")
     print(path)
-except (KeyError, TypeError, ValueError) as error:
-    sys.exit("Unable to resolve signed application product: " + str(error))
-' "${DERIVED_DATA_PATH}")"
+except (ValueError, OSError) as error:
+    print(f"Unable to resolve signed application product: {error}", file=sys.stderr)
+    sys.exit(1)
+' "${DERIVED_DATA_PATH}")"; then
+        exit 1
+    fi
+
+    echo "Running signed public FluidVoice build..."
     echo "Build product: ${app_path}"
+    xcodebuild "${build_args[@]}"
+
     ctranscribe_framework="${app_path}/Contents/Frameworks/CTranscribe.framework"
     if [ ! -d "${app_path}" ] || [ -L "${app_path}" ]; then
         echo "Signed build product is missing: ${app_path}" >&2

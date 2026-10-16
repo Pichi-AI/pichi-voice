@@ -6,7 +6,7 @@ final class PichiMeetingSummarySettings: ObservableObject {
     enum Mode: String, CaseIterable, Identifiable {
         case local, configuredProvider
         var id: String { self.rawValue }
-        var title: String { self == .local ? PichiLocalization.text("Local model on this Mac") : PichiLocalization.text("Configured AI provider") }
+        var title: String { self == .local ? PichiLocalization.text("Local API endpoint") : PichiLocalization.text("Configured AI provider") }
     }
 
     enum TimeBudget: String, CaseIterable, Identifiable {

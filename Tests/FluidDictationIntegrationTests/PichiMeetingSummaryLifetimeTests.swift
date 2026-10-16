@@ -198,7 +198,7 @@ final class PichiMeetingSummaryLifetimeTests: XCTestCase {
         XCTAssertNil(controller.error)
         XCTAssertEqual(controller.document, document)
         XCTAssertEqual(controller.requestConfiguration(current: remote)?.cacheIdentity, remote.cacheIdentity)
-        XCTAssertFalse(controller.requestConfiguration(current: remote)?.isOnDevice ?? true)
+        XCTAssertFalse(controller.requestConfiguration(current: remote)?.usesLoopbackEndpoint ?? true)
         XCTAssertNil(controller.requestConfiguration(current: nil), "Old document metadata must not enable an unconfigured request")
         XCTAssertEqual(controller.documentConfiguration?.cacheIdentity, local.cacheIdentity)
         XCTAssertEqual(controller.documentConfiguration?.language, "ru", "Copy uses the saved document's language")

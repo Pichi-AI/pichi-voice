@@ -444,6 +444,31 @@ final class PichiMeetingSummaryTests: XCTestCase {
         XCTAssertThrowsError(try self.configuration(endpoint: "https://user:password@api.example.com/v1").validate())
     }
 
+    func testLoopbackDisclosureNamesDestinationAndWarnsAboutCloudForwardingForAnyModel() throws {
+        for endpoint in ["http://localhost:11434/v1", "http://127.0.0.1:11434/v1", "http://[::1]:11434/v1"] {
+            for model in ["gpt-oss:120b-cloud", "team-summary", "qwen3.5:4b"] {
+                let config = PichiMeetingSummaryConfiguration(providerID: "pichi-local", modelID: model,
+                                                              baseURL: endpoint, apiKey: "", language: "ru")
+                XCTAssertNoThrow(try config.validate())
+                XCTAssertEqual(config.transcriptDestinationText(language: .english),
+                    "Transcript will be sent to \(endpoint) · \(model)\n"
+                    + "This local server may forward the transcript to a cloud service. Check the model and server configuration.")
+                XCTAssertEqual(config.transcriptDestinationText(language: .russian),
+                    "Расшифровка будет отправлена на \(endpoint) · \(model)\n"
+                    + "Этот локальный сервер может отправлять расшифровку в облачный сервис. Проверьте настройки модели и сервера.")
+            }
+        }
+    }
+
+    func testRemoteDisclosureNamesDestinationWithoutClaimingLocalExecution() throws {
+        let config = self.configuration(endpoint: "https://api.example.com/v1")
+        XCTAssertNoThrow(try config.validate())
+        XCTAssertEqual(config.transcriptDestinationText(language: .english),
+                       "Transcript will be sent to https://api.example.com/v1 · fixture-model")
+        XCTAssertEqual(config.transcriptDestinationText(language: .russian),
+                       "Расшифровка будет отправлена на https://api.example.com/v1 · fixture-model")
+    }
+
     func testLocalTranscriptBodyCannotFollow307Or308Redirect() async throws {
         let source = try XCTUnwrap(URL(string: "http://127.0.0.1:11434/v1/chat/completions"))
         var redirected = URLRequest(url: try XCTUnwrap(URL(string: "https://external.example/v1/chat/completions")))
