@@ -522,29 +522,38 @@ toolbar_revision = os.environ.get('PICHI_TOOLBAR_INK_LEGACY_REVISION')
 def toolbar_source(path):
     return subprocess.check_output(['git', 'show', f'{toolbar_revision}:{path}'], text=True) if toolbar_revision else Path(path).read_text()
 page_layout = toolbar_source('Sources/Fluid/Theme/Components/FluidPageLayout.swift')
-page_actions = page_layout[page_layout.index('                    self.actions\n'):]
-page_actions = page_actions[:page_actions.index('\n                }')]
-assert '.buttonStyle(.automatic)' in page_actions and '.labelStyle(FluidToolbarLabelStyle())' in page_actions
-# Compile the actual caller-environment read as well as its action chain.
-# The optional stale host is a reference adapter for the observed native
-# rehosting mismatch; it does not claim to reproduce AppKit itself.
-page_capture = ''
-page_environment = ''
-if 'let pageColorScheme = self.colorScheme' in page_layout:
-    assert page_layout.count('let pageColorScheme = self.colorScheme') == 1
-    page_capture = '  let pageColorScheme = self.colorScheme\n'
-    page_environment = ' @Environment(\\.colorScheme) private var colorScheme\n'
-    assert page_environment.strip() in page_layout
+paired = 'private func pairedActions(theme: AppTheme, colorScheme: ColorScheme)' in page_layout
+if paired:
+    first = page_layout.index('    private func pairedActions(')
+    page_method = page_layout[first:page_layout.index('\n    }', first) + len('\n    }')]
+    first = page_layout.index('        let pageTheme = self.theme')
+    page_capture = page_layout[first:page_layout.index('\n        #if os(macOS)', first)] + '\n'
+    assert '.buttonStyle(FluidOutlinedButtonStyle())' in page_method
+    assert '.environment(\\.theme, theme)' in page_method
+    assert '.sharedBackgroundVisibility(.hidden)' in page_layout
+    page_chain = 'self.pairedActions(theme: pageTheme, colorScheme: pageColorScheme)'
+else:
+    page_method = ''
+    page_actions = page_layout[page_layout.index('                    self.actions\n'):]
+    page_chain = page_actions[:page_actions.index('\n                }')]
+    page_capture = '        let pageColorScheme = self.colorScheme\n' if 'let pageColorScheme = self.colorScheme' in page_layout else ''
 Path(sys.argv[1]).with_name('ToolbarPageLayout.swift').write_text(page_layout + '\n'
     'struct ProductionToolbarPageFixture: View {\n'
-    + page_environment +
-    ' @Environment(\\.colorScheme) private var referenceCallerScheme\n'
+    ' @Environment(\\.theme) private var theme\n'
+    ' @Environment(\\.colorScheme) private var colorScheme\n'
     ' var staleHostScheme: ColorScheme? = nil\n'
-    ' private var actions: some View {\n'
-    '  Button(action: {}) { Label("Share", systemImage: "square.and.arrow.up") }.buttonStyle(.plain)\n'
-    ' }\n var body: some View {\n' + page_capture +
-    '  return Group {\n' + page_actions + '\n  }\n'
-    '  .environment(\\.colorScheme, self.staleHostScheme ?? self.referenceCallerScheme)\n }\n}\n')
+    ' var imageOnly = false\n var disabled = false\n var automatic = false\n'
+    ' @ViewBuilder private var actions: some View {\n'
+    '  if self.automatic {\n'
+    '   Button(action: {}) { Label("Meeting settings", systemImage: "gearshape") }.buttonStyle(.automatic)\n'
+    '  } else if self.imageOnly {\n'
+    '   Button(action: {}) { Image(systemName: "square.and.arrow.up").fluidToolbarIcon() }.disabled(self.disabled)\n'
+    '  } else {\n'
+    '   Button(action: {}) { Label("Share", systemImage: "square.and.arrow.up") }.disabled(self.disabled)\n'
+    '  }\n }\n var body: some View {\n' + page_capture +
+    '  return Group {\n' + page_chain + '\n  }\n'
+    '  .environment(\\.colorScheme, self.staleHostScheme ?? self.colorScheme)\n }\n'
+    + page_method + '\n}\n')
 content_source = toolbar_source('Sources/Fluid/ContentView.swift')
 main_toolbar = content_source[content_source.index('    private func applyMainWindowToolbar'):content_source.index('    private var hasPageToolbarActions:')]
 assert '.buttonStyle(.automatic)' in main_toolbar
@@ -583,7 +592,7 @@ Path(sys.argv[1]).with_name('ToolbarInkProductionSource.json').write_text(json.d
     'contentSHA256': hashlib.sha256(content_source.encode()).hexdigest(),
     'pageLayoutSHA256': hashlib.sha256(page_layout.encode()).hexdigest(),
     'legacySourceRevision': subprocess.check_output(['git', 'rev-parse', toolbar_revision], text=True).strip() if toolbar_revision else None,
-    'adapters': ['synthetic statistics and theme-icon selection', 'reference native material colorScheme', 'plain inner page Button renderer', 'optional stale page-toolbar host scheme'],
+    'adapters': ['synthetic statistics and theme-icon selection', 'reference native material colorScheme', 'actual paired page control style', 'optional stale page-toolbar host scheme'],
     'nativeToolbarSchemePropagation': 'SKIP', 'nativeGlassRasterization': 'SKIP',
 }, indent=2) + '\n')
 

@@ -30,6 +30,10 @@ enum ToolbarInkTests {
             case "issue": ProductionToolbarIssueFixture()
             case "update": ProductionToolbarUpdateFixture()
             case "page": ProductionToolbarPageFixture()
+            case "page-automatic": ProductionToolbarPageFixture(staleHostScheme: self.state.material == .light ? .dark : .light, automatic: true)
+            case "page-image": ProductionToolbarPageFixture(staleHostScheme: self.state.material == .light ? .dark : .light, imageOnly: true)
+            case "page-disabled": ProductionToolbarPageFixture(disabled: true)
+            case "page-image-disabled": ProductionToolbarPageFixture(staleHostScheme: self.state.material == .light ? .dark : .light, imageOnly: true, disabled: true)
             case "page-stale-host": ProductionToolbarPageFixture(staleHostScheme: self.state.material == .light ? .dark : .light)
             case "today-empty": ProductionToolbarTodayFixture(hasActivity: false, action: {})
             default: ProductionToolbarTodayFixture(hasActivity: true, action: {})
@@ -50,7 +54,7 @@ enum ToolbarInkTests {
     }
 
     @MainActor private static func check(_ image: CGImage, name: String, state: State,
-                                        updater: Bool, directory: URL) throws {
+                                        updater: Bool, page: Bool, disabled: Bool, automatic: Bool, directory: URL) throws {
         let bitmap = NSBitmapImageRep(cgImage: image)
         try bitmap.representation(using: .png, properties: [:])!.write(to: directory.appendingPathComponent(name + ".png"))
         var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
@@ -60,6 +64,30 @@ enum ToolbarInkTests {
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         let background = Array(repeating: state.material == .light ? 1.0 : 0.0, count: 3)
         let accent = UIContrastTests.components(state.theme.palette.accent)
+        if page {
+            // Automatic Buttons can draw a native fill over the owned backing.
+            // Measure that real renderer instead of pretending it is the palette fill.
+            let sampleOffset = ((image.height / 2) * image.width + image.width / 2 + 30) * 4
+            let fill = automatic ? (0..<3).map { Double(bytes[sampleOffset + $0]) / 255 }
+                : UIContrastTests.components(state.theme.palette.elevatedCardBackground)
+            let ink = UIContrastTests.components(disabled ? state.theme.palette.secondaryText
+                : state.theme.palette.readableText(state.theme.palette.primaryText))
+            precondition(UIContrastTests.contrast(ink, fill) >= (disabled ? 3 : 4.5), "\(name): paired palette ink is unreadable")
+            // Inspect the center symbol, excluding the opaque surface and border.
+            // Counting arbitrary contrast pixels would falsely accept a blank button.
+            var glyphPixels = 0, fillPixels = 0
+            for y in image.height / 2 - 20..<image.height / 2 + 20 {
+                for x in image.width / 2 - 20..<image.width / 2 + 20 {
+                    let offset = (y * image.width + x) * 4
+                    let pixel = (0..<3).map { Double(bytes[offset + $0]) / 255 }
+                    if zip(pixel, ink).allSatisfy({ abs($0 - $1) < 0.06 }) { glyphPixels += 1 }
+                    if zip(pixel, fill).allSatisfy({ abs($0 - $1) < 0.03 }) { fillPixels += 1 }
+                }
+            }
+            precondition(fillPixels >= 100, "\(name): nested automatic control lost its opaque paired surface")
+            precondition(glyphPixels >= 20, "\(name): nested Image/Label lost paired ink under the stale host scheme")
+            return
+        }
         var visible = 0, accentPixels = 0
         for offset in stride(from: 0, to: bytes.count, by: 4) {
             guard bytes[offset + 3] == 255 else { continue }
@@ -96,8 +124,9 @@ enum ToolbarInkTests {
                 if brand == "inverted" {
                     precondition(theme.palette.nativeColorScheme(fallback: appScheme) != appScheme)
                 }
-                let kinds = brand == "inverted" ? ["page", "page-stale-host"]
-                    : ["sidebar", "theme", "issue", "update", "page", "page-stale-host", "today-empty", "today-active"]
+                let pageKinds = ["page", "page-stale-host", "page-image", "page-disabled", "page-image-disabled", "page-automatic"]
+                let kinds = brand == "inverted" ? pageKinds
+                    : ["sidebar", "theme", "issue", "update", "today-empty", "today-active"] + pageKinds
                 for language in ["en", "ru"] {
                     for kind in kinds {
                         let state = State(theme: theme)
@@ -111,14 +140,15 @@ enum ToolbarInkTests {
                             let name = "toolbar-ink-\(brand)-\(language)-app-\(appScheme)-\(kind)-\(step)-material-\(material)"
                             guard let image = renderer.cgImage else { preconditionFailure("Toolbar label did not rasterize") }
                             precondition(state.seenScheme == material, "Inner material appearance must override the app palette scheme in this projection")
-                            try self.check(image, name: name, state: state, updater: kind == "update", directory: directory)
+                            try self.check(image, name: name, state: state, updater: kind == "update", page: kind.hasPrefix("page"),
+                                           disabled: kind.contains("disabled"), automatic: kind == "page-automatic", directory: directory)
                             checks += 1
                         }
                     }
                 }
             }
         }
-        print("Toolbar ink: \(checks) production label/reference-material checks, 3 brands plus validated inverted palette, RU/EN, opposite and matching app/material appearances; stale page-host forwarding and intentional updater accent preserved")
+        print("Toolbar ink: \(checks) production label/reference-material checks, 3 brands plus validated inverted palette, RU/EN, opposite and matching app/material appearances; paired page Image/Label enabled/disabled ink under stale hosts and intentional updater accent preserved")
         print("SKIP: actual native toolbar material-to-label scheme propagation, disabled chrome, pointer/AX actions and hot/cold application replay")
     }
 }
