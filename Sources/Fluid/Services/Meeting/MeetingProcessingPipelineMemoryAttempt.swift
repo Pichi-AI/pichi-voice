@@ -301,13 +301,21 @@ extension MeetingProcessingPipeline {
         }
         try Task.checkCancellation()
         progress(.finalizing)
-        var record = session.processingAttempts.last(where: { $0.completedAt == nil }) ?? MeetingProcessingAttempt(
-            id: attempt.request.attemptID, startedAt: session.startedAt, completedAt: nil, stage: .pending,
-            pipelineVersion: attempt.request.configuration.pipelineVersion, asrProvider: session.recordingBackendID,
-            asrModel: attempt.request.configuration.asrModel, languageCode: session.languageCode,
+        // Stop-time pending records can predate or differ from the admitted PCM request.
+        // As in canonicalResult, preserve only the matching identity and record all lineage
+        // from the immutable configuration that actually owned inference.
+        var record = session.processingAttempts.last(where: {
+            $0.completedAt == nil && $0.id == attempt.request.attemptID
+        }) ?? MeetingProcessingAttempt(
+            id: attempt.request.attemptID, startedAt: attempt.request.session.startedAt, completedAt: nil, stage: .pending,
+            pipelineVersion: attempt.request.configuration.pipelineVersion, asrProvider: nil,
+            asrModel: nil, languageCode: nil,
             diarizationModel: attempt.request.configuration.diarizationFingerprint, lastCompletedTrackID: nil, errorCode: nil
         )
         record.completedAt = Date(); record.stage = .completed
+        record.pipelineVersion = attempt.request.configuration.pipelineVersion
+        record.languageCode = attempt.request.configuration.languageCode
+        record.diarizationModel = attempt.request.configuration.diarizationFingerprint
         record.asrModel = attempt.request.configuration.asrModel
         record.asrArtifactFingerprint = attempt.request.configuration.asrArtifactFingerprint
         record.asrProvider = attempt.descriptor.id.rawValue

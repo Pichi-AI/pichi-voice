@@ -1823,7 +1823,8 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
         return try MeetingCapturePCMConverter.sampleBuffer(buffer: buffer, presentationTime: .zero)
     }
     private func verifyScheduling(policy: Bool, capability: Bool, privacy: Bool,
-                                  refusingPrivacy: Bool = false, permitsProvisionalDisplay: Bool = true) async throws {
+                                  refusingPrivacy: Bool = false, permitsProvisionalDisplay: Bool = true,
+                                  completesAttempt: Bool = false) async throws {
         let runtime = Runtime(progressive: capability)
         let registered = try descriptor(policy: policy)
         let registry = MeetingTranscriptionBackendRegistry(defaultBackendID: .whisperTiny)
@@ -1899,8 +1900,40 @@ final class MeetingPCMProgressivePipelineTests: XCTestCase {
         } else {
             XCTAssertEqual(observations.checkpoints.flatMap(\.segments).count, 1)
         }
-        await pipeline.cancelMemoryAudio(sessionID: session.id)
+        if completesAttempt {
+            let frozen = try XCTUnwrap(pipeline.memoryAttempts[session.id]?.request)
+            // The coordinator adds an unrelated pending record after Stop. Its nil/stale
+            // identity fields must never replace the admitted runtime's provenance.
+            let unrelatedID = UUID()
+            session.processingAttempts.append(.init(id: unrelatedID, startedAt: Date(),
+                completedAt: nil, stage: .pending, pipelineVersion: -1, asrProvider: "stale",
+                asrModel: "stale", languageCode: "stale", asrArtifactFingerprint: "stale",
+                diarizationModel: nil, lastCompletedTrackID: nil, errorCode: nil))
+            session.audioTracks = [track]
+            session.transcriptSegments = observations.checkpoints.flatMap(\.segments)
+            let result = try await pipeline.process(session: session,
+                sessionDirectory: URL(fileURLWithPath: "/synthetic-never-created"), progress: { _ in })
+            XCTAssertEqual(result.attempt.id, frozen.attemptID)
+            XCTAssertNotEqual(result.attempt.id, unrelatedID)
+            XCTAssertEqual(result.attempt.stage, .completed)
+            XCTAssertNotNil(result.attempt.completedAt)
+            XCTAssertEqual(result.attempt.pipelineVersion, frozen.configuration.pipelineVersion)
+            XCTAssertEqual(result.attempt.asrModel, frozen.configuration.asrModel)
+            XCTAssertEqual(result.attempt.languageCode, frozen.configuration.languageCode)
+            XCTAssertEqual(result.attempt.asrArtifactFingerprint, frozen.configuration.asrArtifactFingerprint)
+            XCTAssertEqual(result.attempt.diarizationModel, frozen.configuration.diarizationFingerprint)
+            XCTAssertEqual(result.attempt.backendID, registered.id.rawValue)
+            XCTAssertEqual(result.attempt.asrProvider, registered.id.rawValue)
+            XCTAssertEqual(result.attempt.backendVersion, registered.version)
+            XCTAssertFalse(result.segments.isEmpty)
+            XCTAssertTrue(result.segments.allSatisfy { $0.originalText == nil && !$0.text.contains("Иван") })
+        } else {
+            await pipeline.cancelMemoryAudio(sessionID: session.id)
+        }
         XCTAssertTrue(pipeline.memoryAttempts.isEmpty)
+    }
+    func testCompletedStrictAttemptRetainsFrozenRuntimeLineageAndProtectedText() async throws {
+        try await verifyScheduling(policy: true, capability: true, privacy: true, completesAttempt: true)
     }
     func testRegisteredPolicyAndRuntimeCapabilitySelectProgressiveInput() async throws {
         try await verifyScheduling(policy: true, capability: true, privacy: false)
