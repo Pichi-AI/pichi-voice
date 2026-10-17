@@ -256,6 +256,19 @@ private actor SyntheticMeetingMicrophone: MeetingCaptureControlling {
 private nonisolated struct CombinedEvaluationOptions {
     let privateEvaluation: Bool
     let repetitions: Int
+    let longEvaluation: Bool
+    var maximumDurationSeconds: Double { longEvaluation ? 3_900 : 600 }
+    var maximumAudioBytes: Int { (longEvaluation ? 128 : 64) * 1_048_576 }
+    var maximumProtectedEvidenceBytes: Int { (longEvaluation ? 64 : 16) * 1_048_576 }
+    var sampleIntervalSeconds: Double { longEvaluation ? 1 : 0.25 }
+    var maximumSamples: Int { longEvaluation ? 12_000 : 10_000 }
+
+    func validatePCM(frameCount: Int64, fileBytes: Int) throws {
+        guard frameCount >= 160_000, frameCount <= Int64(maximumDurationSeconds * 16_000),
+              fileBytes >= 0, fileBytes <= maximumAudioBytes else {
+            throw NSError(domain: "CombinedMeetingPCMFormatOrDuration", code: 1)
+        }
+    }
     init(environment: [String: String]) throws {
         privateEvaluation = environment["PICHI_COMBINED_MEETING_PRIVATE_EVALUATION"] == "1"
         guard let count = Int(environment["PICHI_COMBINED_MEETING_REPETITIONS"] ?? "1"),
@@ -263,6 +276,10 @@ private nonisolated struct CombinedEvaluationOptions {
             throw NSError(domain: "CombinedMeetingEvaluationOptions", code: 1)
         }
         repetitions = count
+        longEvaluation = environment["PICHI_COMBINED_MEETING_LONG_EVALUATION"] == "1"
+        guard !longEvaluation || (privateEvaluation && count == 1) else {
+            throw NSError(domain: "CombinedMeetingEvaluationOptions", code: 2)
+        }
     }
 }
 
@@ -287,6 +304,7 @@ private nonisolated final class CombinedResourceSamples: @unchecked Sendable {
     }
     private let lock = NSLock()
     private let limit: Int
+    let intervalSeconds: Double
     private var phase = "preparation"
     private var rows: [Sample] = []
     private var missing = 0
@@ -295,7 +313,14 @@ private nonisolated final class CombinedResourceSamples: @unchecked Sendable {
     private var maximumGap = 0.0
     private var missedIntervals = 0
     private var maximumThermalState = 0
-    init(limit: Int = 10_000) { self.limit = limit }
+    init(limit: Int = 10_000, intervalSeconds: Double = 0.25) throws {
+        guard (1...12_000).contains(limit), intervalSeconds.isFinite,
+              (0.05...60).contains(intervalSeconds) else {
+            throw NSError(domain: "CombinedMeetingResourceSamplingOptions", code: 1)
+        }
+        self.limit = limit
+        self.intervalSeconds = intervalSeconds
+    }
     func setPhase(_ value: String) { lock.withLock { phase = value } }
     func capture(since started: Double) {
         let elapsed = ProcessInfo.processInfo.systemUptime - started
@@ -307,7 +332,7 @@ private nonisolated final class CombinedResourceSamples: @unchecked Sendable {
             if let previousElapsed {
                 let gap = max(0, elapsed - previousElapsed)
                 maximumGap = max(maximumGap, gap)
-                missedIntervals += max(0, Int((gap / 0.25).rounded(.down)) - 1)
+                missedIntervals += max(0, Int(min(Double(Int.max / 2), (gap / intervalSeconds).rounded(.down))) - 1)
             }
             previousElapsed = elapsed
             maximumThermalState = max(maximumThermalState, thermalState)
@@ -329,6 +354,48 @@ private nonisolated final class CombinedResourceSamples: @unchecked Sendable {
             }
         }
         return status == KERN_SUCCESS ? info.phys_footprint : nil
+    }
+}
+
+/// Flushes a fixed metadata schema directly to XCTest stdout, including while
+/// post-stop inference occupies MainActor. No transcript or voice identity enters it.
+private nonisolated final class CombinedLongProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private let started: Double
+    private var phase = "preparation"
+    private var deliveredFrames = 0
+    private var protectedUtterances = 0
+    private var protectedPartials = 0
+    private var protectedFinalSegments = 0
+    private var lastEmission: Double?
+    init(started: Double) { self.started = started }
+    func update(phase: String, deliveredFrames: Int, protectedUtterances: Int,
+                protectedPartials: Int, protectedFinalSegments: Int = 0) {
+        lock.withLock {
+            self.phase = phase
+            self.deliveredFrames = deliveredFrames
+            self.protectedUtterances = protectedUtterances
+            self.protectedPartials = protectedPartials
+            self.protectedFinalSegments = protectedFinalSegments
+        }
+    }
+    func emit(force: Bool = false) {
+        lock.withLock {
+            let elapsed = ProcessInfo.processInfo.systemUptime - started
+            guard force || lastEmission.map({ elapsed - $0 >= 60 }) ?? true else { return }
+            lastEmission = elapsed
+            let row: [String: Any] = ["event": "combinedMeetingLongProgress", "schema": 1,
+                "phase": phase, "elapsedSeconds": elapsed, "deliveredFrames": deliveredFrames,
+                "protectedUtteranceCount": protectedUtterances, "protectedPartialCount": protectedPartials,
+                "protectedFinalSegmentCount": protectedFinalSegments,
+                "footprintBytes": CombinedResourceSamples.footprintBytes() as Any? ?? NSNull(),
+                "thermalState": ProcessInfo.processInfo.thermalState.rawValue]
+            if var bytes = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) {
+                bytes.append(0x0A)
+                // FileHandle writes do not depend on the C stdio buffering policy.
+                try? FileHandle.standardOutput.write(contentsOf: bytes)
+            }
+        }
     }
 }
 
@@ -386,7 +453,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let referenceData = try Data(contentsOf: referenceURL)
         let reference = try JSONDecoder().decode(CombinedMeetingReference.self, from: referenceData)
         let audioURL = assets.appendingPathComponent("audio/combined-ru.wav")
-        guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 64 * 1_048_576 else {
+        let audioBytes = try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
+        guard audioBytes <= options.maximumAudioBytes else {
             throw NSError(domain: "CombinedMeetingAudioSize", code: 1)
         }
         let audioFile = try FileHandle(forReadingFrom: audioURL)
@@ -397,9 +465,10 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let referenceDigest = SHA256.hash(data: referenceData).map { String(format: "%02x", $0) }.joined()
         let input = try AVAudioFile(forReading: audioURL)
         guard input.processingFormat.sampleRate == 16_000, input.processingFormat.channelCount == 1,
-              input.length >= 160_000, input.length <= 9_600_000 else {
+              input.length >= 160_000 else {
             throw NSError(domain: "CombinedMeetingPCMFormatOrDuration", code: 1)
         }
+        try options.validatePCM(frameCount: Int64(input.length), fileBytes: audioBytes)
         let duration = Double(input.length) / 16_000
         try reference.validate(duration: duration, privateEvaluation: options.privateEvaluation)
         let baseline = try XCTUnwrap(physicalFootprintBytes())
@@ -428,12 +497,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let started = ProcessInfo.processInfo.systemUptime
         let processCPUStarted = DiagnosticProcessCPUTime.capture()
         let thermalStateStarted = ProcessInfo.processInfo.thermalState.rawValue
-        let resourceSamples = CombinedResourceSamples()
+        let resourceSamples = try CombinedResourceSamples(limit: options.maximumSamples,
+                                                         intervalSeconds: options.sampleIntervalSeconds)
+        let progress = options.longEvaluation ? CombinedLongProgress(started: started) : nil
+        progress?.emit(force: true)
         resourceSamples.capture(since: started)
         let sampler = Task.detached(priority: .utility) {
             while !Task.isCancelled {
                 resourceSamples.capture(since: started)
-                do { try await Task.sleep(nanoseconds: 250_000_000) } catch { break }
+                progress?.emit()
+                do { try await Task.sleep(nanoseconds: UInt64(resourceSamples.intervalSeconds * 1_000_000_000)) } catch { break }
             }
         }
         defer { sampler.cancel() }
@@ -472,16 +545,29 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                         firstProtectedTextSeconds = ProcessInfo.processInfo.systemUptime - captureStart
                     }
                 }
+                if let progress {
+                    let live = coordinator.liveTranscript
+                    progress.update(phase: phase, deliveredFrames: offset,
+                        protectedUtterances: live.utterances.count, protectedPartials: live.partials.count)
+                }
                 XCTAssertTrue(coordinator.isRecording, "Capture must remain active for the complete fixture")
                 let remaining = captureStart + Double(offset) / 16_000 - ProcessInfo.processInfo.systemUptime
                 if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
             }
             phase = "postStop"
             resourceSamples.setPhase(phase)
+            progress?.update(phase: "postStopBegin", deliveredFrames: offset,
+                protectedUtterances: coordinator.liveTranscript.utterances.count,
+                protectedPartials: coordinator.liveTranscript.partials.count)
+            progress?.emit(force: true)
             let stopStart = ProcessInfo.processInfo.systemUptime
             let completed = try await coordinator.stopAndTranscribe()
             let stopSeconds = ProcessInfo.processInfo.systemUptime - stopStart
             let completedWallSeconds = ProcessInfo.processInfo.systemUptime - started
+            progress?.update(phase: "postStopEnd", deliveredFrames: offset,
+                protectedUtterances: 0, protectedPartials: 0,
+                protectedFinalSegments: completed.transcriptSegments.count)
+            progress?.emit(force: true)
             phase = "completedPrivacyReady"
             resourceSamples.setPhase(phase)
             try await Task.sleep(nanoseconds: 300_000_000)
@@ -552,6 +638,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "repeatCondition": repetition == 1 ? "firstRunFreshService" : "sameProcessFreshServiceRepeat",
                 "modelResidencyVerified": false,
                 "privateEvaluationEnabled": options.privateEvaluation,
+                "longEvaluationEnabled": options.longEvaluation,
                 "legacySimulatorReviewEnabled": Self.isSimulator && environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1"
             ]
             if let limit = environment["PICHI_COMBINED_MEETING_MAX_FOOTPRINT_MIB"] {
@@ -569,6 +656,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "privacyModel": PichiTranscriptPrivacyModelStore.descriptor.id,
                 "diarizationModels": diarizationModels,
                 "audioSeconds": duration, "postStopSeconds": stopSeconds,
+                "audioByteLimit": options.maximumAudioBytes,
+                "protectedEvidenceByteLimit": options.maximumProtectedEvidenceBytes,
                 "totalWallSeconds": totalWallSeconds, "completedWallSeconds": completedWallSeconds,
                 "wallClockOrigin": "service composition ready, before model preparation; excludes fixture hashing",
                 "totalWallIncludesDiagnosticHolds": true,
@@ -595,7 +684,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "maximumSampledThermalState": resources.maximumThermalState,
                 "baselineFootprintBytes": baseline, "peakFootprintBytes": peak,
                 "cleanupFootprintDeltaBytes": Int64(physicalFootprintBytes() ?? baseline) - Int64(baseline),
-                "sampleIntervalSeconds": 0.25, "footprintSamples": resources.samples.map(\.json),
+                "sampleIntervalSeconds": resourceSamples.intervalSeconds,
+                "sampleCapacity": options.maximumSamples, "footprintSamples": resources.samples.map(\.json),
                 "omittedFootprintSamples": resources.omitted, "missingFootprintSamples": resources.missing,
                 "maximumSampleGapSeconds": resources.maximumGap, "missedSampleIntervals": resources.missedIntervals,
                 "attributionAgreement": agreementAvailable ? agreement as Any : NSNull(),
@@ -636,7 +726,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 ]
                 visualReview.merge(try CombinedProtectedEvaluation.values(segments: completed.transcriptSegments, speakers: completed.speakers)) { _, new in new }
                 let reviewData = try JSONSerialization.data(withJSONObject: visualReview, options: [.prettyPrinted, .sortedKeys])
-                guard reviewData.count <= 16 * 1_048_576 else {
+                guard reviewData.count <= options.maximumProtectedEvidenceBytes else {
                     throw NSError(domain: "CombinedMeetingProtectedEvidenceSize", code: 2)
                 }
                 let review = XCTAttachment(data: reviewData, uniformTypeIdentifier: "public.json")
@@ -646,6 +736,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 add(review)
             }
         } catch {
+            progress?.emit(force: true)
             await coordinator.shutdownForTermination()
             try? await privacy.unload()
             sampler.cancel()
@@ -683,6 +774,54 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         XCTAssertEqual(repeated.repetitions, 3)
         let visualOnly = try CombinedEvaluationOptions(environment: ["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW": "1"])
         XCTAssertFalse(visualOnly.privateEvaluation)
+    }
+
+    func testCombinedLongEvaluationRequiresPrivateSingleRunAndRetainsLegacyBounds() throws {
+        let legacy = try CombinedEvaluationOptions(environment: [:])
+        XCTAssertFalse(legacy.longEvaluation)
+        XCTAssertEqual(legacy.maximumAudioBytes, 64 * 1_048_576)
+        XCTAssertEqual(legacy.maximumDurationSeconds, 600)
+        XCTAssertEqual(legacy.maximumProtectedEvidenceBytes, 16 * 1_048_576)
+        XCTAssertEqual(legacy.sampleIntervalSeconds, 0.25)
+        XCTAssertEqual(legacy.maximumSamples, 10_000)
+        XCTAssertNoThrow(try legacy.validatePCM(frameCount: 9_600_000, fileBytes: 64 * 1_048_576))
+        XCTAssertThrowsError(try legacy.validatePCM(frameCount: 9_600_001, fileBytes: 44))
+        XCTAssertThrowsError(try legacy.validatePCM(frameCount: 160_000, fileBytes: 64 * 1_048_576 + 1))
+        XCTAssertThrowsError(try legacy.validatePCM(frameCount: 159_999, fileBytes: 44))
+        XCTAssertThrowsError(try CombinedEvaluationOptions(environment: ["PICHI_COMBINED_MEETING_LONG_EVALUATION": "1"]))
+        XCTAssertThrowsError(try CombinedEvaluationOptions(environment: [
+            "PICHI_COMBINED_MEETING_LONG_EVALUATION": "1",
+            "PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1", "PICHI_COMBINED_MEETING_REPETITIONS": "2"]))
+        let long = try CombinedEvaluationOptions(environment: [
+            "PICHI_COMBINED_MEETING_LONG_EVALUATION": "1", "PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1"])
+        XCTAssertTrue(long.longEvaluation)
+        XCTAssertEqual(long.repetitions, 1)
+        XCTAssertEqual(long.maximumProtectedEvidenceBytes, 64 * 1_048_576)
+        XCTAssertNoThrow(try long.validatePCM(frameCount: 57_600_000, fileBytes: 115_200_044))
+        XCTAssertNoThrow(try long.validatePCM(frameCount: 62_400_000, fileBytes: 128 * 1_048_576))
+        XCTAssertThrowsError(try long.validatePCM(frameCount: 62_400_001, fileBytes: 44))
+        XCTAssertThrowsError(try long.validatePCM(frameCount: 160_000, fileBytes: 128 * 1_048_576 + 1))
+        XCTAssertThrowsError(try long.validatePCM(frameCount: 160_000, fileBytes: -1))
+    }
+
+    func testCombinedLongSamplerCoversThreeHoursAndUsesItsConfiguredPeriod() throws {
+        let options = try CombinedEvaluationOptions(environment: [
+            "PICHI_COMBINED_MEETING_LONG_EVALUATION": "1", "PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1"])
+        let sampler = try CombinedResourceSamples(limit: options.maximumSamples, intervalSeconds: options.sampleIntervalSeconds)
+        for second in 0...10_800 { sampler.record(elapsed: Double(second), bytes: 10, thermalState: 0) }
+        let result = sampler.snapshot()
+        XCTAssertEqual(result.samples.count, 10_801)
+        XCTAssertEqual(result.omitted, 0)
+        XCTAssertEqual(result.missedIntervals, 0)
+        let gapSampler = try CombinedResourceSamples(limit: 2, intervalSeconds: 1)
+        gapSampler.record(elapsed: 0, bytes: 10, thermalState: 0)
+        gapSampler.record(elapsed: 4, bytes: 10, thermalState: 0)
+        XCTAssertEqual(gapSampler.snapshot().missedIntervals, 3)
+        XCTAssertEqual(gapSampler.snapshot().maximumGap, 4)
+        for period in [Double.nan, .infinity, -.infinity, -1, 0, 0.049, 60.001] {
+            XCTAssertThrowsError(try CombinedResourceSamples(intervalSeconds: period))
+        }
+        for limit in [0, -1, 12_001] { XCTAssertThrowsError(try CombinedResourceSamples(limit: limit)) }
     }
 
     func testCombinedPrivateReferenceAllowsMissingPrivacyCasesWithoutWeakeningLegacy() throws {
@@ -749,7 +888,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
     }
 
     func testCombinedResourceSamplesBoundStorageAndExposeActualGaps() throws {
-        let sampler = CombinedResourceSamples(limit: 2)
+        let sampler = try CombinedResourceSamples(limit: 2)
         sampler.record(elapsed: 0, bytes: 10, thermalState: 0)
         sampler.setPhase("capture")
         sampler.record(elapsed: 0.25, bytes: 20, thermalState: 1)

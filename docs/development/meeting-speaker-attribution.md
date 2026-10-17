@@ -117,3 +117,48 @@ provenance were not exported. Replaying newer activity against those words does 
 end-to-end production accuracy, generalization to other recordings, or iPad memory consumption.
 Synthetic acceptance tests establish defined behavior under their inputs. They cannot prove
 the best possible diarization for every audio recording.
+
+## Opt-in hour replay on a physical device
+
+The existing `MobileMeetingEndToEndTests/testCombinedRussianMeetingPrivacySpeakersAndFootprint`
+can admit a long fixture with all three gates enabled:
+
+```text
+PICHI_COMBINED_MEETING_E2E=1
+PICHI_COMBINED_MEETING_PRIVATE_EVALUATION=1
+PICHI_COMBINED_MEETING_LONG_EVALUATION=1
+PICHI_COMBINED_MEETING_REPETITIONS=1
+```
+
+This test-only mode accepts 10 through 3900 seconds of mono 16 kHz audio, at most
+128 MiB on disk. The ordinary test retains its 600-second, 64 MiB limits. Long
+mode requires private evaluation and a single repetition. Reference limits remain
+512 turns, 8 speakers and 128 KiB in private mode; coalesce adjacent identical
+reference turns before staging an authorized long fixture. Reference provenance
+remains explicit. Weak automatic labels are not a gold reference.
+
+The test reads and delivers at most 1600 PCM frames at a time, paced to real time.
+It uses the existing service composition and strict memory-only audio mode. This
+measures inference and post-stop behavior, not microphone capture, background
+execution, audio saving, interruption recovery or battery energy. The external
+runner must set a deadline that covers both the capture and post-stop processing.
+
+Long mode samples footprint and thermal state every second into a bounded 12000-row
+buffer. Ordinary runs retain 250 ms and 10000 rows. Reports record the configured
+period, observed largest gap, missed intervals, missing counters and omitted rows.
+A completed run asserts that no samples were omitted. The long sampler can cover
+three hours including post-stop work without exhausting its row capacity.
+
+Every 60 seconds, including during post-stop processing, the long mode writes a
+fixed JSON progress schema directly to XCTest stdout. Forced records also mark
+post-stop begin and end. These records contain only phase, elapsed time, delivered
+frame count, protected text counts, footprint and thermal state. The host must retain
+stdout because an operating-system kill cannot execute a catch block or attach final
+results. This progress output contains no transcript, speaker identity or audio.
+
+Protected evaluation attachments remain full, post-privacy evidence without original
+text, embeddings or contact identities. The ordinary cap stays 16 MiB; the explicit
+long mode permits 64 MiB. Existing 100000-segment, 512-speaker and 4194304 UTF-16 text
+limits remain unchanged. Exceeding a cap fails explicitly instead of silently
+truncating evidence. Keep private fixtures, stdout, attachments and extracted reports
+in ignored storage. This test does not change any production provider or policy.
