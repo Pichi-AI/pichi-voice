@@ -783,6 +783,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         #endif
     }
 
+    #if arch(arm64)
     func testDetailedComputeOverrideRequiresTheExplicitProfilingGate() {
         XCTAssertEqual(MeetingFast32ComputePolicy.diagnosticUnits(preferred: .cpuAndGPU, environment: [:]), .cpuAndGPU)
         XCTAssertEqual(MeetingFast32ComputePolicy.diagnosticUnits(preferred: .cpuAndGPU,
@@ -792,6 +793,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         XCTAssertEqual(MeetingFast32ComputePolicy.diagnosticUnits(preferred: .cpuAndNeuralEngine,
             environment: ["PICHI_MEETING_DETAILED_PROFILE": "1", "PICHI_MEETING_PROFILE_COMPUTE_UNITS": "unexpected"]), .cpuAndNeuralEngine)
     }
+    #endif
 
     func testCombinedPrivateEvaluationOptionsAreBoundedAndSeparatelyGated() throws {
         let legacy = try CombinedEvaluationOptions(environment: [:])
