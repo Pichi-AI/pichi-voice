@@ -1553,7 +1553,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 backendID: backendID,
                 languageCode: session.languageCode,
                 artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
-                diarizationEnabled: session.speakerLabelsEnabled ?? true
+                diarizationEnabled: session.speakerLabelsEnabled ?? true,
+                speakerProcessingMode: session.effectiveSpeakerProcessingMode
             ),
             privacyFingerprint: attemptRedactor?.checkpointIdentity
         )
