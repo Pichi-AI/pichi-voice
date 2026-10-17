@@ -832,6 +832,7 @@
 				Services/Meeting/MeetingPersistedMetadata.swift,
 				Services/Meeting/MeetingAudioAsset.swift,
 				Services/Meeting/MeetingTranscriptExporter.swift,
+				Services/Meeting/MeetingSpeakerPresentation.swift,
 				Localization/PichiLocalization.swift,
 			);
 			target = F5E000000000000000000001 /* fv-serve */;

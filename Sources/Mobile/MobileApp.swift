@@ -69,8 +69,8 @@ final class AppServices: ObservableObject {
                       settings.meetingTranscriptionBackendID == savedBackendID else { throw CancellationError() }
                 let configuration = MeetingCaptureConfiguration(mode: mode, title: title, languageCode: language,
                     microphone: microphone, timestampDefaultTitle: true, audioStorageMode: storageMode,
-                    speakerLabelsEnabled: speakerLabelsEnabled, piiRedactionEnabled: piiRedactionEnabled,
-                    speakerProcessingMode: speakerProcessingMode)
+                    speakerLabelsEnabled: speakerLabelsEnabled, speakerProcessingMode: speakerProcessingMode,
+                    piiRedactionEnabled: piiRedactionEnabled)
                 // Deployment admission uses the frozen privacy request before preparing even
                 // the text redactor. Start/capture owners repeat it after asynchronous work.
                 if storageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming {
