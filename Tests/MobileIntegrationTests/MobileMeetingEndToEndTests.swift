@@ -32,9 +32,9 @@ private final class SyntheticPrivacyReplayDiagnostics: TranscriptTextRedacting {
 
     init(wrapping wrapped: any TranscriptTextRedacting) { self.wrapped = wrapped }
     nonisolated var checkpointIdentity: String? { wrapped.checkpointIdentity }
-    func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
+    @MainActor func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
 
-    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+    @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let result = try await wrapped.redactWithSpans(text)
         let size = text.utf16.count + result.text.utf16.count
         if observations.count < 128, size <= 32_768, retainedUTF16 + size <= 131_072 {
@@ -177,8 +177,8 @@ private final class CombinedPrivacyObservations: TranscriptTextRedacting {
         self.wrapped = wrapped; self.aliases = aliases
     }
     nonisolated var checkpointIdentity: String? { wrapped.checkpointIdentity }
-    func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
-    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+    @MainActor func prepareForMeeting() async throws { try await wrapped.prepareForMeeting() }
+    @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.privacyRedact)
         var succeeded = false
         defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.privacyRedact, since: began,

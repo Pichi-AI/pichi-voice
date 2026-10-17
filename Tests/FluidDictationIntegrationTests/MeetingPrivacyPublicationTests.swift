@@ -8,7 +8,7 @@ private final class SyntheticPersonRedactor: TranscriptTextRedacting {
     private(set) var inputs: [String] = []
     init(approvesPreview: Bool = false) { self.approvesPreview = approvesPreview }
 
-    func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+    @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
         self.inputs.append(text)
         let input = text as NSString
         let range = input.range(of: "Анна Тестова")
@@ -192,7 +192,7 @@ final class MeetingPrivacyPreparationLifecycleTests: XCTestCase {
         var current: String { self.lock.withLock { self.value } }
         func change() { self.lock.withLock { self.value = "synthetic-privacy-v2" } }
     }
-    private final class ColdRedactor: TranscriptTextRedacting {
+    @MainActor private final class ColdRedactor: TranscriptTextRedacting {
         private nonisolated let identity = Identity()
         nonisolated var checkpointIdentity: String? { self.identity.current }
         var behavior: Behavior = .ready
@@ -201,7 +201,7 @@ final class MeetingPrivacyPreparationLifecycleTests: XCTestCase {
         private(set) var isReady = false
         private(set) var preparations = 0
         private(set) var inputs: [String] = []
-        func prepareForMeeting() async throws {
+        @MainActor func prepareForMeeting() async throws {
             self.preparations += 1
             switch self.behavior {
             case .failure: throw FixtureFailure.preparationFailed
@@ -216,7 +216,7 @@ final class MeetingPrivacyPreparationLifecycleTests: XCTestCase {
             self.isReady = true
         }
         func release() { self.waiter?.resume(); self.waiter = nil }
-        func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
+        @MainActor func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction {
             guard self.isReady else { throw FixtureFailure.notPrepared }
             self.inputs.append(text)
             let source = text as NSString
