@@ -900,7 +900,8 @@ private final class CaptionNativeHost {
 final class MeetingSavedTranscriptPresentationTests: XCTestCase {
     func testHistoricalMultipleVoicesAreNotPresentedAsOneUnknownParticipant() {
         for (language, expected) in [(PichiInterfaceLanguage.english, "Several speakers"), (.russian, "Несколько говорящих")] {
-            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: .candidates([], relation: .several), language: language), expected)
+            let value = MeetingSpeakerPresentation(identity: "historical-multiple", label: .candidates([], relation: .several))
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: value, language: language), expected)
         }
     }
     private func session() -> MeetingSession {

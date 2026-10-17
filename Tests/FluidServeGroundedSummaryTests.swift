@@ -242,6 +242,15 @@ struct FluidServeGroundedSummaryTests {
                              relation: .none, rule: .incomingSpeaker)
         let multiple = unit(2, text: "Multiple fixture.", selected: nil, raw: .ambiguous([a, b]),
                             relation: .simultaneous, rule: .ambiguous)
+        let conflict = unit(4, text: "Conflict fixture.", selected: nil, raw: .ambiguous([a, b]),
+                            relation: .conflict, rule: .conflict)
+        for (member, expected) in [(multiple, "Simultaneous speech: First + You"),
+                                   (conflict, "Speaker evidence conflicts: First + You")] {
+            let paragraph = MeetingTranscriptExporter.DisplayParagraph(segments: [member])
+            check(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: session,
+                speakerNames: [first: "First", second: "Saved owner alias"]) == expected,
+                  "A historical fallback must never discard canonical candidate identities or relation")
+        }
         var corrected = foreground
         corrected.id = UUID()
         corrected.start = .init(value: 6000, timescale: 1000)

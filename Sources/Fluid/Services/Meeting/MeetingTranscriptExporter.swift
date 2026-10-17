@@ -204,6 +204,8 @@ nonisolated enum MeetingTranscriptExporter {
     ) -> String {
         if paragraph.firstSegment.speakerID == nil,
            paragraph.projectedSpeakerID == nil,
+           paragraph.segments.allSatisfy({ $0.speakerAttribution == nil
+               && $0.nativePrecision == nil && $0.nativeSpeakerAssignment == nil }),
            paragraph.segments.contains(where: { $0.attributionState == .overlappingSpeakers }) {
             return self.speakerLabel(for: .candidates([], relation: .several), language: language, bundle: bundle)
         }
