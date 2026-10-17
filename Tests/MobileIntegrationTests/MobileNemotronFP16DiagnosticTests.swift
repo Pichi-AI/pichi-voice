@@ -88,6 +88,18 @@ private nonisolated struct NemotronFP16DiagnosticOptions: Sendable {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
+    static func relativeArtifactPath(_ entry: URL, canonicalModelPrefix: String) throws -> String {
+        // Check the original entry first. Resolving a symlink before this check
+        // would conceal an unexpected link from the bundle's strict allowlist.
+        guard try entry.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink != true else {
+            throw Failure.invalidArtifact
+        }
+        let path = entry.resolvingSymlinksInPath().path
+        guard canonicalModelPrefix.hasSuffix("/"), path.hasPrefix(canonicalModelPrefix),
+              path.count > canonicalModelPrefix.count else { throw Failure.invalidArtifact }
+        return String(path.dropFirst(canonicalModelPrefix.count))
+    }
+
     func validateAssets(root: URL) throws -> (audio: URL, model: URL, silence: URL) {
         let directory = root.appendingPathComponent("diagnostics/NemotronFP16", isDirectory: true)
         let model = directory.appendingPathComponent(candidate.config.modelFileName, isDirectory: true)
@@ -97,6 +109,10 @@ private nonisolated struct NemotronFP16DiagnosticOptions: Sendable {
                 includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey]) else {
             throw Failure.invalidArtifact
         }
+        // Foundation enumeration can return /private/var or /private/tmp paths
+        // while the original URL uses /var or /tmp. Compare canonical paths only
+        // after rejecting a symlink at the original model-directory entry.
+        let canonicalModelPrefix = model.resolvingSymlinksInPath().path + "/"
         let expected = Set(candidate.files.map(\.0))
         var found = Set<String>()
         var entryCount = 0
@@ -107,7 +123,7 @@ private nonisolated struct NemotronFP16DiagnosticOptions: Sendable {
             let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey])
             guard values.isSymbolicLink != true else { throw Failure.invalidArtifact }
             if values.isRegularFile == true {
-                let relative = String(url.path.dropFirst(model.path.count + 1))
+                let relative = try Self.relativeArtifactPath(url, canonicalModelPrefix: canonicalModelPrefix)
                 guard expected.contains(relative), found.insert(relative).inserted else { throw Failure.invalidArtifact }
             } else if values.isDirectory != true { throw Failure.invalidArtifact }
         }
@@ -394,6 +410,33 @@ nonisolated final class MobileNemotronFP16DiagnosticTests: XCTestCase {
         let link = root.appendingPathComponent("link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
         XCTAssertThrowsError(try NemotronFP16DiagnosticOptions.digest(link, size: 3))
+    }
+
+    func testDiagnosticRelativePathsAcceptAliasesAndRejectEscapeOrSymlinks() throws {
+        #if os(macOS)
+        let base = URL(fileURLWithPath: "/tmp", isDirectory: true)
+        #else
+        let base = FileManager.default.temporaryDirectory
+        #endif
+        let root = base.appendingPathComponent("FP16PathProbe.\(UUID().uuidString)", isDirectory: true)
+        let model = root.appendingPathComponent("model", isDirectory: true)
+        try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = model.appendingPathComponent("synthetic.bin")
+        try Data("abc".utf8).write(to: file)
+        let canonicalPrefix = model.resolvingSymlinksInPath().path + "/"
+        let entries = try XCTUnwrap(FileManager.default.enumerator(at: model, includingPropertiesForKeys: nil))
+        let enumerated = try XCTUnwrap(entries.nextObject() as? URL)
+        XCTAssertEqual(try NemotronFP16DiagnosticOptions.relativeArtifactPath(enumerated, canonicalModelPrefix: canonicalPrefix),
+                       "synthetic.bin")
+        XCTAssertEqual(try NemotronFP16DiagnosticOptions.relativeArtifactPath(file, canonicalModelPrefix: canonicalPrefix),
+                       "synthetic.bin")
+        let outside = root.appendingPathComponent("model-sibling.bin")
+        try Data("abc".utf8).write(to: outside)
+        XCTAssertThrowsError(try NemotronFP16DiagnosticOptions.relativeArtifactPath(outside, canonicalModelPrefix: canonicalPrefix))
+        let link = model.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        XCTAssertThrowsError(try NemotronFP16DiagnosticOptions.relativeArtifactPath(link, canonicalModelPrefix: canonicalPrefix))
     }
 }
 #endif
