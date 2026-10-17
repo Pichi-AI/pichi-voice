@@ -760,6 +760,25 @@ nonisolated enum MeetingSpeakerAttribution {
         return true
     }
 
+    /// Shared chronological admission for a gap between two independent anchors. This checks
+    /// timing only, never identities, acoustic evidence or native word precision. Historical
+    /// reading projections can reuse the same bounds without manufacturing canonical evidence.
+    static func admitsNeighborRun(
+        _ intervals: [MeetingSpeakerAttributionInterval], policy: MeetingSpeakerAttributionPolicy
+    ) -> Bool {
+        guard intervals.count >= 3, policy.enableNeighborResolution,
+              intervals.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start }),
+              intervals[intervals.count - 2].end - intervals[1].start
+                <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance
+        else { return false }
+        for index in 1..<intervals.count {
+            let gap = intervals[index].start - intervals[index - 1].end
+            guard gap >= -policy.comparisonTolerance,
+                  gap <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance else { return false }
+        }
+        return true
+    }
+
     private static func resolveNeighbors(
         units: [MeetingFinalTextUnit], decisions: inout [Decision], anchors: [Bool],
         temporalBarriers: Set<String>, contextBarriers: ContextBarrierIndex?,
@@ -779,17 +798,14 @@ nonisolated enum MeetingSpeakerAttribution {
             }
             let last = position - 1
             guard first > 0, position < units.count, anchors[first - 1], anchors[position],
-                  units[last].analysisEnd - units[first].analysisStart <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance,
                   let previous = decisions[first - 1].selectedToken,
                   let next = decisions[position].selectedToken,
                   contextBarriers?.intersects(start: units[first - 1].analysisStart,
                                               end: units[position].analysisEnd) != true
             else { continue }
-            let range = (first...position)
-            guard range.allSatisfy({ index in
-                let gap = units[index].analysisStart - units[index - 1].analysisEnd
-                return gap >= -policy.comparisonTolerance && gap <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance
-            }) else { continue }
+            guard self.admitsNeighborRun(units[(first - 1)...position].map {
+                .init(start: $0.analysisStart, end: $0.analysisEnd)
+            }, policy: policy) else { continue }
             let runCandidates = decisions[first...last].flatMap(\.candidates).filter { $0.supportSeconds > policy.comparisonTolerance }
             guard runCandidates.allSatisfy({ $0.token == previous || $0.token == next }) else { continue }
             let cues = [units[first - 1].id, units[position].id]

@@ -1,0 +1,123 @@
+{
+  "schemaVersion": 1,
+  "id": "1AD3258B-41DC-426A-A9CA-0FB6531A9021",
+  "title": "Синтетическая проверка старой разметки",
+  "languageCode": "ru",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-16T12:00:00Z",
+  "endedAt": "2026-10-16T12:02:00Z",
+  "updatedAt": "2026-10-16T12:02:00Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "completed",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "memoryOnly",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": []
+    }
+  ],
+  "speakers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000065",
+      "displayName": "Анна",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
+    }
+  ],
+  "transcriptSegments": [
+    {
+      "id": "00000000-0000-0000-0000-202610170001",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 2860,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 2960,
+        "timescale": 1000
+      },
+      "text": "Обсудим",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "speakerID": "00000000-0000-0000-0000-000000000065"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170002",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 3280,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 3320,
+        "timescale": 1000
+      },
+      "text": "и",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "unassigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170003",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 3440,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 3540,
+        "timescale": 1000
+      },
+      "text": "продолжим.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "speakerID": "00000000-0000-0000-0000-000000000065"
+    }
+  ],
+  "retention": {},
+  "processingAttempts": [
+    {
+      "id": "1AD3258B-41DC-426A-A9CA-0FB6531A9022",
+      "startedAt": "2026-10-16T12:00:00Z",
+      "completedAt": "2026-10-16T12:02:00Z",
+      "stage": "completed",
+      "pipelineVersion": 13
+    }
+  ],
+  "transcriptTimeDomain": "meetingRelative",
+  "transcriptIsComplete": true,
+  "speakerLabelsEnabled": true
+}

@@ -19,7 +19,7 @@ nonisolated enum MeetingTranscriptExporter {
             }.map(\.element)
         return self.displayParagraphs(for: segments, in: session).map { paragraph in
             let segment = paragraph.firstSegment
-            let speaker = Self.speakerLabel(for: segment, in: session, speakerNames: speakerNames)
+            let speaker = Self.speakerLabel(for: paragraph, in: session, speakerNames: speakerNames)
             return "[\(Self.timestampText(segment.start.seconds))] \(speaker): \(paragraph.text)"
         }.joined(separator: "\n\n")
     }
@@ -126,6 +126,8 @@ nonisolated enum MeetingTranscriptExporter {
     /// Every member retains its ID, text, revision and attribution for corrections and playback.
     struct DisplayParagraph: Identifiable, Equatable {
         let segments: [MeetingTranscriptSegment]
+        /// A legacy reading bridge is deliberately not persisted as a native assignment.
+        var containsLegacySpeakerBridge = false
         var id: MeetingTranscriptSegmentID { segments[0].id }
         var firstSegment: MeetingTranscriptSegment { segments[0] }
         var text: String {
@@ -142,33 +144,143 @@ nonisolated enum MeetingTranscriptExporter {
         }
     }
 
+    /// Qualify the complete reading turn when any member used a contextual estimate. The first
+    /// word can have direct evidence even though a later word needed the neighbor rule.
+    static func speakerLabel(
+        for paragraph: DisplayParagraph, in session: MeetingSession,
+        speakerNames: [SessionSpeakerID: String], language: PichiInterfaceLanguage = .english,
+        bundle: Bundle = .main
+    ) -> String {
+        let first = paragraph.firstSegment
+        let estimated = paragraph.containsLegacySpeakerBridge || paragraph.segments.contains {
+            guard $0.attributionState == nil || $0.attributionState == .assigned else { return false }
+            if let attribution = $0.speakerAttribution, attribution.selectedSpeakerID == $0.speakerID {
+                return attribution.rule.isHeuristic
+            }
+            return $0.speakerAttribution == nil && $0.speakerAttributionInference != nil
+        }
+        if estimated, first.attributionState == nil || first.attributionState == .assigned,
+           first.speakerAttribution?.background.isEmpty != false,
+           let name = self.resolvedSpeakerName(first.speakerID, in: session, speakerNames: speakerNames,
+                                               language: language, bundle: bundle) {
+            return PichiLocalization.format("Estimated speaker: %@", language: language,
+                                            bundle: bundle, arguments: [name])
+        }
+        return self.speakerLabel(for: first, in: session, speakerNames: speakerNames, language: language, bundle: bundle)
+    }
+
+    /// Detailed evidence identities still drive correction rows and JSON. A readable turn is
+    /// instead defined by the foreground speaker and meaningful uncertainty/background changes,
+    /// not which individual word needed a neighbor rule or retained a suppressed candidate.
+    private static func paragraphIdentity(
+        for segment: MeetingTranscriptSegment, legacySpeakerID: SessionSpeakerID?,
+        in session: MeetingSession, speakerNames: [SessionSpeakerID: String]
+    ) -> String {
+        if let speaker = legacySpeakerID ?? segment.speakerID,
+           legacySpeakerID != nil || segment.attributionState == nil || segment.attributionState == .assigned {
+            let attribution = segment.speakerAttribution
+            let relation = attribution.map { [.simultaneous, .consecutive, .conflict].contains($0.relation) ? $0.relation.rawValue : "single" } ?? "single"
+            let background = attribution?.background.map {
+                "\($0.token.analysisEpochID):\($0.token.label):\($0.speakerID?.uuidString ?? "nil")"
+            }.sorted().joined(separator: ",") ?? ""
+            return [speaker.uuidString, "assigned", segment.overlap.rawValue, relation, background].joined(separator: "|")
+        }
+        return self.speakerLabelIdentity(for: segment, in: session, speakerNames: speakerNames)
+    }
+
+    /// Pre-canonical archives have no native word precision or activity to replay. A completed,
+    /// untouched legacy gap between the same known speaker can flow inside that reading turn,
+    /// explicitly qualified as estimated. Cross-speaker gaps and all unsafe/manual evidence stay
+    /// boundaries. No word, speaker ID, time, revision, provenance or stored policy is rewritten.
+    private static func legacyReadingBridges(
+        for segments: [MeetingTranscriptSegment], in session: MeetingSession
+    ) -> [MeetingTranscriptSegmentID: SessionSpeakerID] {
+        // Pipeline 14 introduced canonical word-attribution provenance. Missing provenance in
+        // a current attempt must never opt it into compatibility inference.
+        guard session.state == .completed, session.endedAt != nil,
+              session.transcriptIsComplete != false, session.transcriptCoverageGaps?.isEmpty != false,
+              session.resultSidecarReference == nil, let attempt = session.processingAttempts.last,
+              attempt.stage == .completed, attempt.completedAt != nil, attempt.errorCode == nil,
+              attempt.pipelineVersion > 0, attempt.pipelineVersion < 14 else { return [:] }
+        let source = session.transcriptSegments.enumerated().sorted {
+            ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
+        }.map(\.element)
+        let sourcePositions = Dictionary(source.enumerated().map { ($0.element.id, $0.offset) },
+                                         uniquingKeysWith: { first, _ in first })
+        guard sourcePositions.count == source.count else { return [:] }
+        let active = Set(session.activeSpeakers.map(\.id))
+        func untouched(_ segment: MeetingTranscriptSegment) -> Bool {
+            segment.revision == 0 && segment.originalText == nil && segment.status == .final
+                && segment.completeness == .complete && !segment.isEcho && segment.overlap == .none
+                && segment.nativePrecision == nil && segment.nativeTiming == nil && segment.nativeUnitID == nil
+                && segment.nativeSpeakerAssignment == nil && segment.speakerAttribution == nil
+                && segment.speakerAttributionInference == nil
+        }
+        func unknown(_ segment: MeetingTranscriptSegment) -> Bool {
+            untouched(segment) && segment.speakerID == nil && segment.attributionState == .unassigned
+        }
+        func anchor(_ segment: MeetingTranscriptSegment) -> SessionSpeakerID? {
+            guard untouched(segment), segment.attributionState == .assigned,
+                  let speaker = segment.speakerID,
+                  self.resolvedSpeakerID(speaker, in: session, activeSpeakerIDs: active) != nil else { return nil }
+            return speaker
+        }
+        var bridges: [MeetingTranscriptSegmentID: SessionSpeakerID] = [:]
+        var position = 0
+        while position < segments.count {
+            guard unknown(segments[position]) else { position += 1; continue }
+            let first = position
+            while position < segments.count, unknown(segments[position]) { position += 1 }
+            guard first > 0, position < segments.count,
+                  let speaker = anchor(segments[first - 1]), anchor(segments[position]) == speaker else { continue }
+            let range = (first - 1)...position
+            guard let sourceStart = sourcePositions[segments[first - 1].id],
+                  range.allSatisfy({ sourcePositions[segments[$0].id] == sourceStart + $0 - (first - 1)
+                      && segments[$0].sourceTrackID == segments[first - 1].sourceTrackID }),
+                  MeetingSpeakerAttribution.admitsNeighborRun(range.map {
+                      .init(start: segments[$0].start.seconds, end: segments[$0].end.seconds)
+                  }, policy: .standard) else { continue }
+            for index in first..<position { bridges[segments[index].id] = speaker }
+        }
+        return bridges
+    }
+
     /// Input order is retained. Callers supply chronological, non-echo segments.
     /// Adjacent nil-speaker fragments can flow under the honest unknown-speaker label. Their
     /// distinct uncertainty states remain on every canonical member, not an invented identity.
-    /// Identified speaker/state changes and source/evidence changes stay boundaries. Buffer size,
+    /// Identified speaker/state changes and source/evidence changes stay boundaries. Short safe
+    /// gaps in untouched pre-canonical archives use the explicitly estimated legacy projection.
+    /// Buffer size,
     /// elapsed time, pauses and line breaks are not evidence of a new speaker turn. Explicit line
     /// breaks remain in the text inside a turn without creating a second speaker header.
     static func displayParagraphs(for segments: [MeetingTranscriptSegment], in session: MeetingSession) -> [DisplayParagraph] {
         let names = Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        let legacyBridges = self.legacyReadingBridges(for: segments, in: session)
         var paragraphs: [DisplayParagraph] = []
         var members: [MeetingTranscriptSegment] = []
+        var containsLegacyBridge = false
         for segment in segments {
             let startsParagraph = members.last.map { previous in
                 let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
+                    && legacyBridges[previous.id] == nil && legacyBridges[segment.id] == nil
                 return ((!bothUnknown || previous.speakerAttribution != nil || segment.speakerAttribution != nil)
-                    && speakerLabelIdentity(for: previous, in: session, speakerNames: names)
-                    != speakerLabelIdentity(for: segment, in: session, speakerNames: names))
+                    && paragraphIdentity(for: previous, legacySpeakerID: legacyBridges[previous.id], in: session, speakerNames: names)
+                    != paragraphIdentity(for: segment, legacySpeakerID: legacyBridges[segment.id], in: session, speakerNames: names))
+                    || (previous.speakerAttribution?.policyFingerprint != nil && segment.speakerAttribution?.policyFingerprint != nil
+                        && previous.speakerAttribution?.policyFingerprint != segment.speakerAttribution?.policyFingerprint)
                     || previous.sourceTrackID != segment.sourceTrackID
                     || previous.status != segment.status || previous.completeness != segment.completeness
                     || previous.isEcho != segment.isEcho
             } ?? false
             if startsParagraph {
-                paragraphs.append(DisplayParagraph(segments: members))
+                paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge))
                 members = []
+                containsLegacyBridge = false
             }
             members.append(segment)
+            containsLegacyBridge = containsLegacyBridge || legacyBridges[segment.id] != nil
         }
-        if !members.isEmpty { paragraphs.append(DisplayParagraph(segments: members)) }
+        if !members.isEmpty { paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge)) }
         return paragraphs
     }
 

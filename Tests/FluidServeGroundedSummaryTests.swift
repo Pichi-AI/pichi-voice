@@ -17,6 +17,7 @@ struct FluidServeGroundedSummaryTests {
             checks += 1
         }
         try self.checkSpeakerTurnPresentation(check)
+        try self.checkLegacyReadingAndEvidenceTurns(check)
         try self.checkSpeakerAttributionProjection(check, root: base.appendingPathComponent("AttributionMeetings"))
         try self.checkLongWordManifest(check, root: base.appendingPathComponent("LongMeetings"))
         let ordinaryClocks: [(String, TimeInterval)] = [("90", 90), ("12:30", 750), ("1:02:03", 3723)]
@@ -294,6 +295,96 @@ struct FluidServeGroundedSummaryTests {
         let range = try FluidServeMeetings.jsonTurns(for: meeting, from: 2, to: 4)
         check(range.map { $0["text"] as! String } == [estimated.text, multiple.text], "JSON range retains native start filtering")
         check(try Data(contentsOf: file) == manifest, "Text, JSON and search leave persisted evidence unchanged")
+    }
+
+    /// Real production projection of synthetic legacy archives and current word provenance.
+    private static func checkLegacyReadingAndEvidenceTurns(_ check: (Bool, String) -> Void) throws {
+        let track = UUID(), speaker = UUID(), other = UUID()
+        var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic reading compatibility",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1,
+                            firstPresentationTime: nil))
+        session.state = .completed
+        session.endedAt = session.startedAt.addingTimeInterval(120)
+        session.speakers = [speaker, other].map {
+            .init(id: $0, displayName: "Speaker", diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        session.processingAttempts = [.init(id: UUID(), startedAt: session.startedAt, completedAt: session.startedAt,
+            stage: .completed, pipelineVersion: 13)]
+        func segment(_ text: String, _ start: Double, _ end: Double, speakerID: UUID? = speaker) -> MeetingTranscriptSegment {
+            .init(id: UUID(), start: .init(value: Int64((start * 1000).rounded()), timescale: 1000),
+                end: .init(value: Int64((end * 1000).rounded()), timescale: 1000), sourceTrackID: track,
+                speakerID: speakerID, text: text, revision: 0, status: .final, overlap: .none,
+                completeness: .complete, attributionState: speakerID == nil ? .unassigned : .assigned)
+        }
+        let originals = [segment("A", 2.86, 2.96), segment("bridge", 3.28, 3.32, speakerID: nil), segment("B", 3.44, 3.54)]
+        session.transcriptSegments = originals
+        let before = try MeetingTranscriptExporter.json(for: session)
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: originals, in: session)
+        check(paragraphs.count == 1 && paragraphs[0].text == "A bridge B", "Legacy same-speaker gap flows inside one readable turn")
+        check(paragraphs[0].containsLegacySpeakerBridge, "A legacy reading bridge is explicitly qualified")
+        check(paragraphs.flatMap(\.segments) == originals && originals[1].speakerID == nil, "Original gap stays unknown in canonical evidence and editor members")
+        check(MeetingTranscriptExporter.speakerLabel(for: paragraphs[0], in: session, speakerNames: [speaker: "Speaker"]) == "Estimated speaker: Speaker",
+              "The paragraph label qualifies an estimated member even when the first word was assigned")
+        check(MeetingTranscriptExporter.text(for: session) == "[00:02] Estimated speaker: Speaker: A bridge B", "Text export shares the exact readable turn")
+        let after = try MeetingTranscriptExporter.json(for: session)
+        check(try JSONSerialization.jsonObject(with: before) as! NSDictionary == JSONSerialization.jsonObject(with: after) as! NSDictionary,
+              "Reading projection never changes JSON evidence semantics")
+        func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil) {
+            check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session).count == rows.count,
+                  "Unsafe, manual, nonlegacy or different-speaker evidence must remain a boundary")
+        }
+        for index in 0..<3 {
+            var rows = originals; rows[index].revision = 1; staysSplit(rows)
+            rows = originals; rows[index].originalText = "Original"; staysSplit(rows)
+            rows = originals; rows[index].status = .provisional; staysSplit(rows)
+            rows = originals; rows[index].completeness = .incompleteTrack; staysSplit(rows)
+            rows = originals; rows[index].overlap = .ambiguous; staysSplit(rows)
+            rows = originals; rows[index].sourceTrackID = UUID(); staysSplit(rows)
+            rows = originals; rows[index].attributionState = .timingUncertain; staysSplit(rows)
+            rows = originals; rows[index].nativePrecision = .word; staysSplit(rows)
+        }
+        var changed = session; changed.state = .processing; staysSplit(originals, in: changed)
+        changed = session; changed.processingAttempts = []; staysSplit(originals, in: changed)
+        changed = session; changed.processingAttempts[0].pipelineVersion = 15; staysSplit(originals, in: changed)
+        changed = session; changed.speakers = []; staysSplit(originals, in: changed)
+        changed = session; changed.transcriptIsComplete = false; staysSplit(originals, in: changed)
+        changed = session; changed.transcriptCoverageGaps = [.init(trackID: track, start: 3.1, end: 3.2, reason: .missingOrUnreadableAudio)]; staysSplit(originals, in: changed)
+        changed = session
+        var hiddenEcho = segment("Echo", 3.1, 3.2); hiddenEcho.isLikelyEcho = true
+        changed.transcriptSegments.insert(hiddenEcho, at: 1); staysSplit(originals, in: changed)
+        var rows = originals; rows[2].speakerID = other; staysSplit(rows)
+        rows = originals; rows[1].start = .init(value: 2000, timescale: 1000); staysSplit(rows)
+        rows = originals; rows[2].start = .init(value: 5000, timescale: 1000); rows[2].end = .init(value: 5100, timescale: 1000); staysSplit(rows)
+        rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); staysSplit(rows)
+
+        let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
+        let background = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")
+        func provenance(_ segment: MeetingTranscriptSegment, rule: MeetingSpeakerAttributionRule,
+                        candidates: [MeetingBackendSpeakerToken] = [], backgroundTokens: [MeetingBackendSpeakerToken] = []) -> MeetingTranscriptSegment {
+            var result = segment; result.speakerID = speaker; result.attributionState = .assigned; result.nativePrecision = .word
+            let decision = MeetingSpeakerAttributionDecision(unitID: result.id.uuidString, rawAssignment: .unassigned,
+                candidates: candidates.map { .init(token: $0, intervals: [], supportSeconds: 0, isSuppressed: true) },
+                activeSupportSeconds: 0, simultaneousIntervals: [], relation: backgroundTokens.isEmpty ? .none : .simultaneous,
+                selectedToken: token, rule: rule, cueUnitIDs: [], backgroundTokens: backgroundTokens,
+                policyVersion: 2, policyFingerprint: MeetingSpeakerAttributionPolicy.standard.fingerprint)
+            result.speakerAttribution = .init(decision: decision, speakerIDs: [token: speaker, background: other])
+            return result
+        }
+        changed = session; changed.processingAttempts[0].pipelineVersion = 15
+        rows = [originals[0], provenance(originals[1], rule: .neighborAgreement), originals[2]]
+        let current = MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed)
+        check(current.count == 1 && !current[0].containsLegacySpeakerBridge, "Current direct and neighbor words form the same speaker turn")
+        check(MeetingTranscriptExporter.speakerLabel(for: current[0], in: changed, speakerNames: [speaker: "Speaker"]) == "Estimated speaker: Speaker",
+              "Current turn retains the heuristic qualifier beyond its first member")
+        check(current.flatMap(\.segments) == rows, "Current provenance remains per word")
+        rows = [provenance(originals[0], rule: .neighborAgreement), provenance(originals[1], rule: .incomingSpeaker, candidates: [token, background])]
+        check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed).count == 1,
+              "Per-word heuristic names and suppressed candidate sets do not invent speaker changes")
+        rows = [originals[0], provenance(originals[1], rule: .briefInterruption, backgroundTokens: [background]), originals[2]]
+        staysSplit(rows, in: changed)
     }
 
     /// Genuine production codec payload, not whitespace padding: long word-level transcripts

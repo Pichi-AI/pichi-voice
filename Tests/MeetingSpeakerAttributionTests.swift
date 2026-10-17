@@ -46,6 +46,7 @@ struct MeetingSpeakerAttributionTests {
         try self.acoustics()
         try self.initialAcousticProjection()
         try self.neighbors()
+        self.neighborAdmission()
         try self.interruptions()
         try self.interruptionWordSupport()
         try self.scopeAndChronology()
@@ -56,6 +57,30 @@ struct MeetingSpeakerAttributionTests {
         try await self.cancellation()
         try self.scale()
         print("Meeting speaker attribution: \(self.checks) checks passed")
+    }
+
+    static func neighborAdmission() {
+        let policy = MeetingSpeakerAttributionPolicy.standard
+        func admitted(_ values: [(Double, Double)], policy: MeetingSpeakerAttributionPolicy = .standard) -> Bool {
+            MeetingSpeakerAttribution.admitsNeighborRun(values.map { .init(start: $0.0, end: $0.1) }, policy: policy)
+        }
+        for (before, start, end, after) in [(2.96, 3.28, 3.32, 3.44), (17.52, 17.64, 17.68, 17.84),
+                                           (69.32, 69.88, 69.92, 70.04), (97.80, 97.88, 97.92, 98.40)] {
+            self.check(admitted([(before - 0.1, before), (start, end), (after, after + 0.1)]))
+        }
+        self.check(admitted([(0, 1), (1, 1 + policy.maximumUnknownRunSeconds),
+                             (1 + policy.maximumUnknownRunSeconds, 5)]))
+        self.check(!admitted([(0, 1), (1, 1 + policy.maximumUnknownRunSeconds + 0.01), (4.6, 5)]))
+        self.check(admitted([(0, 1), (1.8, 2), (2.8, 3)]))
+        self.check(!admitted([(0, 1), (1.81, 2), (2.8, 3)]))
+        self.check(!admitted([(0, 1), (0.9, 2), (2, 3)]))
+        self.check(!admitted([(0, 1), (1, 2), (1.9, 3)]))
+        self.check(!admitted([(0, 1), (1, 1), (1, 2)]))
+        self.check(!admitted([(0, 1), (.nan, 2), (2, 3)]))
+        self.check(!admitted([(-1, 0), (0, 1), (1, 2)]))
+        self.check(!admitted([(0, 1), (1, .infinity), (2, 3)]))
+        self.check(!admitted([(0, 1), (1, 2)]))
+        self.check(!admitted([(0, 1), (1, 2), (2, 3)], policy: .init(enableNeighborResolution: false)))
     }
 
     static func acoustics() throws {
