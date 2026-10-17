@@ -242,6 +242,15 @@ struct FluidServeGroundedSummaryTests {
                              relation: .none, rule: .incomingSpeaker)
         let multiple = unit(2, text: "Multiple fixture.", selected: nil, raw: .ambiguous([a, b]),
                             relation: .simultaneous, rule: .ambiguous)
+        let conflict = unit(4, text: "Conflict fixture.", selected: nil, raw: .ambiguous([a, b]),
+                            relation: .conflict, rule: .conflict)
+        for (member, expected) in [(multiple, "Simultaneous speech: First + You"),
+                                   (conflict, "Speaker evidence conflicts: First + You")] {
+            let paragraph = MeetingTranscriptExporter.DisplayParagraph(segments: [member])
+            check(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: session,
+                speakerNames: [first: "First", second: "Saved owner alias"]) == expected,
+                  "A historical fallback must never discard canonical candidate identities or relation")
+        }
         var corrected = foreground
         corrected.id = UUID()
         corrected.start = .init(value: 6000, timescale: 1000)
@@ -266,15 +275,15 @@ struct FluidServeGroundedSummaryTests {
         let meeting = entries[0].meeting
         check(FluidServeMeetings.transcript(for: meeting) == MeetingTranscriptExporter.text(for: session),
               "CLI text shares the application's foreground, estimate, multi-speaker and corrected labels")
-        let expectedLabels = ["You (interrupting; background: First)", "Estimated speaker: First", "Simultaneous speech: First + You", "First"]
+        let expectedLabels = ["You (interrupting; background: First)", "First", "Simultaneous speech: First + You", "First"]
         check(meeting.turns.map { FluidServeMeetings.speakerLabel(for: $0, in: meeting) } == expectedLabels,
-              "Labels retain uncertainty, the known background and resolved owner/merged aliases")
+              "Labels retain unknown/background states and resolved owner/merged aliases")
         let show = FluidServeCommand.run(arguments: ["meet", "show", "latest"], root: root, accessEnabled: true)
         check(show.exitCode == 0 && show.output.hasSuffix(MeetingTranscriptExporter.text(for: session)),
               "Actual CLI text uses the shared projection")
         let searched = FluidServeCommand.run(arguments: ["meet", "search", "fixture"], root: root, accessEnabled: true)
         check(searched.exitCode == 0 && expectedLabels.dropLast().allSatisfy { searched.output.contains($0) },
-              "Search results carry the same qualified labels")
+              "Search results carry the same shared labels")
         let json = FluidServeCommand.run(arguments: ["meet", "show", "latest", "--json"], root: root, accessEnabled: true)
         let document = try JSONSerialization.jsonObject(with: Data(json.output.utf8)) as! [String: Any]
         let turns = document["turns"] as! [[String: Any]]
@@ -283,7 +292,7 @@ struct FluidServeGroundedSummaryTests {
         check(json.exitCode == 0 && turns.count == session.transcriptSegments.count, "CLI JSON retains every native timed fragment")
         for (index, turn) in turns.enumerated() {
             var withoutLabel = turn
-            check(withoutLabel.removeValue(forKey: "speaker") as? String == expectedLabels[index], "JSON keeps the legacy speaker field with the qualified shared label")
+            check(withoutLabel.removeValue(forKey: "speaker") as? String == expectedLabels[index], "JSON keeps the legacy speaker field with the shared participant label")
             check(NSDictionary(dictionary: withoutLabel).isEqual(to: canonical[index]), "All JSON native/provenance fields reuse the exact canonical export projection")
         }
         let foregroundMetadata = turns[0]["speakerAttribution"] as! [String: Any]
@@ -323,17 +332,17 @@ struct FluidServeGroundedSummaryTests {
         let before = try MeetingTranscriptExporter.json(for: session)
         let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: originals, in: session)
         check(paragraphs.count == 1 && paragraphs[0].text == "A bridge B", "Legacy same-speaker gap flows inside one readable turn")
-        check(paragraphs[0].containsLegacySpeakerBridge, "A legacy reading bridge is explicitly qualified")
+        check(paragraphs[0].containsLegacySpeakerBridge, "A legacy reading bridge retains its internal estimate marker")
         check(paragraphs.flatMap(\.segments) == originals && originals[1].speakerID == nil, "Original gap stays unknown in canonical evidence and editor members")
-        check(MeetingTranscriptExporter.speakerLabel(for: paragraphs[0], in: session, speakerNames: [speaker: "Speaker"]) == "Estimated speaker: Speaker",
-              "The paragraph label qualifies an estimated member even when the first word was assigned")
-        check(MeetingTranscriptExporter.text(for: session) == "[00:02] Estimated speaker: Speaker: A bridge B", "Text export shares the exact readable turn")
+        check(MeetingTranscriptExporter.speakerLabel(for: paragraphs[0], in: session, speakerNames: [speaker: "Speaker"]) == "Speaker",
+              "The paragraph uses the selected participant name without an estimate prefix")
+        check(MeetingTranscriptExporter.text(for: session) == "[00:02] Speaker: A bridge B", "Text export shares the exact readable turn")
         let after = try MeetingTranscriptExporter.json(for: session)
         check(try JSONSerialization.jsonObject(with: before) as! NSDictionary == JSONSerialization.jsonObject(with: after) as! NSDictionary,
               "Reading projection never changes JSON evidence semantics")
         func staysSplit(_ rows: [MeetingTranscriptSegment], in changed: MeetingSession? = nil) {
             check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed ?? session).count == rows.count,
-                  "Unsafe, manual, nonlegacy or different-speaker evidence must remain a boundary")
+                  "Unsafe, manual or nonlegacy evidence must remain a boundary")
         }
         for index in 0..<3 {
             var rows = originals; rows[index].revision = 1; staysSplit(rows)
@@ -354,9 +363,22 @@ struct FluidServeGroundedSummaryTests {
         changed = session
         var hiddenEcho = segment("Echo", 3.1, 3.2); hiddenEcho.isLikelyEcho = true
         changed.transcriptSegments.insert(hiddenEcho, at: 1); staysSplit(originals, in: changed)
-        var rows = originals; rows[2].speakerID = other; staysSplit(rows)
+        var rows = originals; rows[2].speakerID = other
+        let incoming = MeetingTranscriptExporter.displayParagraphs(for: rows, in: session)
+        check(incoming.count == 2 && incoming[0].segments == [rows[0]] && incoming[1].segments == Array(rows.dropFirst()),
+              "A bounded legacy gap at a voice change belongs to the incoming reading turn")
+        check(incoming[1].projectedSpeakerID == other && incoming[1].firstSegment.speakerID == nil,
+              "The projected speaker remains separate from the unresolved first member")
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            check(MeetingTranscriptExporter.speakerLabel(for: incoming[1], in: session,
+                speakerNames: [speaker: "Анна", other: "Борис"], language: language) == "Борис",
+                  "An incoming paragraph beginning with an unknown word has a plain known label")
+        }
+        check(incoming.flatMap(\.segments) == rows && rows[1].speakerID == nil,
+              "Incoming projection preserves exact member IDs, text, timing and original unknown evidence")
+        var mixed = rows; mixed[1].attributionState = .overlappingSpeakers; staysSplit(mixed)
         rows = originals; rows[1].start = .init(value: 2000, timescale: 1000); staysSplit(rows)
-        rows = originals; rows[2].start = .init(value: 5000, timescale: 1000); rows[2].end = .init(value: 5100, timescale: 1000); staysSplit(rows)
+        rows = originals; rows[2].start = .init(value: 8200, timescale: 1000); rows[2].end = .init(value: 8300, timescale: 1000); staysSplit(rows)
         rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); staysSplit(rows)
 
         let nested = [segment("Enclosing speaker", 0, 10, speakerID: other),
@@ -396,8 +418,8 @@ struct FluidServeGroundedSummaryTests {
         rows = [originals[0], provenance(originals[1], rule: .neighborAgreement), originals[2]]
         let current = MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed)
         check(current.count == 1 && !current[0].containsLegacySpeakerBridge, "Current direct and neighbor words form the same speaker turn")
-        check(MeetingTranscriptExporter.speakerLabel(for: current[0], in: changed, speakerNames: [speaker: "Speaker"]) == "Estimated speaker: Speaker",
-              "Current turn retains the heuristic qualifier beyond its first member")
+        check(MeetingTranscriptExporter.speakerLabel(for: current[0], in: changed, speakerNames: [speaker: "Speaker"]) == "Speaker",
+              "Current turn uses the participant name while retaining per-word heuristic evidence")
         check(current.flatMap(\.segments) == rows, "Current provenance remains per word")
         rows = [provenance(originals[0], rule: .neighborAgreement), provenance(originals[1], rule: .incomingSpeaker, candidates: [token, background])]
         check(MeetingTranscriptExporter.displayParagraphs(for: rows, in: changed).count == 1,

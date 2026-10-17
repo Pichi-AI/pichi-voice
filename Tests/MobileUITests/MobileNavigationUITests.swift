@@ -332,9 +332,9 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testGeneralizedSpeakerAttributionLabelsInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
-        for (language, appearance, historyTitle, interruptionLabel, estimatedLabel) in [
-            ("en", "light", "History", "Борис (interrupting; background: Анна)", "Estimated speaker: Борис"),
-            ("ru", "dark", "История", "Борис (перебивает; фон: Анна)", "Предположительно: Борис")
+        for (language, appearance, historyTitle, interruptionLabel, participantLabel) in [
+            ("en", "light", "History", "Борис (interrupting; background: Анна)", "Борис"),
+            ("ru", "dark", "История", "Борис (перебивает; фон: Анна)", "Борис")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -357,8 +357,8 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(mixedText.waitForExistence(timeout: 5))
             try revealParagraphAboveNavigation(mixedText, step: "attribution-\(language)-portrait")
             capture("attribution-\(language)-portrait-foreground")
-            let inferred = app.staticTexts[estimatedLabel].firstMatch
-            XCTAssertTrue(inferred.exists, "A neighbor inference must not appear as an unqualified identity")
+            let inferred = app.staticTexts[participantLabel].firstMatch
+            XCTAssertTrue(inferred.exists, "A selected participant uses its plain name while retaining inference metadata")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
             XCTAssertTrue(label.exists && mixedText.exists)
@@ -367,12 +367,12 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
-    func testLegacyOrphanWordReadsInsideOneEstimatedParagraphInBothLanguagesAndThemes() throws {
+    func testLegacyOrphanWordReadsInsideOneParticipantParagraphInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9021"
         let firstID = "00000000-0000-0000-0000-202610170001"
-        for (language, appearance, historyTitle, estimatedLabel, cancelTitle) in [
-            ("en", "light", "History", "Estimated speaker: Анна", "Cancel"),
-            ("ru", "dark", "История", "Предположительно: Анна", "Отмена")
+        for (language, appearance, historyTitle, participantLabel, cancelTitle) in [
+            ("en", "light", "History", "Анна", "Cancel"),
+            ("ru", "dark", "История", "Анна", "Отмена")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -389,7 +389,7 @@ final class MobileNavigationUITests: XCTestCase {
             meeting.tap()
             XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
             capture("legacy-attribution-\(language)-opened")
-            let label = app.staticTexts[estimatedLabel].firstMatch
+            let label = app.staticTexts[participantLabel].firstMatch
             XCTAssertTrue(label.waitForExistence(timeout: 5))
             let paragraph = app.staticTexts["Обсудим и продолжим."].firstMatch
             XCTAssertTrue(paragraph.waitForExistence(timeout: 5))
@@ -405,13 +405,73 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-attribution-\(language)-original-members")
             app.buttons[cancelTitle].firstMatch.tap()
             capture("legacy-attribution-\(language)-editor-cancelled")
+            let incomingParagraph = app.staticTexts["Нет, это ответ."].firstMatch
+            XCTAssertTrue(incomingParagraph.waitForExistence(timeout: 5))
+            try revealParagraphAboveNavigation(incomingParagraph, step: "legacy-attribution-\(language)-incoming-portrait")
+            XCTAssertTrue(app.staticTexts["Борис"].firstMatch.exists)
+            XCTAssertFalse(app.staticTexts[language == "ru" ? "Неизвестный участник" : "Unknown speaker"].exists)
+            capture("legacy-attribution-\(language)-incoming-prefix")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
             // Landscape can virtualize the whole paragraph below the meeting header.
             try revealParagraphAboveNavigation(paragraph, step: "legacy-attribution-\(language)-landscape")
             XCTAssertTrue(label.exists && paragraph.exists)
             capture("legacy-attribution-\(language)-landscape-merged")
+            try revealParagraphAboveNavigation(incomingParagraph, step: "legacy-attribution-\(language)-incoming-landscape")
+            capture("legacy-attribution-\(language)-landscape-incoming-prefix")
         }
+    }
+
+    func testPrivateSavedIncomingParagraphsOnPhysicalDevice() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("A separately authorized physical-device saved-session review")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard let sessionID = environment["PICHI_PRIVATE_SAVED_SESSION_ID"],
+              let encoded = environment["PICHI_PRIVATE_SAVED_EXPECTED_PARAGRAPHS"],
+              let data = encoded.data(using: .utf8),
+              let expected = try JSONSerialization.jsonObject(with: data) as? [String], !expected.isEmpty else {
+            throw XCTSkip("Provide an authorized session ID and expected paragraphs for read-only device review")
+        }
+        app.terminate()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru"]
+        app.launch()
+        capture("private-saved-ready")
+        // A scheduled iPadOS update can cover the application with a passcode sheet.
+        // Dismiss only its reminder action; never interact with credentials or update settings.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for title in ["Напомнить позже", "Remind Me Later"] {
+            let reminder = springboard.buttons[title].firstMatch
+            if reminder.exists {
+                reminder.tap()
+                capture("private-saved-update-reminder-dismissed")
+                app.activate()
+                capture("private-saved-active")
+                break
+            }
+        }
+        openNavigation("history", title: "История")
+        capture("private-saved-history")
+        let meeting = app.buttons["history.session.\(sessionID)"]
+        XCTAssertTrue(meeting.waitForExistence(timeout: 10))
+        meeting.tap()
+        capture("private-saved-transcript")
+        let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        for (index, text) in expected.enumerated() {
+            let paragraph = app.staticTexts[text].firstMatch
+            for attempt in 0..<40 {
+                if paragraph.exists && paragraph.isHittable { break }
+                let from = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.8))
+                let to = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25))
+                from.press(forDuration: 0.05, thenDragTo: to)
+                capture("private-saved-\(index)-scroll-\(attempt)")
+            }
+            XCTAssertTrue(paragraph.exists && paragraph.isHittable,
+                          "The actual saved unknown prefix must be inside its incoming participant's paragraph")
+            capture("private-saved-\(index)-merged")
+        }
+        #endif
     }
 
     func testRetainedProcessingRecoveryActionsInBothLanguagesAndThemes() throws {

@@ -47,6 +47,7 @@ struct MeetingSpeakerAttributionTests {
         try self.initialAcousticProjection()
         try self.neighbors()
         self.neighborAdmission()
+        try self.sameSpeakerPauses()
         try self.interruptions()
         try self.interruptionWordSupport()
         try self.scopeAndChronology()
@@ -61,8 +62,12 @@ struct MeetingSpeakerAttributionTests {
 
     static func neighborAdmission() {
         let policy = MeetingSpeakerAttributionPolicy.standard
-        func admitted(_ values: [(Double, Double)], policy: MeetingSpeakerAttributionPolicy = .standard) -> Bool {
-            MeetingSpeakerAttribution.admitsNeighborRun(values.map { .init(start: $0.0, end: $0.1) }, policy: policy)
+        func admitted(
+            _ values: [(Double, Double)], policy: MeetingSpeakerAttributionPolicy = .standard,
+            sameSpeaker: Bool = false
+        ) -> Bool {
+            MeetingSpeakerAttribution.admitsNeighborRun(values.map { .init(start: $0.0, end: $0.1) },
+                                                        policy: policy, sameSpeaker: sameSpeaker)
         }
         for (before, start, end, after) in [(2.96, 3.28, 3.32, 3.44), (17.52, 17.64, 17.68, 17.84),
                                            (69.32, 69.88, 69.92, 70.04), (97.80, 97.88, 97.92, 98.40)] {
@@ -81,6 +86,23 @@ struct MeetingSpeakerAttributionTests {
         self.check(!admitted([(0, 1), (1, .infinity), (2, 3)]))
         self.check(!admitted([(0, 1), (1, 2)]))
         self.check(!admitted([(0, 1), (1, 2), (2, 3)], policy: .init(enableNeighborResolution: false)))
+        for offset in [0.0, 10_000.0] {
+            func shifted(_ values: [(Double, Double)]) -> [(Double, Double)] {
+                values.map { ($0.0 + offset, $0.1 + offset) }
+            }
+            let exactBudget = shifted([(0, 1), (3.68, 4.1), (6.1, 6.3)])
+            self.check(admitted(exactBudget, sameSpeaker: true), "Matching anchors lost the exact 5.1-second budget")
+            self.check(!admitted(exactBudget), "Different or unspecified anchors shared a pause budget")
+            self.check(!admitted(exactBudget, policy: .init(enableSameSpeakerPauseResolution: false), sameSpeaker: true))
+            self.check(!admitted(shifted([(0, 1), (3.68, 4.1), (6.100_001, 6.3)]), sameSpeaker: true))
+            self.check(admitted(shifted([(0, 1), (2.6, 6.1), (6.1, 6.3)]), sameSpeaker: true))
+            self.check(!admitted(shifted([(0, 1), (2.5, 6.000_001), (6.1, 6.3)]), sameSpeaker: true),
+                       "Sharing pauses expanded the 3.5-second unknown-span cap")
+            self.check(admitted(shifted([(0, 1), (1.1, 1.2), (2.2, 2.3), (3.2, 3.4)]), sameSpeaker: true))
+            self.check(!admitted(shifted([(0, 1), (0.9, 1.2), (3.2, 3.4)]), sameSpeaker: true))
+            self.check(!admitted(shifted([(0, 1), (1.1, 1.3), (1.2, 1.4), (3.2, 3.4)]), sameSpeaker: true))
+            self.check(!admitted(shifted([(0, 1), (1.1, 1.3), (1.2, 1.4)]), sameSpeaker: true))
+        }
         func blocked(_ values: [(Double, Double)]) -> Set<Int> {
             MeetingSpeakerAttribution.overlappingIntervalIndices(values.map { .init(start: $0.0, end: $0.1) },
                 tolerance: policy.comparisonTolerance, checkpoint: { _ in })
@@ -211,6 +233,46 @@ struct MeetingSpeakerAttributionTests {
         self.check(try self.resolve(utterance, activity)[1].selectedToken == nil)
         let foreignWeak = try self.resolve(units, activity + [self.activity("c", 0.3, 0.32)])[1]
         self.check(foreignWeak.selectedToken == self.token("c") && foreignWeak.rule == .singleAcousticSupport)
+    }
+
+    static func sameSpeakerPauses() throws {
+        let a = self.token("a"), b = self.token("b")
+        for offset in [0.0, 10_000.0] {
+            for pause in [0.84, 1.08, 1.36, 1.92, 2.68] {
+                for pauseBefore in [true, false] {
+                    let start = offset + 1 + (pauseBefore ? pause : 0.1)
+                    let end = start + 0.1
+                    let right = end + (pauseBefore ? 0.1 : pause)
+                    let units = [self.unit("left", offset, offset + 1, .assigned(a)),
+                                 self.unit("unknown", start, end),
+                                 self.unit("right", right, right + 0.2, .assigned(a))]
+                    let activity = [self.activity("a", offset, offset + 1), self.activity("a", right, right + 0.2)]
+                    let result = try self.resolve(units, activity)[1]
+                    self.check(result.selectedToken == a && result.rule == .neighborAgreement)
+                    self.check(result.rawAssignment == .unassigned && result.cueUnitIDs == ["left", "right"])
+                    self.check(result.candidates.isEmpty && result.activeSupportSeconds == 0)
+                    let disabled = try self.resolve(units, activity, policy: .init(enableSameSpeakerPauseResolution: false))[1]
+                    self.check(disabled.selectedToken == nil, "Disabled pause policy changed the old per-gap rule")
+                    let different = [units[0], units[1], self.unit("right", right, right + 0.2, .assigned(b))]
+                    let differentActivity = [activity[0], self.activity("b", right, right + 0.2)]
+                    self.check(try self.resolve(different, differentActivity)[1].selectedToken == nil)
+                    self.check(try self.resolve(units, activity, barriers: ["unknown"])[1].selectedToken == nil)
+                    let gap = MeetingSpeakerAttributionContextBarrier(analysisEpochID: Self.epoch,
+                        interval: .init(start: offset + 1, end: start))
+                    self.check(try self.resolve(units, activity, contextualBarriers: [gap])[1].selectedToken == nil)
+                    self.check(try self.resolve(units, [activity[0]])[1].selectedToken == nil,
+                               "A raw-only right identity became an independent acoustic anchor")
+                }
+            }
+            for (right, expected) in [(6.1, true), (6.100_001, false)] {
+                let units = [self.unit("left", offset, offset + 1, .assigned(a)),
+                             self.unit("unknown", offset + 3.68, offset + 4.1),
+                             self.unit("right", offset + right, offset + right + 0.2, .assigned(a))]
+                let result = try self.resolve(units, [self.activity("a", offset, offset + 1),
+                                                      self.activity("a", offset + right, offset + right + 0.2)])[1]
+                self.check((result.selectedToken == a) == expected)
+            }
+        }
     }
 
     static func interruptions() throws {
@@ -453,11 +515,24 @@ struct MeetingSpeakerAttributionTests {
         self.expectError { _ = try self.resolve([good], [], policy: .init(maximumUnknownRunSeconds: -1)) }
         self.expectError { _ = try MeetingSpeakerAttribution.unionedIntervals([.init(start: .nan, end: 1)]) }
         let policy = MeetingSpeakerAttributionPolicy.standard
+        self.check(policy.schemaVersion == 2 && policy.enableSameSpeakerPauseResolution)
         let roundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(policy))
         self.check(roundTrip == policy && roundTrip.fingerprint == policy.fingerprint)
         self.check(policy.fingerprint.count < 100)
         self.check(MeetingSpeakerAttributionPolicy(maximumCandidateNoiseSeconds: -0.0).fingerprint == MeetingSpeakerAttributionPolicy(maximumCandidateNoiseSeconds: 0).fingerprint)
         self.check(MeetingSpeakerAttributionPolicy(maximumUnknownRunSeconds: 4).fingerprint != policy.fingerprint)
+        // Captured from v2 before the additive pause flag existed. Old attempt identity must
+        // survive decoding and re-encoding, including checkpoints that store this fingerprint.
+        let oldJSON = Data("""
+        {"maximumUnknownRunSeconds":3.5,"maximumNeighborGapSeconds":0.8,"maximumBriefInterruptionGapSeconds":0.08,"maximumCandidateNoiseSeconds":0.08,"schemaVersion":2,"dominanceMinLeaderFraction":0.5,"dominanceMinRatio":2,"maximumCandidateNoiseActiveFraction":0.2,"maximumBoundaryResidualSeconds":0.08,"dominanceMaxRunnerFraction":0.2,"maximumBriefInterruptionSeconds":2,"enableBriefInterruption":true,"minimumInterruptionSupportSeconds":0.08,"maximumInterruptionWordSeconds":3,"enableNeighborResolution":true,"comparisonTolerance":1e-09,"enableDominance":true}
+        """.utf8)
+        let oldFingerprint = "speaker-attribution-v2:196d1cbbd5ce49c733b1fce3a7d1a9c3036448ccba13619cad8eb12b7e032a9a"
+        let oldPolicy = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: oldJSON)
+        self.check(!oldPolicy.enableSameSpeakerPauseResolution && oldPolicy.schemaVersion == 2)
+        self.check(oldPolicy == MeetingSpeakerAttributionPolicy(enableSameSpeakerPauseResolution: false))
+        self.check(oldPolicy.fingerprint == oldFingerprint && policy.fingerprint != oldFingerprint)
+        let oldRoundTrip = try JSONDecoder().decode(MeetingSpeakerAttributionPolicy.self, from: JSONEncoder().encode(oldPolicy))
+        self.check(oldRoundTrip == oldPolicy && oldRoundTrip.fingerprint == oldFingerprint)
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(policy)) as! [String: Any]
         object["schemaVersion"] = MeetingSpeakerAttributionPolicy.currentVersion + 1
         do {

@@ -649,7 +649,7 @@ extension MeetingSessionModelTests {
         XCTAssertTrue(MeetingTranscriptExporter.text(for: session).contains("Speaker 1: Initial provisional text"))
     }
 
-    func testOverlappingEvidenceUsesUnknownSpeakerLabel() {
+    func testOverlappingEvidenceWithoutCandidateNamesUsesSeveralSpeakersLabel() {
         var session = MeetingModelFixture.makeSession()
         var segment = session.transcriptSegments[0]
         segment.speakerID = nil
@@ -657,7 +657,7 @@ extension MeetingSessionModelTests {
         segment.text = "Crosstalk"
         session.transcriptSegments = [segment]
 
-        XCTAssertTrue(MeetingTranscriptExporter.text(for: session).contains("Unknown speaker: Crosstalk"))
+        XCTAssertTrue(MeetingTranscriptExporter.text(for: session).contains("Several speakers: Crosstalk"))
     }
 
     func testUnassignedAttributionStateLabel() {

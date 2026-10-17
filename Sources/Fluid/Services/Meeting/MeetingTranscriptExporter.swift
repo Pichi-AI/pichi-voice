@@ -73,14 +73,14 @@ nonisolated enum MeetingTranscriptExporter {
         switch label {
         case .unknown:
             return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
-        case let .identified(value): return name(value)
-        case let .estimated(value):
-            return PichiLocalization.format("Estimated speaker: %@", language: language, bundle: bundle,
-                                            arguments: [name(value)])
+        case let .identified(value), let .estimated(value): return name(value)
         case let .interrupting(value, background):
             return PichiLocalization.format("%@ (interrupting; background: %@)", language: language, bundle: bundle,
                                             arguments: [name(value), names(background)])
         case let .candidates(values, relation):
+            if values.isEmpty {
+                return PichiLocalization.text("Several speakers", language: language, bundle: bundle)
+            }
             let template: String
             switch relation {
             case .simultaneous: template = "Simultaneous speech: %@"
@@ -131,7 +131,8 @@ nonisolated enum MeetingTranscriptExporter {
         }
         switch state {
         case .assigned: return name(segment.speakerID).map { .identified($0) } ?? .unknown
-        case .overlappingSpeakers, .unassigned, .timingUncertain: return .unknown
+        case .overlappingSpeakers: return .candidates([], relation: .several)
+        case .unassigned, .timingUncertain: return .unknown
         }
     }
 
@@ -175,6 +176,9 @@ nonisolated enum MeetingTranscriptExporter {
         let segments: [MeetingTranscriptSegment]
         /// A legacy reading bridge is deliberately not persisted as a native assignment.
         var containsLegacySpeakerBridge = false
+        /// A legacy incoming turn can begin with an unresolved source member. Keep its
+        /// reading identity separate from that member's immutable stored evidence.
+        var projectedSpeakerID: SessionSpeakerID? = nil
         var id: MeetingTranscriptSegmentID { segments[0].id }
         var firstSegment: MeetingTranscriptSegment { segments[0] }
         var text: String {
@@ -191,29 +195,30 @@ nonisolated enum MeetingTranscriptExporter {
         }
     }
 
-    /// Qualify the complete reading turn when any member used a contextual estimate. The first
-    /// word can have direct evidence even though a later word needed the neighbor rule.
+    /// A reading turn uses the selected participant's name. Contextual estimates remain on
+    /// their canonical members without adding a qualifier to the visible participant label.
     static func speakerLabel(
         for paragraph: DisplayParagraph, in session: MeetingSession,
         speakerNames: [SessionSpeakerID: String], language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
-        let first = paragraph.firstSegment
-        let estimated = paragraph.containsLegacySpeakerBridge || paragraph.segments.contains {
-            guard $0.attributionState == nil || $0.attributionState == .assigned else { return false }
-            if let attribution = $0.speakerAttribution, attribution.selectedSpeakerID == $0.speakerID {
-                return attribution.rule.isHeuristic
+        if paragraph.firstSegment.speakerID == nil,
+           paragraph.projectedSpeakerID == nil,
+           paragraph.segments.allSatisfy({ $0.speakerAttribution == nil
+               && $0.nativePrecision == nil && $0.nativeSpeakerAssignment == nil }),
+           paragraph.segments.contains(where: { $0.attributionState == .overlappingSpeakers }) {
+            return self.speakerLabel(for: .candidates([], relation: .several), language: language, bundle: bundle)
+        }
+        if let projected = paragraph.projectedSpeakerID {
+            let resolved = self.resolvedAliasID(projected, in: session)
+            if let speaker = session.activeSpeakers.first(where: { $0.id == resolved }),
+               let displayName = speakerNames[resolved] {
+                return self.speakerLabel(for: .estimated(.init(displayName: displayName, isLocalUser: speaker.isLocalUser)),
+                    language: language, bundle: bundle)
             }
-            return $0.speakerAttribution == nil && $0.speakerAttributionInference != nil
         }
-        if estimated, first.attributionState == nil || first.attributionState == .assigned,
-           first.speakerAttribution?.background.isEmpty != false,
-           let name = self.resolvedSpeakerName(first.speakerID, in: session, speakerNames: speakerNames,
-                                               language: language, bundle: bundle) {
-            return PichiLocalization.format("Estimated speaker: %@", language: language,
-                                            bundle: bundle, arguments: [name])
-        }
-        return self.speakerLabel(for: first, in: session, speakerNames: speakerNames, language: language, bundle: bundle)
+        return self.speakerLabel(for: paragraph.firstSegment, in: session, speakerNames: speakerNames,
+                                language: language, bundle: bundle)
     }
 
     /// Detailed evidence identities still drive correction rows and JSON. A readable turn is
@@ -236,9 +241,9 @@ nonisolated enum MeetingTranscriptExporter {
     }
 
     /// Pre-canonical archives have no native word precision or activity to replay. A completed,
-    /// untouched legacy gap between the same known speaker can flow inside that reading turn,
-    /// explicitly qualified as estimated. Cross-speaker gaps and all unsafe/manual evidence stay
-    /// boundaries. No word, speaker ID, time, revision, provenance or stored policy is rewritten.
+    /// untouched legacy gap between known speakers uses the shared bounded neighbor admission:
+    /// equal neighbors keep that voice, different neighbors select the incoming voice. Unsafe
+    /// or manual evidence remains a boundary. No stored word, ID, timing or policy is rewritten.
     private static func legacyReadingBridges(
         for segments: [MeetingTranscriptSegment], in session: MeetingSession
     ) -> [MeetingTranscriptSegmentID: SessionSpeakerID] {
@@ -285,7 +290,8 @@ nonisolated enum MeetingTranscriptExporter {
             let first = position
             while position < segments.count, unknown(segments[position]) { position += 1 }
             guard first > 0, position < segments.count,
-                  let speaker = anchor(segments[first - 1]), anchor(segments[position]) == speaker else { continue }
+                  let preceding = anchor(segments[first - 1]),
+                  let incoming = anchor(segments[position]) else { continue }
             let range = (first - 1)...position
             guard let sourceStart = sourcePositions[segments[first - 1].id],
                   range.allSatisfy({ sourcePositions[segments[$0].id] == sourceStart + $0 - (first - 1)
@@ -293,8 +299,10 @@ nonisolated enum MeetingTranscriptExporter {
                       && segments[$0].sourceTrackID == segments[first - 1].sourceTrackID }),
                   MeetingSpeakerAttribution.admitsNeighborRun(range.map {
                       .init(start: segments[$0].start.seconds, end: segments[$0].end.seconds)
-                  }, policy: .standard) else { continue }
-            for index in first..<position { bridges[segments[index].id] = speaker }
+                  }, policy: .standard,
+                  sameSpeaker: self.resolvedAliasID(preceding, in: session)
+                    == self.resolvedAliasID(incoming, in: session)) else { continue }
+            for index in first..<position { bridges[segments[index].id] = incoming }
         }
         return bridges
     }
@@ -303,7 +311,7 @@ nonisolated enum MeetingTranscriptExporter {
     /// Adjacent nil-speaker fragments can flow under the honest unknown-speaker label. Their
     /// distinct uncertainty states remain on every canonical member, not an invented identity.
     /// Identified speaker/state changes and source/evidence changes stay boundaries. Short safe
-    /// gaps in untouched pre-canonical archives use the explicitly estimated legacy projection.
+    /// gaps in untouched pre-canonical archives retain the legacy projection's estimate marker.
     /// Buffer size,
     /// elapsed time, pauses and line breaks are not evidence of a new speaker turn. Explicit line
     /// breaks remain in the text inside a turn without creating a second speaker header.
@@ -313,6 +321,7 @@ nonisolated enum MeetingTranscriptExporter {
         var paragraphs: [DisplayParagraph] = []
         var members: [MeetingTranscriptSegment] = []
         var containsLegacyBridge = false
+        var projectedSpeakerID: SessionSpeakerID?
         for segment in segments {
             let startsParagraph = members.last.map { previous in
                 let bothUnknown = previous.speakerID == nil && segment.speakerID == nil
@@ -327,14 +336,19 @@ nonisolated enum MeetingTranscriptExporter {
                     || previous.isEcho != segment.isEcho
             } ?? false
             if startsParagraph {
-                paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge))
+                paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge,
+                                                   projectedSpeakerID: projectedSpeakerID))
                 members = []
                 containsLegacyBridge = false
             }
+            if members.isEmpty { projectedSpeakerID = legacyBridges[segment.id] }
             members.append(segment)
             containsLegacyBridge = containsLegacyBridge || legacyBridges[segment.id] != nil
         }
-        if !members.isEmpty { paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge)) }
+        if !members.isEmpty {
+            paragraphs.append(DisplayParagraph(segments: members, containsLegacySpeakerBridge: containsLegacyBridge,
+                                               projectedSpeakerID: projectedSpeakerID))
+        }
         return paragraphs
     }
 
@@ -400,26 +414,8 @@ nonisolated enum MeetingTranscriptExporter {
         return try encoder.encode(document)
     }
 
-    /// A segment may still point at a speaker that was merged away; walk the alias chain
-    /// defensively even though post-merge segments are already repointed to the target. `nil`
-    /// means no known speaker could be resolved, letting callers apply their own fallback label.
-    private static func resolvedSpeakerName(
-        _ speakerID: SessionSpeakerID?,
-        in session: MeetingSession,
-        speakerNames: [SessionSpeakerID: String],
-        language: PichiInterfaceLanguage, bundle: Bundle
-    ) -> String? {
-        guard let resolvedID = speakerID.map({ Self.resolvedAliasID($0, in: session) }) else {
-            return nil
-        }
-        if let owner = session.activeSpeakers.first(where: { $0.id == resolvedID && $0.isLocalUser }) {
-            return self.speakerDisplayName(owner, language: language, bundle: bundle)
-        }
-        return speakerNames[resolvedID]
-    }
-
-    /// The same alias-chain walk as `resolvedSpeakerName`, but returning the id itself so JSON
-    /// export never references a speaker absent from the exported `speakers` array.
+    /// A segment can still reference a merged speaker. Resolve its alias chain so JSON export
+    /// never references a speaker absent from the exported `speakers` array.
     private static func resolvedSpeakerID(
         _ speakerID: SessionSpeakerID?,
         in session: MeetingSession,

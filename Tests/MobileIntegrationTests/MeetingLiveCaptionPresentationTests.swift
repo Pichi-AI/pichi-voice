@@ -153,6 +153,21 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
     }
 
+    func testSelectedParticipantLabelsStayPlainInEnglishAndRussian() {
+        for alias in ["Participant 1", "Participant 2", "Участник 1", "Участник 2", "Ёлкин"] {
+            let direct = MeetingSpeakerPresentation(identity: UUID().uuidString,
+                label: .identified(.init(displayName: alias, isLocalUser: false)))
+            let estimated = direct.markingEstimated()
+            for language in [PichiInterfaceLanguage.english, .russian] {
+                XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: direct, language: language), alias)
+                XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: estimated, language: language), alias)
+            }
+            XCTAssertTrue(estimated.isEstimated, "Plain labels retain internal heuristic evidence")
+            XCTAssertFalse(direct.isEstimated)
+            XCTAssertEqual(direct.identity, estimated.identity)
+        }
+    }
+
     func testUncertainOverlapAndInterruptingRolesStayDistinctFromKnownTurn() {
         let name = MeetingSpeakerPresentation.Name(displayName: "Участник", isLocalUser: false)
         let roles: [MeetingSpeakerPresentation] = [
@@ -883,6 +898,12 @@ private final class CaptionNativeHost {
 }
 
 final class MeetingSavedTranscriptPresentationTests: XCTestCase {
+    func testHistoricalMultipleVoicesAreNotPresentedAsOneUnknownParticipant() {
+        for (language, expected) in [(PichiInterfaceLanguage.english, "Several speakers"), (.russian, "Несколько говорящих")] {
+            let value = MeetingSpeakerPresentation(identity: "historical-multiple", label: .candidates([], relation: .several))
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: value, language: language), expected)
+        }
+    }
     private func session() -> MeetingSession {
         MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic transcript",
             microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")),
@@ -898,10 +919,42 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
               status: .final, overlap: .none, completeness: .complete, attributionState: attribution)
     }
 
+    func testLegacyIncomingTurnKeepsItsShortUnknownPrefixAndPlainParticipantLabel() throws {
+        let track = UUID(), outgoing = UUID(), incoming = UUID()
+        var source = session()
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(700)
+        source.processingAttempts = [.init(id: UUID(), startedAt: source.startedAt, completedAt: source.endedAt,
+            stage: .completed, pipelineVersion: 13)]
+        source.speakers = [(outgoing, "Анна"), (incoming, "Борис")].map {
+            .init(id: $0.0, displayName: $0.1, diarizationClusterID: nil, trackKind: .microphone,
+                  isLocalUser: false, identityCandidates: [])
+        }
+        var rows = [segment("Вопрос?", track: track, start: 608.4, speaker: outgoing, attribution: .assigned),
+                    segment("Нет, это", track: track, start: 609.28),
+                    segment("ответ.", track: track, start: 609.84, speaker: incoming, attribution: .assigned)]
+        for index in rows.indices { rows[index].revision = 0; rows[index].originalText = nil }
+        source.transcriptSegments = rows
+        let before = try MeetingTranscriptExporter.json(for: source)
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: rows, in: source)
+        XCTAssertEqual(paragraphs.count, 2)
+        let paragraph = try XCTUnwrap(paragraphs.last)
+        XCTAssertEqual(paragraph.text, "Нет, это ответ.")
+        XCTAssertEqual(paragraph.firstSegment.id, rows[1].id)
+        XCTAssertNil(paragraph.firstSegment.speakerID)
+        XCTAssertEqual(paragraph.projectedSpeakerID, incoming)
+        XCTAssertEqual(paragraph.firstSegment.start, rows[1].start)
+        for language in [PichiInterfaceLanguage.english, .russian] {
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
+                speakerNames: [outgoing: "Анна", incoming: "Борис"], language: language), "Борис")
+        }
+        XCTAssertEqual(paragraphs.flatMap(\.segments), rows)
+        XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), before)
+    }
+
     func testLegacyOrphanWordsReadWithinTheirSameSpeakerTurnInBothLanguages() throws {
         let track = UUID(), speaker = UUID()
         var source = session()
-        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(120)
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(3600)
         source.speakers = [.init(id: speaker, displayName: "Анна", diarizationClusterID: nil,
             trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
         source.processingAttempts = [.init(id: UUID(), startedAt: source.startedAt, completedAt: source.endedAt,
@@ -914,7 +967,9 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
             return row
         }
         let cases = [(2.96, 3.28, 3.32, 3.44), (17.52, 17.64, 17.68, 17.84),
-                     (69.32, 69.88, 69.92, 70.04), (97.80, 97.88, 97.92, 98.40)]
+                     (69.32, 69.88, 69.92, 70.04), (97.80, 97.88, 97.92, 98.40),
+                     (340.04, 341.04, 341.08, 341.28), (1577.32, 1580.0, 1580.48, 1580.84),
+                     (2459.40, 2459.56, 2459.80, 2461.32)]
         for (before, start, end, after) in cases {
             let rows = [legacy("Начало", start: before - 0.1, end: before, identified: true),
                         legacy("и", start: start, end: end, identified: false),
@@ -930,9 +985,9 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
             XCTAssertNil(paragraph.segments[1].speakerID)
             XCTAssertNil(paragraph.segments[1].nativePrecision)
             XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
-                speakerNames: [speaker: "Анна"], language: .english), "Estimated speaker: Анна")
+                speakerNames: [speaker: "Анна"], language: .english), "Анна")
             XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
-                speakerNames: [speaker: "Анна"], language: .russian), "Предположительно: Анна")
+                speakerNames: [speaker: "Анна"], language: .russian), "Анна")
             XCTAssertEqual(source, original)
             XCTAssertEqual(try MeetingTranscriptExporter.json(for: source), try MeetingTranscriptExporter.json(for: original))
             var manual = rows; manual[1].revision += 1
@@ -971,9 +1026,9 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
         XCTAssertFalse(paragraph.containsLegacySpeakerBridge)
         XCTAssertEqual(paragraph.segments, rows)
         XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
-            speakerNames: [speaker: "Анна"], language: .english), "Estimated speaker: Анна")
+            speakerNames: [speaker: "Анна"], language: .english), "Анна")
         XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source,
-            speakerNames: [speaker: "Анна"], language: .russian), "Предположительно: Анна")
+            speakerNames: [speaker: "Анна"], language: .russian), "Анна")
         XCTAssertEqual(MeetingTranscriptExporter.displayRows(for: rows, in: source).map(\.showsLabel), [true, true, true],
             "The evidence/correction row projection still describes each changed attribution")
     }

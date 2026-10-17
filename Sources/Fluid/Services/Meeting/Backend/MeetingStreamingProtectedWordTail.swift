@@ -283,8 +283,16 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                       let summary = resolved[index].speakerAttribution,
                       let token = summary.selectedToken else { continue }
                 let timing = Self.timing(original)
-                guard activity.contains(where: { $0.token == token
-                    && min($0.end, timing.end) - max($0.start, timing.start) > self.policy.comparisonTolerance }),
+                let hasWordSupport = boundedActivity.contains { $0.token == token
+                    && min($0.end, timing.end) - max($0.start, timing.start) > self.policy.comparisonTolerance }
+                // The canonical neighbor resolver has already checked independent original
+                // anchors, cue paths and barriers using this same immutable source snapshot.
+                // A gap word need not itself contain the chosen voice. Resolve its existing
+                // identity without changing native assignment or inventing acoustic support.
+                let hasNeighborCues = original.speakerID == nil && summary.rawAssignment == .unassigned
+                    && (summary.rule == .neighborAgreement || summary.rule == .incomingSpeaker)
+                    && (summary.relation == .none || summary.relation == .single)
+                guard hasWordSupport || hasNeighborCues,
                       let known = self.speakers.first(where: {
                           $0.diarizationClusterID == "\(token.analysisEpochID):\(token.label.precomposedStringWithCanonicalMapping)"
                       }) else { continue }
