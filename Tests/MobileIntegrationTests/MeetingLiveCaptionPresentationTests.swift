@@ -814,6 +814,13 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
             XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: manual, in: source).count, 3)
             var current = source; current.processingAttempts[0].pipelineVersion = 15
             XCTAssertEqual(MeetingTranscriptExporter.displayParagraphs(for: rows, in: current).count, 3)
+            var enclosing = legacy("Enclosing envelope", start: before - 0.2, end: after + 1, identified: true)
+            enclosing.isLikelyEcho = true
+            var hiddenOverlap = source; hiddenOverlap.transcriptSegments.insert(enclosing, at: 0)
+            let blocked = MeetingTranscriptExporter.displayParagraphs(for: rows, in: hiddenOverlap)
+            XCTAssertEqual(blocked.count, 3)
+            XCTAssertFalse(blocked.contains(where: \.containsLegacySpeakerBridge),
+                "An earlier hidden envelope remains a temporal barrier after echo filtering")
         }
     }
 

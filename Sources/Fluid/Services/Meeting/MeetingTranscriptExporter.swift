@@ -202,12 +202,18 @@ nonisolated enum MeetingTranscriptExporter {
               session.resultSidecarReference == nil, let attempt = session.processingAttempts.last,
               attempt.stage == .completed, attempt.completedAt != nil, attempt.errorCode == nil,
               attempt.pipelineVersion > 0, attempt.pipelineVersion < 14 else { return [:] }
+        guard session.transcriptSegments.allSatisfy({
+            $0.start.seconds.isFinite && $0.end.seconds.isFinite && $0.start.seconds >= 0 && $0.end.seconds > $0.start.seconds
+        }) else { return [:] }
         let source = session.transcriptSegments.enumerated().sorted {
             ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset)
         }.map(\.element)
         let sourcePositions = Dictionary(source.enumerated().map { ($0.element.id, $0.offset) },
                                          uniquingKeysWith: { first, _ in first })
         guard sourcePositions.count == source.count else { return [:] }
+        let temporalBarriers = MeetingSpeakerAttribution.overlappingIntervalIndices(source.map {
+            .init(start: $0.start.seconds, end: $0.end.seconds)
+        }, tolerance: MeetingSpeakerAttributionPolicy.standard.comparisonTolerance, checkpoint: { _ in })
         let active = Set(session.activeSpeakers.map(\.id))
         func untouched(_ segment: MeetingTranscriptSegment) -> Bool {
             segment.revision == 0 && segment.originalText == nil && segment.status == .final
@@ -236,6 +242,7 @@ nonisolated enum MeetingTranscriptExporter {
             let range = (first - 1)...position
             guard let sourceStart = sourcePositions[segments[first - 1].id],
                   range.allSatisfy({ sourcePositions[segments[$0].id] == sourceStart + $0 - (first - 1)
+                      && !temporalBarriers.contains(sourceStart + $0 - (first - 1))
                       && segments[$0].sourceTrackID == segments[first - 1].sourceTrackID }),
                   MeetingSpeakerAttribution.admitsNeighborRun(range.map {
                       .init(start: segments[$0].start.seconds, end: segments[$0].end.seconds)

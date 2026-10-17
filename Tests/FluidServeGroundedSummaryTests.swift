@@ -359,6 +359,25 @@ struct FluidServeGroundedSummaryTests {
         rows = originals; rows[2].start = .init(value: 5000, timescale: 1000); rows[2].end = .init(value: 5100, timescale: 1000); staysSplit(rows)
         rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); staysSplit(rows)
 
+        let nested = [segment("Enclosing speaker", 0, 10, speakerID: other),
+                      segment("Anchor", 1, 2), segment("gap", 2, 2.1, speakerID: nil), segment("Anchor", 2.1, 3)]
+        changed = session; changed.transcriptSegments = nested
+        staysSplit(nested, in: changed)
+        check(MeetingTranscriptExporter.displayParagraphs(for: nested, in: changed).allSatisfy { !$0.containsLegacySpeakerBridge },
+              "An earlier enclosing speaker blocks every nested reading gap despite adjacent end touches")
+        var hiddenNested = nested; hiddenNested[0].isLikelyEcho = true
+        changed.transcriptSegments = hiddenNested
+        staysSplit(Array(hiddenNested.dropFirst()), in: changed)
+        var invalidNested = nested; invalidNested[0].end = .init(value: -1, timescale: 1000)
+        changed.transcriptSegments = invalidNested
+        staysSplit(Array(invalidNested.dropFirst()), in: changed)
+        var touching = nested; touching[0].end = .init(value: 1000, timescale: 1000)
+        changed.transcriptSegments = touching
+        let touchingParagraphs = MeetingTranscriptExporter.displayParagraphs(for: touching, in: changed)
+        check(touchingParagraphs.count == 2 && touchingParagraphs[1].segments == Array(touching.dropFirst())
+            && touchingParagraphs[1].containsLegacySpeakerBridge,
+              "A genuinely half-open end touch is not an overlap barrier")
+
         let epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0)
         let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "a")
         let background = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "b")

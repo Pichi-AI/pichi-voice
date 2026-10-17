@@ -738,15 +738,28 @@ nonisolated enum MeetingSpeakerAttribution {
     /// An overlapping cluster is a contextual barrier, regardless of ID sort order. Words are
     /// still individually described, but equal or nested envelopes never establish chronology.
     private static func overlappingUnits(_ units: [MeetingFinalTextUnit], tolerance: Double) throws -> Set<String> {
-        var blocked = Set<String>(), cluster: [String] = [], maximumEnd = -Double.infinity
+        let blocked = try self.overlappingIntervalIndices(units.map {
+            .init(start: $0.analysisStart, end: $0.analysisEnd)
+        }, tolerance: tolerance, checkpoint: { try self.checkCancellation(at: $0) })
+        return Set(blocked.map { units[$0].id })
+    }
+
+    /// Chronologically sorted intervals can overlap an earlier enclosing envelope even when
+    /// adjacent rows merely touch. Mark the complete overlap cluster in one linear sweep.
+    /// Reading old archives uses this same safety boundary without inventing native text units.
+    static func overlappingIntervalIndices(
+        _ intervals: [MeetingSpeakerAttributionInterval], tolerance: Double,
+        checkpoint: (Int) throws -> Void
+    ) rethrows -> Set<Int> {
+        var blocked = Set<Int>(), cluster: [Int] = [], maximumEnd = -Double.infinity
         var clusterIsBlocked = false
-        for (position, unit) in units.enumerated() {
-            try self.checkCancellation(at: position)
-            if unit.analysisStart < maximumEnd - tolerance {
+        for (position, interval) in intervals.enumerated() {
+            try checkpoint(position)
+            if interval.start < maximumEnd - tolerance {
                 if !clusterIsBlocked { blocked.formUnion(cluster); clusterIsBlocked = true }
-                blocked.insert(unit.id)
-                maximumEnd = max(maximumEnd, unit.analysisEnd)
-            } else { cluster = [unit.id]; maximumEnd = unit.analysisEnd; clusterIsBlocked = false }
+                blocked.insert(position)
+                maximumEnd = max(maximumEnd, interval.end)
+            } else { cluster = [position]; maximumEnd = interval.end; clusterIsBlocked = false }
         }
         return blocked
     }

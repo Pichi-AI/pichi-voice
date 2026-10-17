@@ -191,7 +191,10 @@ The completed archive must have no known coverage gaps, failed attempt, incomple
 transcript or canonical sidecar. Every bridge and both anchors must remain final,
 complete, unedited and without overlap or native/canonical attribution metadata.
 The members must also be contiguous in the original archive, including hidden echo
-rows, so filtering cannot remove a barrier. Different-speaker gaps remain unknown.
+rows, so filtering cannot remove a barrier. A full-source temporal overlap sweep also
+blocks nested/enclosing envelopes and start ties, including an earlier hidden row;
+half-open end touches remain admissible. Invalid source timing disables compatibility
+bridging. Different-speaker gaps remain unknown.
 
 This compatibility projection qualifies the paragraph with the existing localized
 estimated-speaker label. It does not assign a native speaker, fabricate word times,

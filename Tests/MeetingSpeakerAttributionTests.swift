@@ -81,6 +81,16 @@ struct MeetingSpeakerAttributionTests {
         self.check(!admitted([(0, 1), (1, .infinity), (2, 3)]))
         self.check(!admitted([(0, 1), (1, 2)]))
         self.check(!admitted([(0, 1), (1, 2), (2, 3)], policy: .init(enableNeighborResolution: false)))
+        func blocked(_ values: [(Double, Double)]) -> Set<Int> {
+            MeetingSpeakerAttribution.overlappingIntervalIndices(values.map { .init(start: $0.0, end: $0.1) },
+                tolerance: policy.comparisonTolerance, checkpoint: { _ in })
+        }
+        self.check(blocked([(0, 10), (1, 2), (2, 2.1), (2.1, 3)]) == Set(0..<4))
+        self.check(blocked([(0, 1), (1, 2), (2, 2.1), (2.1, 3)]).isEmpty)
+        self.check(blocked([(0, 1), (0, 10), (2, 3)]) == Set(0..<3))
+        self.check(blocked([(0, 4), (1, 2), (3, 5), (4.5, 6), (6, 7)]) == Set(0..<4))
+        self.check(blocked([(0, 1), (2, 3), (2.5, 4), (5, 6)]) == [1, 2])
+        self.check(blocked([]).isEmpty)
     }
 
     static func acoustics() throws {
