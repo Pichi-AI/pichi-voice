@@ -338,6 +338,30 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testStreamingParticipantsRenderAsSeparateNativeTurns() async throws {
+        let first = MeetingSpeakerPresentation.Name(displayName: "Анна", isLocalUser: false)
+        let second = MeetingSpeakerPresentation.Name(displayName: "Борис", isLocalUser: false)
+        let participants: [MeetingSpeakerPresentation] = [
+            .init(identity: "first", label: .identified(first)),
+            .init(identity: "second", label: .interrupting(second, background: [first])),
+            .init(identity: "unknown", label: .unknown)
+        ]
+        let texts = ["Обсудим план встречи.", "Да, уточню один вопрос.", "Короткий неуверенный фрагмент."]
+        let rows = zip(participants, texts).map { participant, text in
+            MeetingLiveBubbleComposer.Row(id: UUID(), speaker: .you, text: text,
+                isPartial: false, showsLabel: true, participant: participant)
+        }
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 3)
+        for scheme in [ColorScheme.light, .dark] {
+            let host = try CaptionNativeHost(rows: rows, scheme: scheme)
+            defer { host.close() }
+            try await settle(host, "Streaming participant paragraphs have native layout") {
+                self.scrollViews(in: host.controller.view).contains { $0.bounds.height > 0 }
+            }
+            capture(host, step: "streaming-participants", scheme: scheme)
+        }
+    }
+
     func testShortInlineBubbleKeepsItsIntrinsicWidth() async throws {
         let host = try CaptionNativeHost(rows: [row("Привет.")], scheme: .light, documentStyle: false)
         defer { host.close() }
