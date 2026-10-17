@@ -332,9 +332,9 @@ final class MobileNavigationUITests: XCTestCase {
 
     func testGeneralizedSpeakerAttributionLabelsInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
-        for (language, appearance, historyTitle, interruptionLabel, estimatedLabel) in [
-            ("en", "light", "History", "Борис (interrupting; background: Анна)", "Estimated speaker: Борис"),
-            ("ru", "dark", "История", "Борис (перебивает; фон: Анна)", "Предположительно: Борис")
+        for (language, appearance, historyTitle, interruptionLabel, participantLabel) in [
+            ("en", "light", "History", "Борис (interrupting; background: Анна)", "Борис"),
+            ("ru", "dark", "История", "Борис (перебивает; фон: Анна)", "Борис")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -357,8 +357,8 @@ final class MobileNavigationUITests: XCTestCase {
             XCTAssertTrue(mixedText.waitForExistence(timeout: 5))
             try revealParagraphAboveNavigation(mixedText, step: "attribution-\(language)-portrait")
             capture("attribution-\(language)-portrait-foreground")
-            let inferred = app.staticTexts[estimatedLabel].firstMatch
-            XCTAssertTrue(inferred.exists, "A neighbor inference must not appear as an unqualified identity")
+            let inferred = app.staticTexts[participantLabel].firstMatch
+            XCTAssertTrue(inferred.exists, "A selected participant uses its plain name while retaining inference metadata")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
             XCTAssertTrue(label.exists && mixedText.exists)
@@ -367,12 +367,12 @@ final class MobileNavigationUITests: XCTestCase {
         }
     }
 
-    func testLegacyOrphanWordReadsInsideOneEstimatedParagraphInBothLanguagesAndThemes() throws {
+    func testLegacyOrphanWordReadsInsideOneParticipantParagraphInBothLanguagesAndThemes() throws {
         let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9021"
         let firstID = "00000000-0000-0000-0000-202610170001"
-        for (language, appearance, historyTitle, estimatedLabel, cancelTitle) in [
-            ("en", "light", "History", "Estimated speaker: Анна", "Cancel"),
-            ("ru", "dark", "История", "Предположительно: Анна", "Отмена")
+        for (language, appearance, historyTitle, participantLabel, cancelTitle) in [
+            ("en", "light", "History", "Анна", "Cancel"),
+            ("ru", "dark", "История", "Анна", "Отмена")
         ] {
             app.terminate()
             XCUIDevice.shared.orientation = .portrait
@@ -389,7 +389,7 @@ final class MobileNavigationUITests: XCTestCase {
             meeting.tap()
             XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
             capture("legacy-attribution-\(language)-opened")
-            let label = app.staticTexts[estimatedLabel].firstMatch
+            let label = app.staticTexts[participantLabel].firstMatch
             XCTAssertTrue(label.waitForExistence(timeout: 5))
             let paragraph = app.staticTexts["Обсудим и продолжим."].firstMatch
             XCTAssertTrue(paragraph.waitForExistence(timeout: 5))

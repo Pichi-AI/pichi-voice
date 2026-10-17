@@ -24,7 +24,7 @@ nonisolated struct MeetingSpeakerPresentation: Sendable, Equatable {
     let identity: String
     let label: Label
 
-    /// A whole reading turn stays honestly qualified if any constituent word was estimated.
+    /// Preserve the whole turn's internal estimate marker without changing the visible name.
     func markingEstimated() -> Self {
         guard case let .identified(name) = label else { return self }
         return Self(identity: identity, label: .estimated(name))

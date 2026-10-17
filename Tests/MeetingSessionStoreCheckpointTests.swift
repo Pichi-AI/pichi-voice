@@ -43,6 +43,8 @@ struct MeetingSessionStoreCheckpointTests {
             checks += 1
         }
 
+        try Self.checkPlainParticipantLabels(template: session, check: check)
+
         let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
             for: session.transcriptSegments[0], in: session)
         check(MeetingTranscriptExporter.speakerLabel(for: nativePresentation) == "Fixture speaker",
@@ -64,7 +66,7 @@ struct MeetingSessionStoreCheckpointTests {
         check(nativePresentation.identity == estimatedPresentation.identity,
               "Per-word native/estimated reasons do not fragment one known readable turn")
         check(estimatedPresentation.isEstimated && nativePresentation.markingEstimated() == estimatedPresentation,
-              "A word estimate promotes the shared turn label honestly")
+              "A word estimate preserves the shared turn's internal evidence marker")
         var unknownWord = session.transcriptSegments[0]
         unknownWord.speakerID = nil
         unknownWord.attributionState = .unassigned
@@ -111,7 +113,7 @@ struct MeetingSessionStoreCheckpointTests {
               "Creating a reading label does not mutate transcript evidence")
 
         // Archives written by the retired product-level continuity rule remain readable,
-        // but must be shown as estimates and never become new acoustic evidence.
+        // with plain participant names and never become new acoustic evidence.
         let oldInference = MeetingSpeakerAttributionInference(rule: .incomingSpeaker,
             originalState: .unassigned, originalOverlap: .none,
             precedingSegmentID: UUID(), followingSegmentID: UUID())
@@ -127,8 +129,8 @@ struct MeetingSessionStoreCheckpointTests {
         check(restoredArchive.transcriptSegments[0].speakerAttribution == nil,
               "Decoding an old estimate never fabricates new canonical decisions")
         let archiveText = MeetingTranscriptExporter.text(for: restoredArchive)
-        check(archiveText.contains("Estimated speaker: Fixture speaker"),
-              "Old continuity estimates remain qualified in shared labels and text export")
+        check(archiveText == "[00:00] Fixture speaker: \(restoredArchive.transcriptSegments[0].text)",
+              "Old continuity metadata does not add a visible label qualifier")
         let exportedArchive = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: restoredArchive)) as! [String: Any]
         let exportedWords = exportedArchive["segments"] as! [[String: Any]]
         let exportedInference = exportedWords[0]["speakerAttributionInference"] as! [String: Any]
@@ -140,8 +142,8 @@ struct MeetingSessionStoreCheckpointTests {
         try confirmedArchive.reassignSegment(id: confirmedArchive.transcriptSegments[0].id, to: speaker.id)
         check(confirmedArchive.transcriptSegments[0].speakerAttributionInference == nil,
               "Explicit confirmation of the same legacy speaker clears the old estimate")
-        check(!MeetingTranscriptExporter.text(for: confirmedArchive).contains("Estimated speaker:"),
-              "A manual assignment is presented as a user correction")
+        check(MeetingTranscriptExporter.text(for: confirmedArchive) == archiveText,
+              "Manual confirmation keeps the same plain participant name")
         var mergedArchive = restoredArchive
         let mergeTarget = MeetingSessionSpeaker(id: UUID(), displayName: "Legacy merge target", diarizationClusterID: nil,
             trackKind: .microphone, isLocalUser: false, identityCandidates: [])
@@ -397,6 +399,67 @@ struct MeetingSessionStoreCheckpointTests {
         print("Meeting session checkpoint tests passed: \(checks) checks; \(segmentCount) segments; "
             + "compactBytes=\(compact.count) legacyBytes=\(legacy.count) "
             + "createSeconds=\(createSeconds) saveSeconds=\(saveSeconds) legacyEncodeSeconds=\(legacyEncodeSeconds)")
+    }
+
+    /// Exercise the real shared live/history/export renderer and correction operations using
+    /// both numbered participant names and a user alias. Interface locale never translates aliases.
+    private static func checkPlainParticipantLabels(template: MeetingSession,
+                                                    check: (Bool, String) -> Void) throws {
+        for (firstAlias, secondAlias) in [("Participant 1", "Participant 2"), ("Участник 1", "Участник 2"), ("Ёлкин", "Мария")] {
+            var source = template
+            source.state = .completed
+            source.endedAt = source.startedAt.addingTimeInterval(2)
+            var first = template.speakers[0]; first.displayName = firstAlias
+            var second = first; second.id = UUID(); second.displayName = secondAlias
+            var merged = first; merged.id = UUID(); merged.displayName = "Retired alias"
+            merged.mergedIntoSpeakerID = first.id
+            source.speakers = [first, second, merged]
+            var direct = template.transcriptSegments[0]; direct.speakerID = merged.id
+            var legacy = direct
+            legacy.speakerAttributionInference = .init(rule: .incomingSpeaker, originalState: .unassigned,
+                originalOverlap: .none, precedingSegmentID: UUID(), followingSegmentID: UUID())
+            let token = MeetingBackendSpeakerToken(analysisEpochID: .init(trackID: direct.sourceTrackID, ordinal: 0),
+                                                   label: "synthetic-selected")
+            let decision = MeetingSpeakerAttributionDecision(unitID: "synthetic-selected-word", rawAssignment: .unassigned,
+                candidates: [], activeSupportSeconds: 0, simultaneousIntervals: [], relation: .none,
+                selectedToken: token, rule: .neighborAgreement, cueUnitIDs: [], backgroundTokens: [],
+                policyVersion: 2, policyFingerprint: MeetingSpeakerAttributionPolicy.standard.fingerprint)
+            var heuristic = direct
+            heuristic.speakerAttribution = .init(decision: decision, speakerIDs: [token: merged.id])
+            for (word, isEstimated) in [(direct, false), (legacy, true), (heuristic, true)] {
+                source.transcriptSegments = [word]
+                let original = source
+                let originalJSON = try MeetingTranscriptExporter.json(for: source)
+                let presentation = MeetingTranscriptExporter.speakerPresentation(for: word, in: source)
+                check(presentation.isEstimated == isEstimated, "Presentation retains the original heuristic marker")
+                let names = Dictionary(uniqueKeysWithValues: source.activeSpeakers.map { ($0.id, $0.displayName) })
+                let paragraph = MeetingTranscriptExporter.displayParagraphs(for: [word], in: source)[0]
+                for language in [PichiInterfaceLanguage.english, .russian] {
+                    check(MeetingTranscriptExporter.speakerLabel(for: presentation, language: language) == firstAlias,
+                          "Live labels show the plain resolved participant alias in both interface languages")
+                    check(MeetingTranscriptExporter.speakerLabel(for: word, in: source, speakerNames: names,
+                        language: language) == firstAlias, "History rows share the plain resolved participant alias")
+                    check(MeetingTranscriptExporter.speakerLabel(for: paragraph, in: source, speakerNames: names,
+                        language: language) == firstAlias, "History paragraphs share the plain participant alias")
+                }
+                check(MeetingTranscriptExporter.text(for: source) == "[00:00] \(firstAlias): \(word.text)",
+                      "Text export does not prefix selected participants with an estimate qualifier")
+                let renderedJSON = try MeetingTranscriptExporter.json(for: source)
+                check(source == original && renderedJSON == originalJSON,
+                      "Rendering plain labels preserves the session and JSON uncertainty evidence")
+            }
+            try source.reassignSegment(id: heuristic.id, to: second.id)
+            let corrected = source.transcriptSegments[0]
+            check(corrected.speakerAttribution == nil && corrected.speakerAttributionInference == nil,
+                  "Manual corrections supersede automatic reading evidence through the existing operation")
+            for language in [PichiInterfaceLanguage.english, .russian] {
+                check(MeetingTranscriptExporter.speakerLabel(for: MeetingTranscriptExporter.speakerPresentation(
+                    for: corrected, in: source), language: language) == secondAlias,
+                      "A manual participant correction displays its new plain name in both languages")
+            }
+            check(MeetingTranscriptExporter.text(for: source) == "[00:00] \(secondAlias): \(corrected.text)",
+                  "Text export reflects the corrected participant name")
+        }
     }
 
     private static func indexIDs(at url: URL) throws -> [String] {
