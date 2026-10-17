@@ -279,7 +279,7 @@ nonisolated enum MeetingTranscriptExporter {
             let first = position
             while position < segments.count, unknown(segments[position]) { position += 1 }
             guard first > 0, position < segments.count,
-                  anchor(segments[first - 1]) != nil,
+                  let preceding = anchor(segments[first - 1]),
                   let incoming = anchor(segments[position]) else { continue }
             let range = (first - 1)...position
             guard let sourceStart = sourcePositions[segments[first - 1].id],
@@ -288,7 +288,9 @@ nonisolated enum MeetingTranscriptExporter {
                       && segments[$0].sourceTrackID == segments[first - 1].sourceTrackID }),
                   MeetingSpeakerAttribution.admitsNeighborRun(range.map {
                       .init(start: segments[$0].start.seconds, end: segments[$0].end.seconds)
-                  }, policy: .standard) else { continue }
+                  }, policy: .standard,
+                  sameSpeaker: self.resolvedAliasID(preceding, in: session)
+                    == self.resolvedAliasID(incoming, in: session)) else { continue }
             for index in first..<position { bridges[segments[index].id] = incoming }
         }
         return bridges

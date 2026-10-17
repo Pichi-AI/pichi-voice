@@ -405,13 +405,60 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-attribution-\(language)-original-members")
             app.buttons[cancelTitle].firstMatch.tap()
             capture("legacy-attribution-\(language)-editor-cancelled")
+            let incomingParagraph = app.staticTexts["Нет, это ответ."].firstMatch
+            XCTAssertTrue(incomingParagraph.waitForExistence(timeout: 5))
+            try revealParagraphAboveNavigation(incomingParagraph, step: "legacy-attribution-\(language)-incoming-portrait")
+            XCTAssertTrue(app.staticTexts["Борис"].firstMatch.exists)
+            XCTAssertFalse(app.staticTexts[language == "ru" ? "Неизвестный участник" : "Unknown speaker"].exists)
+            capture("legacy-attribution-\(language)-incoming-prefix")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
             // Landscape can virtualize the whole paragraph below the meeting header.
             try revealParagraphAboveNavigation(paragraph, step: "legacy-attribution-\(language)-landscape")
             XCTAssertTrue(label.exists && paragraph.exists)
             capture("legacy-attribution-\(language)-landscape-merged")
+            try revealParagraphAboveNavigation(incomingParagraph, step: "legacy-attribution-\(language)-incoming-landscape")
+            capture("legacy-attribution-\(language)-landscape-incoming-prefix")
         }
+    }
+
+    func testPrivateSavedIncomingParagraphsOnPhysicalDevice() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("A separately authorized physical-device saved-session review")
+        #else
+        let environment = ProcessInfo.processInfo.environment
+        guard let sessionID = environment["PICHI_PRIVATE_SAVED_SESSION_ID"],
+              let encoded = environment["PICHI_PRIVATE_SAVED_EXPECTED_PARAGRAPHS"],
+              let data = encoded.data(using: .utf8),
+              let expected = try JSONSerialization.jsonObject(with: data) as? [String], !expected.isEmpty else {
+            throw XCTSkip("Provide an authorized session ID and expected paragraphs for read-only device review")
+        }
+        app.terminate()
+        app.launchArguments = ["-PichiInterfaceLanguage", "ru"]
+        app.launch()
+        capture("private-saved-ready")
+        openNavigation("history", title: "История")
+        capture("private-saved-history")
+        let meeting = app.buttons["history.session.\(sessionID)"]
+        XCTAssertTrue(meeting.waitForExistence(timeout: 10))
+        meeting.tap()
+        capture("private-saved-transcript")
+        let scroll = app.scrollViews.matching(identifier: "meeting.transcript").firstMatch
+        XCTAssertTrue(scroll.waitForExistence(timeout: 5))
+        for (index, text) in expected.enumerated() {
+            let paragraph = app.staticTexts[text].firstMatch
+            for attempt in 0..<40 {
+                if paragraph.exists && paragraph.isHittable { break }
+                let from = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.8))
+                let to = scroll.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.25))
+                from.press(forDuration: 0.05, thenDragTo: to)
+                capture("private-saved-\(index)-scroll-\(attempt)")
+            }
+            XCTAssertTrue(paragraph.exists && paragraph.isHittable,
+                          "The actual saved unknown prefix must be inside its incoming participant's paragraph")
+            capture("private-saved-\(index)-merged")
+        }
+        #endif
     }
 
     func testRetainedProcessingRecoveryActionsInBothLanguagesAndThemes() throws {

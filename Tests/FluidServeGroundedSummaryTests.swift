@@ -369,7 +369,7 @@ struct FluidServeGroundedSummaryTests {
               "Incoming projection preserves exact member IDs, text, timing and original unknown evidence")
         var mixed = rows; mixed[1].attributionState = .overlappingSpeakers; staysSplit(mixed)
         rows = originals; rows[1].start = .init(value: 2000, timescale: 1000); staysSplit(rows)
-        rows = originals; rows[2].start = .init(value: 5000, timescale: 1000); rows[2].end = .init(value: 5100, timescale: 1000); staysSplit(rows)
+        rows = originals; rows[2].start = .init(value: 8200, timescale: 1000); rows[2].end = .init(value: 8300, timescale: 1000); staysSplit(rows)
         rows = originals; rows[1].end = .init(value: 7000, timescale: 1000); rows[2].start = .init(value: 7100, timescale: 1000); rows[2].end = .init(value: 7200, timescale: 1000); staysSplit(rows)
 
         let nested = [segment("Enclosing speaker", 0, 10, speakerID: other),

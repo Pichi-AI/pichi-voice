@@ -948,7 +948,7 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
     func testLegacyOrphanWordsReadWithinTheirSameSpeakerTurnInBothLanguages() throws {
         let track = UUID(), speaker = UUID()
         var source = session()
-        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(120)
+        source.state = .completed; source.endedAt = source.startedAt.addingTimeInterval(3600)
         source.speakers = [.init(id: speaker, displayName: "Анна", diarizationClusterID: nil,
             trackKind: .microphone, isLocalUser: false, identityCandidates: [])]
         source.processingAttempts = [.init(id: UUID(), startedAt: source.startedAt, completedAt: source.endedAt,
@@ -961,7 +961,9 @@ final class MeetingSavedTranscriptPresentationTests: XCTestCase {
             return row
         }
         let cases = [(2.96, 3.28, 3.32, 3.44), (17.52, 17.64, 17.68, 17.84),
-                     (69.32, 69.88, 69.92, 70.04), (97.80, 97.88, 97.92, 98.40)]
+                     (69.32, 69.88, 69.92, 70.04), (97.80, 97.88, 97.92, 98.40),
+                     (340.04, 341.04, 341.08, 341.28), (1577.32, 1580.0, 1580.48, 1580.84),
+                     (2459.40, 2459.56, 2459.80, 2461.32)]
         for (before, start, end, after) in cases {
             let rows = [legacy("Начало", start: before - 0.1, end: before, identified: true),
                         legacy("и", start: start, end: end, identified: false),
