@@ -60,7 +60,78 @@ nonisolated struct MeetingFast32RuntimeTests {
         }
         try self.testCheckpointContinuation(config: config)
         try self.testDetailedProfiling(config: config, samples: samples)
-        print("PASS fast32 geometry, intervals, cancellation, frontend parity, exact checkpoint continuation and bounded metadata-only profiling")
+        try await self.testProfileLogTransport(config: config)
+        print("PASS fast32 geometry, intervals, cancellation, frontend parity, exact checkpoint continuation, bounded metadata-only profiling and profile log transport")
+    }
+
+    private final class ProfileLineCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+        func append(_ line: String) { lock.withLock { self.lines.append(line) } }
+        func snapshot() -> [String] { lock.withLock { self.lines } }
+    }
+
+    private enum ProfileReplayFailure: Error { case expected }
+    private struct ProfileReplaySource: MeetingPCMReplaySource {
+        let totalSampleCount = 16_001
+        func readSamples(in range: Range<Int>) async throws -> [Float] {
+            guard range.lowerBound == 0 else { throw ProfileReplayFailure.expected }
+            // One second is shorter than fast32's first chunk. Fail the next read
+            // to exercise the actual session's deferred summary without prediction.
+            return Array(repeating: 0, count: range.count)
+        }
+    }
+
+    /// Use an unloaded CoreML object only to allocate the real adapter's scratch
+    /// buffers. Reset and interrupted replay require no model inference or weights.
+    private static func testProfileLogTransport(config: Nemotron3Config) async throws {
+        let flag = "PICHI_MEETING_DETAILED_PROFILE"
+        let previous = ProcessInfo.processInfo.environment[flag]
+        defer {
+            if let previous { setenv(flag, previous, 1) }
+            else { unsetenv(flag) }
+        }
+        let capture = ProfileLineCapture()
+        let models = try Nemotron3Models(config: config, model: MLModel(),
+                                         silenceEmbedding: Array(repeating: 0.125, count: 512))
+        setenv(flag, "1", 1)
+        let diarizer = Nemotron3Diarizer(config: config, models: models, profileLogSink: { capture.append($0) })
+        // Mutating the process environment cannot disable an already-created instance.
+        unsetenv(flag)
+        for _ in 0..<71 {
+            diarizer.appendAudio([0, 0.1, -0.1])
+            diarizer.reset()
+        }
+        let rows = capture.snapshot()
+        try require(rows.count == 71, "Exactly one complete callback row per emitted diagnostic summary")
+        for line in rows {
+            try require(!line.contains("\n"), "Profile sink receives one complete JSON line")
+            let row = try JSONSerialization.jsonObject(with: Data(line.utf8)) as! [String: Any]
+            let profile = row["profile"] as! [String: Any]
+            try require(row["event"] as? String == "summary" && row["outcome"] as? String == "resetBeforeFinish" &&
+                        row["nemotron3DetailedProfile"] as? Int == 1 && profile["inputSampleCount"] as? Int == 3,
+                        "Transport preserves real serialized row schema and per-reset counters")
+        }
+        let disabled = Nemotron3Diarizer(config: config, models: models, profileLogSink: { capture.append($0) })
+        disabled.appendAudio([0])
+        disabled.reset()
+        try require(capture.snapshot().count == 71, "A sink cannot enable profiling when the flag is off")
+
+        setenv(flag, "1", 1)
+        let factory = Fast32NemotronDiarizerFactory(config: config, models: models,
+                                                  profileLogSink: { capture.append($0) })
+        defer { factory.cleanup() }
+        let session = try await factory.makeDiarizer(epoch: .init())
+        unsetenv(flag)
+        do {
+            _ = try await session.diarize(source: ProfileReplaySource())
+            throw NSError(domain: "ExpectedReplayFailure", code: 1)
+        } catch ProfileReplayFailure.expected { }
+        let allRows = capture.snapshot()
+        try require(allRows.count == 72, "Factory and session preserve the model-local log sink")
+        let finalRow = try JSONSerialization.jsonObject(with: Data(allRows.last!.utf8)) as! [String: Any]
+        try require(finalRow["event"] as? String == "summary" && finalRow["outcome"] as? String == "resetBeforeFinish",
+                    "Factory-created interrupted stream emits a complete partial summary through its captured sink")
     }
 
     private static func testDetailedProfiling(config: Nemotron3Config, samples: [Float]) throws {

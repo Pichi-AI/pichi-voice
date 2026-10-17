@@ -20,6 +20,9 @@ public nonisolated final class Nemotron3Diarizer {
     private let updater: Nemotron3StateUpdater
     private var state: Nemotron3StreamingState
     private let logger = AppLogger(category: "Nemotron3Diarizer")
+    /// Applications can serialize diagnostic rows with their existing log queue.
+    /// Nil preserves standalone FluidAudio logging; this carries metadata JSON only.
+    private let profileLogSink: (@Sendable (String) -> Void)?
     /// Snapshot once per diarizer. Diagnostic settings never change a running attempt.
     private let detailedProfileEnabled: Bool
     private var profileSummaryEmitted = false
@@ -100,12 +103,16 @@ public nonisolated final class Nemotron3Diarizer {
         environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
     }
 
-    public init(config: Nemotron3Config, models: Nemotron3Models) {
+    public init(
+        config: Nemotron3Config, models: Nemotron3Models,
+        profileLogSink: (@Sendable (String) -> Void)? = nil
+    ) {
         self.config = config
         self.models = models
         self.updater = Nemotron3StateUpdater(config: config, silenceEmbedding: models.silenceEmbedding)
         self.state = Nemotron3StreamingState(config: config)
         self.frontend = Nemotron3StreamingFrontend(config: config)
+        self.profileLogSink = profileLogSink
         self.detailedProfileEnabled = Self.detailedProfileRequested(environment: ProcessInfo.processInfo.environment)
     }
 
@@ -476,7 +483,8 @@ public nonisolated final class Nemotron3Diarizer {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         if let data = try? encoder.encode(row), let line = String(data: data, encoding: .utf8) {
-            logger.info(line)
+            if let profileLogSink { profileLogSink(line) }
+            else { logger.info(line) }
         }
         if event != "chunk" { profileSummaryEmitted = true }
     }

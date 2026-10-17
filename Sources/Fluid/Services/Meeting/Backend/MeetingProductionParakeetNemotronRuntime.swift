@@ -688,7 +688,11 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             }
             let models = try Nemotron3Models(config: config, model: model, silenceEmbedding: silence, preEncodeProjection: projection)
             MeetingPCMRuntimeDiagnostics.completed(.load, since: loadBegan, sourceBytes: artifact.totalByteCount)
-            let factory = Fast32NemotronDiarizerFactory(config: config, models: models)
+            // Keep chunk JSON and outer phase rows on the same existing serial log
+            // queue. AppLogger's separate stderr writer can split JSON inside XCTest.
+            let factory = Fast32NemotronDiarizerFactory(config: config, models: models, profileLogSink: {
+                DebugLogger.shared.log($0, source: "Nemotron3Diarizer")
+            })
             defer { factory.cleanup() }
             try Task.checkCancellation()
             let result = try await body(factory)

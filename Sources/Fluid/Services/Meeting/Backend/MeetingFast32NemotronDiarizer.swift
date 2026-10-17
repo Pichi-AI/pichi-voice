@@ -26,17 +26,23 @@ nonisolated enum MeetingFast32ComputePolicy {
 final nonisolated class Fast32NemotronDiarizerFactory: MeetingNemotronDiarizerFactory, @unchecked Sendable {
     private let config: Nemotron3Config
     private let models: Nemotron3Models
+    private let profileLogSink: (@Sendable (String) -> Void)?
     private let lock = NSLock()
     private var sessions: [Fast32NemotronDiarizerSession] = []
 
-    init(config: Nemotron3Config, models: Nemotron3Models) {
+    init(
+        config: Nemotron3Config, models: Nemotron3Models,
+        profileLogSink: (@Sendable (String) -> Void)? = nil
+    ) {
         self.config = config
         self.models = models
+        self.profileLogSink = profileLogSink
     }
 
     func makeDiarizer(epoch _: MeetingAnalysisEpochID) async throws -> any MeetingNemotronDiarizerSession {
         try Task.checkCancellation()
-        let session = Fast32NemotronDiarizerSession(config: self.config, models: self.models)
+        let session = Fast32NemotronDiarizerSession(
+            config: self.config, models: self.models, profileLogSink: self.profileLogSink)
         self.lock.withLock { self.sessions.append(session) }
         return session
     }
@@ -57,8 +63,11 @@ private final nonisolated class Fast32NemotronDiarizerSession: MeetingResumableN
     private var diarizer: Nemotron3Diarizer?
     private let config: Nemotron3Config
 
-    init(config: Nemotron3Config, models: Nemotron3Models) {
-        self.diarizer = Nemotron3Diarizer(config: config, models: models)
+    init(
+        config: Nemotron3Config, models: Nemotron3Models,
+        profileLogSink: (@Sendable (String) -> Void)? = nil
+    ) {
+        self.diarizer = Nemotron3Diarizer(config: config, models: models, profileLogSink: profileLogSink)
         self.config = config
     }
 
