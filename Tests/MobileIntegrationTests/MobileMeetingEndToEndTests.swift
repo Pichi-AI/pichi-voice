@@ -1162,7 +1162,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         let sourceBefore = try retainedAudioProof(session: completed, directory: directory, root: root)
         XCTAssertEqual(sourceBefore.frames, sourceFrames, "The real retained writer must finalize every paced source frame")
         XCTAssertFalse(sourceBefore.digests.isEmpty)
-        let attemptsBefore = Set(completed.processingAttempts.map(\.id))
+        let completedAttemptIDs = Set(completed.processingAttempts.map(\.id))
         let originalAttempt = try XCTUnwrap(completed.processingAttempts.last(where: { $0.completedAt != nil }))
         let freshPrivacy = PichiTranscriptPrivacyService(modelStore: .init(directory: privacyModelDirectory))
         let privacyReadyBeforeRetry = await freshPrivacy.isReady
@@ -1202,6 +1202,15 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(coordinator.activeSession?.id, completed.id)
             XCTAssertFalse(coordinator.isRecording)
             XCTAssertTrue(fresh.meetingProcessingPipeline.memoryAttempts.isEmpty)
+            // Restoration records a pending recovery offer. Retry closes that
+            // audit entry and creates one inference attempt, so measure from the
+            // restored state rather than from the previous completed session.
+            let restoredAttempts = try XCTUnwrap(coordinator.activeSession).processingAttempts
+            let attemptsBeforeRetry = Set(restoredAttempts.map(\.id))
+            XCTAssertTrue(completedAttemptIDs.isSubset(of: attemptsBeforeRetry))
+            let recoveryOffers = restoredAttempts.filter { !completedAttemptIDs.contains($0.id) }
+            XCTAssertEqual(recoveryOffers.count, 1)
+            XCTAssertTrue(recoveryOffers.allSatisfy { $0.stage == .pending && $0.completedAt == nil })
             let retryBegan = ProcessInfo.processInfo.systemUptime
             // This is the existing History/Resume service operation. It plans its own
             // retained-file backend and prepares required resources through production code.
@@ -1219,8 +1228,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertEqual(recovered.piiRedactionEnabled, true)
             XCTAssertTrue(recovered.hasRetryableAudio)
             XCTAssertEqual(recovered.transcriptIsComplete, true, "A successful retry must cover its finalized retained source")
-            let newAttempts = recovered.processingAttempts.filter { !attemptsBefore.contains($0.id) }
+            let newAttempts = recovered.processingAttempts.filter { !attemptsBeforeRetry.contains($0.id) }
             XCTAssertEqual(newAttempts.count, 1, "Exactly one new attempt should replace interrupted processing")
+            XCTAssertTrue(attemptsBeforeRetry.isSubset(of: Set(recovered.processingAttempts.map(\.id))))
+            XCTAssertTrue(recoveryOffers.allSatisfy { offer in
+                recovered.processingAttempts.contains { $0.id == offer.id && $0.completedAt != nil }
+            }, "Retry must close the restored recovery offer and preserve its audit history")
             let attempt = try XCTUnwrap(newAttempts.last)
             XCTAssertEqual(attempt.stage, .completed)
             XCTAssertNotNil(attempt.completedAt)
