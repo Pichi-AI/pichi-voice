@@ -238,7 +238,11 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         }
         self.watermarks = watermarks
         self.pruneContext()
-        try self.validateBounds()
+        // A newly privacy-admitted batch may straddle a long silent gap. Bound allocations
+        // now, then evaluate the time horizon after finite policy commitment and pruning.
+        // Silence consumes no word/text memory and must not make an otherwise bounded
+        // batch fail before its already-expired left words can be emitted and retired.
+        try self.validateBounds(checkTime: false)
 
         var revisions: [SpeakerRevision] = []
         var resolved: [MeetingTranscriptSegment] = []
@@ -355,7 +359,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         self.retainActivityFrom = max(self.retainActivityFrom, max(0, firstStart - boutPreroll))
     }
 
-    private func validateBounds() throws {
+    private func validateBounds(checkTime: Bool = true) throws {
         guard self.retained.count <= self.limits.maximumRetainedWords else { throw Failure.retainedWordLimit }
         var bytes = 0
         for word in self.retained {
@@ -364,7 +368,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
                 bytes += count
             }
         }
-        if let start = self.retained.map({ Self.timing($0.original).start }).min(),
+        if checkTime, let start = self.retained.map({ Self.timing($0.original).start }).min(),
            let end = self.retained.map({ Self.timing($0.original).end }).max(),
            end - start > self.limits.maximumRetainedSeconds { throw Failure.retainedTimeLimit }
     }

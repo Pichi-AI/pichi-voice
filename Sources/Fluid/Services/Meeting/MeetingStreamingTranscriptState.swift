@@ -1,0 +1,394 @@
+import Foundation
+
+/// Joins the existing privacy admission owner with bounded, word-timed speaker refinement.
+/// It owns protected text and scalar cursors only, never PCM or an additional redaction pass
+/// over previously published text. The capture owner serializes emissions and applies patches.
+actor MeetingStreamingTranscriptState {
+    struct Limits: Sendable {
+        let maximumPendingWords: Int
+        let maximumPendingTextBytes: Int
+        let maximumPendingSeconds: TimeInterval
+        let tail: MeetingStreamingProtectedWordTail.Limits
+
+        init(maximumPendingWords: Int = 2_048, maximumPendingTextBytes: Int = 524_288,
+             maximumPendingSeconds: TimeInterval = 120,
+             tail: MeetingStreamingProtectedWordTail.Limits = .init()) {
+            self.maximumPendingWords = maximumPendingWords
+            self.maximumPendingTextBytes = maximumPendingTextBytes
+            self.maximumPendingSeconds = maximumPendingSeconds
+            self.tail = tail
+        }
+    }
+
+    struct Diagnostics: Sendable {
+        let acceptedThroughSample: Int
+        let asrStableThroughSample: Int
+        let diarizationProcessedThroughSample: Int
+        let privacySafeThroughSample: Int
+        let committedThroughSample: Int
+        let pendingProtectedWords: Int
+        let retainedAttributionWords: Int
+        let insertedWords: Int
+        let revisedWords: Int
+        let privacyMilliseconds: Double
+        let attributionMilliseconds: Double
+        let isFinal: Bool
+    }
+
+    struct Emission: Sendable {
+        let safeBatch: MeetingPCMTranscriptBatch
+        /// Call the runtime eviction operation after its observation callback has returned.
+        let retainActivityFromSample: Int
+        let diagnostics: Diagnostics
+    }
+
+    enum Failure: Error, Equatable {
+        case invalidConfiguration
+        case invalidObservation
+        case unsupportedNativeTiming
+        case regressedCursor
+        case staleObservation
+        case concurrentOperation
+        case pendingWordLimit
+        case pendingTextLimit
+        case pendingTimeLimit
+        case speakerLimit
+        case alreadyFinished
+        case cancelled
+        case failed
+    }
+
+    private enum Phase { case active, finished, cancelled, failed }
+    private let attemptID: UUID
+    private let track: MeetingAudioTrack
+    private let epoch: MeetingAnalysisEpochID
+    private let privacyContext: MeetingTranscriptPrivacyContext?
+    private let limits: Limits
+    private var tail: MeetingStreamingProtectedWordTail
+    private var pending: [MeetingTranscriptSegment] = []
+    private var speakers: [MeetingSessionSpeaker]
+    private var phase: Phase = .active
+    private var isProcessing = false
+    private var acceptedThroughSample = 0
+    private var processedThroughSample = 0
+    private var asrStableThroughSample = 0
+    private var privacySafeThroughSample = 0
+    private var privacySafeThroughTime: TimeInterval = 0
+    private var acknowledgedThroughSample = 0
+    private var isComplete = true
+    private(set) var metadataDiagnostics: Diagnostics?
+    var retainActivityFromSample: Int { self.acknowledgedThroughSample }
+
+    init(attemptID: UUID, track: MeetingAudioTrack,
+         configuration: MeetingFinalProcessingConfiguration,
+         privacyContext: MeetingTranscriptPrivacyContext?,
+         priorSpeakers: [MeetingSessionSpeaker] = [], limits: Limits = .init(),
+         speakerNameFormat: String = PichiLocalization.text("Speaker %lld")) throws {
+        guard configuration.speakerLabelsEnabled,
+              configuration.effectiveSpeakerProcessingMode == .streaming,
+              track.kind == .microphone,
+              limits.maximumPendingWords > 0, limits.maximumPendingTextBytes > 0,
+              limits.maximumPendingSeconds.isFinite, limits.maximumPendingSeconds > 0 else {
+            throw Failure.invalidConfiguration
+        }
+        self.attemptID = attemptID
+        self.track = track
+        self.epoch = .init(trackID: track.id, ordinal: 0)
+        self.privacyContext = privacyContext
+        self.limits = limits
+        self.speakers = Self.identityOnly(priorSpeakers)
+        self.tail = try .init(attemptID: attemptID, epoch: self.epoch,
+            speakerNameFormat: speakerNameFormat, policy: configuration.speakerAttributionPolicy ?? .standard,
+            limits: limits.tail, priorSpeakers: priorSpeakers)
+    }
+
+    /// A nil ASR cursor denotes an acoustic-only callback. It may refine existing words,
+    /// but cannot declare an unrecognized captured prefix or silence ASR-stable.
+    func observe(_ observation: MeetingStreamingPCMObservation) async throws -> Emission {
+        try await self.consume(observation, final: false)
+    }
+
+    /// The runtime must join ASR and flush its acoustic right context first. This drains only
+    /// the original privacy lexical tail and bounded protected attribution tail, exactly once.
+    func finish(_ observation: MeetingStreamingPCMObservation) async throws -> Emission {
+        try await self.consume(observation, final: true)
+    }
+
+    func cancel() {
+        self.phase = .cancelled
+        self.pending.removeAll(keepingCapacity: false)
+        self.speakers.removeAll(keepingCapacity: false)
+        self.tail.cancel()
+    }
+
+    private func consume(_ observation: MeetingStreamingPCMObservation, final: Bool) async throws -> Emission {
+        try self.checkActive()
+        guard !self.isProcessing else { throw Failure.concurrentOperation }
+        self.isProcessing = true
+        defer { self.isProcessing = false }
+        do {
+            try self.validate(observation, final: final)
+            var privacyMilliseconds = 0.0
+            let oldASRCursor = self.asrStableThroughSample
+            if let asrCursor = observation.asrStableThroughSample { self.asrStableThroughSample = asrCursor }
+            self.acceptedThroughSample = observation.acceptedThroughSample
+            self.processedThroughSample = observation.processedThroughSample
+            self.isComplete = self.isComplete && observation.batch.isComplete
+
+            if !observation.batch.segments.isEmpty {
+                try self.validateRawWords(observation.batch, previousASRCursor: oldASRCursor)
+                var source = observation.batch
+                source.sourceTrack = self.track
+                // Raw window identity remains useful to privacy preview admission. The
+                // attribution tail receives a separate global epoch identity below.
+                let safe: MeetingPCMTranscriptBatch
+                if let privacyContext = self.privacyContext {
+                    let started = ContinuousClock.now
+                    safe = try await privacyContext.redact(source)
+                    privacyMilliseconds += Self.milliseconds(since: started)
+                } else { safe = source }
+                try self.checkActive()
+                try self.mergeSpeakers(safe)
+                self.pending.append(contentsOf: safe.segments)
+            }
+            if final, let privacyContext = self.privacyContext {
+                let started = ContinuousClock.now
+                let remainder = try await privacyContext.finish()
+                privacyMilliseconds += Self.milliseconds(since: started)
+                try self.checkActive()
+                if let remainder {
+                    try self.mergeSpeakers(remainder)
+                    self.pending.append(contentsOf: remainder.segments)
+                    self.isComplete = self.isComplete && remainder.isComplete
+                }
+            }
+            try self.checkActive()
+            let heldStart = await self.privacyContext?.earliestHeldWordStart
+            try self.checkActive()
+            try self.validatePending(checkTime: false)
+
+            let asrSeconds = Double(self.asrStableThroughSample) / 16_000
+            let diarizationSeconds = Double(self.processedThroughSample) / 16_000
+            let availableThrough = min(asrSeconds, diarizationSeconds)
+            // Preserve exact word envelopes, including overlapping native word bounds. An
+            // overlap cluster crossing a scored/privacy boundary waits as a whole; admitting
+            // its first word then moving the safe prefix backwards would violate publication.
+            var admittedCount = self.pending.prefix { word in
+                guard let timing = word.nativeTiming else { return false }
+                return timing.end <= availableThrough + 1e-9
+                    && word.end.seconds <= availableThrough + 0.001
+            }.count
+            var prefixRequiredEnds: [TimeInterval] = []
+            prefixRequiredEnds.reserveCapacity(admittedCount)
+            for word in self.pending.prefix(admittedCount) {
+                // Native intervals may be nested; the most recent word is not necessarily
+                // the longest. Millisecond canonical rounding retains its existing slack.
+                prefixRequiredEnds.append(max(prefixRequiredEnds.last ?? 0,
+                    word.nativeTiming!.end, word.end.seconds - 0.001))
+            }
+            while admittedCount > 0 {
+                let boundary = min(availableThrough, heldStart ?? availableThrough,
+                    admittedCount < self.pending.count
+                        ? self.pending[admittedCount].nativeTiming!.start : availableThrough)
+                if prefixRequiredEnds[admittedCount - 1] <= boundary + 1e-9 { break }
+                admittedCount -= 1
+            }
+            let admitted = Array(self.pending.prefix(admittedCount))
+            self.pending.removeFirst(admittedCount)
+            try self.validatePending()
+            let pendingStart = self.pending.first?.nativeTiming?.start
+            let safeSeconds = min(asrSeconds, heldStart ?? asrSeconds, pendingStart ?? asrSeconds)
+            let safeSample = Self.floorSample(safeSeconds)
+            guard safeSeconds >= self.privacySafeThroughTime,
+                  safeSample >= self.privacySafeThroughSample else { throw Failure.regressedCursor }
+            self.privacySafeThroughTime = safeSeconds
+            self.privacySafeThroughSample = safeSample
+            if final {
+                guard self.pending.isEmpty, heldStart == nil,
+                      self.asrStableThroughSample == self.acceptedThroughSample,
+                      self.processedThroughSample == self.acceptedThroughSample,
+                      self.privacySafeThroughSample == self.acceptedThroughSample else {
+                    throw Failure.invalidObservation
+                }
+            }
+            var safe = MeetingPCMTranscriptBatch(segments: admitted, speakers: self.speakers,
+                isComplete: self.isComplete)
+            safe.speechObservationIdentity = .init(attemptID: self.attemptID, epochID: self.epoch)
+            let marks = MeetingStreamingProtectedWordTail.Watermarks(asrStableThrough: asrSeconds,
+                diarizationProcessedThrough: diarizationSeconds,
+                privacySafeThrough: safeSeconds)
+            let attributionStarted = ContinuousClock.now
+            if !safe.segments.isEmpty {
+                // ASR can seal a window before all its words are acoustically scored. Those
+                // private words wait above; their first canonical publication must contain
+                // evidence from the complete scored envelope, rather than the earlier empty
+                // assignment. Never refresh native evidence of already-published words.
+                let owners = Dictionary(uniqueKeysWithValues: self.speakers.map { ($0.id, $0.isLocalUser) })
+                safe = try MeetingPCMRecordingAttribution.assemble(transcript: safe,
+                    activity: observation.activity, epoch: self.epoch, attemptID: self.attemptID,
+                    duration: diarizationSeconds, speakerNameFormat: self.tail.speakerNameFormat,
+                    speakerAttributionPolicy: self.tail.policy)
+                for index in safe.speakers.indices {
+                    if let isLocalUser = owners[safe.speakers[index].id] {
+                        safe.speakers[index].isLocalUser = isLocalUser
+                    }
+                }
+                try self.mergeSpeakers(safe)
+            }
+            let updated: MeetingStreamingProtectedWordTail.Update
+            if final {
+                updated = try self.tail.finish(safeWords: safe, activity: observation.activity,
+                    watermarks: marks, attemptID: self.attemptID, epoch: self.epoch,
+                    activityAvailableFrom: Double(observation.retainedFromSample) / 16_000)
+            } else {
+                updated = try self.tail.update(safeWords: safe, activity: observation.activity,
+                    watermarks: marks, attemptID: self.attemptID, epoch: self.epoch,
+                    activityAvailableFrom: Double(observation.retainedFromSample) / 16_000)
+            }
+            let attributionMilliseconds = Self.milliseconds(since: attributionStarted)
+            var batch = MeetingPCMTranscriptBatch(segments: updated.inserted, speakers: updated.speakers,
+                isComplete: self.isComplete)
+            batch.speakerRevisions = updated.revisions
+            // Never copy a raw source label or a provisional privacy preview into canonical
+            // publication. Only the redacted batch's words and lightweight identities leave.
+            let retain = Self.floorSample(min(updated.retainActivityFrom,
+                heldStart ?? updated.retainActivityFrom, pendingStart ?? updated.retainActivityFrom))
+            guard retain >= self.acknowledgedThroughSample else { throw Failure.regressedCursor }
+            self.acknowledgedThroughSample = retain
+            try self.mergeSpeakers(batch)
+            if final { self.phase = .finished; self.speakers.removeAll(keepingCapacity: false) }
+            try Task.checkCancellation()
+            let diagnostics = Diagnostics(acceptedThroughSample: self.acceptedThroughSample,
+                    asrStableThroughSample: self.asrStableThroughSample,
+                    diarizationProcessedThroughSample: self.processedThroughSample,
+                    privacySafeThroughSample: self.privacySafeThroughSample,
+                    committedThroughSample: Self.floorSample(updated.committedThrough),
+                    pendingProtectedWords: self.pending.count,
+                    retainedAttributionWords: updated.retainedWordCount,
+                    insertedWords: updated.inserted.count, revisedWords: updated.revisions.count,
+                    privacyMilliseconds: privacyMilliseconds, attributionMilliseconds: attributionMilliseconds, isFinal: final)
+            self.metadataDiagnostics = diagnostics
+            return .init(safeBatch: batch, retainActivityFromSample: retain, diagnostics: diagnostics)
+        } catch {
+            // Privacy may have consumed an admitted lexical tail before a later check fails.
+            // Retrying it could duplicate words or weaken the safe prefix. Fail this attempt
+            // explicitly; the capture owner joins native work and preserves prior checkpoints.
+            if case .cancelled = self.phase {} else { self.phase = .failed }
+            self.pending.removeAll(keepingCapacity: false)
+            self.speakers.removeAll(keepingCapacity: false)
+            self.tail.cancel()
+            throw error
+        }
+    }
+
+    private func validate(_ observation: MeetingStreamingPCMObservation, final: Bool) throws {
+        guard observation.isFinal == final,
+              observation.acceptedThroughSample >= 0,
+              observation.acceptedThroughSample <= Int.max / 2,
+              observation.processedThroughSample >= 0,
+              observation.processedThroughSample <= observation.acceptedThroughSample,
+              observation.retainedFromSample >= 0,
+              observation.retainedFromSample <= self.acknowledgedThroughSample,
+              observation.batch.speakerRevisions.isEmpty,
+              observation.batch.sourceTrack.map({ $0.id == self.track.id }) ?? true else {
+            throw Failure.invalidObservation
+        }
+        guard observation.acceptedThroughSample >= self.acceptedThroughSample,
+              observation.processedThroughSample >= self.processedThroughSample else { throw Failure.regressedCursor }
+        if let cursor = observation.asrStableThroughSample {
+            guard cursor >= self.asrStableThroughSample else { throw Failure.regressedCursor }
+            guard cursor <= observation.acceptedThroughSample else { throw Failure.invalidObservation }
+        } else {
+            guard observation.batch.segments.isEmpty, !final else { throw Failure.invalidObservation }
+        }
+        if let identity = observation.batch.speechObservationIdentity {
+            guard identity.attemptID == self.attemptID, identity.epochID.trackID == self.track.id else {
+                throw Failure.staleObservation
+            }
+        }
+    }
+
+    private func validateRawWords(_ batch: MeetingPCMTranscriptBatch, previousASRCursor: Int) throws {
+        guard batch.segments.count <= self.limits.maximumPendingWords else { throw Failure.pendingWordLimit }
+        guard batch.speakers.count <= self.limits.tail.maximumSpeakers,
+              Set(batch.speakers.map(\.id)).count == batch.speakers.count else { throw Failure.invalidObservation }
+        var lastStart = Double(previousASRCursor) / 16_000
+        var bytes = 0
+        var IDs = Set<MeetingTranscriptSegmentID>()
+        var nativeIDs = Set<String>()
+        for word in batch.segments {
+            for count in [word.text.utf8.count, word.originalText?.utf8.count ?? 0] {
+                guard count <= self.limits.maximumPendingTextBytes - bytes else { throw Failure.pendingTextLimit }
+                bytes += count
+            }
+            guard let timing = word.nativeTiming, word.nativePrecision == .word,
+                  let nativeID = word.nativeUnitID, !nativeID.isEmpty else { throw Failure.unsupportedNativeTiming }
+            guard word.sourceTrackID == self.track.id,
+                  MeetingEvidenceInterval.isValid(start: timing.start, end: timing.end),
+                  timing.start + 0.001 >= lastStart,
+                  timing.end <= Double(self.asrStableThroughSample) / 16_000 + 1e-9,
+                  word.start.seconds.isFinite, word.end.seconds.isFinite,
+                  word.start.seconds >= 0, word.end.seconds > word.start.seconds,
+                  word.end.seconds <= Double(self.asrStableThroughSample) / 16_000 + 0.001,
+                  word.nativeSpeakerAssignment?.tokens.allSatisfy({ $0.analysisEpochID == self.epoch }) ?? true,
+                  IDs.insert(word.id).inserted, nativeIDs.insert(nativeID).inserted,
+                  word.status == .final, !word.text.isEmpty else { throw Failure.invalidObservation }
+            lastStart = timing.start
+        }
+    }
+
+    private func validatePending(checkTime: Bool = true) throws {
+        guard self.pending.count <= self.limits.maximumPendingWords else { throw Failure.pendingWordLimit }
+        var bytes = 0
+        var previous = -1.0
+        var IDs = Set<MeetingTranscriptSegmentID>()
+        for word in self.pending {
+            guard let timing = word.nativeTiming, word.nativePrecision == .word else { throw Failure.unsupportedNativeTiming }
+            guard timing.start >= previous, IDs.insert(word.id).inserted else { throw Failure.invalidObservation }
+            previous = timing.start
+            for count in [word.text.utf8.count, word.originalText?.utf8.count ?? 0] {
+                guard count <= self.limits.maximumPendingTextBytes - bytes else { throw Failure.pendingTextLimit }
+                bytes += count
+            }
+        }
+        // Silence advances physical/ASR cursors without consuming more text memory. Bound
+        // the actual queued word envelope, never wall-clock age of a held privacy token.
+        if checkTime, let start = self.pending.first?.nativeTiming?.start,
+           let end = self.pending.compactMap({ $0.nativeTiming?.end }).max(),
+           end - start > self.limits.maximumPendingSeconds { throw Failure.pendingTimeLimit }
+    }
+
+    private func checkActive() throws {
+        try Task.checkCancellation()
+        switch self.phase {
+        case .active: break
+        case .finished: throw Failure.alreadyFinished
+        case .cancelled: throw Failure.cancelled
+        case .failed: throw Failure.failed
+        }
+    }
+
+    private func mergeSpeakers(_ batch: MeetingPCMTranscriptBatch) throws {
+        guard Set(self.speakers.map(\.id)).union(batch.speakers.map(\.id)).count <= self.limits.tail.maximumSpeakers else {
+            throw Failure.speakerLimit
+        }
+        self.speakers = Self.identityOnly(batch.mergingSpeakers(into: self.speakers))
+    }
+
+    private static func milliseconds(since start: ContinuousClock.Instant) -> Double {
+        let value = start.duration(to: .now).components
+        return Double(value.seconds) * 1_000 + Double(value.attoseconds) / 1_000_000_000_000_000
+    }
+
+    private static func identityOnly(_ speakers: [MeetingSessionSpeaker]) -> [MeetingSessionSpeaker] {
+        speakers.map { source in
+            var speaker = source
+            speaker.diarizationEmbedding = nil
+            return speaker
+        }
+    }
+
+    private static func floorSample(_ seconds: TimeInterval) -> Int {
+        Int((seconds * 16_000 + 1e-7).rounded(.down))
+    }
+}

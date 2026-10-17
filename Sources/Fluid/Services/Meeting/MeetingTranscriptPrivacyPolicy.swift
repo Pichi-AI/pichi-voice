@@ -432,6 +432,12 @@ actor MeetingTranscriptPrivacyContext {
     private(set) var speechAdmissionDiagnosticFields = ""
     init(redactor: any TranscriptTextRedacting) { self.redactor = redactor }
 
+    /// Metadata only. Streaming attribution must retain acoustic evidence for this lexical
+    /// tail and must not advance its safe cursor past words still awaiting privacy context.
+    var earliestHeldWordStart: TimeInterval? {
+        self.pending.map { $0.nativeTiming?.start ?? $0.start.seconds }.min()
+    }
+
     /// Speech can be displayed before expensive attribution, but cannot enter the durable
     /// tail or checkpoint until that window completes. Use the same frozen redactor/guards.
     func previewSpeech(_ batch: MeetingPCMTranscriptBatch) async throws -> MeetingLivePartial? {
