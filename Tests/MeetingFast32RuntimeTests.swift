@@ -59,7 +59,79 @@ nonisolated struct MeetingFast32RuntimeTests {
             try require(delta < 0.0002, "Streaming/batch feature values parity")
         }
         try self.testCheckpointContinuation(config: config)
-        print("PASS fast32 geometry, intervals, cancellation, frontend parity and exact checkpoint continuation with cache compression")
+        try self.testDetailedProfiling(config: config, samples: samples)
+        print("PASS fast32 geometry, intervals, cancellation, frontend parity, exact checkpoint continuation and bounded metadata-only profiling")
+    }
+
+    private static func testDetailedProfiling(config: Nemotron3Config, samples: [Float]) throws {
+        try require(!Nemotron3Diarizer.detailedProfileRequested(environment: [:]), "Detailed stream profiling is opt-in")
+        for value in ["0", "true", "yes", " 1", "1 "] {
+            try require(!Nemotron3Diarizer.detailedProfileRequested(environment: ["PICHI_MEETING_DETAILED_PROFILE": value]),
+                        "Only the explicit profiling flag enables diagnostics")
+        }
+        try require(Nemotron3Diarizer.detailedProfileRequested(environment: ["PICHI_MEETING_DETAILED_PROFILE": "1"]),
+                    "Explicit profiling flag is supported")
+        var unprofiled = Nemotron3StreamingFrontend(config: config)
+        var profiled = Nemotron3StreamingFrontend(config: config)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        for start in stride(from: 0, to: samples.count, by: 7_319) {
+            let batch = Array(samples[start..<min(samples.count, start + 7_319)])
+            unprofiled.append(batch)
+            profiled.append(batch)
+            while true {
+                let expected = unprofiled.nextChunk(final: false)
+                let actual = profiled.nextChunk(final: false, measure: true)
+                try require(actual?.features == expected?.features && actual?.length == expected?.length,
+                            "Profiling cannot change streaming mel values or chunk cadence")
+                try require(profiled.lastProfile.melSeconds.isFinite && profiled.lastProfile.melSeconds >= 0 &&
+                            profiled.lastProfile.chunkSliceSeconds.isFinite && profiled.lastProfile.chunkSliceSeconds >= 0,
+                            "Monotonic frontend timings remain finite and nonnegative")
+                try require(unprofiled.lastProfile == .init(), "Default frontend path retains no timing data")
+                let actualSnapshot = try encoder.encode(profiled.snapshot())
+                let expectedSnapshot = try encoder.encode(unprofiled.snapshot())
+                try require(actualSnapshot == expectedSnapshot, "Profiling is excluded from exact resume state")
+                if actual == nil { break }
+            }
+        }
+        while true {
+            let expected = unprofiled.nextChunk(final: true)
+            let actual = profiled.nextChunk(final: true, measure: true)
+            try require(actual?.features == expected?.features && actual?.length == expected?.length,
+                        "Profiling preserves final padding and tail chunk values")
+            if actual == nil { break }
+        }
+        profiled.reset()
+        try require(profiled.lastProfile == .init(), "Frontend reset clears diagnostic state")
+
+        var aggregate = Nemotron3Diarizer.PipelineProfile()
+        let output = Nemotron3Models.Output(predictions: [0.5], highResPredictions: [0.5],
+                                            chunkEmbeddings: [0.5], chunkLength: 1,
+                                            inputPrepSeconds: 0.3, predictSeconds: 2, readbackSeconds: 0.1,
+                                            projectionSeconds: 0.2, packingSeconds: 0.1,
+                                            firstPredictionSeconds: 0.8, retryPredictionSeconds: 1.1,
+                                            backingFallbackCount: 1)
+        aggregate.add(output)
+        aggregate.add(output)
+        try require(aggregate.inputPrepSeconds == 0.6 && aggregate.predictSeconds == 4 &&
+                    aggregate.readbackSeconds == 0.2 && aggregate.projectionSeconds == 0.4 &&
+                    aggregate.packingSeconds == 0.2 && aggregate.firstPredictionSeconds == 1.6 &&
+                    aggregate.retryPredictionSeconds == 2.2 && aggregate.backingFallbackCount == 2,
+                    "Detailed substage totals and backing fallback counts accumulate without mixing levels")
+        for _ in 0..<2_000 { try require(aggregate.admitChunkRow(), "Bounded per-chunk diagnostic row") }
+        for _ in 0..<37 { try require(!aggregate.admitChunkRow(), "Excess per-chunk rows suppressed") }
+        try require(aggregate.detailedRowsEmitted == 2_000 && aggregate.detailedRowsSuppressed == 37,
+                    "Diagnostic row cap preserves exact emitted/suppressed counters")
+        let data = try encoder.encode(aggregate)
+        let fields = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let allowed = Set(["appendSeconds", "melSeconds", "chunkSliceSeconds", "inferenceSeconds", "inputPrepSeconds",
+                           "predictSeconds", "readbackSeconds", "projectionSeconds", "packingSeconds", "firstPredictionSeconds",
+                           "retryPredictionSeconds", "stateUpdateSeconds", "outputAppendSeconds", "totalSeconds", "finishFlushSeconds",
+                           "chunkCount", "failedChunkCount", "flushChunkCount", "appendCallCount", "bufferedCallCount",
+                           "inputSampleCount", "melFrameCount", "outputFrameCount", "restoredSampleCursor", "restoredFrameCursor",
+                           "backingFallbackCount", "detailedRowsEmitted", "detailedRowsSuppressed", "skippedChunks"])
+        try require(Set(fields.keys) == allowed && fields.values.allSatisfy { $0 is NSNumber },
+                    "Only bounded numeric metadata appears in the profile schema")
     }
 
     private struct SyntheticResult {

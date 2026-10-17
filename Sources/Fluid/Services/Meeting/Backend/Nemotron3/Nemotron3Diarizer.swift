@@ -20,6 +20,9 @@ public nonisolated final class Nemotron3Diarizer {
     private let updater: Nemotron3StateUpdater
     private var state: Nemotron3StreamingState
     private let logger = AppLogger(category: "Nemotron3Diarizer")
+    /// Snapshot once per diarizer. Diagnostic settings never change a running attempt.
+    private let detailedProfileEnabled: Bool
+    private var profileSummaryEmitted = false
 
     // Streaming (audio-in) state - see `appendAudio`.
     private var frontend: Nemotron3StreamingFrontend
@@ -27,24 +30,75 @@ public nonisolated final class Nemotron3Diarizer {
     /// 10 ms output frames emitted so far by the streaming path.
     public private(set) var streamedFrameCount = 0
 
-    /// Wall-time breakdown of the last `processComplete` call, in seconds.
-    public struct PipelineProfile: Sendable {
+    /// Monotonic active wall time, excluding gaps between public calls. Streaming
+    /// counters/timers are opt-in; processComplete retains its existing always-on profile.
+    /// Exclusive top-level stages are append, mel, chunkSlice, inference, stateUpdate,
+    /// and outputAppend. Inference contains inputPrep + predict + readback; inputPrep
+    /// contains projection + packing; predict contains first + retry prediction.
+    /// finishFlush is an inclusive subset of totalSeconds, not another additive stage.
+    /// This is host-observed latency, not GPU device execution/utilization time.
+    public struct PipelineProfile: Sendable, Encodable {
+        public var appendSeconds: Double = 0
         public var melSeconds: Double = 0
         public var chunkSliceSeconds: Double = 0
         public var inferenceSeconds: Double = 0
         public var inputPrepSeconds: Double = 0
         public var predictSeconds: Double = 0
         public var readbackSeconds: Double = 0
+        public var projectionSeconds: Double = 0
+        public var packingSeconds: Double = 0
+        public var firstPredictionSeconds: Double = 0
+        public var retryPredictionSeconds: Double = 0
         public var stateUpdateSeconds: Double = 0
         public var outputAppendSeconds: Double = 0
         public var totalSeconds: Double = 0
+        public var finishFlushSeconds: Double = 0
         public var chunkCount: Int = 0
+        public var failedChunkCount: Int = 0
+        public var flushChunkCount: Int = 0
+        public var appendCallCount: Int = 0
+        public var bufferedCallCount: Int = 0
+        public var inputSampleCount: Int = 0
+        public var melFrameCount: Int = 0
+        public var outputFrameCount: Int = 0
+        public var restoredSampleCursor: Int = 0
+        public var restoredFrameCursor: Int = 0
+        public var backingFallbackCount: Int = 0
+        public var detailedRowsEmitted: Int = 0
+        public var detailedRowsSuppressed: Int = 0
         /// Chunks skipped by VAD gating (no speech in the chunk's core window).
         public var skippedChunks: Int = 0
+
+        /// Limit diagnostic output without retaining per-chunk samples in memory.
+        /// Aggregate counters continue over the entire stream after the row limit.
+        mutating func admitChunkRow() -> Bool {
+            guard detailedRowsEmitted < 2_000 else {
+                detailedRowsSuppressed += 1
+                return false
+            }
+            detailedRowsEmitted += 1
+            return true
+        }
+
+        mutating func add(_ output: Nemotron3Models.Output) {
+            inputPrepSeconds += output.inputPrepSeconds
+            predictSeconds += output.predictSeconds
+            readbackSeconds += output.readbackSeconds
+            projectionSeconds += output.projectionSeconds
+            packingSeconds += output.packingSeconds
+            firstPredictionSeconds += output.firstPredictionSeconds
+            retryPredictionSeconds += output.retryPredictionSeconds
+            backingFallbackCount += output.backingFallbackCount
+        }
     }
 
-    /// Populated by `processComplete`; read after the call for stage-level analysis.
+    /// Streaming is cumulative since reset/restore when detailed profiling is enabled.
+    /// Reset/restore clears diagnostic counters; they never enter an inference checkpoint.
     public private(set) var lastProfile = PipelineProfile()
+
+    static func detailedProfileRequested(environment: [String: String]) -> Bool {
+        environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
+    }
 
     public init(config: Nemotron3Config, models: Nemotron3Models) {
         self.config = config
@@ -52,13 +106,21 @@ public nonisolated final class Nemotron3Diarizer {
         self.updater = Nemotron3StateUpdater(config: config, silenceEmbedding: models.silenceEmbedding)
         self.state = Nemotron3StreamingState(config: config)
         self.frontend = Nemotron3StreamingFrontend(config: config)
+        self.detailedProfileEnabled = Self.detailedProfileRequested(environment: ProcessInfo.processInfo.environment)
     }
 
     public func reset() {
+        // A caller's defer may reset after cancellation outside runChunks. Preserve a
+        // bounded partial summary before dropping diagnostic counters, never model state.
+        if detailedProfileEnabled, !profileSummaryEmitted, lastProfile.appendCallCount > 0 {
+            emitProfile(event: "summary", outcome: "resetBeforeFinish")
+        }
         state = Nemotron3StreamingState(config: config)
         frontend.reset()
         streamFinished = false
         streamedFrameCount = 0
+        lastProfile = PipelineProfile()
+        profileSummaryEmitted = false
     }
 
     /// Captured only between completed streaming steps. Model weights and scratch CoreML
@@ -117,6 +179,12 @@ public nonisolated final class Nemotron3Diarizer {
         self.frontend = restoredFrontend
         self.streamedFrameCount = snapshot.streamedFrameCount
         self.streamFinished = false
+        self.lastProfile = PipelineProfile()
+        if self.detailedProfileEnabled {
+            self.lastProfile.restoredSampleCursor = sampleCursor
+            self.lastProfile.restoredFrameCursor = snapshot.streamedFrameCount
+        }
+        self.profileSummaryEmitted = false
     }
 
     /// Process a complete audio buffer (16 kHz mono) and return per-frame speaker
@@ -135,12 +203,14 @@ public nonisolated final class Nemotron3Diarizer {
     ) throws -> (probabilities: [Float], frameCount: Int) {
         reset()
         var profile = PipelineProfile()
-        let t0 = Date()
+        let t0 = ProcessInfo.processInfo.systemUptime
 
-        var tStage = Date()
+        var tStage = ProcessInfo.processInfo.systemUptime
         let mel = AudioMelSpectrogram()
         let (featSeq, featLength, featSeqLength) = mel.computeFlatTransposed(audio: audio)
-        profile.melSeconds = Date().timeIntervalSince(tStage)
+        profile.melSeconds = ProcessInfo.processInfo.systemUptime - tStage
+        profile.inputSampleCount = audio.count
+        profile.melFrameCount = featLength
 
         var total = [Float]()
         total.reserveCapacity(featLength * config.numSpeakers)
@@ -154,9 +224,9 @@ public nonisolated final class Nemotron3Diarizer {
         // pool after a few thousand calls (issue #752 failure class).
         while try autoreleasepool(invoking: { () -> Bool in
             try Task.checkCancellation()
-            tStage = Date()
+            tStage = ProcessInfo.processInfo.systemUptime
             guard let chunk = loader.next() else { return false }
-            profile.chunkSliceSeconds += Date().timeIntervalSince(tStage)
+            profile.chunkSliceSeconds += ProcessInfo.processInfo.systemUptime - tStage
 
             // VAD gate: emit zeros for speech-free chunks without running the model or
             // advancing state. Output frame count must match the normal path exactly.
@@ -181,19 +251,19 @@ public nonisolated final class Nemotron3Diarizer {
             }
             coreStart = coreEnd
 
-            tStage = Date()
+            tStage = ProcessInfo.processInfo.systemUptime
             let out =
                 config.splitGraph
                 ? try models.runSplit(
-                    chunk: chunk.features, chunkLength: chunk.length, state: state, config: config)
+                    chunk: chunk.features, chunkLength: chunk.length, state: state, config: config,
+                    detailedProfile: detailedProfileEnabled)
                 : try models.run(
-                    chunk: chunk.features, chunkLength: chunk.length, state: state, config: config)
-            profile.inferenceSeconds += Date().timeIntervalSince(tStage)
-            profile.inputPrepSeconds += out.inputPrepSeconds
-            profile.predictSeconds += out.predictSeconds
-            profile.readbackSeconds += out.readbackSeconds
+                    chunk: chunk.features, chunkLength: chunk.length, state: state, config: config,
+                    detailedProfile: detailedProfileEnabled)
+            profile.inferenceSeconds += ProcessInfo.processInfo.systemUptime - tStage
+            profile.add(out)
 
-            tStage = Date()
+            tStage = ProcessInfo.processInfo.systemUptime
             let result = try updater.update(
                 state: &state,
                 chunkEmbeddings: out.chunkEmbeddings,
@@ -203,19 +273,21 @@ public nonisolated final class Nemotron3Diarizer {
                 lc: (chunk.leftOffset + sub / 2) / sub,
                 rc: (chunk.rightOffset + sub - 1) / sub
             )
-            profile.stateUpdateSeconds += Date().timeIntervalSince(tStage)
+            profile.stateUpdateSeconds += ProcessInfo.processInfo.systemUptime - tStage
 
-            tStage = Date()
+            tStage = ProcessInfo.processInfo.systemUptime
             total.append(contentsOf: result.probabilities)
-            profile.outputAppendSeconds += Date().timeIntervalSince(tStage)
+            profile.outputAppendSeconds += ProcessInfo.processInfo.systemUptime - tStage
             profile.chunkCount += 1
             return true
         }) {}
 
         // NeMo trims to ceil(mel_frames / output_subsampling_factor); output factor is 1 (10 ms).
         let outputFrames = min(featSeqLength, total.count / config.numSpeakers)
-        profile.totalSeconds = Date().timeIntervalSince(t0)
+        profile.totalSeconds = ProcessInfo.processInfo.systemUptime - t0
+        profile.outputFrameCount = outputFrames
         lastProfile = profile
+        if detailedProfileEnabled { emitProfile(event: "batchSummary", outcome: "completed") }
         return (Array(total[0..<(outputFrames * config.numSpeakers)]), outputFrames)
     }
 
@@ -230,13 +302,28 @@ public nonisolated final class Nemotron3Diarizer {
     /// start is available.
     public func appendAudio(_ samples: [Float]) {
         precondition(!streamFinished, "appendAudio after finishStream; call reset() first")
+        let start = detailedProfileEnabled ? ProcessInfo.processInfo.systemUptime : 0
         frontend.append(samples)
+        if detailedProfileEnabled {
+            let duration = ProcessInfo.processInfo.systemUptime - start
+            lastProfile.appendSeconds += duration
+            lastProfile.totalSeconds += duration
+            lastProfile.appendCallCount += 1
+            lastProfile.inputSampleCount += samples.count
+        }
     }
 
     /// Run every chunk the buffered audio completes and return their results in order.
     /// Each result covers `chunkSeconds` of audio at 10 ms per frame.
     public func processBufferedAudio() throws -> [Nemotron3ChunkResult] {
-        try runChunks(final: false)
+        do {
+            return try runChunks(final: false)
+        } catch {
+            if detailedProfileEnabled {
+                emitProfile(event: "summary", outcome: error is CancellationError ? "cancelled" : "failed")
+            }
+            throw error
+        }
     }
 
     /// Flush the tail: pads the stream like `processComplete` does, runs the remaining
@@ -245,12 +332,38 @@ public nonisolated final class Nemotron3Diarizer {
     public func finishStream() throws -> [Nemotron3ChunkResult] {
         guard !streamFinished else { return [] }
         streamFinished = true
-        return try runChunks(final: true)
+        do {
+            let results = try runChunks(final: true)
+            if detailedProfileEnabled { emitProfile(event: "summary", outcome: "completed", final: true) }
+            return results
+        } catch {
+            if detailedProfileEnabled {
+                emitProfile(event: "summary", outcome: error is CancellationError ? "cancelled" : "failed", final: true)
+            }
+            throw error
+        }
     }
 
     private func runChunks(final: Bool) throws -> [Nemotron3ChunkResult] {
+        let start = detailedProfileEnabled ? ProcessInfo.processInfo.systemUptime : 0
+        let previousTotal = lastProfile.totalSeconds
+        if detailedProfileEnabled { lastProfile.bufferedCallCount += 1 }
+        defer {
+            if detailedProfileEnabled {
+                let duration = ProcessInfo.processInfo.systemUptime - start
+                lastProfile.totalSeconds = previousTotal + duration
+                if final { lastProfile.finishFlushSeconds += duration }
+            }
+        }
         var results: [Nemotron3ChunkResult] = []
-        while let chunk = frontend.nextChunk(final: final) {
+        while true {
+            let chunk = frontend.nextChunk(final: final, measure: detailedProfileEnabled)
+            if detailedProfileEnabled {
+                lastProfile.melSeconds += frontend.lastProfile.melSeconds
+                lastProfile.chunkSliceSeconds += frontend.lastProfile.chunkSliceSeconds
+                lastProfile.melFrameCount = frontend.melFramesComputed
+            }
+            guard let chunk else { break }
             try Task.checkCancellation()
             var result = try autoreleasepool {
                 try step(
@@ -259,6 +372,7 @@ public nonisolated final class Nemotron3Diarizer {
             }
             // Trim the tail chunk to the audio's exact 10 ms frame count (mirrors
             // `processComplete`'s ceil(mel_frames) trim).
+            let outputStart = detailedProfileEnabled ? ProcessInfo.processInfo.systemUptime : 0
             let remaining = frontend.melFramesComputed - streamedFrameCount
             if final, result.frameCount > remaining {
                 let keep = max(remaining, 0)
@@ -268,6 +382,13 @@ public nonisolated final class Nemotron3Diarizer {
             }
             streamedFrameCount += result.frameCount
             results.append(result)
+            if detailedProfileEnabled {
+                lastProfile.outputAppendSeconds += ProcessInfo.processInfo.systemUptime - outputStart
+                lastProfile.outputFrameCount += result.frameCount
+                if final { lastProfile.flushChunkCount += 1 }
+                lastProfile.totalSeconds = previousTotal + ProcessInfo.processInfo.systemUptime - start
+                if lastProfile.admitChunkRow() { emitProfile(event: "chunk", outcome: "completed", final: final) }
+            }
         }
         return results
     }
@@ -285,16 +406,39 @@ public nonisolated final class Nemotron3Diarizer {
         leftOffsetMel: Int,
         rightOffsetMel: Int
     ) throws -> Nemotron3ChunkResult {
+        let inferenceStart = detailedProfileEnabled ? ProcessInfo.processInfo.systemUptime : 0
+        var inferenceCompleted = false
+        defer {
+            if detailedProfileEnabled, !inferenceCompleted {
+                lastProfile.inferenceSeconds += ProcessInfo.processInfo.systemUptime - inferenceStart
+                lastProfile.failedChunkCount += 1
+            }
+        }
         let out =
             config.splitGraph
             ? try models.runSplit(
-                chunk: chunkFeatures, chunkLength: chunkMelLength, state: state, config: config)
+                chunk: chunkFeatures, chunkLength: chunkMelLength, state: state, config: config,
+                detailedProfile: detailedProfileEnabled)
             : try models.run(
-                chunk: chunkFeatures, chunkLength: chunkMelLength, state: state, config: config)
+                chunk: chunkFeatures, chunkLength: chunkMelLength, state: state, config: config,
+                detailedProfile: detailedProfileEnabled)
+        inferenceCompleted = true
+        if detailedProfileEnabled {
+            lastProfile.inferenceSeconds += ProcessInfo.processInfo.systemUptime - inferenceStart
+            lastProfile.add(out)
+        }
         let sub = config.subsamplingFactor
         let lcEnc = (leftOffsetMel + sub / 2) / sub  // round()
         let rcEnc = (rightOffsetMel + sub - 1) / sub  // ceil()
-        return try updater.update(
+        let updateStart = detailedProfileEnabled ? ProcessInfo.processInfo.systemUptime : 0
+        var updateCompleted = false
+        defer {
+            if detailedProfileEnabled {
+                lastProfile.stateUpdateSeconds += ProcessInfo.processInfo.systemUptime - updateStart
+                if !updateCompleted { lastProfile.failedChunkCount += 1 }
+            }
+        }
+        let result = try updater.update(
             state: &state,
             chunkEmbeddings: out.chunkEmbeddings,
             chunkEncLength: out.chunkLength,
@@ -303,6 +447,38 @@ public nonisolated final class Nemotron3Diarizer {
             lc: lcEnc,
             rc: rcEnc
         )
+        updateCompleted = true
+        if detailedProfileEnabled { lastProfile.chunkCount += 1 }
+        return result
+    }
+
+    /// Fixed, numeric/categorical schema only. No transcript, speaker identity, path,
+    /// audio samples, probabilities, embeddings or error descriptions enter these rows.
+    private func emitProfile(event: String, outcome: String, final: Bool = false) {
+        struct Row: Encodable {
+            let nemotron3DetailedProfile: Int
+            let event: String
+            let outcome: String
+            let final: Bool
+            let uptimeSeconds: Double
+            let inputSampleCursor: Int
+            let outputFrameCursor: Int
+            let melFrameCursor: Int
+            let splitGraph: Bool
+            let profile: PipelineProfile
+        }
+        let row = Row(nemotron3DetailedProfile: 1, event: event, outcome: outcome, final: final,
+                      uptimeSeconds: ProcessInfo.processInfo.systemUptime,
+                      inputSampleCursor: lastProfile.restoredSampleCursor + lastProfile.inputSampleCount,
+                      outputFrameCursor: lastProfile.restoredFrameCursor + lastProfile.outputFrameCount,
+                      melFrameCursor: lastProfile.melFrameCount,
+                      splitGraph: config.splitGraph, profile: lastProfile)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(row), let line = String(data: data, encoding: .utf8) {
+            logger.info(line)
+        }
+        if event != "chunk" { profileSummaryEmitted = true }
     }
 
     /// Convert frame probabilities into arrival-ordered speaker segments.
@@ -405,6 +581,12 @@ nonisolated struct Nemotron3StreamingFrontend {
     private var melCacheStart = 0
     private(set) var melFramesComputed = 0
     private var nextCoreMel = 0
+    /// Only the latest call, never accumulated or serialized in the exact checkpoint.
+    struct Profile: Equatable {
+        var melSeconds: Double = 0
+        var chunkSliceSeconds: Double = 0
+    }
+    private(set) var lastProfile = Profile()
 
     init(config: Nemotron3Config) {
         self.config = config
@@ -503,6 +685,7 @@ nonisolated struct Nemotron3StreamingFrontend {
         melCacheStart = 0
         melFramesComputed = 0
         nextCoreMel = 0
+        lastProfile = Profile()
     }
 
     mutating func append(_ samples: [Float]) {
@@ -513,8 +696,17 @@ nonisolated struct Nemotron3StreamingFrontend {
     /// The next chunk in `Nemotron3FeatureLoader` layout, or nil when the buffered audio
     /// does not complete one. With `final`, the stream is right-padded like center-mode
     /// extraction and the trailing (short) chunks are emitted.
-    mutating func nextChunk(final: Bool) -> (features: [Float], length: Int, leftOffset: Int, rightOffset: Int)? {
+    mutating func nextChunk(
+        final: Bool, measure: Bool = false
+    ) -> (features: [Float], length: Int, leftOffset: Int, rightOffset: Int)? {
+        let melStart = measure ? ProcessInfo.processInfo.systemUptime : 0
         computeMel(final: final)
+        let sliceStart = measure ? ProcessInfo.processInfo.systemUptime : 0
+        if measure { lastProfile.melSeconds = sliceStart - melStart }
+        else { lastProfile = Profile() }
+        defer {
+            if measure { lastProfile.chunkSliceSeconds = ProcessInfo.processInfo.systemUptime - sliceStart }
+        }
         let sub = config.subsamplingFactor
         let lcMel = config.chunkLeftContext * sub
         let rcMel = config.chunkRightContext * sub
