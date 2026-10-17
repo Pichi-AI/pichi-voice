@@ -88,10 +88,11 @@ extension MeetingProcessingPipeline {
         let value = emission.diagnostics
         let known = emission.safeBatch.segments.filter { $0.speakerID != nil }.count
         let uptimeMS = Int64(ProcessInfo.processInfo.systemUptime * 1_000)
+        let stageTiming = " privacyMs=\(value.privacyMilliseconds) attributionMs=\(value.attributionMilliseconds)"
         DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
             DebugLogger.shared.info(
-                "attemptID=\(attemptID) uptimeMs=\(uptimeMS) phase=\(phase) mode=streaming replay=false acceptedThroughSample=\(value.acceptedThroughSample) processedThroughSample=\(value.diarizationProcessedThroughSample) asrStableThroughSample=\(value.asrStableThroughSample) committedThroughSample=\(value.committedThroughSample) privacySafeThroughSample=\(value.privacySafeThroughSample) retainActivityFromSample=\(emission.retainActivityFromSample) pendingWords=\(value.pendingProtectedWords) retainedWords=\(value.retainedAttributionWords) insertedWords=\(value.insertedWords) revisedWords=\(value.revisedWords) knownCount=\(known)",
-                source: "MeetingStreamingPCM")
+                "attemptID=\(attemptID) uptimeMs=\(uptimeMS) phase=\(phase) mode=streaming replay=false acceptedThroughSample=\(value.acceptedThroughSample) processedThroughSample=\(value.diarizationProcessedThroughSample) asrStableThroughSample=\(value.asrStableThroughSample) committedThroughSample=\(value.committedThroughSample) privacySafeThroughSample=\(value.privacySafeThroughSample) retainActivityFromSample=\(emission.retainActivityFromSample) pendingWords=\(value.pendingProtectedWords) retainedWords=\(value.retainedAttributionWords) insertedWords=\(value.insertedWords) revisedWords=\(value.revisedWords) knownCount=\(known)"
+                + stageTiming, source: "MeetingStreamingPCM")
         }
     }
 }
