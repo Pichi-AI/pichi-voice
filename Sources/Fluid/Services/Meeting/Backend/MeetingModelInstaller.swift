@@ -13,15 +13,6 @@ nonisolated enum MeetingModelInstaller {
         "Data/com.apple.CoreML/weights/weight.bin": "b7c50bd483210f206014548c0cc2fc7b3601de012ab86b2e49f8a911db9a7d40",
     ]
 
-    private static let fast32Files = [
-        MeetingNemotronModelLocator.compiledModelFileName + "/model.mil": "560f87a4a5124712d51ac7aecfee9a97278cac9087919719b031917a0160b508",
-        MeetingNemotronModelLocator.compiledModelFileName + "/coremldata.bin": "b349771fbdb19443fb0af32b6c061fdb183d58e54c0b6376c2fbdca0a9941b70",
-        MeetingNemotronModelLocator.compiledModelFileName + "/analytics/coremldata.bin": "3241bd5be194abbf0f625be8bd639b5c2035359594a6a513d70e9159e294ce39",
-        MeetingNemotronModelLocator.compiledModelFileName + "/weights/weight.bin": "99e2ae43ac6a513abf99951b35a75fb6bc51d2287c3c1af48a9657d917e57aed",
-        "learnable_sil_emb.bin": "d4417b3c0eabdf7c47032fac2b5b5a7ee83d819a6ddda8fd8eaf74e2b5cc4ac7",
-        MeetingNemotronModelLocator.projectionFileName: "eb15b89e7af9813331a7d8db02e83e30bf97463d272c748e72086bafd4e81c60",
-    ]
-
     /// The checkpoint's trained silence embedding (`learnable_sil_emb`), published next to the
     /// package: 512 little-endian float32 values.
     static let silenceEmbeddingFileName = "learnable_sil_emb.f32"
@@ -35,9 +26,9 @@ nonisolated enum MeetingModelInstaller {
         }
     }
 
-    static func validate(_ package: URL) throws -> MeetingNemotronModelArtifact {
-        let artifact = try MeetingNemotronModelLocator.validatePackage(at: package.standardizedFileURL)
-        let expectedFiles = artifact.compiledModelURL == nil ? Self.expectedFiles : Self.fast32Files
+    static func validate(_ package: URL, profile: MeetingNemotronModelProfile = .fast32SplitW8A8) throws -> MeetingNemotronModelArtifact {
+        let artifact = try MeetingNemotronModelLocator.validatePackage(at: package.standardizedFileURL, profile: profile)
+        let expectedFiles = artifact.compiledModelURL == nil ? Self.expectedFiles : profile.expectedFiles
         if artifact.compiledModelURL != nil, artifact.fileCount != expectedFiles.count { throw InstallError.wrongPackage }
         for (path, expected) in expectedFiles {
             let handle = try FileHandle(forReadingFrom: package.appendingPathComponent(path))
@@ -81,14 +72,18 @@ nonisolated enum MeetingModelInstaller {
         try data.write(to: Self.silenceEmbeddingURL(besides: package), options: .atomic)
     }
 
-    static func install(from source: URL, to destination: URL = MeetingNemotronModelLocator.defaultPackageURL()) throws -> MeetingNemotronModelArtifact {
+    static func install(
+        from source: URL, to destination: URL? = nil,
+        profile: MeetingNemotronModelProfile = .fast32SplitW8A8
+    ) throws -> MeetingNemotronModelArtifact {
         self.installationLock.lock()
         defer { self.installationLock.unlock() }
+        let destination = destination ?? MeetingNemotronModelLocator.defaultPackageURL(profile: profile)
         let accessing = source.startAccessingSecurityScopedResource()
         defer { if accessing { source.stopAccessingSecurityScopedResource() } }
-        _ = try Self.validate(source)
+        _ = try Self.validate(source, profile: profile)
         if source.standardizedFileURL == destination.standardizedFileURL {
-            return try Self.validate(destination)
+            return try Self.validate(destination, profile: profile)
         }
         let manager = FileManager.default
         let parent = destination.deletingLastPathComponent()
@@ -96,7 +91,7 @@ nonisolated enum MeetingModelInstaller {
         let staging = parent.appendingPathComponent("import-\(UUID().uuidString)." + source.pathExtension, isDirectory: true)
         defer { try? manager.removeItem(at: staging) }
         try manager.copyItem(at: source, to: staging)
-        let artifact = try Self.validate(staging)
+        let artifact = try Self.validate(staging, profile: profile)
         try Task.checkCancellation()
         if manager.fileExists(atPath: destination.path) {
             // Atomically swap directory packages; staging then contains the old model.
@@ -114,7 +109,8 @@ nonisolated enum MeetingModelInstaller {
             totalByteCount: artifact.totalByteCount,
             fileCount: artifact.fileCount,
             manifestSHA256: artifact.manifestSHA256,
-            entryMetadataSHA256: artifact.entryMetadataSHA256
+            entryMetadataSHA256: artifact.entryMetadataSHA256,
+            profile: profile
         )
     }
 }

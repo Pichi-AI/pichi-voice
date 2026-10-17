@@ -1,6 +1,99 @@
 import CryptoKit
 import Foundation
 
+/// Fixed author-compiled variants of the same runtime. Experimental profiles are selected
+/// explicitly by a registered inference adapter, never by package-name guessing or fallback.
+/// Keeping this below the composite backend registry avoids another model-specific pipeline.
+nonisolated enum MeetingNemotronModelProfile: String, CaseIterable, Sendable {
+    case fast32SplitW8A8 = "fast32-split-w8a8"
+    case experimentalFast32FP16CPU = "experimental-fast32-fp16-cpu"
+    case experimentalFast128FP16CPU = "experimental-fast128-fp16-cpu"
+
+    enum ComputePreference: String, Sendable {
+        case devicePreferred
+        case cpuOnly
+    }
+
+    static let repositoryRevision = "25a90f97f254428d4b30374b76af9c74fdee8327"
+    static let runtimeRevision = "82eb4c1e0ab67e1c7d8de5092aa42a8f74cbd7b8"
+    static let silenceEmbeddingFileName = "learnable_sil_emb.bin"
+
+    var isExperimental: Bool { self != .fast32SplitW8A8 }
+    var computePreference: ComputePreference { self.isExperimental ? .cpuOnly : .devicePreferred }
+    var presetName: String {
+        switch self {
+        case .fast32SplitW8A8: return "fast32-split-w8a8"
+        case .experimentalFast32FP16CPU: return "fast32"
+        case .experimentalFast128FP16CPU: return "fast128"
+        }
+    }
+    var compiledModelFileName: String {
+        switch self {
+        case .fast32SplitW8A8: return "Nemotron3Diarizer_s32_split_w8a8.mlmodelc"
+        case .experimentalFast32FP16CPU: return "Nemotron3Diarizer_fast32.mlmodelc"
+        case .experimentalFast128FP16CPU: return "Nemotron3Diarizer_fast128.mlmodelc"
+        }
+    }
+    var projectionFileName: String? { self == .fast32SplitW8A8 ? "pre_encode_proj_t.bin" : nil }
+    var remoteModelPath: String {
+        (self == .fast32SplitW8A8 ? "split/" : "monolithic/v2/") + self.compiledModelFileName
+    }
+    var cacheVersion: String {
+        self == .fast32SplitW8A8 ? "v2-fast32-w8a8" : "v3-" + self.rawValue
+    }
+    var packageFileName: String {
+        (self == .fast32SplitW8A8 ? "fast32-w8a8" : self.rawValue) + ".nemotronbundle"
+    }
+    var hostFileNames: [String] {
+        [Self.silenceEmbeddingFileName] + (self.projectionFileName.map { [$0] } ?? [])
+    }
+    /// Order retains the production download contract. Paths stay under the pinned repo.
+    var remoteFilePaths: [String] {
+        ["analytics/coremldata.bin", "coremldata.bin", "model.mil", "weights/weight.bin"]
+            .map { self.remoteModelPath + "/" + $0 } + self.hostFileNames
+    }
+    var expectedFiles: [String: String] {
+        let modelFiles: [String: String]
+        switch self {
+        case .fast32SplitW8A8:
+            modelFiles = [
+                "model.mil": "560f87a4a5124712d51ac7aecfee9a97278cac9087919719b031917a0160b508",
+                "coremldata.bin": "b349771fbdb19443fb0af32b6c061fdb183d58e54c0b6376c2fbdca0a9941b70",
+                "analytics/coremldata.bin": "3241bd5be194abbf0f625be8bd639b5c2035359594a6a513d70e9159e294ce39",
+                "weights/weight.bin": "99e2ae43ac6a513abf99951b35a75fb6bc51d2287c3c1af48a9657d917e57aed",
+            ]
+        case .experimentalFast32FP16CPU:
+            modelFiles = [
+                "model.mil": "e2f0cbbf88e824385475779b637c36281c5f98f339783840bdf7b3dfcd08c123",
+                "coremldata.bin": "fbc2d4dc25147427269e4774a5b8e3dd6b613e8c8458d74c7462a1a377dbae75",
+                "analytics/coremldata.bin": "7932ba85d07f09ba8feff996e1278f376a9139e31141d2827021f1c225e590ae",
+                "weights/weight.bin": "7353d8e7a5d29a8d15edf86dbf40bed4e82b7b8f456f302d5cdcbf850ed25358",
+            ]
+        case .experimentalFast128FP16CPU:
+            modelFiles = [
+                "model.mil": "e7c029a46d9f327bec4c47fc34e5d32ee2cec9ce596950af0c403d05146b4ead",
+                "coremldata.bin": "ebcca7245d8d774305752b9f2b79433ad1858f8a06df3b326e0ae6305d981d25",
+                "analytics/coremldata.bin": "a71e06616a3ae7bddef06ce5dfc7fe523a286e489f63a8da2fc4f1e940d560a4",
+                "weights/weight.bin": "e8c90d2d0e16787a420de6805fd5b7a95c116fac0163208b5bc4d8a9ae459ca4",
+            ]
+        }
+        var files = Dictionary(uniqueKeysWithValues: modelFiles.map { (self.compiledModelFileName + "/" + $0.key, $0.value) })
+        files[Self.silenceEmbeddingFileName] = "d4417b3c0eabdf7c47032fac2b5b5a7ee83d819a6ddda8fd8eaf74e2b5cc4ac7"
+        if let projectionFileName {
+            files[projectionFileName] = "eb15b89e7af9813331a7d8db02e83e30bf97463d272c748e72086bafd4e81c60"
+        }
+        return files
+    }
+    var implementationFingerprint: String {
+        let weight = self.expectedFiles[self.compiledModelFileName + "/weights/weight.bin"]!
+        let config = self == .experimentalFast128FP16CPU ? "128-4-40-264" : "32-4-40-264"
+        let base = "Nemotron3-" + (self == .fast32SplitW8A8 ? "fast32-split-w8a8" : self.rawValue)
+            + "@\(Self.runtimeRevision);model=\(Self.repositoryRevision);weight=\(weight);config=\(config)"
+        // Persisted attempts/checkpoints keep the original default identity.
+        return self == .fast32SplitW8A8 ? base : base + ";split=false;compute=\(self.computePreference.rawValue)"
+    }
+}
+
 // Stage E of `MEETING_TRANSCRIPTION_IMPLEMENTATION_PLAN.md` (§5): FluidVoice-side Nemotron model
 // readiness. This locator only resolves and validates a local, already-installed model package.
 // It never downloads and never accepts a symlink — `MeetingDiarizationModelStore` downloads and
@@ -20,17 +113,28 @@ nonisolated struct MeetingNemotronModelArtifact: Equatable, Sendable {
     /// Stable digest of every regular entry's relative path, logical size and modification time.
     /// This makes a same-size weight replacement visible without hashing 190 MB on the main actor.
     let entryMetadataSHA256: String
+    let profile: MeetingNemotronModelProfile
+
+    init(packageURL: URL, totalByteCount: Int64, fileCount: Int, manifestSHA256: String,
+         entryMetadataSHA256: String, profile: MeetingNemotronModelProfile = .fast32SplitW8A8) {
+        self.packageURL = packageURL
+        self.totalByteCount = totalByteCount
+        self.fileCount = fileCount
+        self.manifestSHA256 = manifestSHA256
+        self.entryMetadataSHA256 = entryMetadataSHA256
+        self.profile = profile
+    }
 
     var implementationFingerprint: String {
         self.compiledModelURL == nil
             ? "Nemotron3-sortformer@eb1e6628998e47022799d305b52c2680d3576801;model=8976c3c40a752cd6468a08f2aa08626770bc048f"
-            : MeetingNemotronModelLocator.implementationFingerprint
+            : self.profile.implementationFingerprint
     }
 
     /// The new model is author-compiled and must never enter the legacy package compiler.
     var compiledModelURL: URL? {
         guard packageURL.pathExtension == "nemotronbundle" else { return nil }
-        return packageURL.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName, isDirectory: true)
+        return packageURL.appendingPathComponent(self.profile.compiledModelFileName, isDirectory: true)
     }
 }
 
@@ -74,17 +178,20 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
 
     let injectedURL: URL?
     let environment: [String: String]
+    let profile: MeetingNemotronModelProfile
 
     init(
         injectedURL: URL? = nil,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        profile: MeetingNemotronModelProfile = .fast32SplitW8A8
     ) {
         self.injectedURL = injectedURL
         self.environment = environment
+        self.profile = profile
     }
 
     /// The versioned FluidVoice cache location used when nothing is injected or overridden.
-    static func defaultPackageURL() -> URL {
+    static func defaultPackageURL(profile: MeetingNemotronModelProfile = .fast32SplitW8A8) -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent("Library/Application Support", isDirectory: true)
@@ -92,23 +199,23 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
             .appendingPathComponent(AppBrand.storageNamespace, isDirectory: true)
             .appendingPathComponent("MeetingModels", isDirectory: true)
             .appendingPathComponent("nemotron-3-diarization", isDirectory: true)
-            .appendingPathComponent(Self.cacheVersion, isDirectory: true)
-            .appendingPathComponent(Self.packageFileName, isDirectory: true)
+            .appendingPathComponent(profile.cacheVersion, isDirectory: true)
+            .appendingPathComponent(profile.packageFileName, isDirectory: true)
     }
 
     func resolvedPackageURL() -> URL {
         if let injectedURL { return injectedURL }
-        if let override = self.environment[Self.environmentOverrideKey],
+        if self.profile == .fast32SplitW8A8, let override = self.environment[Self.environmentOverrideKey],
            !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             return URL(fileURLWithPath: override)
         }
-        return Self.defaultPackageURL()
+        return Self.defaultPackageURL(profile: self.profile)
     }
 
     func locate() throws -> MeetingNemotronModelArtifact {
         let url = self.resolvedPackageURL().standardizedFileURL
-        return try Self.validatePackage(at: url)
+        return try Self.validatePackage(at: url, profile: self.profile)
     }
 
     func recheck(_ artifact: MeetingNemotronModelArtifact) throws -> MeetingNemotronModelArtifact {
@@ -117,7 +224,8 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
               current.totalByteCount == artifact.totalByteCount,
               current.fileCount == artifact.fileCount,
               current.manifestSHA256 == artifact.manifestSHA256,
-              current.entryMetadataSHA256 == artifact.entryMetadataSHA256
+              current.entryMetadataSHA256 == artifact.entryMetadataSHA256,
+              current.profile == artifact.profile
         else {
             throw MeetingNemotronModelReadinessError.artifactChanged(path: artifact.packageURL.path)
         }
@@ -128,7 +236,7 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
     /// `Manifest.json` and at least one `model.mlmodel`, with no symlink anywhere inside it. A
     /// symlinked component would make the measured bytes describe a different file than CoreML
     /// later opens.
-    static func validatePackage(at url: URL) throws -> MeetingNemotronModelArtifact {
+    static func validatePackage(at url: URL, profile: MeetingNemotronModelProfile = .fast32SplitW8A8) throws -> MeetingNemotronModelArtifact {
         let manager = FileManager.default
         guard let attributes = try? manager.attributesOfItem(atPath: url.path),
               let type = attributes[.type] as? FileAttributeType
@@ -166,6 +274,9 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
         }
 
         let isCompiledBundle = url.pathExtension == "nemotronbundle"
+        guard isCompiledBundle || profile == .fast32SplitW8A8 else {
+            throw MeetingNemotronModelReadinessError.invalidModelPackage(reason: "profileRequiresCompiledBundle")
+        }
         var totalByteCount: Int64 = 0
         var fileCount = 0
         var hasManifest = false
@@ -199,12 +310,12 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
                 size: logicalSize,
                 modified: values.contentModificationDate?.timeIntervalSince1970 ?? 0
             ))
-            if (isCompiledBundle && relativePath == Self.compiledModelFileName + "/model.mil")
+            if (isCompiledBundle && relativePath == profile.compiledModelFileName + "/model.mil")
                 || (!isCompiledBundle && entry.lastPathComponent == "Manifest.json") {
                 hasManifest = true
                 manifestSHA256 = try Self.sha256Hex(contentsOf: entry)
             }
-            if (isCompiledBundle && relativePath == Self.compiledModelFileName + "/coremldata.bin")
+            if (isCompiledBundle && relativePath == profile.compiledModelFileName + "/coremldata.bin")
                 || (!isCompiledBundle && entry.lastPathComponent == "model.mlmodel") {
                 hasModel = true
             }
@@ -230,7 +341,8 @@ nonisolated struct MeetingNemotronModelLocator: MeetingNemotronModelLocating {
             totalByteCount: totalByteCount,
             fileCount: fileCount,
             manifestSHA256: manifestSHA256,
-            entryMetadataSHA256: entryMetadataSHA256
+            entryMetadataSHA256: entryMetadataSHA256,
+            profile: profile
         )
     }
 

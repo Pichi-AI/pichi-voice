@@ -66,11 +66,114 @@ struct MeetingNemotronCompiledModelOwnerTests {
         try await body(base, locator, locator.locate())
         print("PASS " + name)
     }
+
+    private static func profileContracts(in root: URL) async throws {
+        let production = MeetingNemotronModelProfile.fast32SplitW8A8
+        try require(production.implementationFingerprint == MeetingNemotronModelLocator.implementationFingerprint,
+                    "Default attempt and checkpoint identity must remain byte-compatible")
+        try require(production.computePreference == .devicePreferred && !production.isExperimental,
+                    "Registering candidates cannot change the default compute route")
+        try require(production.packageFileName == MeetingNemotronModelLocator.packageFileName
+                    && production.cacheVersion == MeetingNemotronModelLocator.cacheVersion
+                    && production.remoteModelPath == MeetingNemotronModelLocator.remoteModelPath,
+                    "Default artifact storage and download remain unchanged")
+        try require(Set(MeetingNemotronModelProfile.allCases.map(\.implementationFingerprint)).count == 3,
+                    "Each preset and compute profile needs a distinct frozen identity")
+        try require(Set(MeetingNemotronModelProfile.allCases.map(\.packageFileName)).count == 3,
+                    "Candidate publication cannot overwrite the production package")
+        print("PASS profile-default-compatibility-and-identities")
+
+        for profile in MeetingNemotronModelProfile.allCases {
+            let candidate = profile.isExperimental
+            try require(profile.hostFileNames.count == (candidate ? 1 : 2), "Only the split graph requires host projection")
+            try require(profile.expectedFiles.count == (candidate ? 5 : 6), "Checksums bind all model and host files")
+            try require(!candidate || profile.computePreference == .cpuOnly, "Experimental compute policy is frozen")
+            try require(profile.expectedFiles.values.allSatisfy {
+                $0.count == 64 && $0.allSatisfy { "0123456789abcdef".contains($0) }
+            }, "Every published file uses a complete SHA-256")
+            let localPaths = Set(profile.remoteFilePaths.map { path in
+                path.hasPrefix(profile.remoteModelPath + "/")
+                    ? profile.compiledModelFileName + path.dropFirst(profile.remoteModelPath.count) : path
+            })
+            try require(localPaths == Set(profile.expectedFiles.keys), "Download and installer require the same exact files")
+        }
+        print("PASS profile-hash-download-and-host-contracts")
+
+        let override = root.appendingPathComponent("explicit-default-model.nemotronbundle")
+        let environment = [MeetingNemotronModelLocator.environmentOverrideKey: override.path]
+        try require(MeetingNemotronModelLocator(environment: environment).resolvedPackageURL() == override,
+                    "The existing production development override remains supported")
+        for profile in MeetingNemotronModelProfile.allCases where profile.isExperimental {
+            let defaultURL = MeetingNemotronModelLocator.defaultPackageURL(profile: profile)
+            try require(MeetingNemotronModelLocator(environment: environment, profile: profile).resolvedPackageURL() == defaultURL,
+                        "A production override cannot silently relabel its W8 package as FP16")
+            try require(defaultURL != MeetingNemotronModelLocator.defaultPackageURL(), "Candidate stores are isolated")
+        }
+        print("PASS profile-explicit-selection-and-storage")
+
+        for profile in MeetingNemotronModelProfile.allCases {
+            let package = root.appendingPathComponent(profile.packageFileName, isDirectory: true)
+            for path in profile.expectedFiles.keys {
+                let file = package.appendingPathComponent(path)
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data("synthetic-\(path)".utf8).write(to: file)
+            }
+            let locator = MeetingNemotronModelLocator(injectedURL: package, profile: profile)
+            let artifact = try locator.locate()
+            try require(artifact.profile == profile && artifact.implementationFingerprint == profile.implementationFingerprint,
+                        "Located artifacts carry the frozen registered model identity")
+            try require(artifact.compiledModelURL == package.appendingPathComponent(profile.compiledModelFileName, isDirectory: true),
+                        "The selected compiled URL must match the actual graph")
+            try require(try locator.recheck(artifact) == artifact, "Unchanged profile-bound artifacts can reopen")
+            let counter = Counter()
+            let owner = MeetingNemotronCompiledModelOwner(baseDirectory: root) { _, _ in _ = await counter.increment() }
+            _ = try await owner.compiledModel(for: artifact) { try locator.recheck($0) }
+            await owner.cancelAndCleanup()
+            try require(await counter.count == 0 && FileManager.default.fileExists(atPath: package.path),
+                        "Every author-compiled profile bypasses compilation and retains installed data")
+
+            let wrongProfile: MeetingNemotronModelProfile = profile == .experimentalFast128FP16CPU
+                ? .experimentalFast32FP16CPU : .experimentalFast128FP16CPU
+            let relabeled = MeetingNemotronModelArtifact(packageURL: artifact.packageURL,
+                totalByteCount: artifact.totalByteCount, fileCount: artifact.fileCount,
+                manifestSHA256: artifact.manifestSHA256, entryMetadataSHA256: artifact.entryMetadataSHA256,
+                profile: wrongProfile)
+            do { _ = try locator.recheck(relabeled); throw NSError(domain: "UnexpectedRelabeledArtifact", code: 1) }
+            catch MeetingNemotronModelReadinessError.artifactChanged { }
+            do {
+                _ = try MeetingNemotronModelLocator(injectedURL: package, profile: wrongProfile).locate()
+                throw NSError(domain: "UnexpectedGraphSubstitution", code: 1)
+            } catch MeetingNemotronModelReadinessError.invalidModelPackage { }
+
+            // Synthetic structure can exercise ownership, but never pass the pinned installer.
+            let installed = root.appendingPathComponent("preserve-" + profile.packageFileName, isDirectory: true)
+            try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: false)
+            let sentinel = installed.appendingPathComponent("existing-marker")
+            try Data("keep".utf8).write(to: sentinel)
+            do {
+                _ = try MeetingModelInstaller.install(from: package, to: installed, profile: profile)
+                throw NSError(domain: "UnexpectedUnpinnedInstall", code: 1)
+            } catch MeetingModelInstaller.InstallError.wrongPackage { }
+            try require(try Data(contentsOf: sentinel) == Data("keep".utf8), "Invalid candidate cannot replace an installed package")
+        }
+        print("PASS profile-bound-compiled-ownership-and-drift")
+        print("PASS profile-pinned-install-rejects-synthetic-data-without-replacement")
+
+        let legacy = try fixture(in: root.appendingPathComponent("legacy-profile-refusal"))
+        for profile in MeetingNemotronModelProfile.allCases where profile.isExperimental {
+            do {
+                _ = try MeetingNemotronModelLocator(injectedURL: legacy.resolvedPackageURL(), profile: profile).locate()
+                throw NSError(domain: "UnexpectedLegacyCandidate", code: 1)
+            } catch MeetingNemotronModelReadinessError.invalidModelPackage { }
+        }
+        print("PASS experimental-profile-refuses-legacy-package")
+    }
     static func main() async throws {
         let parent = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).resolvingSymlinksInPath()
         let root = parent.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try await self.profileContracts(in: root)
         try await subtest(root, "reuse-and-cleanup") { base, locator, artifact in
             let counter = Counter()
             let owner = MeetingNemotronCompiledModelOwner(baseDirectory: base) { _, target in
@@ -248,6 +351,6 @@ struct MeetingNemotronCompiledModelOwnerTests {
             owner = nil
             try require(try directories(in: base).isEmpty, "Ending the joined runtime releases its temporary derivative")
         }
-        print("12 compiled model ownership tests passed")
+        print("12 compiled model ownership tests and 6 profile contract groups passed")
     }
 }
