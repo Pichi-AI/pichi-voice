@@ -430,6 +430,153 @@ private nonisolated enum CombinedProtectedEvaluation {
     }
 }
 
+/// The streaming test reads only whitelisted numeric diagnostics for this exact attempt.
+/// It never attaches support logs, paths, source wording, identities or model inputs.
+private nonisolated enum CombinedStreamingDiagnostics {
+    struct Row: Equatable, Sendable {
+        let attemptID: UUID
+        let phase: String
+        let uptimeMS: Int64
+        let accepted: Int
+        let processed: Int
+        let asrStable: Int
+        let committed: Int
+        let pendingWords: Int
+        let knownCount: Int
+        let isStreamingFinish: Bool
+        var json: [String: Any] {
+            ["phase": phase, "uptimeMs": uptimeMS, "acceptedThroughSample": accepted,
+             "processedThroughSample": processed, "asrStableThroughSample": asrStable,
+             "committedThroughSample": committed, "pendingWords": pendingWords,
+             "knownCount": knownCount, "streamingFinishWithoutReplay": isStreamingFinish]
+        }
+    }
+
+    static func fields(_ line: String) -> [String: String] {
+        Dictionary(line.split(whereSeparator: { $0.isWhitespace }).compactMap { token in
+            let parts = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            return parts.count == 2 ? (String(parts[0]), String(parts[1])) : nil
+        }, uniquingKeysWith: { first, _ in first })
+    }
+
+    static func row(_ line: String, attempts: Set<UUID>) -> Row? {
+        guard line.contains("[MeetingStreamingPCM]") else { return nil }
+        let values = fields(line)
+        guard let rawID = values["attemptID"], let id = UUID(uuidString: rawID), attempts.contains(id),
+              let phase = values["phase"], ["progress", "window", "finish"].contains(phase),
+              let uptime = values["uptimeMs"].flatMap(Int64.init), uptime >= 0,
+              let accepted = values["acceptedThroughSample"].flatMap(Int.init),
+              let processed = values["processedThroughSample"].flatMap(Int.init),
+              let asrStable = values["asrStableThroughSample"].flatMap(Int.init),
+              let committed = values["committedThroughSample"].flatMap(Int.init),
+              let pending = values["pendingWords"].flatMap(Int.init),
+              let known = values["knownCount"].flatMap(Int.init),
+              accepted >= 0, processed >= 0, asrStable >= 0, committed >= 0, pending >= 0, known >= 0,
+              processed <= accepted, asrStable <= accepted,
+              committed <= min(asrStable, processed) else { return nil }
+        return .init(attemptID: id, phase: phase, uptimeMS: uptime, accepted: accepted,
+            processed: processed, asrStable: asrStable, committed: committed,
+            pendingWords: pending, knownCount: known,
+            isStreamingFinish: phase == "finish" && values["mode"] == "streaming" && values["replay"] == "false")
+    }
+
+    /// Both bounded logger files cover a rotation. Reading never changes logger ownership.
+    static func lines() throws -> [String] {
+        let current = FileLogger.shared.currentLogFileURL()
+        let previous = current.appendingPathExtension("1")
+        return try [previous, current].flatMap { url -> [String] in
+            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+            let bytes = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
+            guard bytes <= 1_100_000 else { throw NSError(domain: "StreamingMeetingDiagnosticLogSize", code: 1) }
+            return try String(contentsOf: url, encoding: .utf8).components(separatedBy: .newlines)
+        }
+    }
+
+    static func phaseTotals(_ lines: [String], from startMS: Int64, through endMS: Int64) -> [String: Any] {
+        var elapsed: [String: Int64] = [:]
+        var counts: [String: Int] = [:]
+        for line in lines where line.contains("[MeetingPCMRuntime]") {
+            let values = fields(line)
+            guard values["event"] == "end", let phase = values["phase"],
+                  let timestamp = values["uptimeMs"].flatMap(Int64.init), (startMS...endMS).contains(timestamp),
+                  let milliseconds = values["elapsedMs"].flatMap(Int64.init), milliseconds >= 0 else { continue }
+            elapsed[phase, default: 0] += milliseconds
+            counts[phase, default: 0] += 1
+        }
+        return ["elapsedMillisecondsByPhase": elapsed, "completedSpansByPhase": counts,
+                "scope": "Whole-process diagnostic spans ending in this test interval; nested spans overlap"]
+    }
+
+    static func completedPhaseCount(_ phase: String, in lines: [String], from startMS: Int64, through endMS: Int64) -> Int {
+        lines.filter { line in
+            guard line.contains("[MeetingPCMRuntime]") else { return false }
+            let values = fields(line)
+            return values["event"] == "end" && values["phase"] == phase
+                && values["uptimeMs"].flatMap(Int64.init).map { (startMS...endMS).contains($0) } == true
+        }.count
+    }
+
+    struct TransportRow: Sendable {
+        let offsetSeconds: Double
+        let frames: Int
+        let pending: Int
+        let peakPending: Int
+        let budget: Int
+        let windowMS: Int
+        let checkpointMS: Int
+        var json: [String: Any] {
+            ["offsetSeconds": offsetSeconds, "frames": frames, "pendingFrames": pending,
+             "peakPendingFrames": peakPending, "budgetFrames": budget,
+             "windowWallMilliseconds": windowMS, "checkpointMilliseconds": checkpointMS]
+        }
+    }
+
+    static func transportRow(_ line: String, attempts: Set<UUID>) -> TransportRow? {
+        guard line.contains("[MeetingMemoryAudio]") else { return nil }
+        let values = fields(line)
+        guard let rawID = values["pipelineID"], let id = UUID(uuidString: rawID), attempts.contains(id),
+              let offset = values["offset"].flatMap(Double.init), offset.isFinite, offset >= 0,
+              let frames = values["frames"].flatMap(Int.init), frames > 0,
+              let pending = values["pendingFrames"].flatMap(Int.init), pending >= 0,
+              let peak = values["peakPendingFrames"].flatMap(Int.init), peak >= pending,
+              let budget = values["budgetFrames"].flatMap(Int.init), budget > 0, peak <= budget,
+              let windowMS = values["windowMs"].flatMap(Int.init), windowMS >= 0,
+              let checkpointMS = values["checkpointMs"].flatMap(Int.init), checkpointMS >= 0 else { return nil }
+        return .init(offsetSeconds: offset, frames: frames, pending: pending,
+                     peakPending: peak, budget: budget, windowMS: windowMS, checkpointMS: checkpointMS)
+    }
+
+    static func percentile95(_ values: [Int]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        return Double(sorted[max(0, Int(ceil(Double(sorted.count) * 0.95)) - 1)]) / 16_000
+    }
+}
+
+/// Detects persistent audio/media creation in the app container, including its temporary
+/// directory. Files deleted between observations remain an explicit limitation.
+private nonisolated enum CombinedStreamingAudioInventory {
+    static func paths(in root: URL) throws -> Set<String> {
+        let extensions: Set<String> = ["wav", "aif", "aiff", "caf", "m4a", "aac", "mp3", "flac", "ogg", "opus", "mp4", "mov"]
+        guard let iterator = FileManager.default.enumerator(at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: []) else {
+            throw NSError(domain: "StreamingMeetingAudioInventory", code: 1)
+        }
+        var entries = 0
+        var paths: Set<String> = []
+        for case let url as URL in iterator {
+            entries += 1
+            guard entries <= 100_000 else { throw NSError(domain: "StreamingMeetingAudioInventory", code: 2) }
+            let properties = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            if properties.isSymbolicLink == true { iterator.skipDescendants(); continue }
+            if properties.isRegularFile == true, extensions.contains(url.pathExtension.lowercased()) {
+                paths.insert(url.standardizedFileURL.path)
+            }
+        }
+        return paths
+    }
+}
+
 @MainActor
 final class MobileMeetingEndToEndTests: XCTestCase {
     /// No audio, preparation, or model downloads occur without this separate gate.
@@ -448,8 +595,34 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         }
     }
 
+    /// Uses actual paced PCM and the registered streaming composition. This separate flag
+    /// implies no approval to mutate normal preferences or existing meeting history.
+    func testStreamingRussianMeetingPrivacySpeakersAndFootprint() async throws {
+        #if DEBUG
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["PICHI_MEETING_STREAMING_E2E"] == "1" else {
+            throw XCTSkip("Explicitly enable actual streaming Russian fixture inference")
+        }
+        let options = try CombinedEvaluationOptions(environment: environment)
+        guard options.privateEvaluation, !options.longEvaluation, options.repetitions == 1,
+              environment["PICHI_MEETING_DETAILED_PROFILE"] == "1" else {
+            throw NSError(domain: "StreamingMeetingRequiresPrivateSingleRunAndDetailedProfile", code: 1)
+        }
+        let revision = RuntimeBuildProvenance.sanitizedSourceRevision(environment["PICHI_COMBINED_MEETING_TESTED_REVISION"])
+        guard revision != "unavailable",
+              RuntimeBuildProvenance.sanitizedSourceRevision(Bundle.main.object(forInfoDictionaryKey: "AppSourceRevision")) == revision else {
+            throw NSError(domain: "StreamingMeetingRequiresMatchingFrozenRevision", code: 1)
+        }
+        var pinned = environment
+        pinned["PICHI_COMBINED_MEETING_ASR"] = SettingsStore.SpeechModel.gigaam.rawValue
+        try await runCombinedRussianMeeting(environment: pinned, options: options, repetition: 1, streaming: true)
+        #else
+        throw XCTSkip("Streaming private evaluation requires a Debug test host")
+        #endif
+    }
+
     private func runCombinedRussianMeeting(environment: [String: String], options: CombinedEvaluationOptions,
-                                           repetition: Int) async throws {
+                                           repetition: Int, streaming: Bool = false) async throws {
         let asrModel = try XCTUnwrap(SettingsStore.SpeechModel(rawValue:
             environment["PICHI_COMBINED_MEETING_ASR"] ?? SettingsStore.SpeechModel.whisperTiny.rawValue),
             "An explicit ASR identifier must resolve without a model fallback")
@@ -482,6 +655,17 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         try options.validatePCM(frameCount: Int64(input.length), fileBytes: audioBytes)
         let duration = Double(input.length) / 16_000
         try reference.validate(duration: duration, privateEvaluation: options.privateEvaluation)
+        let artifactValidationStarted = ProcessInfo.processInfo.systemUptime
+        let streamingArtifact = streaming ? try MeetingNemotronModelLocator(profile: .experimentalFast128FP16CPU).locate() : nil
+        let candidatePreflightValidationSeconds = streaming ? ProcessInfo.processInfo.systemUptime - artifactValidationStarted : 0
+        if streaming {
+            guard input.length == 2_880_000 else {
+                throw NSError(domain: "StreamingMeetingRequiresComplete180SecondFixture", code: 1)
+            }
+            XCTAssertEqual(duration, 180, accuracy: 0.000001)
+            // Refuse a missing or wrong graph before any preparation can download a fallback.
+            XCTAssertEqual(streamingArtifact?.profile, .experimentalFast128FP16CPU)
+        }
         let baseline = try XCTUnwrap(physicalFootprintBytes())
         let name = "CombinedMeetingProbe.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -492,6 +676,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         settings.meetingRecordingDefaults.languageCode = "ru"
         settings.meetingSaveAudio = false
         settings.meetingSpeakerLabelsEnabled = true
+        settings.meetingSpeakerProcessingMode = streaming ? .streaming : .afterRecording
         settings.meetingPIIRedactionEnabled = true
         let store = MeetingSessionStore(rootDirectory: root)
         let privacy = PichiTranscriptPrivacyService(modelStore: .init(directory: assets.appendingPathComponent("models/privacy")))
@@ -522,10 +707,24 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
         }
         defer { sampler.cancel() }
+        let containerRoot = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let existingAudioPaths = streaming ? try CombinedStreamingAudioInventory.paths(in: containerRoot) : []
+        var observedNewAudioPaths: Set<String> = []
+        var checkpointBeforeStop: [MeetingTranscriptSegment] = []
+        var firstKnownSpeakerSeconds: Double?
+        var canonicalCheckpointsObserved = 0
+        var maximumProtectedSegmentsBeforeStop = 0
+        var streamingEvidence: [String: Any] = [:]
         do {
             // The same service operation used by Settings, with pinned artifacts.
             try await services.asr.downloadModel(asrModel)
             let configuration = try await coordinator.defaultConfiguration(mode: .inRoom, title: "Combined Russian probe")
+            if streaming {
+                XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming,
+                               "The ordinary configuration service must preserve the explicit streaming preference")
+                XCTAssertTrue(configuration.speakerLabelsEnabled == true)
+                XCTAssertTrue(configuration.piiRedactionEnabled == true)
+            }
             let privacyReady = await privacy.isReady
             let preparationSeconds = ProcessInfo.processInfo.systemUptime - started
             XCTAssertTrue(privacyReady)
@@ -536,12 +735,15 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             let recording = try await coordinator.startRecording(configuration: configuration)
             XCTAssertEqual(recording.audioStorageMode, .memoryOnly)
             XCTAssertEqual(recording.piiRedactionEnabled, true)
+            if streaming { XCTAssertEqual(recording.effectiveSpeakerProcessingMode, .streaming) }
             phase = "capture"
             resourceSamples.setPhase(phase)
             let captureStart = ProcessInfo.processInfo.systemUptime
             let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: input.processingFormat, frameCapacity: 1_600))
             var offset = 0
             var firstProtectedTextSeconds: Double?
+            var nextAudioInventorySample = 15.0
+            var previousProtectedIDs: Set<MeetingTranscriptSegmentID> = []
             // Bounded file reads and real-time delivery preserve backpressure. No
             // whole-meeting PCM array or unbounded synthetic enqueue burst is used.
             while offset < Int(input.length) {
@@ -557,6 +759,28 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                         firstProtectedTextSeconds = ProcessInfo.processInfo.systemUptime - captureStart
                     }
                 }
+                if streaming, let current = coordinator.activeSession {
+                    let protectedSegments = current.transcriptSegments
+                    let currentIDs = Set(protectedSegments.map(\.id))
+                    if currentIDs != previousProtectedIDs {
+                        canonicalCheckpointsObserved += 1
+                        previousProtectedIDs = currentIDs
+                    }
+                    maximumProtectedSegmentsBeforeStop = max(maximumProtectedSegmentsBeforeStop, protectedSegments.count)
+                    XCTAssertEqual(currentIDs.count, protectedSegments.count, "Canonical checkpoints must never contain duplicate word identities")
+                    XCTAssertTrue(protectedSegments.allSatisfy { $0.originalText == nil })
+                    if firstKnownSpeakerSeconds == nil,
+                       protectedSegments.contains(where: { segment in
+                           segment.speakerID.map { id in current.speakers.contains { $0.id == id } } == true
+                       }) {
+                        firstKnownSpeakerSeconds = ProcessInfo.processInfo.systemUptime - captureStart
+                    }
+                    let sourceSeconds = Double(offset) / 16_000
+                    if sourceSeconds >= nextAudioInventorySample {
+                        observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
+                        nextAudioInventorySample += 15
+                    }
+                }
                 if let progress {
                     let live = coordinator.liveTranscript
                     progress.update(phase: phase, deliveredFrames: offset,
@@ -565,6 +789,14 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 XCTAssertTrue(coordinator.isRecording, "Capture must remain active for the complete fixture")
                 let remaining = captureStart + Double(offset) / 16_000 - ProcessInfo.processInfo.systemUptime
                 if remaining > 0 { try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000)) }
+            }
+            if streaming {
+                checkpointBeforeStop = coordinator.activeSession?.transcriptSegments ?? []
+                XCTAssertGreaterThan(canonicalCheckpointsObserved, 0, "Streaming must publish canonical protected checkpoints before Stop")
+                XCTAssertFalse(checkpointBeforeStop.isEmpty, "Live partial text alone is not evidence of streaming canonical output")
+                XCTAssertNotNil(firstKnownSpeakerSeconds, "At least one actual voice must label protected canonical words before Stop")
+                observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
+                XCTAssertTrue(observedNewAudioPaths.isEmpty, "Memory-only processing must not create persistent audio/media files in the app container")
             }
             phase = "postStop"
             resourceSamples.setPhase(phase)
@@ -585,9 +817,16 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             try await Task.sleep(nanoseconds: 300_000_000)
             XCTAssertEqual(completed.state, .completed)
             let diarizationModels = completed.processingAttempts.compactMap(\.diarizationModel)
-            let expectedDiarization = "Nemotron3-fast32-split-w8a8@82eb4c1e0ab67e1c7d8de5092aa42a8f74cbd7b8;model=25a90f97f254428d4b30374b76af9c74fdee8327;weight=99e2ae43ac6a513abf99951b35a75fb6bc51d2287c3c1af48a9657d917e57aed;config=32-4-40-264"
+            let expectedProfile: MeetingNemotronModelProfile = streaming ? .experimentalFast128FP16CPU : .fast32SplitW8A8
+            let expectedDiarization = expectedProfile.implementationFingerprint
             XCTAssertFalse(diarizationModels.isEmpty, "The completed attempt must record its actual frozen diarizer lineage")
-            XCTAssertTrue(diarizationModels.allSatisfy { $0.hasPrefix(expectedDiarization) }, "Combined evidence requires fast32 W8A8, including its pinned runtime and weight identity")
+            if streaming {
+                XCTAssertTrue(diarizationModels.allSatisfy { $0 == expectedDiarization },
+                              "Streaming evidence requires the exact pinned graph and CPU compute policy without another model lineage")
+            } else {
+                XCTAssertTrue(diarizationModels.allSatisfy { $0.hasPrefix(expectedDiarization) },
+                              "Combined evidence requires fast32 W8A8, including its pinned runtime and weight identity")
+            }
             XCTAssertTrue(completed.processingAttempts.contains { $0.asrModel == asrModel.rawValue })
             XCTAssertTrue(completed.processingAttempts.allSatisfy { $0.asrModel == asrModel.rawValue },
                           "Every attempt must retain the selected ASR identity")
@@ -596,6 +835,22 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                           "Actual ASR must produce Russian text")
             XCTAssertFalse(completed.hasFinalizedAudio)
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
+            if streaming {
+                streamingEvidence = try await streamingEvaluation(completed: completed,
+                    checkpoint: checkpointBeforeStop, sourceFrames: Int(input.length), started: started,
+                    captureStarted: captureStart, stopStarted: stopStart, completedAt: started + completedWallSeconds,
+                    firstKnownSpeakerSeconds: firstKnownSpeakerSeconds,
+                    canonicalCheckpointsObserved: canonicalCheckpointsObserved,
+                    maximumProtectedSegmentsBeforeStop: maximumProtectedSegmentsBeforeStop)
+                observedNewAudioPaths.formUnion(try CombinedStreamingAudioInventory.paths(in: containerRoot).subtracting(existingAudioPaths))
+                XCTAssertTrue(observedNewAudioPaths.isEmpty)
+                streamingEvidence["newPersistentAudioOrMediaPathsObserved"] = observedNewAudioPaths.count
+                streamingEvidence["audioInventoryCadenceSeconds"] = 15
+                streamingEvidence["audioInventoryScope"] = "App container including temporary directory; before preparation, paced input and completion; transient create/delete between observations not proven absent"
+                let currentArtifact = try MeetingNemotronModelLocator(profile: expectedProfile).locate()
+                XCTAssertEqual(currentArtifact.profile, expectedProfile)
+                XCTAssertTrue(currentArtifact == streamingArtifact, "The installed pinned artifact must remain unchanged throughout the attempt")
+            }
             let protectedText = completed.transcriptSegments.map(\.text).joined(separator: " ")
             let matchedAnchors = reference.textAnchors.filter { protectedText.range(of: $0, options: [.caseInsensitive]) != nil }.count
             let agreementUnavailableReason = options.attributionAgreementUnavailableReason(referenceContainsOverlap: reference.containsOverlap)
@@ -656,6 +911,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "privateEvaluationEnabled": options.privateEvaluation,
                 "longEvaluationEnabled": options.longEvaluation,
                 "detailedProfilingEnabled": detailedProfiling,
+                "streamingEvaluationEnabled": streaming,
+                "candidateArtifactValidatedBeforeMeasurement": streaming,
                 "computeUnitsDiagnosticOverride": detailedProfiling && environment["PICHI_MEETING_PROFILE_COMPUTE_UNITS"] == "cpuOnly" ? "cpuOnly" : "automatic",
                 "legacySimulatorReviewEnabled": Self.isSimulator && environment["PICHI_COMBINED_MEETING_EXPORT_PRIVATE_REVIEW"] == "1"
             ]
@@ -665,7 +922,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             }
             XCTAssertEqual(resources.missing, 0)
             XCTAssertEqual(resources.omitted, 0, "A bounded diagnostic buffer must cover the entire completed attempt")
-            let report: [String: Any] = [
+            var report: [String: Any] = [
                 "schema": 2, "physicalDevice": !Self.isSimulator, "referenceProvenance": reference.provenance,
                 "strongReferenceQualityAssertionsApplied": assertsReferenceQuality,
                 "audioSHA256": audioDigest, "referenceSHA256": referenceDigest,
@@ -673,6 +930,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "asr": asrModel.rawValue,
                 "privacyModel": PichiTranscriptPrivacyModelStore.descriptor.id,
                 "diarizationModels": diarizationModels,
+                "expectedDiarizationFingerprint": expectedDiarization,
                 "audioSeconds": duration, "postStopSeconds": stopSeconds,
                 "inputFrameCount": input.length,
                 "detailedProfilingEnabled": detailedProfiling,
@@ -681,7 +939,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "audioByteLimit": options.maximumAudioBytes,
                 "protectedEvidenceByteLimit": options.maximumProtectedEvidenceBytes,
                 "totalWallSeconds": totalWallSeconds, "completedWallSeconds": completedWallSeconds,
-                "wallClockOrigin": "service composition ready, before model preparation; excludes fixture hashing",
+                "wallClockOrigin": "service composition ready, before model preparation; excludes fixture hashing and streaming candidate preflight artifact validation",
+                "candidatePreflightArtifactValidationSecondsExcluded": candidatePreflightValidationSeconds,
                 "totalWallIncludesDiagnosticHolds": true,
                 "preparationSeconds": preparationSeconds, "captureWallSeconds": stopStart - captureStart,
                 "postStopToAudioRatio": stopSeconds / duration,
@@ -725,8 +984,9 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "unscoredSensitiveCases": reference.sensitiveAliases.count - observations.observed.count,
                 "limitations": "Sampled process footprint, not system-wide peak. Transcript attribution agreement is not DER. PCM injection excludes microphone, background and power validation. Idle ASR caches may remain resident."
             ]
+            if streaming { report["streaming"] = streamingEvidence }
             let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
-            attachment.name = "Combined-Russian-meeting-metadata-only" + (options.repetitions > 1 ? "-run-\(repetition)" : "")
+            attachment.name = (streaming ? "Streaming-Russian-meeting-metadata-only" : "Combined-Russian-meeting-metadata-only") + (options.repetitions > 1 ? "-run-\(repetition)" : "")
             attachment.lifetime = .keepAlways
             add(attachment)
             // Physical private evaluation is separately gated. Legacy visual review
@@ -750,12 +1010,13 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     "limitations": "Post-privacy product values only; metadata may be absent or privacy-coarsened. No invented word timings, audio, embeddings, contact identities or source-separated overlap words. WER/CER and overlap scoring require offline reference."
                 ]
                 visualReview.merge(try CombinedProtectedEvaluation.values(segments: completed.transcriptSegments, speakers: completed.speakers)) { _, new in new }
+                if streaming { visualReview["streaming"] = streamingEvidence }
                 let reviewData = try JSONSerialization.data(withJSONObject: visualReview, options: [.prettyPrinted, .sortedKeys])
                 guard reviewData.count <= options.maximumProtectedEvidenceBytes else {
                     throw NSError(domain: "CombinedMeetingProtectedEvidenceSize", code: 2)
                 }
                 let review = XCTAttachment(data: reviewData, uniformTypeIdentifier: "public.json")
-                review.name = (options.privateEvaluation ? "Combined-Russian-meeting-private-protected-evaluation" : "Combined-Russian-meeting-private-visual-review")
+                review.name = streaming ? "Streaming-Russian-meeting-private-protected-evaluation" : (options.privateEvaluation ? "Combined-Russian-meeting-private-protected-evaluation" : "Combined-Russian-meeting-private-visual-review")
                     + (options.repetitions > 1 ? "-run-\(repetition)" : "")
                 review.lifetime = .keepAlways
                 add(review)
@@ -774,6 +1035,191 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             add(attachment)
             throw error
         }
+    }
+
+    private func streamingEvaluation(completed: MeetingSession, checkpoint: [MeetingTranscriptSegment],
+        sourceFrames: Int, started: Double, captureStarted: Double, stopStarted: Double, completedAt: Double,
+        firstKnownSpeakerSeconds: Double?, canonicalCheckpointsObserved: Int,
+        maximumProtectedSegmentsBeforeStop: Int) async throws -> [String: Any] {
+        let segments = completed.transcriptSegments
+        let attempts = Set(completed.processingAttempts.map(\.id))
+        XCTAssertEqual(completed.effectiveSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(Set(segments.map(\.id)).count, segments.count, "Final canonical word identities must be unique")
+        let nativeIDs = segments.compactMap(\.nativeUnitID)
+        XCTAssertEqual(Set(nativeIDs).count, nativeIDs.count, "Native ASR units must not be readmitted after streaming finish")
+        let words = segments.filter { $0.nativePrecision == .word }
+        XCTAssertFalse(words.isEmpty, "Streaming attribution must retain actual native word boundaries")
+        XCTAssertTrue(segments.allSatisfy { segment in
+            guard let timing = segment.nativeTiming else { return true }
+            return timing.start.isFinite && timing.end.isFinite && timing.start >= 0
+                && timing.end > timing.start && timing.end <= Double(sourceFrames) / 16_000 + 0.001
+        }, "Native envelopes must remain finite and inside the complete physical source interval")
+        let byID = Dictionary(segments.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        XCTAssertTrue(checkpoint.allSatisfy { earlier in
+            guard let final = byID[earlier.id] else { return false }
+            return earlier.text == final.text && earlier.nativeUnitID == final.nativeUnitID
+                && earlier.nativeTiming == final.nativeTiming && earlier.start == final.start && earlier.end == final.end
+                && earlier.nativePrecision == final.nativePrecision && earlier.status == final.status
+                && earlier.completeness == final.completeness && final.originalText == nil
+        }, "Speaker revisions must preserve previously protected canonical text, identities and native timing")
+        let known = segments.filter { segment in
+            segment.speakerID.map { id in completed.speakers.contains { $0.id == id } } == true
+        }.count
+        XCTAssertGreaterThan(known, 0)
+        XCTAssertTrue(completed.audioTracks.allSatisfy { $0.chunks.isEmpty }, "Strict streaming must not produce audio chunks")
+
+        var lines: [String] = []
+        var rows: [CombinedStreamingDiagnostics.Row] = []
+        let barrierID = UUID().uuidString
+        DebugLogger.shared.info("evaluationID=\(barrierID)", source: "MeetingStreamingEvaluation")
+        var sawLogBarrier = false
+        // Both loggers enqueue serially. Seeing this test-only marker proves all earlier
+        // joined inference rows reached disk without changing either queue owner.
+        for _ in 0..<20 {
+            lines = try CombinedStreamingDiagnostics.lines()
+            rows = lines.compactMap { CombinedStreamingDiagnostics.row($0, attempts: attempts) }
+            sawLogBarrier = lines.contains { $0.contains("[MeetingStreamingEvaluation]")
+                && CombinedStreamingDiagnostics.fields($0)["evaluationID"] == barrierID }
+            if sawLogBarrier { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(sawLogBarrier, "The test must observe the asynchronous diagnostic write barrier before interpreting evidence")
+        let selectedLines = lines.filter { line in
+            guard line.contains("[MeetingStreamingPCM]"),
+                  let rawID = CombinedStreamingDiagnostics.fields(line)["attemptID"],
+                  let id = UUID(uuidString: rawID) else { return false }
+            return attempts.contains(id)
+        }
+        XCTAssertFalse(rows.isEmpty, "Explicit streaming cursor diagnostics must cover the actual run")
+        XCTAssertEqual(rows.count, selectedLines.count, "Malformed cursor rows from this exact attempt must fail rather than disappear from evidence")
+        XCTAssertLessThanOrEqual(rows.first?.accepted ?? Int.max, 320_000,
+                                 "The bounded log must retain the beginning of streaming, not only its tail after rotation")
+        XCTAssertLessThanOrEqual(rows.count, 10_000, "Diagnostic evidence must remain bounded")
+        let final = try XCTUnwrap(rows.last(where: \.isStreamingFinish), "Streaming finish must explicitly attest no recording replay")
+        XCTAssertEqual(final.accepted, sourceFrames, "Every delivered source sample must enter the continuous diarizer exactly once")
+        XCTAssertEqual(final.processed, sourceFrames, "EOF must score the complete physical prefix, clipping STFT padding")
+        XCTAssertEqual(final.asrStable, sourceFrames, "EOF must finalize the source prefix including silence")
+        XCTAssertEqual(final.committed, sourceFrames, "Privacy and speaker tail must be committed through the physical EOF")
+        XCTAssertEqual(final.pendingWords, 0)
+        for (earlier, later) in zip(rows, rows.dropFirst()) where earlier.attemptID == later.attemptID {
+            XCTAssertLessThanOrEqual(earlier.accepted, later.accepted)
+            XCTAssertLessThanOrEqual(earlier.processed, later.processed)
+            XCTAssertLessThanOrEqual(earlier.asrStable, later.asrStable)
+            XCTAssertLessThanOrEqual(earlier.committed, later.committed)
+        }
+        let startedMS = Int64(started * 1_000)
+        let stopMS = Int64(stopStarted * 1_000)
+        let completedMS = Int64(completedAt * 1_000)
+        var replaySpanCount = 0
+        for phase in ["recording.diarization", "recording.diarization_request", "audio.replay_read"] {
+            let count = CombinedStreamingDiagnostics.completedPhaseCount(phase, in: lines,
+                from: startedMS, through: completedMS)
+            replaySpanCount += count
+            XCTAssertEqual(count, 0, "Streaming must finish its continuous session without whole-recording replay")
+        }
+        for phase in ["asr.infer", "privacy.redact"] {
+            XCTAssertGreaterThan(CombinedStreamingDiagnostics.completedPhaseCount(phase, in: lines,
+                from: startedMS, through: completedMS), 0, "Streaming evidence must include actual native ASR and privacy duration spans")
+        }
+        let transport = lines.compactMap { CombinedStreamingDiagnostics.transportRow($0, attempts: attempts) }
+        XCTAssertFalse(transport.isEmpty, "The actual bounded transport must attest its queued and in-flight PCM budget")
+        var transported = 0
+        for window in transport {
+            XCTAssertEqual(window.offsetSeconds * 16_000, Double(transported), accuracy: 1,
+                           "Completed PCM windows must be contiguous and admitted exactly once")
+            transported += window.frames
+        }
+        XCTAssertEqual(transported, sourceFrames, "Transport diagnostics must cover the complete physical source")
+        let beforeStop = rows.filter { $0.uptimeMS < stopMS }
+        XCTAssertFalse(beforeStop.isEmpty, "Diarization must execute while input is still paced, not begin after Stop")
+        XCTAssertTrue(beforeStop.contains { $0.processed > 0 && $0.asrStable > 0 && $0.committed > 0 })
+        let afterStop = rows.filter { $0.uptimeMS >= stopMS }
+        let throughStop = beforeStop.last
+        let asrLag = rows.map { $0.accepted - $0.asrStable }
+        let diarizationLag = rows.map { $0.accepted - $0.processed }
+        let committedLag = rows.map { $0.accepted - $0.committed }
+        return [
+            "speakerProcessingMode": "streaming", "registeredProfile": MeetingNemotronModelProfile.experimentalFast128FP16CPU.rawValue,
+            "sourceDelivery": "16 kHz mono PCM, 1600-frame blocks paced to monotonic real time",
+            "sourceFrames": sourceFrames, "canonicalCheckpointsObservedBeforeStop": canonicalCheckpointsObserved,
+            "protectedCanonicalSegmentsBeforeStop": checkpoint.count,
+            "maximumProtectedCanonicalSegmentsBeforeStop": maximumProtectedSegmentsBeforeStop,
+            "firstKnownSpeakerSeconds": firstKnownSpeakerSeconds as Any? ?? NSNull(),
+            "firstKnownSpeakerClock": "captureStart; canonical protected session state polled after paced blocks",
+            "finalCanonicalSegmentCount": segments.count, "nativeWordCount": words.count,
+            "uniqueNativeUnitCount": Set(nativeIDs).count, "knownSpeakerSegmentCount": known,
+            "unknownSpeakerSegmentCount": segments.filter { $0.speakerID == nil }.count,
+            "overlapSegmentCount": segments.filter { $0.overlap != .none }.count,
+            "nativeTimingSegmentCount": segments.filter { $0.nativeTiming != nil }.count,
+            "protectedCheckpointWordIdentityAndTimingPreserved": checkpoint.allSatisfy { byID[$0.id]?.nativeTiming == $0.nativeTiming && byID[$0.id]?.text == $0.text },
+            "streamingRows": rows.map(\.json), "rowsBeforeStop": beforeStop.count, "rowsAfterStop": afterStop.count,
+            "acceptedThroughSampleAtLastPreStopObservation": throughStop?.accepted as Any? ?? NSNull(),
+            "processedThroughSampleAtLastPreStopObservation": throughStop?.processed as Any? ?? NSNull(),
+            "asrStableThroughSampleAtLastPreStopObservation": throughStop?.asrStable as Any? ?? NSNull(),
+            "committedThroughSampleAtLastPreStopObservation": throughStop?.committed as Any? ?? NSNull(),
+            "maximumASRStableLagSeconds": Double(asrLag.max() ?? 0) / 16_000,
+            "p95ASRStableLagSeconds": CombinedStreamingDiagnostics.percentile95(asrLag) as Any? ?? NSNull(),
+            "maximumDiarizationLagSeconds": Double(diarizationLag.max() ?? 0) / 16_000,
+            "p95DiarizationLagSeconds": CombinedStreamingDiagnostics.percentile95(diarizationLag) as Any? ?? NSNull(),
+            "maximumCommittedLagSeconds": Double(committedLag.max() ?? 0) / 16_000,
+            "p95CommittedLagSeconds": CombinedStreamingDiagnostics.percentile95(committedLag) as Any? ?? NSNull(),
+            "cursorLagScope": "Accepted source prefix minus explicit ASR stability, scored diarization and protected commit cursors; event-weighted percentiles; excludes audio still queued before acceptance",
+            "pendingWordPeak": rows.map(\.pendingWords).max() ?? 0,
+            "transportWindows": transport.map(\.json),
+            "transportedFrameCount": transported,
+            "peakQueuedAndInFlightPCMSeconds": Double(transport.map(\.peakPending).max() ?? 0) / 16_000,
+            "transportBudgetSeconds": Double(transport.map(\.budget).max() ?? 0) / 16_000,
+            "transportTimingScope": "Growing window wall duration includes waiting for future capture and checkpoint publication; it is not ASR inference duration",
+            "recordingReplayObserved": replaySpanCount > 0,
+            "recordingReplaySpanCount": replaySpanCount,
+            "phaseTimings": CombinedStreamingDiagnostics.phaseTotals(lines, from: startedMS, through: completedMS),
+            "captureStartedUptimeMs": Int64(captureStarted * 1_000), "stopStartedUptimeMs": stopMS,
+            "completedUptimeMs": completedMS,
+            "limitations": "Anonymous session voice IDs are not verified real identities. Known-label coverage is not diarization accuracy. Reference WER and speaker quality require offline scoring. No isolated engine utilization or background execution claim."
+        ]
+    }
+
+    func testStreamingDiagnosticCursorParserRejectsForeignAndImpossiblePrefixes() throws {
+        let id = UUID(), other = UUID()
+        let prefix = "[00:00:00.000] [INFO] [MeetingStreamingPCM] attemptID=\(id) phase=progress uptimeMs=100"
+        let fields = "acceptedThroughSample=16000 processedThroughSample=12000 asrStableThroughSample=8000 committedThroughSample=4000 pendingWords=3 knownCount=1"
+        let row = try XCTUnwrap(CombinedStreamingDiagnostics.row(prefix + " " + fields, attempts: [id]))
+        XCTAssertEqual(row.accepted - row.asrStable, 8_000)
+        XCTAssertFalse(row.isStreamingFinish)
+        XCTAssertNil(CombinedStreamingDiagnostics.row(prefix + " " + fields, attempts: [other]))
+        XCTAssertNil(CombinedStreamingDiagnostics.row((prefix + " " + fields).replacingOccurrences(of: "processedThroughSample=12000", with: "processedThroughSample=16001"), attempts: [id]))
+        XCTAssertNil(CombinedStreamingDiagnostics.row((prefix + " " + fields).replacingOccurrences(of: "committedThroughSample=4000", with: "committedThroughSample=9000"), attempts: [id]))
+        XCTAssertNil(CombinedStreamingDiagnostics.row((prefix + " " + fields).replacingOccurrences(of: "asrStableThroughSample=8000", with: "asrStableThroughSample=-1"), attempts: [id]))
+        let finish = "[MeetingStreamingPCM] attemptID=\(id) phase=finish uptimeMs=101 acceptedThroughSample=16000 processedThroughSample=16000 asrStableThroughSample=16000 committedThroughSample=16000 pendingWords=0 knownCount=1 mode=streaming replay=false"
+        XCTAssertTrue(try XCTUnwrap(CombinedStreamingDiagnostics.row(finish, attempts: [id])).isStreamingFinish)
+        XCTAssertFalse(try XCTUnwrap(CombinedStreamingDiagnostics.row(finish.replacingOccurrences(of: "replay=false", with: "replay=true"), attempts: [id])).isStreamingFinish)
+        XCTAssertEqual(CombinedStreamingDiagnostics.percentile95([16_000, 32_000, 48_000]), 3)
+        XCTAssertNil(CombinedStreamingDiagnostics.percentile95([]))
+        let transport = "[MeetingMemoryAudio] pipelineID=\(id) window offset=20.0 frames=320000 windowMs=20010 checkpointMs=4 pendingFrames=32000 peakPendingFrames=352000 budgetFrames=960000"
+        XCTAssertEqual(try XCTUnwrap(CombinedStreamingDiagnostics.transportRow(transport, attempts: [id])).peakPending, 352_000)
+        XCTAssertNil(CombinedStreamingDiagnostics.transportRow(transport, attempts: [other]))
+        XCTAssertNil(CombinedStreamingDiagnostics.transportRow(transport.replacingOccurrences(of: "peakPendingFrames=352000", with: "peakPendingFrames=960001"), attempts: [id]))
+
+        XCTAssertEqual(CombinedStreamingDiagnostics.completedPhaseCount("audio.replay_read", in: [
+            "[MeetingPCMRuntime] phase=audio.replay_read event=end uptimeMs=102 elapsedMs=1",
+            "[MeetingPCMRuntime] phase=audio.replay_read event=end uptimeMs=999 elapsedMs=1",
+            "[MeetingPCMRuntime] phase=audio.replay_read event=begin uptimeMs=102"
+        ], from: 100, through: 200), 1)
+    }
+
+    func testStreamingAudioInventoryFindsNewNestedMediaWithoutReadingPayloads() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("StreamingInventory.\(UUID())")
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: root.appendingPathComponent("existing.wav"))
+        let before = try CombinedStreamingAudioInventory.paths(in: root)
+        XCTAssertEqual(before.count, 1)
+        try Data().write(to: nested.appendingPathComponent("private.json"))
+        try Data().write(to: nested.appendingPathComponent("accidental.CAF"))
+        let added = try CombinedStreamingAudioInventory.paths(in: root).subtracting(before)
+        XCTAssertEqual(added.count, 1)
+        XCTAssertTrue(added.allSatisfy { $0.hasSuffix("accidental.CAF") })
     }
 
     private static var isSimulator: Bool {
