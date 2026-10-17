@@ -47,6 +47,13 @@
       "isLocalUser": false,
       "trackKind": "microphone",
       "identityCandidates": []
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170099",
+      "displayName": "Борис",
+      "isLocalUser": false,
+      "trackKind": "microphone",
+      "identityCandidates": []
     }
   ],
   "transcriptSegments": [
@@ -105,6 +112,43 @@
       "completeness": "complete",
       "attributionState": "assigned",
       "speakerID": "00000000-0000-0000-0000-000000000065"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170004",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 4000,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 4400,
+        "timescale": 1000
+      },
+      "text": "Нет, это",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "unassigned"
+    },
+    {
+      "id": "00000000-0000-0000-0000-202610170005",
+      "sourceTrackID": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "start": {
+        "value": 4600,
+        "timescale": 1000
+      },
+      "end": {
+        "value": 5000,
+        "timescale": 1000
+      },
+      "text": "ответ.",
+      "revision": 0,
+      "status": "final",
+      "overlap": "none",
+      "completeness": "complete",
+      "attributionState": "assigned",
+      "speakerID": "00000000-0000-0000-0000-202610170099"
     }
   ],
   "retention": {},

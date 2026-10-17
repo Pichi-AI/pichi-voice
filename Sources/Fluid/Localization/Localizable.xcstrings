@@ -52262,6 +52262,22 @@
         }
       }
     },
+    "Several speakers": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Several speakers"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Несколько говорящих"
+          }
+        }
+      }
+    },
     "Several speakers: %@": {
       "localizations": {
         "en": {

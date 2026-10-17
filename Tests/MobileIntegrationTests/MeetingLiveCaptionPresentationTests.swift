@@ -898,6 +898,11 @@ private final class CaptionNativeHost {
 }
 
 final class MeetingSavedTranscriptPresentationTests: XCTestCase {
+    func testHistoricalMultipleVoicesAreNotPresentedAsOneUnknownParticipant() {
+        for (language, expected) in [(PichiInterfaceLanguage.english, "Several speakers"), (.russian, "Несколько говорящих")] {
+            XCTAssertEqual(MeetingTranscriptExporter.speakerLabel(for: .candidates([], relation: .several), language: language), expected)
+        }
+    }
     private func session() -> MeetingSession {
         MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic transcript",
             microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic")),

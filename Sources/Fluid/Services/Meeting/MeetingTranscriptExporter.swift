@@ -78,6 +78,9 @@ nonisolated enum MeetingTranscriptExporter {
             return PichiLocalization.format("%@ (interrupting; background: %@)", language: language, bundle: bundle,
                                             arguments: [name(value), names(background)])
         case let .candidates(values, relation):
+            if values.isEmpty {
+                return PichiLocalization.text("Several speakers", language: language, bundle: bundle)
+            }
             let template: String
             switch relation {
             case .simultaneous: template = "Simultaneous speech: %@"
@@ -128,7 +131,8 @@ nonisolated enum MeetingTranscriptExporter {
         }
         switch state {
         case .assigned: return name(segment.speakerID).map { .identified($0) } ?? .unknown
-        case .overlappingSpeakers, .unassigned, .timingUncertain: return .unknown
+        case .overlappingSpeakers: return .candidates([], relation: .several)
+        case .unassigned, .timingUncertain: return .unknown
         }
     }
 
@@ -198,6 +202,11 @@ nonisolated enum MeetingTranscriptExporter {
         speakerNames: [SessionSpeakerID: String], language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
+        if paragraph.firstSegment.speakerID == nil,
+           paragraph.projectedSpeakerID == nil,
+           paragraph.segments.contains(where: { $0.attributionState == .overlappingSpeakers }) {
+            return self.speakerLabel(for: .candidates([], relation: .several), language: language, bundle: bundle)
+        }
         if let projected = paragraph.projectedSpeakerID {
             let resolved = self.resolvedAliasID(projected, in: session)
             if let speaker = session.activeSpeakers.first(where: { $0.id == resolved }),
