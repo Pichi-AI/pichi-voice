@@ -636,7 +636,7 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         return (plan, manifest, spans)
     }
 
-    func testRetainedContinuityFillsProductGapWithoutChangingRawSidecar() throws {
+    func testRetainedUnsupportedAmbiguityDoesNotRunLegacyProductContinuity() throws {
         let (plan, manifest, spans) = try self.twoEpochMicrophone()
         let span = spans[0]
         let a = MeetingBackendSpeakerToken(analysisEpochID: span.analysisEpochID, label: "slot-0")
@@ -651,8 +651,15 @@ final class MeetingTranscriptAssemblerTests: XCTestCase {
         let result = try MeetingTranscriptAssembler().assemble(.init(plan: plan, manifest: manifest,
             evidence: self.evidence(plan: plan, units: units), coverageReceipts: self.receipts(for: manifest),
             echoVerdicts: Dictionary(uniqueKeysWithValues: units.map { ($0.id, .notEcho) })))
-        XCTAssertEqual(result.segments[1].speakerID, result.segments[2].speakerID)
-        XCTAssertEqual(result.segments[1].speakerAttributionInference?.rule, .incomingSpeaker)
+        XCTAssertNil(result.segments[1].speakerID,
+                     "Raw ambiguity without acoustic supports must not be converted into a guessed incoming voice")
+        XCTAssertNil(result.segments[1].speakerAttributionInference)
+        XCTAssertEqual(result.segments[1].nativeUnitID, "unknown")
+        XCTAssertEqual(result.segments[1].nativeSpeakerAssignment, .ambiguous([a, b]))
+        let decision = try XCTUnwrap(result.sidecar.speakerAttributionDecisions.first { $0.unitID == "unknown" })
+        XCTAssertEqual(decision.rawAssignment, .ambiguous([a, b]))
+        XCTAssertTrue(decision.cueUnitIDs.isEmpty)
+        XCTAssertNil(decision.selectedToken)
         XCTAssertEqual(result.sidecar.units.first { $0.id == "unknown" }?.speaker, .ambiguous([a, b]))
         XCTAssertEqual(result.sidecar.dispositions.first { $0.unitID == "unknown" }?.disposition, .ambiguousUnassigned)
         XCTAssertNoThrow(try result.sidecar.validated())

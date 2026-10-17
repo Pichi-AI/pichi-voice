@@ -547,17 +547,17 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         let first = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-3")
         let second = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
         var original: [MeetingTranscriptSegment] = []
-        for (index, start) in [0.0, 10.0, 28_790.0, 28_795.0].enumerated() {
+        for (index, start) in [0.0, 10.0, 28_780.0, 28_790.0].enumerated() {
             original.append(.init(id: UUID(), start: .init(value: Int64(start * 1_000), timescale: 1_000),
-                end: .init(value: Int64((start + 1) * 1_000), timescale: 1_000), sourceTrackID: track,
+                end: .init(value: Int64((start + 6) * 1_000), timescale: 1_000), sourceTrackID: track,
                 speakerID: nil, text: "Фраза \(index) <PERSON>", originalText: "Protected synthetic original",
                 revision: 2, status: .final, overlap: .none, completeness: .incompleteTrack,
                 isLikelyEcho: false, attributionState: .unassigned))
         }
         let input = MeetingPCMTranscriptBatch(segments: original, isComplete: false)
         let activity: [MeetingBackendSpeakerActivity] = [
-            .init(token: first, start: 0, end: 1), .init(token: second, start: 10, end: 11),
-            .init(token: first, start: 28_790, end: 28_791), .init(token: second, start: 28_795, end: 28_796)]
+            .init(token: first, start: 0, end: 6), .init(token: second, start: 10, end: 16),
+            .init(token: first, start: 28_780, end: 28_786), .init(token: second, start: 28_790, end: 28_796)]
         let output = try MeetingPCMRecordingAttribution.assemble(transcript: input, activity: activity,
             epoch: epoch, attemptID: attempt, duration: 28_800, speakerNameFormat: "Speaker %lld")
         XCTAssertFalse(output.isComplete)
@@ -569,10 +569,14 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
             var expected = before
             expected.speakerID = after.speakerID
             expected.attributionState = .assigned
+            expected.nativePrecision = .utterance
+            expected.nativeUnitID = "post-stop:\(before.id)"
+            expected.nativeSpeakerAssignment = .assigned(before.start.seconds == 0 || before.start.seconds == 28_780 ? first : second)
+            expected.nativeTiming = .init(start: before.start.seconds, end: before.end.seconds)
             XCTAssertEqual(expected, after, "Only speaker attribution may change after privacy publication")
         }
         let overlapped = try MeetingPCMRecordingAttribution.assemble(transcript: input,
-            activity: activity + [.init(token: second, start: 0, end: 1)], epoch: epoch,
+            activity: activity + [.init(token: second, start: 0, end: 6)], epoch: epoch,
             attemptID: attempt, duration: 28_800, speakerNameFormat: "Speaker %lld")
         XCTAssertNil(overlapped.segments[0].speakerID)
         XCTAssertEqual(overlapped.segments[0].attributionState, .overlappingSpeakers)
@@ -590,7 +594,8 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
                 start: .init(value: Int64((range.0 * 1_000).rounded()), timescale: 1_000),
                 end: .init(value: Int64((range.1 * 1_000).rounded()), timescale: 1_000),
                 sourceTrackID: track, speakerID: nil, text: "protected-\(index)", originalText: "Synthetic <PERSON>",
-                revision: 2, status: .final, overlap: .none, completeness: .complete, attributionState: .unassigned)
+                revision: 2, status: .final, overlap: .none, completeness: .complete, attributionState: .unassigned,
+                nativePrecision: .word, nativeUnitID: "native-\(index)")
         }
         let result = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: original),
             activity: [.init(token: a, start: 0, end: 6), .init(token: a, start: 6.3, end: 12),
@@ -603,12 +608,12 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         XCTAssertEqual(result.segments[1].speakerID, result.segments[0].speakerID)
         XCTAssertEqual(result.segments[3].speakerID, result.segments[4].speakerID)
         XCTAssertNotEqual(result.segments[3].speakerID, result.segments[2].speakerID)
-        XCTAssertEqual(result.segments[1].speakerAttributionInference?.rule, .surroundingSpeaker)
-        XCTAssertEqual(result.segments[3].speakerAttributionInference?.rule, .incomingSpeaker)
-        XCTAssertEqual(result.segments[1].speakerAttributionInference?.precedingSegmentID, original[0].id)
-        XCTAssertEqual(result.segments[1].speakerAttributionInference?.followingSegmentID, original[2].id)
-        XCTAssertEqual(result.segments[3].speakerAttributionInference?.precedingSegmentID, original[2].id)
-        XCTAssertEqual(result.segments[3].speakerAttributionInference?.followingSegmentID, original[4].id)
+        XCTAssertEqual(result.segments[1].speakerAttribution?.rule, .neighborAgreement)
+        XCTAssertEqual(result.segments[3].speakerAttribution?.rule, .incomingSpeaker)
+        XCTAssertEqual(result.segments[1].nativeUnitID, "native-1")
+        XCTAssertEqual(result.segments[3].nativeSpeakerAssignment, .unassigned)
+        XCTAssertTrue(result.segments.allSatisfy { $0.speakerAttributionInference == nil })
+        XCTAssertEqual(result.segments.map(\.nativePrecision), Array(repeating: .word, count: original.count))
         var session = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic continuity export",
             microphone: .init(captureDeviceID: "fixture", displayName: "Fixture")),
             timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1))
@@ -617,9 +622,52 @@ final class MobilePCMRuntimeCoverageTests: XCTestCase {
         let data = try MeetingTranscriptExporter.json(for: session)
         let document = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let exported = try XCTUnwrap(document["segments"] as? [[String: Any]])
-        let inference = try XCTUnwrap(exported[3]["speakerAttributionInference"] as? [String: Any])
+        let inference = try XCTUnwrap(exported[3]["speakerAttribution"] as? [String: Any])
         XCTAssertEqual(inference["rule"] as? String, "incomingSpeaker")
-        XCTAssertEqual(inference["followingSegmentID"] as? String, original[4].id.uuidString)
+        XCTAssertEqual(inference["unitID"] as? String, "native-3")
+        XCTAssertNil(exported[3]["speakerAttributionInference"])
+    }
+
+    func testPostStopUnsafePublicationCannotProvideContextOrReceiveGuesses() throws {
+        let track = UUID(), epoch = MeetingAnalysisEpochID(trackID: track, ordinal: 0), attempt = UUID()
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-0")
+        let ranges: [(Double, Double)] = [(0, 6), (6, 6.2), (6.2, 12.2),
+                                         (20, 26), (26, 26.2), (26.2, 32.2)]
+        let activity: [MeetingBackendSpeakerActivity] = [
+            .init(token: token, start: 0, end: 6), .init(token: token, start: 6.2, end: 12.2),
+            .init(token: token, start: 20, end: 26), .init(token: token, start: 26.2, end: 32.2)]
+        let base = ranges.enumerated().map { index, range in
+            MeetingTranscriptSegment(id: UUID(), start: .init(value: Int64((range.0 * 1_000).rounded()), timescale: 1_000),
+                end: .init(value: Int64((range.1 * 1_000).rounded()), timescale: 1_000), sourceTrackID: track,
+                speakerID: nil, text: "protected-\(index)", revision: 2, status: .final,
+                overlap: .none, completeness: .complete, attributionState: .unassigned,
+                nativePrecision: .word, nativeUnitID: "native-\(index)")
+        }
+        for unsafeIndex in [0, 1, 2] {
+            for kind in 0..<4 {
+                var original = base
+                switch kind {
+                case 0: original[unsafeIndex].completeness = .incompleteTrack
+                case 1: original[unsafeIndex].isLikelyEcho = true
+                case 2: original[unsafeIndex].status = .provisional
+                default: original[unsafeIndex].attributionState = .timingUncertain
+                }
+                let output = try MeetingPCMRecordingAttribution.assemble(transcript: .init(segments: original),
+                    activity: activity, epoch: epoch, attemptID: attempt, duration: 33, speakerNameFormat: "Speaker %lld")
+                XCTAssertNil(output.segments[1].speakerID, "Unsafe targets and either unsafe anchor block the contextual chain")
+                XCTAssertNotNil(output.segments[0].speakerID, "Actual safe acoustic support remains available")
+                XCTAssertNotNil(output.segments[2].speakerID)
+                XCTAssertEqual(output.segments[4].speakerID, output.segments[3].speakerID)
+                XCTAssertEqual(output.segments[4].speakerAttribution?.rule, .neighborAgreement,
+                               "An unrelated safe bout in the same epoch still resolves")
+                XCTAssertEqual(output.segments[unsafeIndex].status, original[unsafeIndex].status)
+                XCTAssertEqual(output.segments[unsafeIndex].completeness, original[unsafeIndex].completeness)
+                XCTAssertEqual(output.segments[unsafeIndex].isEcho, original[unsafeIndex].isEcho)
+                if kind == 3 { XCTAssertEqual(output.segments[unsafeIndex].attributionState, .timingUncertain) }
+                XCTAssertEqual(output.segments.map(\.id), original.map(\.id))
+                XCTAssertEqual(output.segments.map(\.text), original.map(\.text))
+            }
+        }
     }
 
     func testStoppedRecordingReplayUsesExactBoundedRangesAndRejectsCorruptAudio() async throws {

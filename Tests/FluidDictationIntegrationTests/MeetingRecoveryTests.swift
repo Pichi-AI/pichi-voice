@@ -3725,7 +3725,10 @@ final class MeetingRecoveryTests: XCTestCase {
         let dir = self.makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = MeetingSessionStore(rootDirectory: dir)
-        let (session, speakerA, speakerB, segmentID) = self.makeCorrectionSession(state: .completed)
+        var (session, speakerA, speakerB, segmentID) = self.makeCorrectionSession(state: .completed)
+        let targetIndex = try XCTUnwrap(session.transcriptSegments.firstIndex { $0.id == segmentID })
+        session.transcriptSegments[targetIndex].speakerAttributionInference = .init(rule: .incomingSpeaker,
+            originalState: .unassigned, originalOverlap: .none, precedingSegmentID: UUID(), followingSegmentID: UUID())
         try await store.create(session)
 
         let coordinator = MeetingSessionCoordinator(
@@ -3737,12 +3740,14 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(undone.speakers, session.speakers)
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
 
-        _ = try await coordinator.reassignSegment(sessionID: session.id, segmentID: segmentID, to: speakerB)
+        let reassigned = try await coordinator.reassignSegment(sessionID: session.id, segmentID: segmentID, to: speakerB)
+        XCTAssertNil(reassigned.transcriptSegments.first { $0.id == segmentID }?.speakerAttributionInference)
         undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.speakers, session.speakers)
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)
 
-        _ = try await coordinator.mergeSpeakers(sessionID: session.id, source: speakerA, into: speakerB)
+        let merged = try await coordinator.mergeSpeakers(sessionID: session.id, source: speakerA, into: speakerB)
+        XCTAssertNil(merged.transcriptSegments.first { $0.id == segmentID }?.speakerAttributionInference)
         undone = try await coordinator.undoTranscriptCorrection(sessionID: session.id)
         XCTAssertEqual(undone.speakers, session.speakers)
         XCTAssertEqual(undone.transcriptSegments, session.transcriptSegments)

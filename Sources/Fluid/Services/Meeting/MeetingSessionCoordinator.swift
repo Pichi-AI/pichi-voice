@@ -197,6 +197,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousOverlap: MeetingTranscriptOverlap,
             previousAttributionState: MeetingTranscriptAttributionState?,
             previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
+            previousLegacyInference: MeetingSpeakerAttributionInference?,
             previousRevision: Int
         )
         case nameUnknown(
@@ -205,12 +206,13 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousOverlap: MeetingTranscriptOverlap,
             previousAttributionState: MeetingTranscriptAttributionState?,
             previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
+            previousLegacyInference: MeetingSpeakerAttributionInference?,
             previousRevision: Int
         )
         case merge(
             sourceID: SessionSpeakerID,
             targetID: SessionSpeakerID,
-            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?)]
+            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?, previousLegacyInference: MeetingSpeakerAttributionInference?)]
         )
         case renameBatch([(speakerID: SessionSpeakerID, previousName: String)])
     }
@@ -1187,6 +1189,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 previousOverlap: previousOverlap,
                 previousAttributionState: previousAttributionState,
                 previousSpeakerAttribution: segment.speakerAttribution,
+                previousLegacyInference: segment.speakerAttributionInference,
                 previousRevision: previousRevision
             )
         }
@@ -1209,6 +1212,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 previousOverlap: segment.overlap,
                 previousAttributionState: segment.attributionState,
                 previousSpeakerAttribution: segment.speakerAttribution,
+                previousLegacyInference: segment.speakerAttributionInference,
                 previousRevision: segment.revision
             )
         }
@@ -1219,7 +1223,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         try await self.performCorrection(sessionID: sessionID) { session in
             let movedSegments = session.transcriptSegments
                 .filter { $0.speakerID == source }
-                .map { (id: $0.id, previousRevision: $0.revision, previousSpeakerAttribution: $0.speakerAttribution) }
+                .map { (id: $0.id, previousRevision: $0.revision, previousSpeakerAttribution: $0.speakerAttribution, previousLegacyInference: $0.speakerAttributionInference) }
             try session.mergeSpeakers(source, into: targetID)
             return .merge(sourceID: source, targetID: targetID, movedSegments: movedSegments)
         }
@@ -1497,11 +1501,13 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousOverlap,
             previousAttributionState,
             previousSpeakerAttribution,
+            previousLegacyInference,
             previousRevision
         ):
             guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
             session.transcriptSegments[index].speakerID = previousSpeakerID
             session.transcriptSegments[index].speakerAttribution = previousSpeakerAttribution
+            session.transcriptSegments[index].speakerAttributionInference = previousLegacyInference
             session.transcriptSegments[index].overlap = previousOverlap
             session.transcriptSegments[index].attributionState = previousAttributionState
             session.transcriptSegments[index].revision = previousRevision
@@ -1512,6 +1518,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousOverlap,
             previousAttributionState,
             previousSpeakerAttribution,
+            previousLegacyInference,
             previousRevision
         ):
             guard let segmentIndex = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }),
@@ -1521,6 +1528,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.speakers.remove(at: speakerIndex)
             session.transcriptSegments[segmentIndex].speakerID = nil
             session.transcriptSegments[segmentIndex].speakerAttribution = previousSpeakerAttribution
+            session.transcriptSegments[segmentIndex].speakerAttributionInference = previousLegacyInference
             session.transcriptSegments[segmentIndex].overlap = previousOverlap
             session.transcriptSegments[segmentIndex].attributionState = previousAttributionState
             session.transcriptSegments[segmentIndex].revision = previousRevision
@@ -1533,6 +1541,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 guard let previous = previousByID[session.transcriptSegments[segmentIndex].id] else { continue }
                 session.transcriptSegments[segmentIndex].speakerID = sourceID
                 session.transcriptSegments[segmentIndex].speakerAttribution = previous.previousSpeakerAttribution
+                session.transcriptSegments[segmentIndex].speakerAttributionInference = previous.previousLegacyInference
                 session.transcriptSegments[segmentIndex].revision = previous.previousRevision
             }
             return true

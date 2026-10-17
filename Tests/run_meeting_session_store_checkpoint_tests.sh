@@ -34,6 +34,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor -O 
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
+    Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingPersistenceValidation.swift \

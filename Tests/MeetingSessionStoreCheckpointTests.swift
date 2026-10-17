@@ -43,6 +43,45 @@ struct MeetingSessionStoreCheckpointTests {
             checks += 1
         }
 
+        // Archives written by the retired product-level continuity rule remain readable,
+        // but must be shown as estimates and never become new acoustic evidence.
+        let oldInference = MeetingSpeakerAttributionInference(rule: .incomingSpeaker,
+            originalState: .unassigned, originalOverlap: .none,
+            precedingSegmentID: UUID(), followingSegmentID: UUID())
+        var archived = session
+        archived.transcriptSegments = [session.transcriptSegments[0]]
+        archived.transcriptSegments[0].speakerAttributionInference = oldInference
+        let archiveEncoder = JSONEncoder(); archiveEncoder.dateEncodingStrategy = .iso8601
+        let archiveDecoder = JSONDecoder(); archiveDecoder.dateDecodingStrategy = .iso8601
+        let archiveData = try archiveEncoder.encode(archived)
+        let restoredArchive = try archiveDecoder.decode(MeetingSession.self, from: archiveData)
+        check(restoredArchive.transcriptSegments[0].speakerAttributionInference == oldInference,
+              "Old continuity metadata survives the real archive codec")
+        check(restoredArchive.transcriptSegments[0].speakerAttribution == nil,
+              "Decoding an old estimate never fabricates new canonical decisions")
+        let archiveText = MeetingTranscriptExporter.text(for: restoredArchive)
+        check(archiveText.contains("Estimated speaker: Fixture speaker"),
+              "Old continuity estimates remain qualified in shared labels and text export")
+        let exportedArchive = try JSONSerialization.jsonObject(with: MeetingTranscriptExporter.json(for: restoredArchive)) as! [String: Any]
+        let exportedWords = exportedArchive["segments"] as! [[String: Any]]
+        let exportedInference = exportedWords[0]["speakerAttributionInference"] as! [String: Any]
+        check(exportedInference["rule"] as? String == "incomingSpeaker",
+              "Legacy JSON export preserves original rule and anchor IDs")
+        check(exportedInference["followingSegmentID"] as? String == oldInference.followingSegmentID.uuidString,
+              "Legacy JSON export preserves exact original anchors")
+        var confirmedArchive = restoredArchive
+        try confirmedArchive.reassignSegment(id: confirmedArchive.transcriptSegments[0].id, to: speaker.id)
+        check(confirmedArchive.transcriptSegments[0].speakerAttributionInference == nil,
+              "Explicit confirmation of the same legacy speaker clears the old estimate")
+        check(!MeetingTranscriptExporter.text(for: confirmedArchive).contains("Estimated speaker:"),
+              "A manual assignment is presented as a user correction")
+        var mergedArchive = restoredArchive
+        let mergeTarget = MeetingSessionSpeaker(id: UUID(), displayName: "Legacy merge target", diarizationClusterID: nil,
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        mergedArchive.speakers.append(mergeTarget)
+        try mergedArchive.mergeSpeakers(speaker.id, into: mergeTarget.id)
+        check(mergedArchive.transcriptSegments[0].speakerAttributionInference == nil,
+              "Manual merges clear the superseded legacy reading estimate")
         let start = ProcessInfo.processInfo.systemUptime
         try await store.create(session)
         let createSeconds = ProcessInfo.processInfo.systemUptime - start
@@ -69,7 +108,7 @@ struct MeetingSessionStoreCheckpointTests {
             ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText)
         try working.write(value, session: retained)
         let obsoleteConfig = MeetingFinalProcessingConfiguration(languageCode: retained.languageCode,
-            pipelineVersion: 13, speakerAttributionPolicy: nil)
+            pipelineVersion: 14, speakerAttributionPolicy: .standard)
         let obsoletePin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: retained.id,
             backendID: pin.backendID, backendVersion: pin.backendVersion, configuration: obsoleteConfig,
             piiRedactionEnabled: false, privacyFingerprint: nil)

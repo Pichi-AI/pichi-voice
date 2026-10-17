@@ -66,6 +66,13 @@ nonisolated enum MeetingTranscriptExporter {
                 return PichiLocalization.format(template, language: language, bundle: bundle, arguments: [names(attribution.candidates)])
             }
         }
+        if segment.speakerAttribution == nil, segment.speakerAttributionInference != nil,
+           segment.attributionState == nil || segment.attributionState == .assigned,
+           let name = Self.resolvedSpeakerName(segment.speakerID, in: session,
+               speakerNames: speakerNames, language: language, bundle: bundle) {
+            return PichiLocalization.format("Estimated speaker: %@", language: language,
+                bundle: bundle, arguments: [name])
+        }
         guard let state = segment.attributionState else {
             if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle) {
                 return name

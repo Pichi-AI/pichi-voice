@@ -816,8 +816,8 @@ nonisolated struct MeetingSessionSpeaker: Codable, Identifiable, Equatable, Send
     var mergedIntoSpeakerID: SessionSpeakerID? = nil
 }
 
-/// Product continuity inference is separate from the diarizer's raw evidence. The original
-/// uncertainty and anchor IDs survive persistence so a contextual guess is never a model score.
+/// Legacy archive metadata, retained for decoding and qualified display only. New attempts
+/// use MeetingTranscriptSpeakerAttribution and never execute the retired continuity pass.
 nonisolated struct MeetingSpeakerAttributionInference: Codable, Equatable, Sendable {
     enum Rule: String, Codable, Sendable {
         case surroundingSpeaker
@@ -1087,9 +1087,11 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
             throw MeetingDomainError.speakerNotFound
         }
         guard self.transcriptSegments[segmentIndex].speakerID != speakerID
-            || self.transcriptSegments[segmentIndex].speakerAttribution != nil else { return }
+            || self.transcriptSegments[segmentIndex].speakerAttribution != nil
+            || self.transcriptSegments[segmentIndex].speakerAttributionInference != nil else { return }
         self.transcriptSegments[segmentIndex].speakerID = speakerID
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
+        self.transcriptSegments[segmentIndex].speakerAttributionInference = nil
         self.transcriptSegments[segmentIndex].attributionState = .assigned
         self.transcriptSegments[segmentIndex].overlap = .none
         self.transcriptSegments[segmentIndex].revision += 1
@@ -1129,6 +1131,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.transcriptSegments[segmentIndex].speakerID = speakerID
         self.transcriptSegments[segmentIndex].overlap = .none
         self.transcriptSegments[segmentIndex].speakerAttribution = nil
+        self.transcriptSegments[segmentIndex].speakerAttributionInference = nil
         self.transcriptSegments[segmentIndex].attributionState = .assigned
         self.transcriptSegments[segmentIndex].revision += 1
         self.updatedAt = Date()
@@ -1152,6 +1155,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         for index in self.transcriptSegments.indices where self.transcriptSegments[index].speakerID == sourceID {
             self.transcriptSegments[index].speakerID = targetID
             self.transcriptSegments[index].speakerAttribution = nil
+            self.transcriptSegments[index].speakerAttributionInference = nil
             self.transcriptSegments[index].revision += 1
         }
         self.speakers[sourceIndex].mergedIntoSpeakerID = targetID
