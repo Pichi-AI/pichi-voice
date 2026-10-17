@@ -316,7 +316,7 @@ extension MeetingProcessingPipeline {
             batch = try await self.replayMemorySpeech(attempt: attempt, track: track)
         } else {
             batch = MeetingPCMTranscriptBatch(segments: session.transcriptSegments,
-                speakers: [], isComplete: session.transcriptIsComplete ?? true)
+                speakers: session.speakers, isComplete: session.transcriptIsComplete ?? true)
         }
         if attempt.request.configuration.speakerLabelsEnabled, !batch.segments.isEmpty,
            attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming {
