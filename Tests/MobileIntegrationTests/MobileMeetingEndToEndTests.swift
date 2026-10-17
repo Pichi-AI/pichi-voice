@@ -263,6 +263,12 @@ private nonisolated struct CombinedEvaluationOptions {
     var sampleIntervalSeconds: Double { longEvaluation ? 1 : 0.25 }
     var maximumSamples: Int { longEvaluation ? 12_000 : 10_000 }
 
+    func attributionAgreementUnavailableReason(referenceContainsOverlap: Bool) -> String? {
+        if longEvaluation { return "longEvaluationRequiresOfflineWordScoring" }
+        if referenceContainsOverlap { return "overlappingReferenceRequiresOfflineWordScoring" }
+        return nil
+    }
+
     func validatePCM(frameCount: Int64, fileBytes: Int) throws {
         guard frameCount >= 160_000, frameCount <= Int64(maximumDurationSeconds * 16_000),
               fileBytes >= 0, fileBytes <= maximumAudioBytes else {
@@ -586,7 +592,8 @@ final class MobileMeetingEndToEndTests: XCTestCase {
             XCTAssertTrue(completed.transcriptSegments.allSatisfy { $0.originalText == nil })
             let protectedText = completed.transcriptSegments.map(\.text).joined(separator: " ")
             let matchedAnchors = reference.textAnchors.filter { protectedText.range(of: $0, options: [.caseInsensitive]) != nil }.count
-            let agreementAvailable = !reference.containsOverlap
+            let agreementUnavailableReason = options.attributionAgreementUnavailableReason(referenceContainsOverlap: reference.containsOverlap)
+            let agreementAvailable = agreementUnavailableReason == nil
             let agreement = agreementAvailable ? reference.agreement(segments: completed.transcriptSegments) : 0
             let assertsReferenceQuality = reference.provenance != "weak-fathom" && !options.privateEvaluation
             if assertsReferenceQuality {
@@ -686,10 +693,12 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                 "cleanupFootprintDeltaBytes": Int64(physicalFootprintBytes() ?? baseline) - Int64(baseline),
                 "sampleIntervalSeconds": resourceSamples.intervalSeconds,
                 "sampleCapacity": options.maximumSamples, "footprintSamples": resources.samples.map(\.json),
+                "sampleScope": "Service composition ready through inference and cleanup; excludes subsequent protected JSON serialization and attachment allocation",
                 "omittedFootprintSamples": resources.omitted, "missingFootprintSamples": resources.missing,
                 "maximumSampleGapSeconds": resources.maximumGap, "missedSampleIntervals": resources.missedIntervals,
                 "attributionAgreement": agreementAvailable ? agreement as Any : NSNull(),
                 "attributionAgreementAvailable": agreementAvailable,
+                "attributionAgreementUnavailableReason": agreementUnavailableReason as Any? ?? NSNull(),
                 "attributionAgreementMetric": "Legacy single-speaker segment-time agreement after label permutation; not DER or word accuracy",
                 "overlapReferenceMetric": reference.containsOverlap ? "unavailable; score native words offline" : "not present",
                 "referenceSpeakerCount": Set(reference.turns.map(\.speaker)).count, "referenceTurns": reference.turns.count,
@@ -720,6 +729,7 @@ final class MobileMeetingEndToEndTests: XCTestCase {
                     "diarizationModels": diarizationModels, "audioSeconds": duration,
                     "attributionAgreement": agreementAvailable ? agreement as Any : NSNull(),
                     "attributionAgreementAvailable": agreementAvailable,
+                    "attributionAgreementUnavailableReason": agreementUnavailableReason as Any? ?? NSNull(),
                     "referenceContainsOverlap": reference.containsOverlap,
                     "asrArtifactFingerprints": completed.processingAttempts.compactMap(\.asrArtifactFingerprint),
                     "limitations": "Post-privacy product values only; metadata may be absent or privacy-coarsened. No invented word timings, audio, embeddings, contact identities or source-separated overlap words. WER/CER and overlap scoring require offline reference."
@@ -802,6 +812,21 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         XCTAssertThrowsError(try long.validatePCM(frameCount: 62_400_001, fileBytes: 44))
         XCTAssertThrowsError(try long.validatePCM(frameCount: 160_000, fileBytes: 128 * 1_048_576 + 1))
         XCTAssertThrowsError(try long.validatePCM(frameCount: 160_000, fileBytes: -1))
+    }
+
+    func testCombinedLongAgreementUsesOfflineScoringWithoutChangingLegacyAvailability() throws {
+        for environment: [String: String] in [[:], ["PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1"]] {
+            let options = try CombinedEvaluationOptions(environment: environment)
+            XCTAssertNil(options.attributionAgreementUnavailableReason(referenceContainsOverlap: false))
+            XCTAssertEqual(options.attributionAgreementUnavailableReason(referenceContainsOverlap: true),
+                           "overlappingReferenceRequiresOfflineWordScoring")
+        }
+        let long = try CombinedEvaluationOptions(environment: [
+            "PICHI_COMBINED_MEETING_LONG_EVALUATION": "1", "PICHI_COMBINED_MEETING_PRIVATE_EVALUATION": "1"])
+        for containsOverlap in [false, true] {
+            XCTAssertEqual(long.attributionAgreementUnavailableReason(referenceContainsOverlap: containsOverlap),
+                           "longEvaluationRequiresOfflineWordScoring")
+        }
     }
 
     func testCombinedLongSamplerCoversThreeHoursAndUsesItsConfiguredPeriod() throws {

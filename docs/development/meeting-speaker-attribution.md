@@ -162,3 +162,10 @@ long mode permits 64 MiB. Existing 100000-segment, 512-speaker and 4194304 UTF-1
 limits remain unchanged. Exceeding a cap fails explicitly instead of silently
 truncating evidence. Keep private fixtures, stdout, attachments and extracted reports
 in ignored storage. This test does not change any production provider or policy.
+
+The long mode skips the legacy on-device segment-time agreement scan. It reports
+`attributionAgreement: null`, availability false and an explicit reason; native word
+evidence remains available for offline scoring. Ordinary non-overlap fixtures keep
+the existing numeric metric and quality assertions. Resource sampling ends after
+inference and cleanup, before protected JSON serialization and attachment allocation;
+the metadata records this scope explicitly.
