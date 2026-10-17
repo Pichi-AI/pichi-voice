@@ -3,6 +3,42 @@ import Foundation
 /// A bounded PCM window's durable result. PCM ownership ends before the next checkpoint;
 /// only normal meeting transcript/speaker records leave the inference adapter.
 nonisolated struct MeetingPCMTranscriptBatch: Sendable {
+    enum SpeakerRevisionFailure: Error { case identityMismatch, revisionOverflow }
+    /// A patch cannot overwrite a concurrent correction to text, native evidence, status or
+    /// completeness. Apply it to the latest product segment through the existing store owner.
+    struct SpeakerRevision: Equatable, Sendable {
+        let segmentID: MeetingTranscriptSegmentID
+        let speakerID: SessionSpeakerID?
+        let overlap: MeetingTranscriptOverlap
+        let attributionState: MeetingTranscriptAttributionState?
+        let speakerAttribution: MeetingTranscriptSpeakerAttribution?
+
+        init(_ segment: MeetingTranscriptSegment) {
+            self.segmentID = segment.id
+            self.speakerID = segment.speakerID
+            self.overlap = segment.overlap
+            self.attributionState = segment.attributionState
+            self.speakerAttribution = segment.speakerAttribution
+        }
+
+        @discardableResult
+        func apply(to segment: inout MeetingTranscriptSegment) throws -> Bool {
+            guard segment.id == self.segmentID else { throw SpeakerRevisionFailure.identityMismatch }
+            guard Self(segment) != self else { return false }
+            guard segment.revision < Int.max else { throw SpeakerRevisionFailure.revisionOverflow }
+            segment.speakerID = self.speakerID
+            segment.overlap = self.overlap
+            segment.attributionState = self.attributionState
+            segment.speakerAttribution = self.speakerAttribution
+            segment.revision += 1
+            return true
+        }
+    }
+
+    /// Speaker-only patches apply against the latest checkpoint, preserving edited text and
+    /// immutable source evidence. Ordinary batches leave this additive capability empty.
+    var speakerRevisions: [SpeakerRevision] = []
+
     /// Provenance of one growing physical PCM window. Native timing partitions
     /// can change between observations without starting a different hypothesis.
     nonisolated struct SpeechObservationIdentity: Equatable, Sendable {

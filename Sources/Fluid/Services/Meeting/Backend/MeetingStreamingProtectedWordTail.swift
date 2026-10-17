@@ -34,36 +34,7 @@ nonisolated struct MeetingStreamingProtectedWordTail: Sendable {
         }
     }
 
-    /// A patch cannot overwrite a concurrent correction to text, native evidence, status or
-    /// completeness. Apply it to the latest product segment through the existing store owner.
-    struct SpeakerRevision: Equatable, Sendable {
-        let segmentID: MeetingTranscriptSegmentID
-        let speakerID: SessionSpeakerID?
-        let overlap: MeetingTranscriptOverlap
-        let attributionState: MeetingTranscriptAttributionState?
-        let speakerAttribution: MeetingTranscriptSpeakerAttribution?
-
-        init(_ segment: MeetingTranscriptSegment) {
-            self.segmentID = segment.id
-            self.speakerID = segment.speakerID
-            self.overlap = segment.overlap
-            self.attributionState = segment.attributionState
-            self.speakerAttribution = segment.speakerAttribution
-        }
-
-        @discardableResult
-        func apply(to segment: inout MeetingTranscriptSegment) throws -> Bool {
-            guard segment.id == self.segmentID else { throw Failure.revisionIdentityMismatch }
-            guard Self(segment) != self else { return false }
-            guard segment.revision < Int.max else { throw Failure.revisionOverflow }
-            segment.speakerID = self.speakerID
-            segment.overlap = self.overlap
-            segment.attributionState = self.attributionState
-            segment.speakerAttribution = self.speakerAttribution
-            segment.revision += 1
-            return true
-        }
-    }
+    typealias SpeakerRevision = MeetingPCMTranscriptBatch.SpeakerRevision
 
     struct Update: Sendable {
         let inserted: [MeetingTranscriptSegment]

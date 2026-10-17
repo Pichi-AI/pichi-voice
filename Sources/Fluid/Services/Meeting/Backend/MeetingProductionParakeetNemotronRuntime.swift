@@ -379,83 +379,10 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             try await DebugLogger.$pipelineID.withValue(pipelineID) {
                 let timing = MeetingPCMWindowComputeTiming()
                 let phase = try await self.withPreparedASR(attemptID: attemptID, configuration: configuration) { session in
-                    var samples: [Float] = []
-                    var output: MeetingParakeetEpochOutput?
-                    var sealed = false
-                    while true {
-                        let waitStarted = timing.beginExclusion()
-                        let next: MeetingPCMWindowUpdate?
-                        do {
-                            next = try await window.next()
-                            timing.endExclusion(since: waitStarted)
-                        } catch {
-                            timing.endExclusion(since: waitStarted)
-                            throw error
-                        }
-                        guard var update = next else { break }
-                        try Task.checkCancellation()
-                        guard update.totalFrames > 0, update.totalFrames <= 320_000,
-                              update.totalFrames == samples.count + update.samples.count,
-                              !update.samples.isEmpty || update.isFinal,
-                              update.samples.allSatisfy(\.isFinite) else {
-                            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
-                        }
-                        // The prior native inference has joined before this append.
-                        // Incoming deltas live in the consumer's charged queue meanwhile.
-                        let hasNewPCM = !update.samples.isEmpty
-                        if samples.isEmpty { samples = update.samples }
-                        else { samples.append(contentsOf: update.samples) }
-                        update.samples = []
-                        // Under pressure, consume every delta but decode only the sealed
-                        // whole window. The final inference and speaker phases always run.
-                        let shouldInfer = MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM,
-                            isFinal: update.isFinal, permitsIntermediateObservations: prior.permitsIntermediateObservations)
-                        if shouldInfer {
-                            let recognized = try await session.transcribeWithTimings(samples)
-                            let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
-                                words: recognized.words, segmentTimings: recognized.result.segmentTimings,
-                                sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])
-                            // An empty observation can be silence or a provider's rejected
-                            // hypothesis. Neither invalidates speech already accepted for
-                            // a shorter prefix. Keep its original coverage and timings.
-                            let hasSpeech = !observed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            if hasSpeech || output == nil || output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
-                                output = observed
-                            }
-                            if let preview, hasSpeech || output?.sampleCount == observed.sampleCount {
-                                let publicationStarted = timing.beginExclusion()
-                                defer { timing.endExclusion(since: publicationStarted) }
-                                try await preview(self.pcmSpeechObservation(output: observed, epoch: epoch,
-                                    offset: offset, duration: Double(samples.count) / 16_000,
-                                    attemptID: attemptID, isFinal: update.isFinal))
-                            }
-                            DebugLogger.shared.info("progressive_speech offset=\(offset) frames=\(samples.count) sealed=\(update.isFinal)", source: "MeetingPCMRuntime")
-                        }
-                        if update.isFinal {
-                            // A final longer observation may reject its tail. Seal
-                            // the retained accepted prefix at its own sample count,
-                            // even when the final update brought additional PCM.
-                            if let output, let preview,
-                               (!hasNewPCM && !shouldInfer) || output.sampleCount != samples.count {
-                                let publicationStarted = timing.beginExclusion()
-                                defer { timing.endExclusion(since: publicationStarted) }
-                                try await preview(self.pcmSpeechObservation(output: output, epoch: epoch,
-                                    offset: offset, duration: Double(output.sampleCount) / 16_000,
-                                    attemptID: attemptID, isFinal: true))
-                            }
-                            sealed = true
-                            break
-                        }
-                    }
-                    guard sealed, let output, output.sampleCount > 0, output.sampleCount <= samples.count else {
-                        throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
-                    }
-                    let physicalSampleCount = samples.count
-                    // Native inference has joined. Transfer only the same array's covered
-                    // prefix to attribution; the scalar records the consumed physical tail.
-                    samples.removeSubrange(output.sampleCount..<samples.count)
-                    return MeetingParakeetPhaseResult(outputs: [output], boundedPCMSamples: samples,
-                        boundedPCMSourceSampleCount: physicalSampleCount)
+                    try await self.recognizeProgressivePCMPhase(session: session, window: window,
+                        offset: offset, epoch: epoch, attemptID: attemptID, timing: timing,
+                        permitsIntermediateObservations: prior.permitsIntermediateObservations, preview: preview)
+
                 }
                 try Task.checkCancellation()
                 guard phase.outputs.count == 1, let output = phase.outputs.first,
@@ -487,7 +414,95 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
         return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
     }
 
-    private func pcmSpeechObservation(output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID,
+    /// Shared bounded ASR loop. A prepared streaming adapter can consume each exact PCM
+    /// delta on the same owned worker before ASR, without owning a second whole window.
+    func recognizeProgressivePCMPhase(
+        session: any MeetingParakeetASRSession, window: MeetingPCMProgressiveWindow,
+        offset: TimeInterval, epoch: MeetingAnalysisEpochID, attemptID: UUID,
+        timing: MeetingPCMWindowComputeTiming, permitsIntermediateObservations: Bool,
+        preview: (@Sendable (MeetingPCMTranscriptBatch) async throws -> Void)?,
+        consumePCM: (@Sendable ([Float], Int) async throws -> Void)? = nil
+    ) async throws -> MeetingParakeetPhaseResult {
+        var samples: [Float] = []
+        var output: MeetingParakeetEpochOutput?
+        var sealed = false
+        while true {
+            let waitStarted = timing.beginExclusion()
+            let next: MeetingPCMWindowUpdate?
+            do {
+                next = try await window.next()
+                timing.endExclusion(since: waitStarted)
+            } catch {
+                timing.endExclusion(since: waitStarted)
+                throw error
+            }
+            guard var update = next else { break }
+            try Task.checkCancellation()
+            guard update.totalFrames > 0, update.totalFrames <= 320_000,
+                  update.totalFrames == samples.count + update.samples.count,
+                  !update.samples.isEmpty || update.isFinal,
+                  update.samples.allSatisfy(\.isFinite) else {
+                throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+            }
+            // The prior native inference has joined before this append.
+            // Incoming deltas live in the consumer's charged queue meanwhile.
+            let hasNewPCM = !update.samples.isEmpty
+            if samples.isEmpty { samples = update.samples }
+            else { samples.append(contentsOf: update.samples) }
+            update.samples = []
+            // Under pressure, consume every delta but decode only the sealed
+            // whole window. The final inference and speaker phases always run.
+            let shouldInfer = MeetingPCMPreviewPacing.shouldInfer(hasNewPCM: hasNewPCM,
+                isFinal: update.isFinal, permitsIntermediateObservations: permitsIntermediateObservations)
+            if shouldInfer {
+                let recognized = try await session.transcribeWithTimings(samples)
+                let observed = MeetingParakeetEpochOutput(epochID: epoch, text: recognized.result.text,
+                    words: recognized.words, segmentTimings: recognized.result.segmentTimings,
+                    sampleRate: 16_000, sampleCount: samples.count, spanSamples: [])
+                // An empty observation can be silence or a provider's rejected
+                // hypothesis. Neither invalidates speech already accepted for
+                // a shorter prefix. Keep its original coverage and timings.
+                let hasSpeech = !observed.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                if hasSpeech || output == nil || output?.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+                    output = observed
+                }
+                if let preview, hasSpeech || output?.sampleCount == observed.sampleCount {
+                    let publicationStarted = timing.beginExclusion()
+                    defer { timing.endExclusion(since: publicationStarted) }
+                    try await preview(self.pcmSpeechObservation(output: observed, epoch: epoch,
+                        offset: offset, duration: Double(samples.count) / 16_000,
+                        attemptID: attemptID, isFinal: update.isFinal))
+                }
+                DebugLogger.shared.info("progressive_speech offset=\(offset) frames=\(samples.count) sealed=\(update.isFinal)", source: "MeetingPCMRuntime")
+            }
+            if update.isFinal {
+                // A final longer observation may reject its tail. Seal
+                // the retained accepted prefix at its own sample count,
+                // even when the final update brought additional PCM.
+                if let output, let preview,
+                   (!hasNewPCM && !shouldInfer) || output.sampleCount != samples.count {
+                    let publicationStarted = timing.beginExclusion()
+                    defer { timing.endExclusion(since: publicationStarted) }
+                    try await preview(self.pcmSpeechObservation(output: output, epoch: epoch,
+                        offset: offset, duration: Double(output.sampleCount) / 16_000,
+                        attemptID: attemptID, isFinal: true))
+                }
+                sealed = true
+                break
+            }
+        }
+        guard sealed, let output, output.sampleCount > 0, output.sampleCount <= samples.count else {
+            throw MeetingParakeetNemotronRuntimeError.invalidPCMWindow
+        }
+        let physicalSampleCount = samples.count
+        // Native inference has joined. Transfer only the same array's covered
+        // prefix to attribution; the scalar records the consumed physical tail.
+        samples.removeSubrange(output.sampleCount..<samples.count)
+        return MeetingParakeetPhaseResult(outputs: [output], boundedPCMSamples: samples,
+            boundedPCMSourceSampleCount: physicalSampleCount)
+    }
+
+    func pcmSpeechObservation(output: MeetingParakeetEpochOutput, epoch: MeetingAnalysisEpochID,
                                       offset: TimeInterval, duration: TimeInterval,
                                       attemptID: UUID, isFinal: Bool = true) throws -> MeetingPCMTranscriptBatch {
         let units = try MeetingParakeetNemotronBackend.pcmUnits(
