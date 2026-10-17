@@ -380,8 +380,9 @@ final class MobileNavigationUITests: XCTestCase {
             capture("legacy-attribution-\(language)-editor-cancelled")
             XCUIDevice.shared.orientation = .landscapeLeft
             waitForOrientation(portrait: false)
-            XCTAssertTrue(label.exists && paragraph.exists)
+            // Landscape can virtualize the whole paragraph below the meeting header.
             try revealParagraphAboveNavigation(paragraph, step: "legacy-attribution-\(language)-landscape")
+            XCTAssertTrue(label.exists && paragraph.exists)
             capture("legacy-attribution-\(language)-landscape-merged")
         }
     }
