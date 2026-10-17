@@ -1410,10 +1410,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
         self.echoVerdictProvider = echoVerdictProvider
-        self.meetingRuntimeFactory = meetingRuntimeFactory ?? { [asrServiceProvider] _ in
+        self.meetingRuntimeFactory = meetingRuntimeFactory ?? { [asrServiceProvider] request in
             MeetingParakeetNemotronRuntime(
                 asrServiceProvider: asrServiceProvider,
-                modelLocator: MeetingNemotronModelLocator()
+                modelLocator: try PichiMeetingProviderFactory.modelLocator(for: request.configuration)
             )
         }
         self.diarizationSupported = diarizationSupported
@@ -1446,7 +1446,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Admit both retained and strict input through the existing registry before preparation.
     /// Optional metadata on injected factories keeps their established runtime validation.
     func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
-        if configuration.audioStorageMode == .memoryOnly {
+        if configuration.audioStorageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming {
             return try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID)
         }
         guard self.backendRegistry.contains(backendID) else { throw MeetingBackendError.unknownBackend(backendID) }
@@ -1462,6 +1462,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
     func prepareSpeakerDependencies(for descriptor: MeetingBackendDescriptor, session: MeetingSession) async throws {
         guard session.speakerLabelsEnabled != false else { return }
+        if session.effectiveSpeakerProcessingMode == .streaming {
+            let configuration = PichiMeetingProviderFactory.configuration(backendID: descriptor.id,
+                languageCode: session.languageCode, artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
+                diarizationEnabled: true, speakerProcessingMode: session.effectiveSpeakerProcessingMode)
+            try descriptor.validateSpeakerProcessingMode(configuration: configuration, mode: session.mode)
+            try await PichiMeetingProviderFactory.prepareSpeakerResources(for: configuration)
+            try Task.checkCancellation()
+            return
+        }
         // Retained audio can keep the provider's original transcript-only hardware fallback.
         // Strict PCM requests must still reject unavailable requested speaker processing.
         if !self.diarizationSupported(), descriptor.allowsTranscriptOnlyOnUnsupportedHardware,
@@ -1475,7 +1484,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
-        if session.audioStorageMode == .memoryOnly { return try await self.finishMemoryAudio(session: session, progress: progress) }
+        if session.audioStorageMode == .memoryOnly || self.memoryAttempts[session.id] != nil {
+            return try await self.finishMemoryAudio(session: session, progress: progress)
+        }
         let attemptRedactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
         if session.piiRedactionEnabled == true, attemptRedactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         if let languages = self.backendRegistry.supportedLanguageCodes, !languages.contains(session.languageCode) {
