@@ -482,22 +482,66 @@ final class MeetingCanonicalPipelineTests: XCTestCase {
     func testEqualTimestampWordsPreserveSourceOrderAcrossAttemptIDs() async throws {
         // More than ten units also catches a lexical unit-ID sort (10 before 2).
         let words = (0..<12).map { (text: "word\($0)", start: 0.0, end: 0.2) }
+        var previousIDs = Set<MeetingTranscriptSegmentID>()
         for ordinal in 1...4 {
             let attemptID = try XCTUnwrap(UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", ordinal)))
             let result = try await self.orderedWordResult(attemptID: attemptID, words: words)
-            XCTAssertEqual(result.segments.count, 1)
-            XCTAssertEqual(result.segments.first?.text, words.map(\.text).joined(separator: " "))
+            try self.assertNativeWordOrderAndReadableTurn(result, attemptID: attemptID,
+                words: words, expectedSourceIndices: Array(words.indices))
+            let ids = Set(result.segments.map(\.id))
+            XCTAssertTrue(previousIDs.isDisjoint(with: ids), "Canonical word IDs are scoped to their attempt")
+            previousIDs.formUnion(ids)
         }
     }
 
     func testDifferentTimestampWordsRemainChronologicalDespiteSourceOrder() async throws {
-        let result = try await self.orderedWordResult(attemptID: UUID(), words: [
+        let attemptID = UUID()
+        let words = [
             (text: "third", start: 0.4, end: 0.6),
             (text: "first", start: 0.0, end: 0.2),
             (text: "second", start: 0.2, end: 0.4),
-        ])
-        XCTAssertEqual(result.segments.count, 1)
-        XCTAssertEqual(result.segments.first?.text, "first second third")
+        ]
+        let result = try await self.orderedWordResult(attemptID: attemptID, words: words)
+        try self.assertNativeWordOrderAndReadableTurn(result, attemptID: attemptID,
+            words: words, expectedSourceIndices: [1, 2, 0])
+    }
+
+    private func assertNativeWordOrderAndReadableTurn(
+        _ result: MeetingProcessingResult, attemptID: UUID,
+        words: [(text: String, start: Double, end: Double)], expectedSourceIndices: [Int]
+    ) throws {
+        // Canonical storage retains every timed word. Coalescing belongs to the shared reading
+        // projection so corrections and playback do not lose their original unit identities.
+        let expected = expectedSourceIndices.map { words[$0] }
+        XCTAssertEqual(result.segments.count, words.count)
+        XCTAssertEqual(result.segments.map(\.text), expected.map(\.text))
+        XCTAssertEqual(Set(result.segments.map(\.id)).count, words.count)
+        XCTAssertEqual(result.segments.map(\.nativeUnitID), expectedSourceIndices.map {
+            "unit:\(attemptID.uuidString):\($0)"
+        })
+        XCTAssertEqual(result.speakers.count, 1)
+        let speaker = try XCTUnwrap(result.speakers.first)
+        for (segment, word) in zip(result.segments, expected) {
+            XCTAssertEqual(segment.speakerID, speaker.id)
+            XCTAssertEqual(segment.nativePrecision, .word)
+            XCTAssertEqual(segment.start.seconds, word.start, accuracy: 1e-9)
+            XCTAssertEqual(segment.end.seconds, word.end, accuracy: 1e-9)
+            let timing = try XCTUnwrap(segment.nativeTiming)
+            XCTAssertEqual(timing.start, word.start, accuracy: 1e-9)
+            XCTAssertEqual(timing.end, word.end, accuracy: 1e-9)
+            let assignment = try XCTUnwrap(segment.nativeSpeakerAssignment)
+            XCTAssertEqual(assignment.tokens.count, 1)
+            XCTAssertEqual(assignment.tokens.first?.label, "slot-0")
+            XCTAssertEqual(assignment.tokens.first?.analysisEpochID.trackID, segment.sourceTrackID)
+        }
+        var session = self.makeSession(mode: .inRoom, tracks: [])
+        session.speakers = result.speakers
+        session.transcriptSegments = result.segments
+        let paragraphs = MeetingTranscriptExporter.displayParagraphs(for: result.segments, in: session)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs.first?.text, expected.map(\.text).joined(separator: " "))
+        XCTAssertEqual(paragraphs.flatMap(\.segments), result.segments,
+            "Readable coalescing preserves every UUID, word, timestamp and attribution")
     }
 
     private actor CheckpointFailureSummaryProvider: MeetingPostProcessingProviding {
