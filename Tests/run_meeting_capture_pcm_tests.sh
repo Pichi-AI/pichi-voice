@@ -19,18 +19,26 @@ start = contract.index('nonisolated protocol MeetingMemoryAudioConsuming:')
 root.joinpath('Contracts.swift').write_text('import Foundation\nimport CoreMedia\n' + contract[start:] + '\n'
     + 'class MeetingProcessingPipeline {}\n'
     + 'final class DebugLogger: Sendable { static let shared = DebugLogger(); func info(_ message: String, source: String) {} }\n'
-    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true }\n'
+    + 'struct MeetingPCMTranscriptBatch: Sendable { var segments: [String]; var speakers: [String]; var isComplete: Bool = true; var speakerRevisions: [String] = [] }\n'
     + 'final class MeetingMemoryAudioArchive: @unchecked Sendable { private let lock = NSLock(); private var count = 0; var totalSampleCount: Int { lock.withLock { count } }; func append(_ samples: UnsafeBufferPointer<Float>) throws { lock.withLock { count += samples.count } }; func seal() throws {} }\n')
 source = pathlib.Path('Sources/Fluid/Services/Meeting/LiveTranscription/MeetingLiveModels.swift').read_text()
 # Compile the complete production copier, without unrelated declarations appended later.
 sample_copy = declaration(source, 'nonisolated enum MeetingLiveSampleCopy {')
 root.joinpath('SampleCopy.swift').write_text('import AVFoundation\nimport CoreMedia\nimport Foundation\n' + sample_copy + '\n')
+# Compile the actual desktop callback and failure methods with inert callback metadata and
+# controlled sinks. Their implementation is not re-created in the regression fixture.
+engine = pathlib.Path('Sources/Fluid/Services/Meeting/MeetingCaptureEngine.swift').read_text()
+inroom = declaration(engine, 'private final nonisolated class InRoomMicrophoneCaptureRuntime:')
+callbacks = '\n'.join(declaration(inroom, marker) for marker in [
+    'func captureOutput(', 'private func failTranscription(', 'private func enqueueForTranscription('])
+probe = pathlib.Path('Tests/Support/MeetingMacCaptureTeeProbe.swift').read_text()
+root.joinpath('MacCaptureTee.swift').write_text(probe.replace('// PRODUCTION_CALLBACKS', callbacks))
 PY
 xcrun swiftc -parse-as-library -swift-version 6 \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingPCMFormatContract.swift \
     Sources/Fluid/Services/Meeting/Platform/MeetingCapturePCMTransport.swift \
     Sources/Fluid/Services/Meeting/MeetingProcessingPipeline+MemoryAudio.swift \
-    "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" \
+    "$task_test_dir/Contracts.swift" "$task_test_dir/SampleCopy.swift" "$task_test_dir/MacCaptureTee.swift" \
     Tests/MeetingCapturePCMTransportTests.swift -o "$task_test_dir/tests"
 "$task_test_dir/tests"

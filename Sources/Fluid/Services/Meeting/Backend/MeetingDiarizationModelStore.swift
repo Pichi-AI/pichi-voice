@@ -3,9 +3,9 @@ import Foundation
 
 /// Downloads and installs the Nemotron 3 Diarization package from Hugging Face.
 ///
-/// The model is only needed after a recording stops, so opening FluidMeet starts the download in
-/// the background and final processing awaits it. One attempt runs at a time and every caller
-/// shares its result; a failed attempt ends in `.failed` and the next call starts a fresh one.
+/// Recorded-audio processing and opt-in streaming share this installation owner. Capture
+/// preparation selects the registered immutable profile before admitting audio. One attempt
+/// runs at a time per profile; callers share its result and failures permit a fresh retry.
 @MainActor
 final class MeetingDiarizationModelStore: ObservableObject {
     enum State: Equatable {
@@ -24,22 +24,29 @@ final class MeetingDiarizationModelStore: ObservableObject {
     }
 
     static let shared = MeetingDiarizationModelStore()
+    private static var profileStores: [MeetingNemotronModelProfile: MeetingDiarizationModelStore] = [:]
+
+    /// Settings and capture preparation observe the same existing operation owner per profile.
+    static func shared(for profile: MeetingNemotronModelProfile) -> MeetingDiarizationModelStore {
+        if profile == .fast32SplitW8A8 { return self.shared }
+        if let store = self.profileStores[profile] { return store }
+        let store = MeetingDiarizationModelStore(profile: profile)
+        self.profileStores[profile] = store
+        return store
+    }
 
     static let repositoryOwner = "FluidInference"
     static let repositoryName = "nemotron-3-diarization-coreml"
     /// Pinned so a later push to the repository can never change an installed app's model.
-    static let repositoryRevision = "25a90f97f254428d4b30374b76af9c74fdee8327"
+    static let repositoryRevision = MeetingNemotronModelProfile.repositoryRevision
 
     // This author-compiled graph has no metadata.json. Declare the pinned files rather
     // than applying the downloader's generic compiled-directory completeness contract.
-    static let requiredDownloadItems: [HuggingFaceModelDownloader.ModelItem] = [
-        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/analytics/coremldata.bin", isDirectory: false),
-        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/coremldata.bin", isDirectory: false),
-        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/model.mil", isDirectory: false),
-        .init(path: MeetingNemotronModelLocator.remoteModelPath + "/weights/weight.bin", isDirectory: false),
-        .init(path: "learnable_sil_emb.bin", isDirectory: false),
-        .init(path: MeetingNemotronModelLocator.projectionFileName, isDirectory: false),
-    ]
+    static let requiredDownloadItems = MeetingDiarizationModelStore.requiredDownloadItems(for: .fast32SplitW8A8)
+
+    nonisolated static func requiredDownloadItems(for profile: MeetingNemotronModelProfile) -> [HuggingFaceModelDownloader.ModelItem] {
+        profile.remoteFilePaths.map { .init(path: $0, isDirectory: false) }
+    }
 
     typealias Validate = @Sendable () throws -> MeetingNemotronModelArtifact
     typealias Install = @Sendable (_ progress: @escaping @Sendable (Double) -> Void) async throws
@@ -73,6 +80,22 @@ final class MeetingDiarizationModelStore: ObservableObject {
         self.install = install
         self.validateVoice = validateVoice
         self.installVoice = installVoice
+    }
+
+    /// Explicit candidate stores share validation, progress, cancellation and publication
+    /// with production setup. No user preference or default store is changed by creating one.
+    convenience init(profile: MeetingNemotronModelProfile) {
+        self.init(
+            canDownload: { MeetingNemotronModelLocator(profile: profile).resolvedPackageURL().standardizedFileURL
+                == MeetingNemotronModelLocator.defaultPackageURL(profile: profile).standardizedFileURL },
+            validate: {
+                let package = MeetingNemotronModelLocator(profile: profile).resolvedPackageURL()
+                _ = try MeetingModelInstaller.validatedSilenceEmbedding(
+                    at: MeetingModelInstaller.silenceEmbeddingURL(besides: package))
+                return try MeetingModelInstaller.validate(package, profile: profile)
+            },
+            install: { progress in try await Self.downloadAndInstall(profile: profile, progress: progress) }
+        )
     }
 
     /// Starts a check, and a download when needed, without waiting for it.
@@ -195,33 +218,41 @@ final class MeetingDiarizationModelStore: ObservableObject {
         try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(), progress: progress)
     }
 
+    nonisolated static func downloadAndInstall(
+        profile: MeetingNemotronModelProfile, progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> MeetingNemotronModelArtifact {
+        try await self.downloadAndInstall(to: MeetingNemotronModelLocator.defaultPackageURL(profile: profile),
+                                         profile: profile, progress: progress)
+    }
+
     /// The existing install operation can target an explicitly owned store. Test and
     /// mobile preflight use the same pinned download and publication as desktop setup.
     nonisolated static func downloadAndInstall(
-        to destination: URL, progress: @escaping @Sendable (Double) -> Void
+        to destination: URL, profile: MeetingNemotronModelProfile = .fast32SplitW8A8,
+        progress: @escaping @Sendable (Double) -> Void
     ) async throws -> MeetingNemotronModelArtifact {
         let staging = destination.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("download-\(MeetingNemotronModelLocator.cacheVersion)", isDirectory: true)
+            .appendingPathComponent("download-\(profile.cacheVersion)", isDirectory: true)
         let downloader = await HuggingFaceModelDownloader(
             owner: Self.repositoryOwner,
             repo: Self.repositoryName,
             revision: Self.repositoryRevision,
-            requiredItems: Self.requiredDownloadItems
+            requiredItems: Self.requiredDownloadItems(for: profile)
         )
         try await downloader.ensureModelsPresent(at: staging) { fraction, _ in progress(fraction) }
-        let downloaded = staging.appendingPathComponent(MeetingNemotronModelLocator.packageFileName, isDirectory: true)
+        let downloaded = staging.appendingPathComponent(profile.packageFileName, isDirectory: true)
         do {
             let installed = try await Task.detached(priority: .utility) {
                 // Publish weights and both host assets in one immutable atomic directory swap.
                 try? FileManager.default.removeItem(at: downloaded)
                 try FileManager.default.createDirectory(at: downloaded, withIntermediateDirectories: false)
                 try FileManager.default.copyItem(
-                    at: staging.appendingPathComponent(MeetingNemotronModelLocator.remoteModelPath),
-                    to: downloaded.appendingPathComponent(MeetingNemotronModelLocator.compiledModelFileName))
-                for name in ["learnable_sil_emb.bin", MeetingNemotronModelLocator.projectionFileName] {
+                    at: staging.appendingPathComponent(profile.remoteModelPath),
+                    to: downloaded.appendingPathComponent(profile.compiledModelFileName))
+                for name in profile.hostFileNames {
                     try FileManager.default.copyItem(at: staging.appendingPathComponent(name), to: downloaded.appendingPathComponent(name))
                 }
-                return try MeetingModelInstaller.install(from: downloaded, to: destination)
+                return try MeetingModelInstaller.install(from: downloaded, to: destination, profile: profile)
             }.value
             try? FileManager.default.removeItem(at: staging)
             return installed

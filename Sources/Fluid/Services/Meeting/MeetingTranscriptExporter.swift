@@ -36,55 +36,102 @@ nonisolated enum MeetingTranscriptExporter {
         language: PichiInterfaceLanguage = .english,
         bundle: Bundle = .main
     ) -> String {
+        self.speakerLabel(for: self.speakerLabelValue(for: segment, in: session, speakerNames: speakerNames),
+                          language: language, bundle: bundle)
+    }
+
+    /// A live reading label is created only from already protected product segments.
+    /// Reuses the history readable-turn identity and exactly the same attribution label resolver.
+    static func speakerPresentation(
+        for segment: MeetingTranscriptSegment, in session: MeetingSession,
+        speakerNames: [SessionSpeakerID: String]? = nil
+    ) -> MeetingSpeakerPresentation {
+        let names = speakerNames ?? Dictionary(uniqueKeysWithValues: session.activeSpeakers.map { ($0.id, $0.displayName) })
+        return MeetingSpeakerPresentation(
+            identity: self.paragraphIdentity(for: segment, legacySpeakerID: nil, in: session, speakerNames: names),
+            label: self.speakerLabelValue(for: segment, in: session, speakerNames: names))
+    }
+
+    static func speakerLabel(
+        for presentation: MeetingSpeakerPresentation,
+        language: PichiInterfaceLanguage = .english, bundle: Bundle = .main
+    ) -> String {
+        self.speakerLabel(for: presentation.label, language: language, bundle: bundle)
+    }
+
+    private static func speakerLabel(
+        for label: MeetingSpeakerPresentation.Label,
+        language: PichiInterfaceLanguage, bundle: Bundle
+    ) -> String {
+        func name(_ value: MeetingSpeakerPresentation.Name) -> String {
+            value.isLocalUser ? PichiLocalization.text("You", language: language, bundle: bundle) : value.displayName
+        }
+        func names(_ values: [MeetingSpeakerPresentation.Name?]) -> String {
+            values.map { $0.map(name) ?? PichiLocalization.text("Unidentified voice", language: language, bundle: bundle) }
+                .joined(separator: " + ")
+        }
+        switch label {
+        case .unknown:
+            return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
+        case let .identified(value): return name(value)
+        case let .estimated(value):
+            return PichiLocalization.format("Estimated speaker: %@", language: language, bundle: bundle,
+                                            arguments: [name(value)])
+        case let .interrupting(value, background):
+            return PichiLocalization.format("%@ (interrupting; background: %@)", language: language, bundle: bundle,
+                                            arguments: [name(value), names(background)])
+        case let .candidates(values, relation):
+            let template: String
+            switch relation {
+            case .simultaneous: template = "Simultaneous speech: %@"
+            case .conflict: template = "Speaker evidence conflicts: %@"
+            case .several: template = "Several speakers: %@"
+            }
+            return PichiLocalization.format(template, language: language, bundle: bundle, arguments: [names(values)])
+        }
+    }
+
+    private static func speakerLabelValue(
+        for segment: MeetingTranscriptSegment, in session: MeetingSession,
+        speakerNames: [SessionSpeakerID: String]
+    ) -> MeetingSpeakerPresentation.Label {
+        func name(_ speakerID: SessionSpeakerID?) -> MeetingSpeakerPresentation.Name? {
+            guard let speakerID else { return nil }
+            let resolvedID = self.resolvedAliasID(speakerID, in: session)
+            if let owner = session.activeSpeakers.first(where: { $0.id == resolvedID && $0.isLocalUser }) {
+                return .init(displayName: owner.displayName, isLocalUser: true)
+            }
+            return speakerNames[resolvedID].map { .init(displayName: $0, isLocalUser: false) }
+        }
         if segment.attributionState != .timingUncertain, let attribution = segment.speakerAttribution,
            attribution.selectedSpeakerID == segment.speakerID {
-            func names(_ references: [MeetingTranscriptSpeakerReference]) -> String {
-                references.map { reference in
-                    Self.resolvedSpeakerName(reference.speakerID, in: session, speakerNames: speakerNames,
-                        language: language, bundle: bundle)
-                        ?? PichiLocalization.text("Unidentified voice", language: language, bundle: bundle)
-                }.joined(separator: " + ")
-            }
-            if let selectedName = Self.resolvedSpeakerName(segment.speakerID, in: session,
-                speakerNames: speakerNames, language: language, bundle: bundle) {
+            if let selectedName = name(segment.speakerID) {
                 if !attribution.background.isEmpty {
-                    return PichiLocalization.format("%@ (interrupting; background: %@)", language: language,
-                        bundle: bundle, arguments: [selectedName, names(attribution.background)])
+                    return .interrupting(selectedName, background: attribution.background.map { name($0.speakerID) })
                 }
-                if attribution.rule.isHeuristic {
-                    return PichiLocalization.format("Estimated speaker: %@", language: language, bundle: bundle, arguments: [selectedName])
-                }
-                return selectedName
+                return attribution.rule.isHeuristic ? .estimated(selectedName) : .identified(selectedName)
             }
             if attribution.candidates.count > 1 {
-                let template: String
+                let relation: MeetingSpeakerPresentation.CandidateRelation
                 switch attribution.relation {
-                case .simultaneous: template = "Simultaneous speech: %@"
-                case .conflict: template = "Speaker evidence conflicts: %@"
-                default: template = "Several speakers: %@"
+                case .simultaneous: relation = .simultaneous
+                case .conflict: relation = .conflict
+                default: relation = .several
                 }
-                return PichiLocalization.format(template, language: language, bundle: bundle, arguments: [names(attribution.candidates)])
+                return .candidates(attribution.candidates.map { name($0.speakerID) }, relation: relation)
             }
         }
         if segment.speakerAttribution == nil, segment.speakerAttributionInference != nil,
            segment.attributionState == nil || segment.attributionState == .assigned,
-           let name = Self.resolvedSpeakerName(segment.speakerID, in: session,
-               speakerNames: speakerNames, language: language, bundle: bundle) {
-            return PichiLocalization.format("Estimated speaker: %@", language: language,
-                bundle: bundle, arguments: [name])
+           let value = name(segment.speakerID) {
+            return .estimated(value)
         }
         guard let state = segment.attributionState else {
-            if let name = resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle) {
-                return name
-            }
-            return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
+            return name(segment.speakerID).map { .identified($0) } ?? .unknown
         }
         switch state {
-        case .assigned:
-            return Self.resolvedSpeakerName(segment.speakerID, in: session, speakerNames: speakerNames, language: language, bundle: bundle)
-                ?? PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
-        case .overlappingSpeakers, .unassigned, .timingUncertain:
-            return PichiLocalization.text("Unknown speaker", language: language, bundle: bundle)
+        case .assigned: return name(segment.speakerID).map { .identified($0) } ?? .unknown
+        case .overlappingSpeakers, .unassigned, .timingUncertain: return .unknown
         }
     }
 

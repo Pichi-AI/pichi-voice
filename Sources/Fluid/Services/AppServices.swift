@@ -198,19 +198,23 @@ final class AppServices: ObservableObject {
             return existing
         }
         DebugLogger.shared.info("Lazily creating MeetingSessionCoordinator", source: "AppServices")
+        let pipeline = MeetingProcessingPipeline(
+            asrServiceProvider: { AppServices.shared.asr },
+            prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) }
+        )
+        let capture = MeetingCaptureEngine(memoryConsumerFactory: { session, _, track, event in
+            try await pipeline.memoryConsumer(for: session.id, track: track, eventHandler: event)
+        })
         let coordinator = MeetingSessionCoordinator(
             store: MeetingSessionStore.shared,
-            capture: MeetingCaptureEngine(),
-            processing: MeetingProcessingPipeline(
-                asrServiceProvider: { AppServices.shared.asr },
-                prepareDiarizationDependencies: { try await MeetingDiarizationModelStore.shared.prepare(dependencies: $0) }
-            ),
+            capture: capture,
+            processing: pipeline,
             audioArbiter: self.meetingAudioActivityArbiter,
             preferredMicrophoneUID: { [weak self] in
                 self?.microphonePreferenceCoordinator.inputDeviceForCapture()?.uid
             },
-            // The speaker model is only needed after Stop, so a missing model never blocks
-            // recording; final processing waits for `MeetingDiarizationModelStore` instead.
+            // The coordinator prepares the frozen speaker dependency profile only when the
+            // capture mode needs it; the ASR lifecycle remains owned by the existing service.
             validateRecordingModels: {
                 let model = SettingsStore.shared.selectedSpeechModel
                 let registered = PichiMeetingProviderFactory.registeredBackendDescriptor(for: model.rawValue) != nil

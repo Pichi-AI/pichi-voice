@@ -116,6 +116,107 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
         XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).flatMap(\.rows), rows)
     }
 
+    func testActualParticipantsOnOneMicrophoneFormDistinctReadableTurns() {
+        let first = MeetingSpeakerPresentation(identity: "participant-a", label: .identified(.init(displayName: "Same alias", isLocalUser: false)))
+        let second = MeetingSpeakerPresentation(identity: "participant-b", label: .identified(.init(displayName: "Same alias", isLocalUser: false)))
+        let words = ["Начало", "[PERSON]", "и", "ответ", "второго"]
+        let utterances = words.enumerated().map { index, text in
+            MeetingLiveUtterance(id: UUID(), speaker: .you, text: text,
+                start: Double(index) * 0.2, end: Double(index) * 0.2 + 0.1,
+                participant: index < 3 ? first : second)
+        }
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = utterances
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertEqual(rows.map(\.showsLabel), [true, false, false, true, false])
+        XCTAssertEqual(paragraphs.map { $0.text() }, ["Начало [PERSON] и", "ответ второго"])
+        XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
+        XCTAssertEqual(rows.map(\.id), utterances.map(\.id))
+        XCTAssertEqual(snapshot.utterances, utterances, "Presentation preserves protected text, source and native times")
+        XCTAssertTrue(rows.allSatisfy { $0.speaker == .you }, "Source routing is independent of actual participant identity")
+    }
+
+    func testEstimatedWordPromotesWholeParticipantTurnWithoutOrphanHeaders() {
+        let name = MeetingSpeakerPresentation.Name(displayName: "Ёлкин", isLocalUser: false)
+        let direct = MeetingSpeakerPresentation(identity: "one-turn", label: .identified(name))
+        let estimated = MeetingSpeakerPresentation(identity: "one-turn", label: .estimated(name))
+        let rows = [
+            MeetingLiveBubbleComposer.Row(id: UUID(), speaker: .you, text: "Текст", isPartial: false, showsLabel: true, participant: direct),
+            .init(id: UUID(), speaker: .you, text: "и", isPartial: false, showsLabel: false, participant: estimated),
+            .init(id: UUID(), speaker: .you, text: "продолжение", isPartial: false, showsLabel: false, participant: direct),
+        ]
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertEqual(paragraphs.count, 1)
+        XCTAssertEqual(paragraphs[0].participant, estimated)
+        XCTAssertEqual(paragraphs[0].text(), "Текст и продолжение")
+        XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
+    }
+
+    func testUncertainOverlapAndInterruptingRolesStayDistinctFromKnownTurn() {
+        let name = MeetingSpeakerPresentation.Name(displayName: "Участник", isLocalUser: false)
+        let roles: [MeetingSpeakerPresentation] = [
+            .init(identity: "assigned", label: .identified(name)),
+            .init(identity: "unknown", label: .unknown),
+            .init(identity: "simultaneous", label: .candidates([name, nil], relation: .simultaneous)),
+            .init(identity: "interruption", label: .interrupting(name, background: [nil])),
+            .init(identity: "assigned", label: .identified(name)),
+        ]
+        let rows = roles.map { MeetingLiveBubbleComposer.Row(id: UUID(), speaker: .you, text: "слово",
+            isPartial: false, showsLabel: true, participant: $0) }
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertEqual(paragraphs.count, roles.count)
+        XCTAssertEqual(paragraphs.compactMap(\.participant), roles)
+        XCTAssertEqual(paragraphs.flatMap(\.rows), rows)
+    }
+
+    func testActualParticipantDoesNotClaimIdentityOfSourceOnlyPartial() {
+        let id = UUID()
+        let participant = MeetingSpeakerPresentation(identity: "person", label: .identified(.init(displayName: "Участник", isLocalUser: false)))
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = [.init(id: id, speaker: .you, text: "[PERSON]", start: 0, end: 1, participant: participant)]
+        // A stale provisional callback can still be present in an incoming value. Never render
+        // it twice when the same turn becomes a protected, attributed result.
+        snapshot.partials[.you] = .init(id: id, text: "STALE_PARTIAL", start: 0)
+        XCTAssertEqual(MeetingLiveBubbleComposer.rows(for: snapshot).map(\.text), ["[PERSON]"])
+        snapshot.partials[.you] = .init(id: UUID(), text: "следующий", start: 2)
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        XCTAssertEqual(rows.map(\.showsLabel), [true, true])
+        XCTAssertNil(rows[1].participant)
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 2)
+    }
+
+    func testParticipantRefinementDoesNotPretendThatNewWordsArrived() {
+        let id = UUID()
+        var original = MeetingLiveTranscriptSnapshot.empty
+        original.utterances = [.init(id: id, speaker: .you, text: "[PERSON] говорит", start: 0, end: 1)]
+        var attributed = original
+        attributed.utterances[0].participant = .init(identity: "participant", label: .identified(.init(displayName: "Участник", isLocalUser: false)))
+        XCTAssertFalse(attributed.hasNewWords(since: original))
+        attributed.utterances[0].text += " дальше"
+        XCTAssertTrue(attributed.hasNewWords(since: original))
+        XCTAssertFalse(MeetingLiveTranscriptSnapshot.empty.hasNewWords(since: original))
+    }
+
+    func testLateEstimateQualifiesHeaderBeforeLongTurnLayoutBreak() {
+        let name = MeetingSpeakerPresentation.Name(displayName: "Участник", isLocalUser: false)
+        let direct = MeetingSpeakerPresentation(identity: "one-long-turn", label: .identified(name))
+        var snapshot = MeetingLiveTranscriptSnapshot.empty
+        snapshot.utterances = (0..<200).map { index in
+            .init(id: UUID(), speaker: .you, text: "слово", start: Double(index), end: Double(index) + 0.5,
+                  participant: index == 199 ? direct.markingEstimated() : direct)
+        }
+        let original = snapshot
+        let rows = MeetingLiveBubbleComposer.rows(for: snapshot)
+        let paragraphs = MeetingLiveCaptionParagraphs.compose(rows)
+        XCTAssertGreaterThan(paragraphs.count, 1)
+        XCTAssertEqual(rows.filter(\.showsLabel).count, 1)
+        XCTAssertEqual(paragraphs[0].participant?.isEstimated, true,
+                       "A later estimate cannot hide below a layout-only paragraph break")
+        XCTAssertEqual(snapshot, original, "Aggregated reading headers never change original word evidence")
+        XCTAssertEqual(rows.map(\.id), snapshot.utterances.map(\.id))
+    }
+
     func testGrowthIsLayoutChangeRatherThanScrollIntent() {
         typealias Geometry = MeetingCaptionScrollTracking.Geometry
         let before = Geometry(contentBottom: 300, viewportHeight: 300, contentHeight: 600, contentOffset: 300)
@@ -237,6 +338,30 @@ final class MeetingLiveCaptionPresentationTests: XCTestCase {
 /// layout and backing UIScrollView are real. This fixture never composes audio services.
 @MainActor
 final class MeetingLiveCaptionNativeScrollTests: XCTestCase {
+    func testStreamingParticipantsRenderAsSeparateNativeTurns() async throws {
+        let first = MeetingSpeakerPresentation.Name(displayName: "Анна", isLocalUser: false)
+        let second = MeetingSpeakerPresentation.Name(displayName: "Борис", isLocalUser: false)
+        let participants: [MeetingSpeakerPresentation] = [
+            .init(identity: "first", label: .identified(first)),
+            .init(identity: "second", label: .interrupting(second, background: [first])),
+            .init(identity: "unknown", label: .unknown)
+        ]
+        let texts = ["Обсудим план встречи.", "Да, уточню один вопрос.", "Короткий неуверенный фрагмент."]
+        let rows = zip(participants, texts).map { participant, text in
+            MeetingLiveBubbleComposer.Row(id: UUID(), speaker: .you, text: text,
+                isPartial: false, showsLabel: true, participant: participant)
+        }
+        XCTAssertEqual(MeetingLiveCaptionParagraphs.compose(rows).count, 3)
+        for scheme in [ColorScheme.light, .dark] {
+            let host = try CaptionNativeHost(rows: rows, scheme: scheme)
+            defer { host.close() }
+            try await settle(host, "Streaming participant paragraphs have native layout") {
+                self.scrollViews(in: host.controller.view).contains { $0.bounds.height > 0 }
+            }
+            capture(host, step: "streaming-participants", scheme: scheme)
+        }
+    }
+
     func testShortInlineBubbleKeepsItsIntrinsicWidth() async throws {
         let host = try CaptionNativeHost(rows: [row("Привет.")], scheme: .light, documentStyle: false)
         defer { host.close() }

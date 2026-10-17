@@ -86,6 +86,37 @@ final class MobileConfigurationSnapshotTests: XCTestCase {
         try configuration.validate()
     }
 
+    func testStreamingModeIsFrozenBeforeAwaitedMicrophoneLookup() async throws {
+        let suite = "StreamingConfigurationSnapshot.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: root) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .gigaam
+        settings.meetingSaveAudio = true
+        settings.meetingSpeakerLabelsEnabled = true
+        settings.meetingSpeakerProcessingMode = .streaming
+        settings.meetingPIIRedactionEnabled = false
+        let microphone = MeetingMicrophoneIdentity(captureDeviceID: "synthetic", displayName: "Synthetic microphone")
+        let services = AppServices(store: MeetingSessionStore(rootDirectory: root), settings: settings,
+            microphoneResolver: { _ in
+                // Simulates a preference change during asynchronous source discovery.
+                await Task.yield()
+                settings.meetingSpeakerProcessingMode = .afterRecording
+                settings.meetingSaveAudio = false
+                return microphone
+            })
+        let configuration = try await services.meetingSessionCoordinator.defaultConfiguration(mode: .inRoom, title: "Synthetic stream")
+        XCTAssertEqual(configuration.effectiveSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(configuration.audioStorageMode, .retainedFiles)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
+        XCTAssertFalse(settings.meetingSaveAudio)
+        let session = MeetingSession(configuration: configuration,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        XCTAssertEqual(session.effectiveSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(session.audioStorageMode, .retainedFiles)
+    }
+
     func testSelectedSpeechModelDoesNotPromoteAmbientBackendToRequestOverride() async throws {
         let suite = "MobileAmbientBackend.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -237,6 +268,30 @@ final class MobilePCMAdmissionTests: XCTestCase {
         .init(mode: .inRoom, title: "Synthetic admission", languageCode: "ru",
               microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
               audioStorageMode: .memoryOnly, speakerLabelsEnabled: true, piiRedactionEnabled: true)
+    }
+
+    func testPCMRequestAdmitsSavedAudioOnlyWithTheRegisteredStreamingMode() throws {
+        let descriptor = try self.descriptor()
+        for storage: MeetingAudioStorageMode in [.memoryOnly, .retainedFiles] {
+            for mode: MeetingSpeakerProcessingMode in [.afterRecording, .streaming] {
+                var capture = self.captureConfiguration()
+                capture.audioStorageMode = storage
+                capture.speakerProcessingMode = mode
+                let session = MeetingSession(configuration: capture,
+                    timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1,
+                        machTimebaseDenominator: 1, firstPresentationTime: nil))
+                let configuration = PichiMeetingProviderFactory.validationConfiguration(backendID: descriptor.id,
+                    languageCode: "ru", diarizationEnabled: true, speakerProcessingMode: mode)
+                let request = MeetingBackendRequest(attemptID: UUID(), session: session,
+                    sessionDirectory: FileManager.default.temporaryDirectory,
+                    configuration: configuration)
+                if storage == .retainedFiles && mode == .afterRecording {
+                    XCTAssertThrowsError(try descriptor.validatePCMInput(request, admissionContext: self.context()))
+                } else {
+                    XCTAssertNoThrow(try descriptor.validatePCMInput(request, admissionContext: self.context()))
+                }
+            }
+        }
     }
 
     func testDeferredSpeakerAnalysisDoesNotInheritTheLiveCombinedWorkloadBan() throws {

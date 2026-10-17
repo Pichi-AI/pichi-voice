@@ -1387,18 +1387,80 @@ final class MeetingPCMBackendAdmissionTests: XCTestCase {
                             contract: MeetingBackendResultContract = .canonicalEvidence,
                             sampleRate: Double = 16_000,
                             inputs: Set<MeetingBackendInputKind> = [.recordedChunks, .boundedMicrophonePCM],
-                            restrictions: [MeetingPCMAdmissionRestriction] = []) -> MeetingBackendDescriptor {
+                            restrictions: [MeetingPCMAdmissionRestriction] = [],
+                            speakerModes: Set<MeetingSpeakerProcessingMode> = [.afterRecording]) -> MeetingBackendDescriptor {
         MeetingBackendDescriptor(id: id, version: version, execution: .local,
             supportedLanguageCodes: languages, supportedTrackKinds: tracks, supportedFinalPrecisions: [.utterance],
             resultContract: contract, knownLimits: [], analysisSampleRate: sampleRate,
             diarizationDependencies: [.speakerSeparation, .voiceMatching], supportedInputs: inputs,
-            pcmAdmissionRestrictions: restrictions)
+            pcmAdmissionRestrictions: restrictions, supportedSpeakerProcessingModes: speakerModes)
     }
 
     private func syntheticRestriction() -> MeetingPCMAdmissionRestriction {
         MeetingPCMAdmissionRestriction(physicalDeviceModel: "fixture-tablet-v1", operatingSystemVersion: "99.4.2",
             asrArtifactFingerprint: "fixture-asr-export@sha256:exact-identity", speakerLabelsEnabled: true,
             piiRedactionEnabled: true, modelDisplayName: "Synthetic model", alternativeModelDisplayName: "Synthetic alternative")
+    }
+
+    func testSpeakerModeAdmissionIsGenericAndRefusesUnsupportedModeOrTopology() throws {
+        let streaming = MeetingFinalProcessingConfiguration(languageCode: "en", speakerProcessingMode: .streaming)
+        let ordinary = self.descriptor()
+        XCTAssertEqual(ordinary.supportedSpeakerProcessingModes, [.afterRecording])
+        XCTAssertThrowsError(try ordinary.validateSpeakerProcessingMode(configuration: streaming, mode: .inRoom)) {
+            XCTAssertEqual($0 as? MeetingBackendError, .unsupportedSpeakerProcessingMode(backend: Self.backendID, mode: .streaming))
+        }
+        let registered = self.descriptor(speakerModes: [.afterRecording, .streaming])
+        XCTAssertNoThrow(try registered.validatePCMInput(configuration: streaming, mode: .inRoom))
+        XCTAssertThrowsError(try registered.validateSpeakerProcessingMode(configuration: streaming, mode: .onlineCall)) {
+            XCTAssertEqual($0 as? MeetingBackendError, .unsupportedTrackTopology(backend: Self.backendID))
+        }
+        let disabled = MeetingFinalProcessingConfiguration(speakerLabelsEnabled: false, speakerProcessingMode: .streaming)
+        XCTAssertNoThrow(try ordinary.validateSpeakerProcessingMode(configuration: disabled, mode: .inRoom))
+    }
+
+    func testRegisteredStreamingConfigurationPinsProfileWithoutChangingASRModel() throws {
+        let selected = PichiMeetingProviderFactory.configuration(asrModel: PichiMeetingProviderFactory.gigaamModelID,
+            languageCode: "ru", artifactFingerprintOverride: "synthetic-export", speakerProcessingMode: .streaming)
+        XCTAssertEqual(selected.asrModel, PichiMeetingProviderFactory.gigaamModelID)
+        XCTAssertEqual(selected.effectiveSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(selected.diarizationFingerprint, MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint)
+        XCTAssertEqual(try PichiMeetingProviderFactory.modelLocator(for: selected).profile, .experimentalFast128FP16CPU)
+        let admission = PichiMeetingProviderFactory.validationConfiguration(backendID: .gigaam,
+            languageCode: "ru", diarizationEnabled: true, artifactFingerprintOverride: "synthetic-export",
+            speakerProcessingMode: .streaming)
+        XCTAssertEqual(admission.diarizationFingerprint, selected.diarizationFingerprint)
+        XCTAssertNoThrow(try PichiMeetingProviderFactory.validateRecordingConfiguration(admission, isAppleSilicon: true))
+        XCTAssertThrowsError(try PichiMeetingProviderFactory.validateRecordingConfiguration(selected,
+            isAppleSilicon: true, captureMode: .onlineCall))
+
+        let wrongProfile = MeetingFinalProcessingConfiguration(asrModel: selected.asrModel, languageCode: "ru",
+            diarizationFingerprint: MeetingNemotronModelProfile.fast32SplitW8A8.implementationFingerprint,
+            speakerProcessingMode: .streaming)
+        XCTAssertThrowsError(try PichiMeetingProviderFactory.modelLocator(for: wrongProfile))
+        for model in [PichiMeetingProviderFactory.whisperTinyModelID, PichiMeetingProviderFactory.parakeetV3ModelID] {
+            let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: model))
+            XCTAssertFalse(descriptor.supportedSpeakerProcessingModes.contains(.streaming))
+            XCTAssertNil(PichiMeetingProviderFactory.speakerModelStore(for: model, speakerProcessingMode: .streaming))
+        }
+        let store = try XCTUnwrap(PichiMeetingProviderFactory.speakerModelStore(
+            for: selected.asrModel, speakerProcessingMode: .streaming))
+        XCTAssertTrue(store === MeetingDiarizationModelStore.shared(for: .experimentalFast128FP16CPU))
+    }
+
+    func testSpeakerProcessingPreferenceDefaultsOffAndDoesNotChangePrivacy() throws {
+        let suite = "SpeakerModeSettings.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        let originalSaveAudio = settings.meetingSaveAudio
+        let originalPrivacy = settings.meetingPIIRedactionEnabled
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
+        settings.meetingSpeakerProcessingMode = .streaming
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(settings.meetingSaveAudio, originalSaveAudio)
+        XCTAssertEqual(settings.meetingPIIRedactionEnabled, originalPrivacy)
+        defaults.set("future-value", forKey: SettingsStore.Keys.meetingSpeakerProcessingMode)
+        XCTAssertEqual(settings.meetingSpeakerProcessingMode, .afterRecording)
     }
 
     private func session(backendID: MeetingBackendID = backendID, language: String = "en",

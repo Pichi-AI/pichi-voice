@@ -359,6 +359,21 @@ final class MeetingDiarizationModelStoreTests: XCTestCase {
         }
     }
 
+    func testExperimentalProfilesReusePinnedDownloadContractWithoutSplitProjection() {
+        for profile in MeetingNemotronModelProfile.allCases where profile.isExperimental {
+            let items = MeetingDiarizationModelStore.requiredDownloadItems(for: profile)
+            XCTAssertEqual(items.map(\.path), profile.remoteFilePaths)
+            XCTAssertEqual(items.count, 5)
+            XCTAssertTrue(items.allSatisfy { !$0.isDirectory })
+            XCTAssertFalse(items.contains { $0.path == MeetingNemotronModelLocator.projectionFileName })
+            XCTAssertTrue(items.contains { $0.path == "learnable_sil_emb.bin" })
+            XCTAssertEqual(profile.computePreference, .cpuOnly)
+            XCTAssertTrue(profile.implementationFingerprint.contains("compute=cpuOnly"))
+            XCTAssertNotEqual(MeetingNemotronModelLocator.defaultPackageURL(profile: profile),
+                              MeetingNemotronModelLocator.defaultPackageURL())
+        }
+    }
+
     func testInstalledModelIsReadyWithoutDownloading() async throws {
         let installs = Counter()
         let store = MeetingDiarizationModelStore(

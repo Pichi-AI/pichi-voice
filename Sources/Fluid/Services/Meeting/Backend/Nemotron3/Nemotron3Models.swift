@@ -131,7 +131,8 @@ public nonisolated struct Nemotron3Models {
         chunk: [Float],
         chunkLength: Int,
         state: Nemotron3StreamingState,
-        config: Nemotron3Config
+        config: Nemotron3Config,
+        detailedProfile: Bool = false
     ) throws -> Output {
         guard let packedArray, let attnBiasArray, let outputMaskArray,
             let projection = preEncodeProjection
@@ -142,7 +143,7 @@ public nonisolated struct Nemotron3Models {
         let sub = config.subsamplingFactor
         let t = config.packedFrames
 
-        var tStage = Date()
+        let inputPrepStart = ProcessInfo.processInfo.systemUptime
         // Feature stacking is a pure reshape of the zero-padded fixed-size mel buffer:
         // [mel, 128] row-major == [mel/8, 1024]. Project with one sgemm.
         let encCapacity = config.chunkMelFrames / sub
@@ -160,6 +161,7 @@ public nonisolated struct Nemotron3Models {
             }
         }
         let encLen = (chunkLength + sub - 1) / sub
+        let projectionEnd = detailedProfile ? ProcessInfo.processInfo.systemUptime : 0
 
         // Pack [spkcache | fifo | chunk] valid frames, zero-pad, build masks.
         let packedPtr = packedArray.dataPointer.bindMemory(to: Float.self, capacity: t * d)
@@ -188,13 +190,14 @@ public nonisolated struct Nemotron3Models {
             "attn_bias": MLFeatureValue(multiArray: attnBiasArray),
             "output_mask": MLFeatureValue(multiArray: outputMaskArray),
         ])
-        let inputPrepSeconds = Date().timeIntervalSince(tStage)
+        let inputPrepEnd = ProcessInfo.processInfo.systemUptime
+        let inputPrepSeconds = inputPrepEnd - inputPrepStart
 
-        tStage = Date()
-        let output = try predict(inputs)
-        let predictSeconds = Date().timeIntervalSince(tStage)
-        tStage = Date()
+        let prediction = try predict(inputs, detailedProfile: detailedProfile)
+        let predictEnd = ProcessInfo.processInfo.systemUptime
+        let predictSeconds = predictEnd - inputPrepEnd
 
+        let output = prediction.output
         let predsArray = output.featureValue(for: "speaker_preds")?.multiArrayValue ?? predsBacking
         let hiresArray = output.featureValue(for: "speaker_preds_10ms")?.multiArrayValue ?? hiresBacking
         return Output(
@@ -204,21 +207,33 @@ public nonisolated struct Nemotron3Models {
             chunkLength: encLen,
             inputPrepSeconds: inputPrepSeconds,
             predictSeconds: predictSeconds,
-            readbackSeconds: Date().timeIntervalSince(tStage)
+            readbackSeconds: ProcessInfo.processInfo.systemUptime - predictEnd,
+            projectionSeconds: detailedProfile ? projectionEnd - inputPrepStart : 0,
+            packingSeconds: detailedProfile ? inputPrepEnd - projectionEnd : 0,
+            firstPredictionSeconds: prediction.firstSeconds,
+            retryPredictionSeconds: prediction.retrySeconds,
+            backingFallbackCount: prediction.backingFallbackCount
         )
     }
 
     /// Predict with the preallocated output backings, dropping them for good if the
     /// runtime still rejects them (e.g. after a failed ANE compile on M3 Max, #951).
-    private func predict(_ inputs: MLFeatureProvider) throws -> MLFeatureProvider {
+    private func predict(
+        _ inputs: MLFeatureProvider, detailedProfile: Bool
+    ) throws -> (output: MLFeatureProvider, firstSeconds: Double, retrySeconds: Double, backingFallbackCount: Int) {
+        let firstStart = detailedProfile ? ProcessInfo.processInfo.systemUptime : 0
         do {
-            return try model.prediction(from: inputs, options: predictionOptions)
+            let output = try model.prediction(from: inputs, options: predictionOptions)
+            return (output, detailedProfile ? ProcessInfo.processInfo.systemUptime - firstStart : 0, 0, 0)
         } catch {
             guard !predictionOptions.outputBackings.isEmpty else { throw error }
+            let firstSeconds = detailedProfile ? ProcessInfo.processInfo.systemUptime - firstStart : 0
             Self.logger.warning(
-                "Output backings rejected (\(error.localizedDescription)); retrying without them")
+                "Output backings rejected; retrying without them")
             predictionOptions.outputBackings = [:]
-            return try model.prediction(from: inputs, options: predictionOptions)
+            let retryStart = detailedProfile ? ProcessInfo.processInfo.systemUptime : 0
+            let output = try model.prediction(from: inputs, options: predictionOptions)
+            return (output, firstSeconds, detailedProfile ? ProcessInfo.processInfo.systemUptime - retryStart : 0, 1)
         }
     }
 
@@ -237,6 +252,13 @@ public nonisolated struct Nemotron3Models {
         public let inputPrepSeconds: Double
         public let predictSeconds: Double
         public let readbackSeconds: Double
+        /// Detailed opt-in children: projection + packing are inside inputPrepSeconds;
+        /// first + retry predictions are inside predictSeconds. Never add both levels.
+        public let projectionSeconds: Double
+        public let packingSeconds: Double
+        public let firstPredictionSeconds: Double
+        public let retryPredictionSeconds: Double
+        public let backingFallbackCount: Int
     }
 
     /// Run one streaming step.
@@ -249,9 +271,10 @@ public nonisolated struct Nemotron3Models {
         chunk: [Float],
         chunkLength: Int,
         state: Nemotron3StreamingState,
-        config: Nemotron3Config
+        config: Nemotron3Config,
+        detailedProfile: Bool = false
     ) throws -> Output {
-        var tStage = Date()
+        let inputPrepStart = ProcessInfo.processInfo.systemUptime
         memoryOptimizer.optimizedCopy(from: chunk, to: chunkArray, pad: true)
         memoryOptimizer.optimizedCopy(from: state.spkcache, to: spkcacheArray, pad: true)
         memoryOptimizer.optimizedCopy(from: state.fifo, to: fifoArray, pad: true)
@@ -267,12 +290,13 @@ public nonisolated struct Nemotron3Models {
             "fifo": MLFeatureValue(multiArray: fifoArray),
             "fifo_lengths": MLFeatureValue(multiArray: fifoLengthArray),
         ])
-        let inputPrepSeconds = Date().timeIntervalSince(tStage)
+        let inputPrepEnd = ProcessInfo.processInfo.systemUptime
+        let inputPrepSeconds = inputPrepEnd - inputPrepStart
 
-        tStage = Date()
-        let output = try predict(inputs)
-        let predictSeconds = Date().timeIntervalSince(tStage)
-        tStage = Date()
+        let prediction = try predict(inputs, detailedProfile: detailedProfile)
+        let predictEnd = ProcessInfo.processInfo.systemUptime
+        let predictSeconds = predictEnd - inputPrepEnd
+        let output = prediction.output
 
         // Outputs land in the preallocated backings; fall back to the provider's arrays
         // if the runtime declined a backing (e.g. shape/dtype mismatch on some OS).
@@ -297,7 +321,12 @@ public nonisolated struct Nemotron3Models {
             chunkLength: chunkEncLength,
             inputPrepSeconds: inputPrepSeconds,
             predictSeconds: predictSeconds,
-            readbackSeconds: Date().timeIntervalSince(tStage)
+            readbackSeconds: ProcessInfo.processInfo.systemUptime - predictEnd,
+            projectionSeconds: 0,
+            packingSeconds: detailedProfile ? inputPrepSeconds : 0,
+            firstPredictionSeconds: prediction.firstSeconds,
+            retryPredictionSeconds: prediction.retrySeconds,
+            backingFallbackCount: prediction.backingFallbackCount
         )
     }
 

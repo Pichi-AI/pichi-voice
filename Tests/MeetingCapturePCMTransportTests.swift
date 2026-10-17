@@ -116,7 +116,101 @@ struct MeetingCapturePCMTransportTests {
                                                    presentationTime: CMTime(value: 1_600_000 + startFrame, timescale: 16_000))
     }
 
+    /// Native-rate source buffers exercise the desktop callback without opening a microphone.
+    static func nativeSample(frames: Int, startFrame: Int64, sampleRate: Int32 = 48_000) throws -> CMSampleBuffer {
+        let buffer = pcm(frames: frames, sampleRate: Double(sampleRate))
+        var description: CMAudioFormatDescription?
+        let format = CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault,
+            asbd: buffer.format.streamDescription, layoutSize: 0, layout: nil,
+            magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &description)
+        try require(format == noErr && description != nil, "native source format is valid")
+        var sample: CMSampleBuffer?
+        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: sampleRate),
+            presentationTimeStamp: CMTime(value: Int64(100 * sampleRate) + startFrame, timescale: sampleRate),
+            decodeTimeStamp: .invalid)
+        let created = CMSampleBufferCreate(allocator: kCFAllocatorDefault, dataBuffer: nil,
+            dataReady: false, makeDataReadyCallback: nil, refcon: nil, formatDescription: description!,
+            sampleCount: frames, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample)
+        try require(created == noErr && sample != nil, "native source buffer is valid")
+        let copied = CMSampleBufferSetDataBufferFromAudioBufferList(sample!, blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault, flags: 0, bufferList: buffer.audioBufferList)
+        try require(copied == noErr && CMSampleBufferSetDataReady(sample!) == noErr, "native source PCM is owned")
+        return sample!
+    }
+
+    static func testDesktopWriterRejection() async throws {
+        let writer = MeetingMacCaptureWriterProbe(rejectCall: 2)
+        let consumer = MeetingMacCaptureConsumerProbe()
+        let events = MeetingMacCaptureEventProbe()
+        let tee = try MeetingMacCaptureTeeProbe(writer: writer, consumer: consumer,
+            event: { events.record($0) }, live: { _, _ in events.presented() })
+        tee.deliver(try nativeSample(frames: 2048, startFrame: 0))
+        let accepted = consumer.received
+        try require(!accepted.isEmpty && accepted.allSatisfy { $0 > 0 }, "the first native buffer reaches converted streaming PCM")
+        // 512/48k is 10.7 ms, smaller than the converter's 20 ms discontinuity guard.
+        tee.deliver(try nativeSample(frames: 512, startFrame: 2048))
+        tee.deliver(try nativeSample(frames: 512, startFrame: 2560))
+        tee.deliver(try nativeSample(frames: 512, startFrame: 3072))
+        try require(tee.isTerminal, "writer rejection must close streaming admission and retain a Stop failure")
+        try require(writer.calls == 2 && consumer.received == accepted,
+            "PCM after the rejected buffer must never be compressed onto the previous streaming prefix")
+        try require(events.snapshot.0 == [.writerBackpressure, .captureStoppedUnexpectedly] && events.snapshot.1 == 1,
+            "writer rejection emits one terminal interruption and no later live progress")
+
+        let legacyWriter = MeetingMacCaptureWriterProbe(rejectCall: 2)
+        let legacyEvents = MeetingMacCaptureEventProbe()
+        let legacy = try MeetingMacCaptureTeeProbe(writer: legacyWriter, consumer: nil,
+            event: { legacyEvents.record($0) }, live: { _, _ in legacyEvents.presented() })
+        for (frames, start) in [(2048, 0), (512, 2048), (512, 2560)] {
+            legacy.deliver(try nativeSample(frames: frames, startFrame: Int64(start)))
+        }
+        try require(legacyWriter.calls == 3 && !legacy.isTerminal && legacyEvents.snapshot.0.isEmpty
+            && legacyEvents.snapshot.1 == 2, "legacy writer-only rejection behavior remains unchanged")
+
+        let rejected = MeetingMacCaptureConsumerProbe(accepts: false)
+        let rejectingWriter = MeetingMacCaptureWriterProbe(rejectCall: 0)
+        let rejectedEvents = MeetingMacCaptureEventProbe()
+        let failed = try MeetingMacCaptureTeeProbe(writer: rejectingWriter, consumer: rejected,
+            event: { rejectedEvents.record($0) }, live: { _, _ in rejectedEvents.presented() })
+        failed.deliver(try nativeSample(frames: 2048, startFrame: 0))
+        failed.deliver(try nativeSample(frames: 512, startFrame: 2048))
+        try require(failed.isTerminal && rejectingWriter.calls == 1 && rejected.received.count == 1
+            && rejectedEvents.snapshot.0 == [.writerBackpressure, .captureStoppedUnexpectedly],
+            "writer and consumer rejection share identical once-only terminal semantics")
+        let enteredWriter = DispatchSemaphore(value: 0)
+        let resumeWriter = DispatchSemaphore(value: 0)
+        let closingWriter = MeetingMacCaptureWriterProbe(rejectCall: 1, beforeEnqueue: {
+            enteredWriter.signal()
+            _ = resumeWriter.wait(timeout: .now() + 3)
+        })
+        let closingEvents = MeetingMacCaptureEventProbe()
+        let closingConsumer = MeetingMacCaptureConsumerProbe()
+        let closing = try MeetingMacCaptureTeeProbe(writer: closingWriter, consumer: closingConsumer,
+            event: { closingEvents.record($0) }, live: { _, _ in closingEvents.presented() })
+        let admitted = Task.detached {
+            closing.deliver(try nativeSample(frames: 512, startFrame: 0))
+        }
+        defer { resumeWriter.signal() }
+        let writerReached = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: enteredWriter.wait(timeout: .now() + 2) == .success)
+            }
+        }
+        try require(writerReached, "the callback reaches its writer after intake admission")
+        closing.closeForStop()
+        resumeWriter.signal()
+        try await admitted.value
+        try require(closing.hasFailureForStop && closingConsumer.received.isEmpty,
+            "an already admitted sink rejection remains visible to Stop after it closes intake")
+        try require(closingEvents.snapshot.0.isEmpty && closingEvents.snapshot.1 == 0,
+            "normal Stop suppresses duplicate interruption events without suppressing the PCM failure")
+        print("Desktop source callback: native-rate writer rejection, Stop race, closed intake, terminal evidence and unchanged legacy path passed.")
+    }
+
     static func main() async throws {
+        try await testDesktopWriterRejection()
+
         let gate = MeetingPCMIntakeGate(maximumBytes: 16_000 * 4, maximumSeconds: 1)
         let reservation = gate.reserve(frames: 12_000, channels: 1, sampleRate: 16_000)!
         try require(gate.retainedBytes == 48_000, "gate must include accepted PCM")
@@ -161,6 +255,40 @@ struct MeetingCapturePCMTransportTests {
             let copy = MeetingLiveSampleCopy.copy(output)!
             let mid = Int(copy.buffer.frameLength) / 2
             try require(abs(copy.buffer.floatChannelData![0][mid] - 0.2) < 0.01, "converter preserves downmixed signal at \(mid): \(copy.buffer.floatChannelData![0][mid]), frames \(copy.buffer.frameLength)")
+        }
+        // The desktop tee preserves the writer's native PCM and converts only the bounded
+        // consumer copy. Exercise raw stereo input rather than the iOS-owned mono tap path.
+        for rate in [44_100, 48_000] {
+            for interleaved in [false, true] {
+                let nativeConverter = try MeetingCapturePCMConverter()
+                var count = 0
+                var expected = CMTime(seconds: 200, preferredTimescale: 16_000)
+                var offset = 0
+                func accept(_ output: CMSampleBuffer) throws {
+                    let contract = try MeetingPCMFormatContract(formatDescription: CMSampleBufferGetFormatDescription(output)!)
+                    try require(contract.sampleRate == 16_000 && contract.channelCount == 1,
+                        "native-rate stereo tee must satisfy the strict consumer contract")
+                    try require(abs(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(output) - expected)) < 1.0 / 16_000,
+                        "native-rate tee keeps one continuous physical clock")
+                    let frames = CMSampleBufferGetNumSamples(output)
+                    count += frames
+                    expected = expected + CMTime(value: Int64(frames), timescale: 16_000)
+                    let copied = MeetingLiveSampleCopy.copy(output)!
+                    try require((0..<Int(copied.buffer.frameLength)).allSatisfy { copied.buffer.floatChannelData![0][$0].isFinite },
+                        "native-rate tee output remains finite")
+                }
+                while offset < rate {
+                    let frames = min(1024, rate - offset)
+                    let native = pcm(frames: frames, sampleRate: Double(rate), channels: 2, interleaved: interleaved)
+                    if let output = try nativeConverter.convert(native,
+                        presentationTime: CMTime(value: Int64(200 * rate + offset), timescale: CMTimeScale(rate))) {
+                        try accept(output)
+                    }
+                    offset += frames
+                }
+                if let tail = try nativeConverter.finish() { try accept(tail) }
+                try require(abs(count - 16_000) <= 1, "native-rate tee joins the complete one-second converter tail")
+            }
         }
         let discontinuous = try MeetingCapturePCMConverter()
         _ = try discontinuous.convert(pcm(frames: 100), presentationTime: CMTime(seconds: 1, preferredTimescale: 16_000))

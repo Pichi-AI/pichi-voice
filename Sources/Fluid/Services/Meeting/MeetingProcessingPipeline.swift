@@ -1410,10 +1410,10 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         self.serializationGate = serializationGate
         self.chunkObserver = chunkObserver
         self.echoVerdictProvider = echoVerdictProvider
-        self.meetingRuntimeFactory = meetingRuntimeFactory ?? { [asrServiceProvider] _ in
+        self.meetingRuntimeFactory = meetingRuntimeFactory ?? { [asrServiceProvider] request in
             MeetingParakeetNemotronRuntime(
                 asrServiceProvider: asrServiceProvider,
-                modelLocator: MeetingNemotronModelLocator()
+                modelLocator: try PichiMeetingProviderFactory.modelLocator(for: request.configuration)
             )
         }
         self.diarizationSupported = diarizationSupported
@@ -1446,7 +1446,7 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Admit both retained and strict input through the existing registry before preparation.
     /// Optional metadata on injected factories keeps their established runtime validation.
     func validateRecordingInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor? {
-        if configuration.audioStorageMode == .memoryOnly {
+        if configuration.audioStorageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming {
             return try self.validateMemoryAudioInput(configuration: configuration, backendID: backendID)
         }
         guard self.backendRegistry.contains(backendID) else { throw MeetingBackendError.unknownBackend(backendID) }
@@ -1462,6 +1462,15 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
 
     func prepareSpeakerDependencies(for descriptor: MeetingBackendDescriptor, session: MeetingSession) async throws {
         guard session.speakerLabelsEnabled != false else { return }
+        if session.effectiveSpeakerProcessingMode == .streaming {
+            let configuration = PichiMeetingProviderFactory.configuration(backendID: descriptor.id,
+                languageCode: session.languageCode, artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
+                diarizationEnabled: true, speakerProcessingMode: session.effectiveSpeakerProcessingMode)
+            try descriptor.validateSpeakerProcessingMode(configuration: configuration, mode: session.mode)
+            try await PichiMeetingProviderFactory.prepareSpeakerResources(for: configuration)
+            try Task.checkCancellation()
+            return
+        }
         // Retained audio can keep the provider's original transcript-only hardware fallback.
         // Strict PCM requests must still reject unavailable requested speaker processing.
         if !self.diarizationSupported(), descriptor.allowsTranscriptOnlyOnUnsupportedHardware,
@@ -1475,7 +1484,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         sessionDirectory: URL,
         progress: @escaping @MainActor (MeetingProcessingStage) -> Void
     ) async throws -> MeetingProcessingResult {
-        if session.audioStorageMode == .memoryOnly { return try await self.finishMemoryAudio(session: session, progress: progress) }
+        if session.audioStorageMode == .memoryOnly || self.memoryAttempts[session.id] != nil {
+            return try await self.finishMemoryAudio(session: session, progress: progress)
+        }
         let attemptRedactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
         if session.piiRedactionEnabled == true, attemptRedactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
         if let languages = self.backendRegistry.supportedLanguageCodes, !languages.contains(session.languageCode) {
@@ -1499,8 +1510,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // the local copy. Re-reading the preference after an await could split one attempt across
         // two backends — planning under one, failing the legacy callback against another.
         let backendID: MeetingBackendID
-        let usesRecordingPin = self.usesRecordingBackendPin && session.processingAttempts.count <= 1
-            && session.processingAttempts.allSatisfy({ $0.completedAt == nil })
+        // A restored streaming recording keeps its original model even when preferences
+        // for new captures changed. Live PCM finalization has no retained inference pin.
+        let usesRecordingPin = self.usesRecordingBackendPin && (
+            session.effectiveSpeakerProcessingMode == .streaming
+                || (session.processingAttempts.count <= 1
+                    && session.processingAttempts.allSatisfy({ $0.completedAt == nil })))
         if let retainedPin {
             backendID = retainedPin.backendID
         } else if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
@@ -1542,7 +1557,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 backendID: backendID,
                 languageCode: session.languageCode,
                 artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
-                diarizationEnabled: session.speakerLabelsEnabled ?? true
+                diarizationEnabled: session.speakerLabelsEnabled ?? true,
+                speakerProcessingMode: session.effectiveSpeakerProcessingMode
             ),
             privacyFingerprint: attemptRedactor?.checkpointIdentity
         )
@@ -1600,6 +1616,16 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             // Cancellation that landed while this attempt waited for the lease must not start model
             // work: the lease can be held for a long time, and the caller has already moved on.
             try Task.checkCancellation()
+            if let attemptRedactor {
+                // Settings/start are not prerequisites for a cold retained-audio retry. Prepare
+                // the same capability whose identity was frozen into this request, under the
+                // attempt lease and before manifest execution or privacy publication.
+                try await attemptRedactor.prepareForMeeting()
+                try Task.checkCancellation()
+                guard attemptRedactor.checkpointIdentity == request.privacyFingerprint else {
+                    throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+                }
+            }
             let summaryProvider = MeetingPostProcessingRegistry.shared.provider
             let execute: () async throws -> MeetingProcessingResult = {
                 var processed: MeetingProcessingResult

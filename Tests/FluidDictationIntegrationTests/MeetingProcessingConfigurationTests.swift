@@ -2,6 +2,62 @@
 import XCTest
 
 final class MeetingProcessingConfigurationTests: XCTestCase {
+    func testSpeakerProcessingModeMigratesWithoutChangingLegacyIdentity() throws {
+        let original = MeetingFinalProcessingConfiguration()
+        XCTAssertNil(original.speakerProcessingMode)
+        XCTAssertEqual(original.effectiveSpeakerProcessingMode, .afterRecording)
+        XCTAssertFalse(original.identityFingerprint.contains("speakerProcessing"))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        object.removeValue(forKey: "speakerProcessingMode")
+        let decoded = try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decoded, original)
+        XCTAssertEqual(decoded.identityFingerprint, original.identityFingerprint)
+        XCTAssertEqual(MeetingFinalProcessingConfiguration(speakerProcessingMode: .afterRecording), original)
+    }
+
+    func testStreamingSpeakerModeIsAnImmutableDistinctCodableIdentity() throws {
+        let streaming = MeetingFinalProcessingConfiguration(speakerProcessingMode: .streaming)
+        let copy = streaming
+        XCTAssertEqual(streaming.effectiveSpeakerProcessingMode, .streaming)
+        XCTAssertNotEqual(streaming.identityFingerprint, MeetingFinalProcessingConfiguration().identityFingerprint)
+        XCTAssertTrue(streaming.identityFingerprint.contains("speakerProcessing"))
+        XCTAssertEqual(try JSONDecoder().decode(MeetingFinalProcessingConfiguration.self,
+            from: JSONEncoder().encode(streaming)), copy)
+        XCTAssertEqual(streaming.asrModel, MeetingFinalProcessingConfiguration().asrModel,
+                       "Speaker scheduling is independent of ASR model identity")
+    }
+
+    func testDisabledSpeakerLabelsDoNotEnableStreamingOrChangeASRIdentity() {
+        let normal = MeetingFinalProcessingConfiguration(speakerLabelsEnabled: false)
+        let requested = MeetingFinalProcessingConfiguration(speakerLabelsEnabled: false, speakerProcessingMode: .streaming)
+        XCTAssertEqual(requested, normal)
+        XCTAssertEqual(requested.identityFingerprint, normal.identityFingerprint)
+        XCTAssertEqual(requested.effectiveSpeakerProcessingMode, .afterRecording)
+    }
+
+    func testCaptureAndSessionSnapshotSpeakerModeAndMigrateMissingField() throws {
+        let capture = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture"),
+            audioStorageMode: .memoryOnly, speakerProcessingMode: .streaming)
+        let session = MeetingSession(configuration: capture,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        XCTAssertEqual(session.effectiveSpeakerProcessingMode, .streaming)
+        XCTAssertEqual(session.audioStorageMode, .memoryOnly)
+        XCTAssertEqual(try JSONDecoder().decode(MeetingSession.self, from: JSONEncoder().encode(session)), session)
+        var captureObject = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(capture)) as? [String: Any])
+        captureObject.removeValue(forKey: "speakerProcessingMode")
+        let legacyCapture = try JSONDecoder().decode(MeetingCaptureConfiguration.self,
+            from: JSONSerialization.data(withJSONObject: captureObject))
+        XCTAssertEqual(legacyCapture.effectiveSpeakerProcessingMode, .afterRecording)
+        var sessionObject = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as? [String: Any])
+        sessionObject.removeValue(forKey: "speakerProcessingMode")
+        let legacySession = try JSONDecoder().decode(MeetingSession.self,
+            from: JSONSerialization.data(withJSONObject: sessionObject))
+        XCTAssertEqual(legacySession.effectiveSpeakerProcessingMode, .afterRecording)
+        XCTAssertEqual(legacySession.audioStorageMode, .memoryOnly, "Mode migration cannot change audio retention")
+    }
+
     func testAttributionPolicyIsFrozenAndLegacyConfigurationsDecodeWithoutIt() throws {
         let configured = MeetingFinalProcessingConfiguration()
         XCTAssertEqual(configured.speakerAttributionPolicy, .standard)

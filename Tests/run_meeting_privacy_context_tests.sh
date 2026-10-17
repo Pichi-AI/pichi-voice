@@ -67,6 +67,7 @@ xcrun swiftc -parse-as-library -swift-version 5 -default-isolation MainActor \
     -module-cache-path "$task_test_dir/module-cache" "${task_link_args[@]}" \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
+    Sources/Fluid/Services/Meeting/MeetingSpeakerPresentation.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \

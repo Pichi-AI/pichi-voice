@@ -133,6 +133,48 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertTrue(coordinator.isQuiescent)
     }
 
+    func testUnsupportedStreamingModeIsRefusedBeforePreparationForEitherStoragePolicy() async throws {
+        let suite = "UnsupportedStreamingCapture.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.selectedSpeechModel = .whisperTiny
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let capture = StubCaptureController()
+        let arbiter = StubArbiter()
+        var preparations = 0
+        let pipeline = MeetingProcessingPipeline(asrServiceProvider: {
+            XCTFail("Unsupported streaming must not reach ASR"); return ASRService()
+        }, managesModelResidency: false, settings: settings)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: capture, processing: pipeline,
+            audioArbiter: arbiter, settings: settings, validateRecordingModels: { preparations += 1 },
+            prepareRecordingDependencies: { _ in XCTFail("Unsupported streaming cannot prepare speaker models") })
+        for storage in [MeetingAudioStorageMode.memoryOnly, .retainedFiles] {
+            var configuration = self.makeConfiguration()
+            configuration.mode = .inRoom
+            configuration.languageCode = "ru"
+            configuration.audioStorageMode = storage
+            configuration.speakerLabelsEnabled = true
+            configuration.speakerProcessingMode = .streaming
+            do {
+                _ = try await coordinator.startRecording(configuration: configuration)
+                XCTFail("A saved recording must not silently downgrade unsupported streaming")
+            } catch {
+                XCTAssertEqual(error as? MeetingBackendError,
+                    .unsupportedSpeakerProcessingMode(backend: .whisperTiny, mode: .streaming))
+            }
+        }
+        XCTAssertEqual(preparations, 0)
+        XCTAssertEqual(capture.preflightCount, 0)
+        XCTAssertEqual(capture.startCount, 0)
+        XCTAssertEqual(arbiter.acquireCount, 0)
+        let sessions = try await store.loadAll()
+        XCTAssertTrue(sessions.isEmpty)
+        XCTAssertTrue(coordinator.isQuiescent)
+    }
+
     func testExplicitRetainedBackendRefusedBeforePreparationOrPermission() async throws {
         let suite = "ExplicitRetainedBackend.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -526,7 +568,19 @@ final class MeetingRecoveryTests: XCTestCase {
         let tail = MeetingTranscriptSegment(id: UUID(), start: .init(value: 1, timescale: 1), end: .init(value: 2, timescale: 1),
             sourceTrackID: track.id, speakerID: nil, text: "Joined final tail", revision: 0, status: .final, overlap: .none, completeness: .complete)
         try await processing.checkpoint(.init(segments: [first]))
-        capture.onStop = { try await processing.checkpoint(.init(segments: [tail])) }
+        let speaker = MeetingSessionSpeaker(id: UUID(), displayName: "Synthetic participant",
+            diarizationClusterID: "synthetic-voice", trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        var attributedFirst = first
+        attributedFirst.speakerID = speaker.id
+        let firstRevision = MeetingPCMTranscriptBatch.SpeakerRevision(attributedFirst)
+        XCTAssertEqual(coordinator.liveTranscript.utterances.first?.participant?.label, .unknown,
+            "Protected PCM rows use product speaker presentation even before attribution")
+        capture.onStop = {
+            try await processing.checkpoint(.init(segments: [tail], speakers: [speaker]))
+            var revisionOnly = MeetingPCMTranscriptBatch(segments: [])
+            revisionOnly.speakerRevisions = [firstRevision]
+            try await processing.checkpoint(revisionOnly)
+        }
         if path == "partialFailure" {
             capture.stopError = MeetingCaptureError.captureStopFailed("Synthetic partial stop", partialResult: try XCTUnwrap(capture.stopResult))
             do { _ = try await coordinator.stopAndTranscribe(); XCTFail("Expected partial failure") } catch { }
@@ -543,6 +597,13 @@ final class MeetingRecoveryTests: XCTestCase {
         }
         let persisted = try await store.load(id: session.id)
         XCTAssertEqual(persisted?.transcriptSegments.map(\.text), [first.text, tail.text], "Terminal snapshot must never roll back joined durable text")
+        let patchedFirst = try XCTUnwrap(persisted?.transcriptSegments.first)
+        XCTAssertEqual(patchedFirst.speakerID, speaker.id, "Joined speaker-only tail revisions must survive every terminal path")
+        XCTAssertEqual(patchedFirst.revision, first.revision + 1)
+        XCTAssertEqual(patchedFirst.start, first.start)
+        XCTAssertEqual(patchedFirst.end, first.end)
+        XCTAssertEqual(patchedFirst.status, first.status)
+        XCTAssertEqual(patchedFirst.completeness, first.completeness)
         XCTAssertEqual(arbiter.releaseCount, 1)
         XCTAssertEqual(processing.cancelCount, path == "normal" ? 0 : 1)
     }

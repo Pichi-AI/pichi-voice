@@ -33,6 +33,12 @@ nonisolated enum MeetingAudioStorageMode: String, Codable, Sendable {
     case memoryOnly
 }
 
+/// Timing of speaker analysis is separate from audio retention and the selected ASR model.
+nonisolated enum MeetingSpeakerProcessingMode: String, Codable, CaseIterable, Hashable, Sendable {
+    case afterRecording
+    case streaming
+}
+
 nonisolated enum MeetingSessionState: String, Codable, Sendable {
     case preparing
     case recording
@@ -310,6 +316,8 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
     /// Optional for existing encoded configuration records. Absence keeps retained audio.
     var audioStorageMode: MeetingAudioStorageMode? = nil
     var speakerLabelsEnabled: Bool? = nil
+    /// Optional so existing capture snapshots retain after-recording behavior.
+    var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
     /// An explicit request override, separate from ambient saved-backend preferences.
     /// Nil keeps the selected speech model's registered route.
@@ -327,6 +335,7 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         timestampDefaultTitle: Bool = false,
         audioStorageMode: MeetingAudioStorageMode = .retainedFiles,
         speakerLabelsEnabled: Bool = true,
+        speakerProcessingMode: MeetingSpeakerProcessingMode = .afterRecording,
         piiRedactionEnabled: Bool = false,
         transcriptionBackendID: String? = nil
     ) {
@@ -341,12 +350,17 @@ nonisolated struct MeetingCaptureConfiguration: Codable, Equatable, Sendable {
         self.timestampDefaultTitle = timestampDefaultTitle
         self.audioStorageMode = audioStorageMode
         self.speakerLabelsEnabled = speakerLabelsEnabled
+        self.speakerProcessingMode = speakerLabelsEnabled && speakerProcessingMode == .streaming ? .streaming : nil
         self.piiRedactionEnabled = piiRedactionEnabled
         self.transcriptionBackendID = transcriptionBackendID
     }
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
         self.applicationAudioScope ?? .selectedApplication
+    }
+
+    var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {
+        self.speakerLabelsEnabled == false ? .afterRecording : self.speakerProcessingMode ?? .afterRecording
     }
 
     var applicationAudioSource: MeetingApplicationAudioSource? {
@@ -993,6 +1007,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
     /// Immutable privacy/attribution policy captured when the meeting begins.
     var audioStorageMode: MeetingAudioStorageMode? = nil
     var speakerLabelsEnabled: Bool? = nil
+    var speakerProcessingMode: MeetingSpeakerProcessingMode? = nil
     var piiRedactionEnabled: Bool? = nil
     /// Explicit for canonical sessions published after the timeline-domain fix. A nil value on a
     /// canonical session with a result sidecar identifies the one-time absolute-host-time migration.
@@ -1020,6 +1035,7 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
         self.mode = configuration.mode
         self.audioStorageMode = configuration.audioStorageMode
         self.speakerLabelsEnabled = configuration.speakerLabelsEnabled
+        self.speakerProcessingMode = configuration.speakerProcessingMode
         self.piiRedactionEnabled = configuration.piiRedactionEnabled
         self.platform = configuration.platform
         self.capturedApplication = configuration.effectiveApplicationAudioScope == .systemAudio ? nil : configuration.application
@@ -1046,6 +1062,10 @@ nonisolated struct MeetingSession: Codable, Identifiable, Equatable, Sendable {
 
     var effectiveApplicationAudioScope: MeetingApplicationAudioScope {
         self.applicationAudioScope ?? .selectedApplication
+    }
+
+    var effectiveSpeakerProcessingMode: MeetingSpeakerProcessingMode {
+        self.speakerLabelsEnabled == false ? .afterRecording : self.speakerProcessingMode ?? .afterRecording
     }
 
     /// Unlocalized resource key, or the imported app name for narrow legacy sessions.

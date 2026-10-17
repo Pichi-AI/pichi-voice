@@ -1031,6 +1031,41 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(runtime.asrConfigurations, [configuration])
     }
 
+    #if arch(arm64)
+    func testStreamingProviderPlanRequiresModelAndFreezesTheExactRequest() throws {
+        let fixture = self.makeTwoEpochFixture(mode: .inRoom)
+        var session = fixture.session
+        session.languageCode = "ru"
+        session.speakerProcessingMode = .streaming
+        let locator = StubModelLocator()
+        let descriptor = try XCTUnwrap(PichiMeetingProviderFactory.registeredBackendDescriptor(for: "gigaam-v3-eou"))
+        let configuration = MeetingFinalProcessingConfiguration(asrModel: "gigaam-v3-eou", languageCode: "ru",
+            diarizationFingerprint: MeetingNemotronModelProfile.experimentalFast128FP16CPU.implementationFingerprint,
+            speakerProcessingMode: .streaming)
+        let request = self.makeRequest(session: session, directory: try self.makeTempSessionDirectory(), configuration: configuration)
+        let backend = MeetingProviderBackedBackend(descriptor: descriptor, providerModelID: "gigaam-v3-eou",
+            runtimeFactory: { _ in XCTFail("Planning must not create a runtime"); return FakeRuntime() },
+            modelLocator: locator, materializer: FakeMaterializer())
+        let plan = try backend.plan(request)
+        locator.error = MeetingNemotronModelReadinessError.modelNotInstalled(path: "/fixture/replaced")
+        XCTAssertEqual(try backend.plan(request).request, plan.request,
+                       "Repeated planning reuses the frozen plan instead of selecting a replacement artifact")
+        let changedRequest = MeetingBackendRequest(attemptID: UUID(), session: session,
+            sessionDirectory: request.sessionDirectory, configuration: configuration)
+        XCTAssertThrowsError(try backend.plan(changedRequest)) {
+            XCTAssertEqual($0 as? MeetingBackendError, .hostCapabilityRequestMismatch(backend: descriptor.id))
+        }
+        let missing = MeetingProviderBackedBackend(descriptor: descriptor, providerModelID: "gigaam-v3-eou",
+            runtimeFactory: { _ in XCTFail("Missing required model must fail before runtime creation"); return FakeRuntime() },
+            modelLocator: locator, materializer: FakeMaterializer())
+        XCTAssertThrowsError(try missing.plan(request)) {
+            guard let error = $0 as? MeetingNemotronModelReadinessError, case .modelNotInstalled = error else {
+                return XCTFail("Streaming cannot silently continue without its requested model")
+            }
+        }
+    }
+    #endif
+
     func testGigaAMRefusesAnotherASRModelOrLanguageInsteadOfRelabelingIt() throws {
         let fixture = self.makeTwoEpochFixture()
         let backend = MeetingProviderBackedBackend(

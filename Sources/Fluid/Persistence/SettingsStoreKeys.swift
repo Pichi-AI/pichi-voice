@@ -7,6 +7,7 @@ extension SettingsStore {
         static let holdSpaceToMute = "HoldSpaceToMute"
         static let meetingSaveAudio = "MeetingSaveAudio"
         static let meetingSpeakerLabelsEnabled = "MeetingSpeakerLabelsEnabled"
+        static let meetingSpeakerProcessingMode = "MeetingSpeakerProcessingMode"
         static let meetingPIIRedactionEnabled = "MeetingPIIRedactionEnabled"
         static let enableAIProcessing = "EnableAIProcessing"
         static let showMainWindowAtLoginLaunch = "ShowMainWindowAtLoginLaunch"

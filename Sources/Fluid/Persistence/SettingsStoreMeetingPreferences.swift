@@ -350,6 +350,15 @@ extension SettingsStore {
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingSpeakerLabelsEnabled) }
     }
 
+    /// Explicit opt-in. Missing or future values keep the established processing schedule.
+    var meetingSpeakerProcessingMode: MeetingSpeakerProcessingMode {
+        get {
+            self.defaults.string(forKey: Keys.meetingSpeakerProcessingMode)
+                .flatMap(MeetingSpeakerProcessingMode.init(rawValue:)) ?? .afterRecording
+        }
+        set { objectWillChange.send(); self.defaults.set(newValue.rawValue, forKey: Keys.meetingSpeakerProcessingMode) }
+    }
+
     var meetingPIIRedactionEnabled: Bool {
         get { self.defaults.bool(forKey: Keys.meetingPIIRedactionEnabled) }
         set { objectWillChange.send(); self.defaults.set(newValue, forKey: Keys.meetingPIIRedactionEnabled) }

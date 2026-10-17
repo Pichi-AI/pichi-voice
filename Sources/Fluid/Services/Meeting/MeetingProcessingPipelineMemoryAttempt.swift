@@ -14,6 +14,8 @@ final class MeetingMemoryProcessingAttempt {
     var consumer: (any MeetingMemoryAudioConsuming)?
     var recordingConsumer: MeetingArchivedMemoryAudioConsumer?
     var analysisTask: Task<MeetingProcessingResult, Error>?
+    var streamingController: MeetingStreamingPCMController?
+    var streamingTranscript: MeetingStreamingTranscriptState?
     init(request: MeetingBackendRequest, descriptor: MeetingBackendDescriptor, runtime: any MeetingParakeetNemotronRunning,
          archive: MeetingMemoryAudioArchive,
          redactor: (any TranscriptTextRedacting)?,
@@ -30,9 +32,12 @@ extension MeetingProcessingPipeline {
     /// Pure capability admission can run before download owners, permission prompts and the
     /// audio lease. The actual session request is frozen and bound separately at preparation.
     func validateMemoryAudioInput(configuration: MeetingCaptureConfiguration, backendID: MeetingBackendID) throws -> MeetingBackendDescriptor {
-        guard configuration.audioStorageMode == .memoryOnly else { throw MeetingMemoryAudioError.invalidBudget }
+        guard configuration.audioStorageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming else {
+            throw MeetingMemoryAudioError.invalidBudget
+        }
         let processingConfiguration = PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
-            languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true)
+            languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
+            speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
         let admissionContext = self.pcmAdmissionContextProvider(configuration.piiRedactionEnabled == true)
         return try self.resolveMemoryInputBackend(backendID: backendID, configuration: processingConfiguration,
             mode: configuration.mode, admissionContext: admissionContext).descriptor
@@ -46,6 +51,8 @@ extension MeetingProcessingPipeline {
                 throw MeetingBackendError.unsupportedInput(backend: backendID, input: .boundedMicrophonePCM)
             }))
         try backend.descriptor.validatePCMInput(configuration: configuration, mode: mode, admissionContext: admissionContext)
+        try backend.descriptor.validateSpeakerProcessingMode(configuration: configuration,
+            mode: mode)
         try backend.validatePCMInput(configuration: configuration, mode: mode, admissionContext: admissionContext)
         return backend
     }
@@ -64,7 +71,8 @@ extension MeetingProcessingPipeline {
     private func prepareMemoryAudioAttempt(session: MeetingSession, sessionDirectory: URL,
                             checkpoint: @escaping @MainActor (MeetingPCMTranscriptBatch) async throws -> Void,
                             preview: (@MainActor @Sendable (MeetingLivePartial?) async throws -> Void)?) async throws {
-        guard session.audioStorageMode == .memoryOnly, self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
+        guard session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming,
+              self.memoryAttempts[session.id] == nil else { throw MeetingMemoryAudioError.invalidBudget }
         let backendID = session.recordingBackendID.map(MeetingBackendID.init(rawValue:)) ?? .productionDefault
         let attemptID = UUID()
         let admissionContext = self.pcmAdmissionContextProvider(session.piiRedactionEnabled == true)
@@ -73,7 +81,8 @@ extension MeetingProcessingPipeline {
                 configuration: PichiMeetingProviderFactory.configuration(
                     backendID: backendID, languageCode: session.languageCode,
                     artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
-                    diarizationEnabled: session.speakerLabelsEnabled ?? true))
+                    diarizationEnabled: session.speakerLabelsEnabled ?? true,
+                    speakerProcessingMode: session.effectiveSpeakerProcessingMode))
         }
         // Resolve the actual registered factory before preparing any weights. This metadata-only
         // context grants no executor/runtime. A declared descriptor alone cannot authorize PCM:
@@ -81,7 +90,8 @@ extension MeetingProcessingPipeline {
         let preflightRequest = MeetingBackendRequest(attemptID: attemptID, session: session, sessionDirectory: sessionDirectory,
             configuration: PichiMeetingProviderFactory.validationConfiguration(backendID: backendID,
                 languageCode: session.languageCode, diarizationEnabled: session.speakerLabelsEnabled ?? true,
-                artifactFingerprintOverride: session.recordingASRArtifactFingerprint))
+                artifactFingerprintOverride: session.recordingASRArtifactFingerprint,
+                speakerProcessingMode: session.effectiveSpeakerProcessingMode))
         let preflightBackend = try self.resolveMemoryInputBackend(backendID: backendID,
             configuration: preflightRequest.configuration, mode: session.mode, admissionContext: admissionContext)
         let descriptor = preflightBackend.descriptor
@@ -107,11 +117,23 @@ extension MeetingProcessingPipeline {
             throw MeetingBackendError.backendDescriptorMismatch(backend: backendID)
         }
         try descriptor.validatePCMInput(request, admissionContext: admissionContext)
+        try descriptor.validateSpeakerProcessingMode(configuration: request.configuration,
+            mode: session.mode)
         try backend.validatePCMInput(configuration: request.configuration, mode: session.mode, admissionContext: admissionContext)
         let redactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
         if session.piiRedactionEnabled == true, redactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
+        if let redactor {
+            let identity = redactor.checkpointIdentity
+            try Task.checkCancellation()
+            try await redactor.prepareForMeeting()
+            try Task.checkCancellation()
+            guard redactor.checkpointIdentity == identity else { throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration }
+        }
         let runtime = try backend.makePCMRuntime(request)
         let configuration = request.configuration
+        if configuration.effectiveSpeakerProcessingMode == .streaming, !runtime.supportsStreamingPCMProcessing {
+            throw MeetingPCMInputError.unsupportedRuntime
+        }
         // Validate/prepare the pinned provider before microphone admission. All ownership is
         // returned before capture, then each bounded window takes the same shared resource gate.
         let service = self.asrServiceProvider()
@@ -125,7 +147,9 @@ extension MeetingProcessingPipeline {
             }
             try await service.withMeetingModelResidency(attemptID: request.attemptID, acceptsCompletedCancellation: { _ in false }) {
                 try await runtime.preparePCMResources(attemptID: request.attemptID, configuration: configuration)
-                _ = try await runtime.withPreparedASR(attemptID: request.attemptID, configuration: configuration) { _ in MeetingParakeetPhaseResult() }
+                if configuration.effectiveSpeakerProcessingMode != .streaming {
+                    _ = try await runtime.withPreparedASR(attemptID: request.attemptID, configuration: configuration) { _ in MeetingParakeetPhaseResult() }
+                }
             }
             prepared = true
         }
@@ -173,6 +197,10 @@ extension MeetingProcessingPipeline {
                 }
             }
         } else { observeSpeech = nil }
+        if configuration.effectiveSpeakerProcessingMode == .streaming {
+            return try await self.makeStreamingMemoryConsumer(attempt: attempt, track: track,
+                service: service, observeSpeech: observeSpeech)
+        }
         DebugLogger.$pipelineID.withValue(attemptID.uuidString) {
             DebugLogger.shared.info("strict_capture session=\(sessionID) track=\(trackID) backend=\(attempt.descriptor.id.rawValue) model=\(configuration.asrModel) speakers=\(configuration.speakerLabelsEnabled) privacy=\(privacyContext != nil)", source: "MeetingMemoryAudio")
         }
@@ -249,6 +277,8 @@ extension MeetingProcessingPipeline {
             analysis.cancel()
             _ = try? await analysis.value
         }
+        await attempt.streamingController?.cancelAndWait()
+        await attempt.streamingTranscript?.cancel()
         try? await attempt.consumer?.finish()
         attempt.archive.clear()
         if self.memoryAttempts[sessionID] === attempt { self.memoryAttempts.removeValue(forKey: sessionID) }
@@ -271,12 +301,20 @@ extension MeetingProcessingPipeline {
                                      progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
         guard let consumer = attempt.consumer else { throw MeetingProcessingError.noRecoverableAudio }
         defer {
+            let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.archiveRelease)
             attempt.archive.clear()
             attempt.analysisTask = nil
             if self.memoryAttempts[session.id] === attempt { self.memoryAttempts.removeValue(forKey: session.id) }
+            MeetingPCMRuntimeDiagnostics.completedDetailed(.archiveRelease, since: began)
         }
         progress(.transcribing)
-        try await consumer.finish()
+        do {
+            let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.speechTail)
+            var succeeded = false
+            defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.speechTail, since: began, succeeded: succeeded) }
+            try await consumer.finish()
+            succeeded = true
+        }
         try Task.checkCancellation()
         let track = session.audioTracks.first(where: { $0.kind == .microphone })
         var batch: MeetingPCMTranscriptBatch
@@ -285,18 +323,25 @@ extension MeetingProcessingPipeline {
             batch = try await self.replayMemorySpeech(attempt: attempt, track: track)
         } else {
             batch = MeetingPCMTranscriptBatch(segments: session.transcriptSegments,
-                speakers: [], isComplete: session.transcriptIsComplete ?? true)
+                speakers: session.speakers, isComplete: session.transcriptIsComplete ?? true)
         }
-        if attempt.request.configuration.speakerLabelsEnabled, !batch.segments.isEmpty {
+        if attempt.request.configuration.speakerLabelsEnabled, !batch.segments.isEmpty,
+           attempt.request.configuration.effectiveSpeakerProcessingMode != .streaming {
             guard let track else { throw MeetingProcessingError.noRecoverableAudio }
             progress(.identifyingSpeakers)
             let service = self.asrServiceProvider()
             let transcript = batch
-            batch = try await service.withMeetingModelResidency(attemptID: attempt.request.attemptID,
-                acceptsCompletedCancellation: { _ in false }) {
-                try await attempt.runtime.diarizePCMRecording(source: attempt.archive, transcript: transcript,
-                    trackID: track.id, attemptID: attempt.request.attemptID,
-                    configuration: attempt.request.configuration)
+            do {
+                let began = MeetingPCMRuntimeDiagnostics.beginDetailed(.diarizationRequest)
+                var succeeded = false
+                defer { MeetingPCMRuntimeDiagnostics.completedDetailed(.diarizationRequest, since: began, succeeded: succeeded) }
+                batch = try await service.withMeetingModelResidency(attemptID: attempt.request.attemptID,
+                    acceptsCompletedCancellation: { _ in false }) {
+                    try await attempt.runtime.diarizePCMRecording(source: attempt.archive, transcript: transcript,
+                        trackID: track.id, attemptID: attempt.request.attemptID,
+                        configuration: attempt.request.configuration)
+                }
+                succeeded = true
             }
         }
         try Task.checkCancellation()
