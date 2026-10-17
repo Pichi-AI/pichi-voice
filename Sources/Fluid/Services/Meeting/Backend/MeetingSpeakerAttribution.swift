@@ -26,6 +26,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     let maximumBriefInterruptionGapSeconds: Double
     let enableDominance: Bool
     let enableNeighborResolution: Bool
+    let enableSameSpeakerPauseResolution: Bool
     let enableBriefInterruption: Bool
 
     init(
@@ -45,6 +46,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         maximumBriefInterruptionGapSeconds: Double = 0.08,
         enableDominance: Bool = true,
         enableNeighborResolution: Bool = true,
+        enableSameSpeakerPauseResolution: Bool = true,
         enableBriefInterruption: Bool = true
     ) {
         self.schemaVersion = schemaVersion
@@ -63,6 +65,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         self.maximumBriefInterruptionGapSeconds = maximumBriefInterruptionGapSeconds
         self.enableDominance = enableDominance
         self.enableNeighborResolution = enableNeighborResolution
+        self.enableSameSpeakerPauseResolution = enableSameSpeakerPauseResolution
         self.enableBriefInterruption = enableBriefInterruption
     }
 
@@ -72,7 +75,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
     /// its digest. No model or personal identity enters it.
     var fingerprint: String {
         func bits(_ value: Double) -> String { String(value == 0 ? 0 : value.bitPattern, radix: 16) }
-        let canonical = MeetingConfigFingerprintEncoding.encode([
+        var entries: [(key: String, value: String)] = [
             ("attributionVersion", String(self.schemaVersion)),
             ("comparisonTolerance", bits(self.comparisonTolerance)),
             ("candidateNoiseCap", bits(self.maximumCandidateNoiseSeconds)),
@@ -90,7 +93,13 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             ("dominanceEnabled", String(self.enableDominance)),
             ("neighborsEnabled", String(self.enableNeighborResolution)),
             ("interruptionEnabled", String(self.enableBriefInterruption)),
-        ])
+        ]
+        // Missing or disabled retains the exact v2 identity of already serialized attempts.
+        // New pause semantics get an additive framed entry without invalidating old decoders.
+        if self.enableSameSpeakerPauseResolution {
+            entries.append(("sameSpeakerPauseEnabled", "true"))
+        }
+        let canonical = MeetingConfigFingerprintEncoding.encode(entries)
         let digest = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
         return "speaker-attribution-v\(self.schemaVersion):\(digest)"
     }
@@ -122,7 +131,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
         case dominanceMaxRunnerFraction, dominanceMinRatio, maximumUnknownRunSeconds
         case maximumNeighborGapSeconds, maximumBoundaryResidualSeconds, maximumBriefInterruptionSeconds
         case maximumInterruptionWordSeconds, maximumBriefInterruptionGapSeconds
-        case enableDominance, enableNeighborResolution, enableBriefInterruption
+        case enableDominance, enableNeighborResolution, enableSameSpeakerPauseResolution, enableBriefInterruption
     }
 
     init(from decoder: Decoder) throws {
@@ -144,6 +153,7 @@ nonisolated struct MeetingSpeakerAttributionPolicy: Codable, Equatable, Sendable
             maximumBriefInterruptionGapSeconds: c.decode(Double.self, forKey: .maximumBriefInterruptionGapSeconds),
             enableDominance: c.decode(Bool.self, forKey: .enableDominance),
             enableNeighborResolution: c.decode(Bool.self, forKey: .enableNeighborResolution),
+            enableSameSpeakerPauseResolution: c.decodeIfPresent(Bool.self, forKey: .enableSameSpeakerPauseResolution) ?? false,
             enableBriefInterruption: c.decode(Bool.self, forKey: .enableBriefInterruption)
         )
         _ = try self.validated()
@@ -774,20 +784,30 @@ nonisolated enum MeetingSpeakerAttribution {
     }
 
     /// Shared chronological admission for a gap between two independent anchors. This checks
-    /// timing only, never identities, acoustic evidence or native word precision. Historical
-    /// reading projections can reuse the same bounds without manufacturing canonical evidence.
+    /// timing only, never identities, acoustic evidence or native word precision. Callers establish
+    /// same-speaker identity from the original anchors. Matching anchors may redistribute the
+    /// existing total budget across pauses; the unknown span keeps its independent cap. Historical
+    /// reading projections reuse these bounds without manufacturing canonical evidence.
     static func admitsNeighborRun(
-        _ intervals: [MeetingSpeakerAttributionInterval], policy: MeetingSpeakerAttributionPolicy
+        _ intervals: [MeetingSpeakerAttributionInterval], policy: MeetingSpeakerAttributionPolicy,
+        sameSpeaker: Bool = false
     ) -> Bool {
         guard intervals.count >= 3, policy.enableNeighborResolution,
               intervals.allSatisfy({ $0.start.isFinite && $0.end.isFinite && $0.start >= 0 && $0.end > $0.start }),
               intervals[intervals.count - 2].end - intervals[1].start
                 <= policy.maximumUnknownRunSeconds + policy.comparisonTolerance
         else { return false }
+        let sharesPauseBudget = sameSpeaker && policy.enableSameSpeakerPauseResolution
+        if sharesPauseBudget {
+            let total = intervals[intervals.count - 1].start - intervals[0].end
+            guard total <= policy.maximumUnknownRunSeconds + 2 * policy.maximumNeighborGapSeconds
+                + policy.comparisonTolerance else { return false }
+        }
         for index in 1..<intervals.count {
             let gap = intervals[index].start - intervals[index - 1].end
             guard gap >= -policy.comparisonTolerance,
-                  gap <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance else { return false }
+                  sharesPauseBudget || gap <= policy.maximumNeighborGapSeconds + policy.comparisonTolerance
+            else { return false }
         }
         return true
     }
@@ -818,7 +838,7 @@ nonisolated enum MeetingSpeakerAttribution {
             else { continue }
             guard self.admitsNeighborRun(units[(first - 1)...position].map {
                 .init(start: $0.analysisStart, end: $0.analysisEnd)
-            }, policy: policy) else { continue }
+            }, policy: policy, sameSpeaker: previous == next) else { continue }
             let runCandidates = decisions[first...last].flatMap(\.candidates).filter { $0.supportSeconds > policy.comparisonTolerance }
             guard runCandidates.allSatisfy({ $0.token == previous || $0.token == next }) else { continue }
             let cues = [units[first - 1].id, units[position].id]
