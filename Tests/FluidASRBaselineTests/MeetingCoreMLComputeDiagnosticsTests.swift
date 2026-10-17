@@ -2,6 +2,20 @@ import Foundation
 import XCTest
 
 final nonisolated class MeetingCoreMLComputeDiagnosticsTests: XCTestCase {
+    func testComputePlanRequiresBothExplicitDiagnosticFlags() {
+        XCTAssertFalse(MeetingCoreMLComputeDiagnostics.requested(environment: [:]))
+        XCTAssertFalse(MeetingCoreMLComputeDiagnostics.requested(environment: ["PICHI_MEETING_DETAILED_PROFILE": "1"]))
+        XCTAssertFalse(MeetingCoreMLComputeDiagnostics.requested(environment: ["PICHI_MEETING_COMPUTE_PLAN": "1"]))
+        for value in ["", "0", "true", " 1", "1 "] {
+            XCTAssertFalse(MeetingCoreMLComputeDiagnostics.requested(environment: [
+                "PICHI_MEETING_DETAILED_PROFILE": "1", "PICHI_MEETING_COMPUTE_PLAN": value]))
+            XCTAssertFalse(MeetingCoreMLComputeDiagnostics.requested(environment: [
+                "PICHI_MEETING_DETAILED_PROFILE": value, "PICHI_MEETING_COMPUTE_PLAN": "1"]))
+        }
+        XCTAssertTrue(MeetingCoreMLComputeDiagnostics.requested(environment: [
+            "PICHI_MEETING_DETAILED_PROFILE": "1", "PICHI_MEETING_COMPUTE_PLAN": "1"]))
+    }
+
     func testStructuralCountsDistinguishAnticipatedAndUnavailablePlacement() throws {
         var summary = MeetingCoreMLComputeDiagnostics.Summary(role: "diarizer", requestedComputeUnits: "cpuAndGPU", availableDevices: ["cpu", "gpu"])
         summary.append(operationType: "matmul", preferred: .gpu, supported: [.cpu, .gpu, .gpu], weight: 0.7)

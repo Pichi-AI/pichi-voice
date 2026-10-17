@@ -4,6 +4,14 @@ Set `PICHI_MEETING_DETAILED_PROFILE=1` before creating the diarizer. The flag is
 snapshotted per instance. The normal streaming path does not read clocks or build
 JSON rows. No model, threshold, cache, cancellation or checkpoint behavior changes.
 
+Routine detailed profiling does not load `MLComputePlan`. To run that separate
+experimental placement probe, explicitly set both `PICHI_MEETING_COMPUTE_PLAN=1`
+and `PICHI_MEETING_DETAILED_PROFILE=1`. Loading a plan can be expensive in time
+and memory, including model specialization; it should be measured separately
+from the normal three-minute profile. A plan describes anticipated placement,
+not measured GPU utilization. The test export's compute-plan overhead flags are
+false unless both switches were explicitly enabled.
+
 The existing `Nemotron3Diarizer.lastProfile` accumulates active host wall time from
 `appendAudio`, `processBufferedAudio` and `finishStream`, using monotonic system
 uptime. Gaps between these calls are excluded. `processComplete` keeps its existing
@@ -35,7 +43,7 @@ profiling overhead. Prediction latency is host-observed and includes scheduled
 CPU/GPU work; it does not establish GPU utilization or pure GPU execution time.
 Final-summary serialization occurs after the measured call body and is excluded.
 
-Diagnostic `AppLogger.info` rows contain `nemotron3DetailedProfile: 1`, an event,
+Diagnostic rows contain `nemotron3DetailedProfile: 1`, an event,
 outcome, final-flush flag, monotonic timestamp, absolute input/mel/output cursors
 and the cumulative numeric profile. Per-chunk rows are capped at 2,000 per stream.
 Suppressed rows are counted while all aggregate timers/counters continue. No event
@@ -54,9 +62,9 @@ remains in `inferenceSeconds`, while incomplete model substage timings are absen
 Reset and restore clear profiling state. A restored stream reports its starting
 sample/frame cursor separately, so new work is not presented as work from the
 previous process. Diagnostic fields never enter the exact Float checkpoint.
-The logger mirrors info rows to console in a DEBUG dependency build; a Release
-build can collect them through unified logging or consume `lastProfile` in its
-existing outer diagnostic adapter.
+The application sends whole JSON rows through its existing serial `DebugLogger`
+queue, shared with outer phase events. Standalone callers retain `AppLogger.info`
+as the default transport. No callback can enable profiling when its flag is off.
 
 Model-free verification is available without downloads:
 

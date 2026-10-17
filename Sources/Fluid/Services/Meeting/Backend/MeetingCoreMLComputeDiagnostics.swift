@@ -91,8 +91,15 @@ nonisolated enum MeetingCoreMLComputeDiagnostics {
         }
     }
 
+    /// Compute-plan loading may specialize a large model and consume substantial
+    /// time/memory. Routine detailed timing never opts into that separate probe.
+    static func requested(environment: [String: String]) -> Bool {
+        environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
+            && environment["PICHI_MEETING_COMPUTE_PLAN"] == "1"
+    }
+
     static var enabled: Bool {
-        ProcessInfo.processInfo.environment["PICHI_MEETING_DETAILED_PROFILE"] == "1"
+        Self.requested(environment: ProcessInfo.processInfo.environment)
     }
 
     #if canImport(CoreML)

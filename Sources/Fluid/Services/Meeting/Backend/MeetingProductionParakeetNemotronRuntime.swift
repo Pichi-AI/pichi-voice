@@ -696,7 +696,7 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
             defer { factory.cleanup() }
             try Task.checkCancellation()
             let result = try await body(factory)
-            if MeetingPCMRuntimeDiagnostics.detailedProfilingEnabled {
+            if MeetingCoreMLComputeDiagnostics.enabled {
                 // Inspect after inference so plan specialization cannot warm the measured
                 // model load or predictions. Its memory and wall time are diagnostic overhead.
                 factory.cleanup()

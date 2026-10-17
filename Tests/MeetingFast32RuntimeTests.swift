@@ -61,7 +61,28 @@ nonisolated struct MeetingFast32RuntimeTests {
         try self.testCheckpointContinuation(config: config)
         try self.testDetailedProfiling(config: config, samples: samples)
         try await self.testProfileLogTransport(config: config)
+        try self.testThreeMinuteFrontendGeometry(config: config)
         print("PASS fast32 geometry, intervals, cancellation, frontend parity, exact checkpoint continuation, bounded metadata-only profiling and profile log transport")
+    }
+
+    private static func testThreeMinuteFrontendGeometry(config: Nemotron3Config) throws {
+        var frontend = Nemotron3StreamingFrontend(config: config)
+        let second = Array(repeating: Float(0), count: 16_000)
+        var chunks = 0
+        var coreFrames = 0
+        for _ in 0..<180 {
+            frontend.append(second)
+            while let chunk = frontend.nextChunk(final: false) {
+                chunks += 1
+                coreFrames += chunk.length - chunk.leftOffset - chunk.rightOffset
+            }
+        }
+        while let chunk = frontend.nextChunk(final: true) {
+            chunks += 1
+            coreFrames += chunk.length - chunk.leftOffset - chunk.rightOffset
+        }
+        try require(frontend.melFramesComputed == 18_001 && coreFrames == 18_001 && chunks == 71,
+                    "Exactly 2,880,000 samples produce 18,001 centered mel frames and 71 fast32 chunks")
     }
 
     private final class ProfileLineCapture: @unchecked Sendable {
