@@ -43,6 +43,73 @@ struct MeetingSessionStoreCheckpointTests {
             checks += 1
         }
 
+        let nativePresentation = MeetingTranscriptExporter.speakerPresentation(
+            for: session.transcriptSegments[0], in: session)
+        check(MeetingTranscriptExporter.speakerLabel(for: nativePresentation) == "Fixture speaker",
+              "Live labels reuse the history attribution resolver")
+        var sameNamedSpeaker = speaker
+        sameNamedSpeaker.id = UUID()
+        var twoSpeakers = session
+        twoSpeakers.speakers.append(sameNamedSpeaker)
+        var secondVoice = session.transcriptSegments[1]
+        secondVoice.speakerID = sameNamedSpeaker.id
+        let secondPresentation = MeetingTranscriptExporter.speakerPresentation(for: secondVoice, in: twoSpeakers)
+        check(nativePresentation.identity != secondPresentation.identity,
+              "Equal aliases cannot collapse two different speaker identities")
+        var estimatedWord = session.transcriptSegments[0]
+        estimatedWord.speakerAttributionInference = .init(rule: .surroundingSpeaker,
+            originalState: .unassigned, originalOverlap: .none,
+            precedingSegmentID: UUID(), followingSegmentID: UUID())
+        let estimatedPresentation = MeetingTranscriptExporter.speakerPresentation(for: estimatedWord, in: session)
+        check(nativePresentation.identity == estimatedPresentation.identity,
+              "Per-word native/estimated reasons do not fragment one known readable turn")
+        check(estimatedPresentation.isEstimated && nativePresentation.markingEstimated() == estimatedPresentation,
+              "A word estimate promotes the shared turn label honestly")
+        var unknownWord = session.transcriptSegments[0]
+        unknownWord.speakerID = nil
+        unknownWord.attributionState = .unassigned
+        let unknownPresentation = MeetingTranscriptExporter.speakerPresentation(for: unknownWord, in: session)
+        check(nativePresentation.identity != unknownPresentation.identity,
+              "Unknown evidence remains a boundary from a known speaker")
+        check(MeetingTranscriptExporter.speakerLabel(for: unknownPresentation) == "Unknown speaker",
+              "Unknown evidence retains the standard label")
+        let presentationEpoch = MeetingAnalysisEpochID(trackID: track.id, ordinal: 0)
+        let presentationToken = MeetingBackendSpeakerToken(analysisEpochID: presentationEpoch, label: "voice-a")
+        let backgroundToken = MeetingBackendSpeakerToken(analysisEpochID: presentationEpoch, label: "voice-b")
+        func readingDecision(_ rule: MeetingSpeakerAttributionRule, relation: MeetingSpeakerAttributionRelation,
+                             background: [MeetingBackendSpeakerToken] = []) -> MeetingSpeakerAttributionDecision {
+            .init(unitID: "fixture-word", rawAssignment: .assigned(presentationToken), candidates: [],
+                  activeSupportSeconds: 0.1, simultaneousIntervals: [], relation: relation,
+                  selectedToken: presentationToken, rule: rule, cueUnitIDs: [], backgroundTokens: background,
+                  policyVersion: 2, policyFingerprint: "synthetic-presentation-policy")
+        }
+        var canonicalWord = session.transcriptSegments[0]
+        canonicalWord.speakerAttribution = .init(decision: readingDecision(.rawAssigned, relation: .single),
+                                                speakerIDs: [presentationToken: speaker.id])
+        let canonicalDirect = MeetingTranscriptExporter.speakerPresentation(for: canonicalWord, in: twoSpeakers)
+        canonicalWord.speakerAttribution = .init(decision: readingDecision(.neighborAgreement, relation: .single),
+                                                speakerIDs: [presentationToken: speaker.id])
+        let canonicalEstimate = MeetingTranscriptExporter.speakerPresentation(for: canonicalWord, in: twoSpeakers)
+        check(canonicalDirect.identity == canonicalEstimate.identity && canonicalEstimate.isEstimated,
+              "Canonical native/neighbor words share identity without hiding the estimate")
+        canonicalWord.speakerAttribution = .init(decision: readingDecision(.briefInterruption, relation: .simultaneous,
+                                                                          background: [backgroundToken]),
+            speakerIDs: [presentationToken: speaker.id, backgroundToken: sameNamedSpeaker.id])
+        let interruption = MeetingTranscriptExporter.speakerPresentation(for: canonicalWord, in: twoSpeakers)
+        check(interruption.identity != canonicalDirect.identity,
+              "Actual overlap/background changes remain readable boundaries")
+        check(MeetingTranscriptExporter.speakerLabel(for: interruption)
+              == "Fixture speaker (interrupting; background: Fixture speaker)",
+              "Live interruptions reuse the existing explicit foreground/background label")
+
+        var ownerSession = session
+        ownerSession.speakers[0].isLocalUser = true
+        let ownerPresentation = MeetingTranscriptExporter.speakerPresentation(for: session.transcriptSegments[0], in: ownerSession)
+        check(MeetingTranscriptExporter.speakerLabel(for: ownerPresentation) == "You",
+              "Local owner presentation uses the existing localized owner marker")
+        check(session.transcriptSegments[0].speakerAttributionInference == nil,
+              "Creating a reading label does not mutate transcript evidence")
+
         // Archives written by the retired product-level continuity rule remain readable,
         // but must be shown as estimates and never become new acoustic evidence.
         let oldInference = MeetingSpeakerAttributionInference(rule: .incomingSpeaker,

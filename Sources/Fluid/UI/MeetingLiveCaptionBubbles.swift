@@ -44,6 +44,10 @@ nonisolated enum MeetingLiveCaptionParagraphs {
         var id: UUID { rows[0].id }
         var speaker: MeetingLiveSpeaker { rows[0].speaker }
         var showsLabel: Bool { rows[0].showsLabel }
+        var participant: MeetingSpeakerPresentation? {
+            guard let first = rows[0].participant else { return nil }
+            return rows.contains { $0.participant?.isEstimated == true } ? first.markingEstimated() : first
+        }
 
         func text(includingPartials: Bool = true) -> String {
             let visible = includingPartials ? rows : rows.filter { !$0.isPartial }
@@ -65,7 +69,7 @@ nonisolated enum MeetingLiveCaptionParagraphs {
             let previous = members.last
             let endsSentence = previous.map { !$0.isPartial && ".!?…".contains($0.text.last ?? " ") } ?? false
             let startsParagraph = previous.map {
-                $0.speaker != row.speaker || (!$0.isPartial && $0.text.contains("\n"))
+                !$0.hasSameSpeaker(as: row) || (!$0.isPartial && $0.text.contains("\n"))
                     || committedLength >= 512 || (committedLength >= 320 && endsSentence)
             } ?? false
             if startsParagraph {
@@ -77,6 +81,20 @@ nonisolated enum MeetingLiveCaptionParagraphs {
         }
         if !members.isEmpty { paragraphs.append(Paragraph(rows: members)) }
         return paragraphs
+    }
+}
+
+private extension MeetingLiveBubbleComposer.Row {
+    var captionLabel: String {
+        participant.map { MeetingTranscriptExporter.speakerLabel(for: $0, language: PichiLocalization.language) }
+            ?? speaker.captionSourceLabel
+    }
+}
+
+private extension MeetingLiveCaptionParagraphs.Paragraph {
+    var captionLabel: String {
+        participant.map { MeetingTranscriptExporter.speakerLabel(for: $0, language: PichiLocalization.language) }
+            ?? speaker.captionSourceLabel
     }
 }
 
@@ -405,7 +423,7 @@ private struct MeetingLiveParagraphRow: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if self.paragraph.showsLabel {
-                Text(self.paragraph.speaker.captionSourceLabel)
+                Text(self.paragraph.captionLabel)
                     .font(self.theme.typography.captionStrong)
                     .foregroundStyle(self.paragraph.speaker == .you ? self.theme.palette.accent : self.theme.palette.secondaryText)
             }
@@ -424,7 +442,7 @@ private struct MeetingLiveParagraphRow: View, Equatable {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(self.paragraph.speaker.captionSourceLabel + ", "
+        .accessibilityLabel(self.paragraph.captionLabel + ", "
             + self.paragraph.text(includingPartials: !self.hidesPartialFromAccessibility)
             + (self.pending.tokens.isEmpty ? "" : ", " + PichiLocalization.text("Audio captured, waiting for transcription")))
         .accessibilityHidden(self.hidesPartialFromAccessibility && self.paragraph.rows.allSatisfy(\.isPartial)
@@ -453,7 +471,7 @@ struct MeetingLiveBubbleRow: View, Equatable {
     private var isMicrophone: Bool { self.row.speaker == .you }
 
     private var sourceLabel: String {
-        self.row.speaker.captionSourceLabel
+        self.row.captionLabel
     }
 
     /// Distinguish capture sources without claiming that either source belongs to a person.
