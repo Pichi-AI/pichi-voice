@@ -1180,6 +1180,11 @@ final class MobileMeetingEndToEndTests: XCTestCase {
         XCTAssertEqual(reloaded.state, .interrupted)
         XCTAssertTrue(reloaded.hasRetryableAudio)
         XCTAssertEqual(reloaded.effectiveSpeakerProcessingMode, .streaming)
+        // New-capture preferences are independent of this persisted recording's pin.
+        settings.selectedSpeechModel = .whisperTiny
+        settings.meetingTranscriptionBackendID = PichiMeetingProviderFactory.registeredBackendDescriptor(
+            for: SettingsStore.SpeechModel.whisperTiny.rawValue)?.id.rawValue
+        settings.meetingSpeakerProcessingMode = .afterRecording
         let observations = CombinedPrivacyObservations(wrapping: freshPrivacy, aliases: reference.sensitiveAliases)
         let recoveryCapture = SyntheticMeetingMicrophone()
         let fresh = AppServices(store: store, capture: recoveryCapture, settings: settings,

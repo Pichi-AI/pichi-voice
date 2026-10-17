@@ -1510,8 +1510,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         // the local copy. Re-reading the preference after an await could split one attempt across
         // two backends — planning under one, failing the legacy callback against another.
         let backendID: MeetingBackendID
-        let usesRecordingPin = self.usesRecordingBackendPin && session.processingAttempts.count <= 1
-            && session.processingAttempts.allSatisfy({ $0.completedAt == nil })
+        // A restored streaming recording keeps its original model even when preferences
+        // for new captures changed. Live PCM finalization has no retained inference pin.
+        let usesRecordingPin = self.usesRecordingBackendPin && (
+            session.effectiveSpeakerProcessingMode == .streaming
+                || (session.processingAttempts.count <= 1
+                    && session.processingAttempts.allSatisfy({ $0.completedAt == nil })))
         if let retainedPin {
             backendID = retainedPin.backendID
         } else if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
