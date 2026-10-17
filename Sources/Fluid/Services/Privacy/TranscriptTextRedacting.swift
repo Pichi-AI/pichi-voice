@@ -8,6 +8,9 @@ protocol TranscriptTextRedacting: Sendable {
     /// Stable model/rules identity for retained working-state restoration. An adapter without
     /// this identity remains usable, but cannot advertise resumable sensitive-text processing.
     nonisolated var checkpointIdentity: String? { get }
+    /// Idempotent readiness for this exact attempt capability. Pipeline entry points call it
+    /// before publication, including a retained-audio retry after a fresh application launch.
+    func prepareForMeeting() async throws
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction
 }
 
@@ -31,6 +34,8 @@ struct TranscriptTextRedaction: Sendable, Equatable {
 
 extension TranscriptTextRedacting {
     nonisolated var checkpointIdentity: String? { nil }
+    /// Already-ready transformers and simple rule-only adapters have no resource lifecycle.
+    func prepareForMeeting() async throws {}
     func redact(_ text: String) async throws -> String {
         try await redactWithSpans(text).text
     }

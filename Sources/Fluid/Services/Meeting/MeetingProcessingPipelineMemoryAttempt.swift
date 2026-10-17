@@ -122,6 +122,13 @@ extension MeetingProcessingPipeline {
         try backend.validatePCMInput(configuration: request.configuration, mode: session.mode, admissionContext: admissionContext)
         let redactor = session.piiRedactionEnabled == true ? try self.privacyRedactorProvider() : nil
         if session.piiRedactionEnabled == true, redactor == nil { throw MeetingPrivacyPublicationError.redactorUnavailable }
+        if let redactor {
+            let identity = redactor.checkpointIdentity
+            try Task.checkCancellation()
+            try await redactor.prepareForMeeting()
+            try Task.checkCancellation()
+            guard redactor.checkpointIdentity == identity else { throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration }
+        }
         let runtime = try backend.makePCMRuntime(request)
         let configuration = request.configuration
         if configuration.effectiveSpeakerProcessingMode == .streaming, !runtime.supportsStreamingPCMProcessing {

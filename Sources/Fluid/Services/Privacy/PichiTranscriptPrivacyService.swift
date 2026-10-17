@@ -113,7 +113,7 @@ actor PichiTranscriptPrivacyModelStore {
 enum TextPrivacyResourceError: Error { case operationInProgress }
 
 /// A meeting freezes this service as its transcript privacy capability. Prepare
-/// must complete before the user starts; model errors propagate, never degrade
+/// completes at each processing entry point; model errors propagate, never degrade
 /// silently to regex-only or raw publication. Public results have no recovery map.
 actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
     nonisolated var checkpointIdentity: String? {
@@ -129,6 +129,8 @@ actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
     }
 
     var isReady: Bool { get async { await runtime.isReady } }
+
+    func prepareForMeeting() async throws { try await self.prepare() }
 
     func prepare(progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
         try Task.checkCancellation()
