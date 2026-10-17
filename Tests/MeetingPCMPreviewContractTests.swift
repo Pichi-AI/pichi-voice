@@ -4,7 +4,7 @@ import Foundation
 // compatibility default, independently of the app, CoreML, audio and model weights.
 nonisolated struct ASRTranscriptionResult: Sendable { let text: String }
 nonisolated struct ASRWordTiming: Sendable {}
-nonisolated struct ASRSegmentTiming: Sendable {}
+nonisolated struct ASRSegmentTiming: Codable, Sendable {}
 nonisolated struct MeetingOwnerVoiceProfileSnapshot: Sendable {}
 nonisolated struct MeetingAnalysisEpochID: Hashable, Sendable {}
 nonisolated struct MeetingBackendSpeakerActivity: Sendable {}
