@@ -3,9 +3,9 @@ import Foundation
 
 /// Downloads and installs the Nemotron 3 Diarization package from Hugging Face.
 ///
-/// The model is only needed after a recording stops, so opening FluidMeet starts the download in
-/// the background and final processing awaits it. One attempt runs at a time and every caller
-/// shares its result; a failed attempt ends in `.failed` and the next call starts a fresh one.
+/// Recorded-audio processing and opt-in streaming share this installation owner. Capture
+/// preparation selects the registered immutable profile before admitting audio. One attempt
+/// runs at a time per profile; callers share its result and failures permit a fresh retry.
 @MainActor
 final class MeetingDiarizationModelStore: ObservableObject {
     enum State: Equatable {

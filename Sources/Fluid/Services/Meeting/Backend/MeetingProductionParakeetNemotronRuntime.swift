@@ -634,8 +634,8 @@ final nonisolated class MeetingParakeetNemotronRuntime: MeetingParakeetNemotronR
                                    priorSpeakers: [MeetingSessionSpeaker]) async throws -> MeetingPCMTranscriptBatch {
         try Task.checkCancellation()
         let duration = Double(samples.count) / 16_000
-        // Live capture produces transcript only under every audio-save setting. Speaker
-        // assignment is a separate whole-recording phase after capture and ASR have drained.
+        // Assemble the ASR-native words before assigning speakers. The caller either keeps
+        // this transcript-only checkpoint or adds the continuous streaming epoch's evidence.
         guard !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return MeetingPCMTranscriptBatch(segments: [])
         }
