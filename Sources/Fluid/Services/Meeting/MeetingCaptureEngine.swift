@@ -2198,7 +2198,12 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         let shouldAccept = !self.stopping
         self.stateLock.unlock()
         guard shouldAccept else { return }
-        guard self.writer.enqueue(sampleBuffer) else { return }
+        guard self.writer.enqueue(sampleBuffer) else {
+            // A skipped native buffer would compress the streaming sample clock, even when
+            // the gap is below the converter's discontinuity tolerance. Fail both sinks.
+            if self.memoryConsumer != nil { self.failTranscription(MeetingCapturePCMError.transcriptionStopped) }
+            return
+        }
         if let pcmConverter {
             do {
                 let count = CMSampleBufferGetNumSamples(sampleBuffer)
@@ -2213,23 +2218,31 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
                     try self.enqueueForTranscription(converted)
                 }
             } catch {
-                let emit = self.stateLock.withLock { () -> Bool in
-                    guard !self.stopping, !self.emittedUnexpectedStop else { return false }
-                    self.emittedUnexpectedStop = true
-                    self.pcmFailure = error
-                    self.stopping = true
-                    return true
-                }
-                if emit {
-                    let detail = (error as? MeetingCapturePCMError)?.localizedDescription
-                        ?? PichiLocalization.text("In-memory transcription is not available for this attempt.")
-                    self.eventHandler(.interrupted(kind: .writerBackpressure, trackID: nil, detail: detail))
-                    self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
-                }
+                self.failTranscription(error)
                 return
             }
         }
         self.liveAudioHandler?(.microphone, sampleBuffer)
+    }
+
+    /// A failure of either tee sink ends this physical stream once. The recorded failure
+    /// also prevents Stop from flushing a misleadingly complete converted timeline.
+    private func failTranscription(_ error: Error) {
+        let emit = self.stateLock.withLock { () -> Bool in
+            // This callback already passed intake. Stop may have closed it meanwhile, but
+            // its joined queue drain must still observe the first rejected PCM buffer.
+            if self.pcmFailure == nil { self.pcmFailure = error }
+            let wasStopping = self.stopping
+            self.stopping = true
+            guard !wasStopping, !self.emittedUnexpectedStop else { return false }
+            self.emittedUnexpectedStop = true
+            return true
+        }
+        guard emit else { return }
+        let detail = (error as? MeetingCapturePCMError)?.localizedDescription
+            ?? PichiLocalization.text("In-memory transcription is not available for this attempt.")
+        self.eventHandler(.interrupted(kind: .writerBackpressure, trackID: nil, detail: detail))
+        self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
     }
 
     /// Same consumer contract as iOS: finite contiguous mono 16 kHz, never a file fallback.
