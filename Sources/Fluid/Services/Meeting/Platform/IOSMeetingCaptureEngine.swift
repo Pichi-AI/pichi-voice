@@ -107,6 +107,11 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
                                       captureMethod: .audioEngine)
         let writer: MeetingAudioChunkWriter?
         let memoryConsumer: (any MeetingMemoryAudioConsuming)?
+        let requiresConsumer = configuration.audioStorageMode == .memoryOnly
+            || configuration.effectiveSpeakerProcessingMode == .streaming
+        if requiresConsumer, self.memoryConsumerFactory == nil {
+            throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("In-memory transcription is not available for this attempt."))
+        }
         switch configuration.audioStorageMode ?? .retainedFiles {
         case .retainedFiles:
             // This branch is the only place that constructs any audio-file owner.
@@ -117,7 +122,10 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
             else { throw MeetingCaptureError.insufficientDiskSpace }
             writer = try MeetingAudioChunkWriter(track: track, sessionDirectory: sessionDirectory,
                                                 chunkDuration: configuration.chunkDuration, eventHandler: eventHandler)
-            memoryConsumer = nil
+            if configuration.effectiveSpeakerProcessingMode == .streaming, let memoryConsumerFactory {
+                do { memoryConsumer = try await memoryConsumerFactory(session, configuration, track, eventHandler) }
+                catch { _ = await writer?.stop(); throw error }
+            } else { memoryConsumer = nil }
         case .memoryOnly:
             guard let memoryConsumerFactory else {
                 throw MeetingCaptureError.captureStartFailed(PichiLocalization.text("In-memory transcription is not available for this attempt."))
@@ -130,16 +138,23 @@ actor IOSMeetingCaptureEngine: MeetingCaptureControlling {
                 writer: writer, memoryConsumer: memoryConsumer,
                 eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
         }
-        let runtime: any IOSMeetingCaptureRuntime
+        func makeRuntime() throws -> any IOSMeetingCaptureRuntime {
 #if DEBUG
-        if let debugInput {
-            runtime = try IOSMeetingDebugFileRuntime(input: debugInput, trackID: track.id,
-                originHostTime: session.timebase.startedHostTime, writer: writer,
-                memoryConsumer: memoryConsumer, eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
-        } else { runtime = try microphoneRuntime() }
-#else
-        runtime = try microphoneRuntime()
+            if let debugInput {
+                return try IOSMeetingDebugFileRuntime(input: debugInput, trackID: track.id,
+                    originHostTime: session.timebase.startedHostTime, writer: writer,
+                    memoryConsumer: memoryConsumer, eventHandler: eventHandler, liveAudioHandler: liveAudioHandler)
+            }
 #endif
+            return try microphoneRuntime()
+        }
+        let runtime: any IOSMeetingCaptureRuntime
+        do { runtime = try makeRuntime() }
+        catch {
+            _ = await writer?.stop()
+            try? await memoryConsumer?.finish()
+            throw error
+        }
         do {
             try Task.checkCancellation()
             guard !self.terminating else { throw CancellationError() }

@@ -10,10 +10,15 @@ import ScreenCaptureKit
 
 
 actor MeetingCaptureEngine: MeetingCaptureControlling {
+    typealias MemoryConsumerFactory = @MainActor @Sendable (
+        MeetingSession, MeetingCaptureConfiguration, MeetingAudioTrack, @escaping @Sendable (MeetingCaptureEvent) -> Void
+    ) async throws -> any MeetingMemoryAudioConsuming
+
     private struct ActiveCapture: @unchecked Sendable {
         var sessionID: MeetingSessionID
         var runtime: any MeetingCaptureRuntime
         var writers: [MeetingAudioChunkWriter]
+        var memoryConsumer: (any MeetingMemoryAudioConsuming)?
     }
 
     private var activeCapture: ActiveCapture?
@@ -21,6 +26,11 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
     private var stopTask: Task<MeetingCaptureStopResult, Error>?
     private var displaySleepAssertionID: IOPMAssertionID?
     private var terminating = false
+    private let memoryConsumerFactory: MemoryConsumerFactory?
+
+    init(memoryConsumerFactory: MemoryConsumerFactory? = nil) {
+        self.memoryConsumerFactory = memoryConsumerFactory
+    }
 
     func preflightPermissions() async throws {
         try await Self.requestMicrophonePermissionIfNeeded()
@@ -40,6 +50,12 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             throw MeetingCaptureError.captureStartFailed(
                 PichiLocalization.text("In-memory transcription is not available for this attempt.")
             )
+        }
+        if configuration.effectiveSpeakerProcessingMode == .streaming {
+            guard configuration.mode == .inRoom, self.memoryConsumerFactory != nil else {
+                throw MeetingCaptureError.captureStartFailed(
+                    PichiLocalization.text("In-memory transcription is not available for this attempt."))
+            }
         }
         guard self.activeCapture == nil, self.startingSessionID == nil, self.stopTask == nil else {
             throw MeetingCaptureError.captureAlreadyActive
@@ -63,6 +79,12 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         }
         let writersByKind = Dictionary(uniqueKeysWithValues: zip(tracks.map(\.kind), writers))
 
+        var memoryConsumer: (any MeetingMemoryAudioConsuming)?
+        if configuration.effectiveSpeakerProcessingMode == .streaming, let memoryConsumerFactory,
+           let microphoneTrack = tracks.first(where: { $0.kind == .microphone }) {
+            do { memoryConsumer = try await memoryConsumerFactory(session, configuration, microphoneTrack, eventHandler) }
+            catch { _ = await Self.stopWriters(writers); throw error }
+        }
         let runtime: any MeetingCaptureRuntime
         switch configuration.mode {
         case .onlineCall:
@@ -138,12 +160,19 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             guard let microphoneWriter = writersByKind[.microphone] else {
                 throw MeetingCaptureError.microphoneUnavailable
             }
-            runtime = try InRoomMicrophoneCaptureRuntime(
-                microphone: configuration.microphone,
-                writer: microphoneWriter,
-                eventHandler: eventHandler,
-                liveAudioHandler: liveAudioHandler
-            )
+            do {
+                runtime = try InRoomMicrophoneCaptureRuntime(
+                    microphone: configuration.microphone,
+                    writer: microphoneWriter,
+                    memoryConsumer: memoryConsumer,
+                    eventHandler: eventHandler,
+                    liveAudioHandler: liveAudioHandler
+                )
+            } catch {
+                _ = await Self.stopWriters(writers)
+                try? await memoryConsumer?.finish()
+                throw error
+            }
         }
 
         do {
@@ -151,6 +180,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         } catch {
             try? await runtime.stop()
             _ = await Self.stopWriters(writers)
+            try? await memoryConsumer?.finish()
             throw error
         }
 
@@ -158,13 +188,15 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
         if self.terminating {
             try? await runtime.stop()
             _ = await Self.stopWriters(writers)
+            try? await memoryConsumer?.finish()
             throw MeetingCaptureError.captureStartFailed("The app is shutting down.")
         }
         self.displaySleepAssertionID = Self.acquireDisplaySleepAssertion()
         self.activeCapture = ActiveCapture(
             sessionID: session.id,
             runtime: runtime,
-            writers: writers
+            writers: writers,
+            memoryConsumer: memoryConsumer
         )
         // Re-snapshot: a VPIO commit during start() promotes provenance on the writer's own track.
         let settledTracks = await withTaskGroup(of: MeetingAudioTrack.self, returning: [MeetingAudioTrack].self) { group in
@@ -199,7 +231,7 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             #if DEBUG
             AudioTopologyDiagnostics.record(.phaseBegin, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .runtimeStop)
             #endif
-            let runtimeFailure: Error?
+            var runtimeFailure: Error?
             do {
                 try await activeCapture.runtime.stop()
                 runtimeFailure = nil
@@ -219,6 +251,10 @@ actor MeetingCaptureEngine: MeetingCaptureControlling {
             #if DEBUG
             AudioTopologyDiagnostics.record(.phaseEnd, owner: .meetingCaptureEngine, queueRole: .actorControl, phase: .writerStop)
             #endif
+            // The bounded worker's finish includes the final durable speaker checkpoint.
+            // Stop cannot hand the session back before that tail has joined.
+            do { try await activeCapture.memoryConsumer?.finish() }
+            catch { runtimeFailure = runtimeFailure ?? error }
             let result = MeetingCaptureStopResult(tracks: tracks, stoppedAt: Date())
             if let runtimeFailure {
                 throw MeetingCaptureError.captureStopFailed(
@@ -2054,21 +2090,29 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
     private let session = AVCaptureSession()
     private let output = AVCaptureAudioDataOutput()
     private let writer: MeetingAudioChunkWriter
+    private let memoryConsumer: (any MeetingMemoryAudioConsuming)?
+    /// Serialized by sampleQueue; the existing writer retains native-rate PCM unchanged.
+    private let pcmConverter: MeetingCapturePCMConverter?
     private let controlQueue = DispatchQueue(label: "com.fluidvoice.meeting.inroom.control")
+    private let sampleQueue = DispatchQueue(label: "com.fluidvoice.meeting.inroom.samples", qos: .userInteractive)
     private let stateLock = NSLock()
     private let eventHandler: @Sendable (MeetingCaptureEvent) -> Void
     private let liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     private var stopping = false
     private var emittedUnexpectedStop = false
+    private var pcmFailure: Error?
     private var notificationObservers: [NSObjectProtocol] = []
 
     init(
         microphone: MeetingMicrophoneIdentity,
         writer: MeetingAudioChunkWriter,
+        memoryConsumer: (any MeetingMemoryAudioConsuming)? = nil,
         eventHandler: @escaping @Sendable (MeetingCaptureEvent) -> Void,
         liveAudioHandler: (@Sendable (MeetingAudioTrackKind, CMSampleBuffer) -> Void)?
     ) throws {
         self.writer = writer
+        self.memoryConsumer = memoryConsumer
+        self.pcmConverter = memoryConsumer == nil ? nil : try MeetingCapturePCMConverter()
         self.eventHandler = eventHandler
         self.liveAudioHandler = liveAudioHandler
         super.init()
@@ -2088,7 +2132,7 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         self.session.addOutput(self.output)
         self.output.setSampleBufferDelegate(
             self,
-            queue: DispatchQueue(label: "com.fluidvoice.meeting.inroom.samples", qos: .userInteractive)
+            queue: self.sampleQueue
         )
         self.observeSessionLifecycle()
     }
@@ -2128,9 +2172,21 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
                 completion.resume(.failure("Timed out while stopping microphone capture."))
             }
         }
+        // A callback may already have passed its acceptance guard when stop closes it.
+        // Join that serial callback queue before the engine finalizes either PCM sink.
+        let convertedTail: Result<Void, Error> = await withCheckedContinuation { continuation in
+            self.sampleQueue.async {
+                do {
+                    if let failure = self.stateLock.withLock({ self.pcmFailure }) { throw failure }
+                    if let tail = try self.pcmConverter?.finish() { try self.enqueueForTranscription(tail) }
+                    continuation.resume(returning: .success(()))
+                } catch { continuation.resume(returning: .failure(error)) }
+            }
+        }
         if case let .failure(detail) = result {
             throw MeetingCaptureRuntimeError.stopFailed(detail)
         }
+        try convertedTail.get()
     }
 
     func captureOutput(
@@ -2143,7 +2199,46 @@ private final nonisolated class InRoomMicrophoneCaptureRuntime: NSObject, Meetin
         self.stateLock.unlock()
         guard shouldAccept else { return }
         guard self.writer.enqueue(sampleBuffer) else { return }
+        if let pcmConverter {
+            do {
+                let count = CMSampleBufferGetNumSamples(sampleBuffer)
+                guard (1...65_536).contains(count),
+                      let description = CMSampleBufferGetFormatDescription(sampleBuffer),
+                      let format = try? MeetingPCMFormatContract(formatDescription: description),
+                      (1...8).contains(format.channelCount), (8_000...192_000).contains(format.sampleRate),
+                      let owned = MeetingLiveSampleCopy.copy(sampleBuffer) else {
+                    throw MeetingCapturePCMError.invalidBuffer
+                }
+                if let converted = try pcmConverter.convert(owned.buffer, presentationTime: owned.pts) {
+                    try self.enqueueForTranscription(converted)
+                }
+            } catch {
+                let emit = self.stateLock.withLock { () -> Bool in
+                    guard !self.stopping, !self.emittedUnexpectedStop else { return false }
+                    self.emittedUnexpectedStop = true
+                    self.pcmFailure = error
+                    self.stopping = true
+                    return true
+                }
+                if emit {
+                    let detail = (error as? MeetingCapturePCMError)?.localizedDescription
+                        ?? PichiLocalization.text("In-memory transcription is not available for this attempt.")
+                    self.eventHandler(.interrupted(kind: .writerBackpressure, trackID: nil, detail: detail))
+                    self.eventHandler(.interrupted(kind: .captureStoppedUnexpectedly, trackID: nil, detail: detail))
+                }
+                return
+            }
+        }
         self.liveAudioHandler?(.microphone, sampleBuffer)
+    }
+
+    /// Same consumer contract as iOS: finite contiguous mono 16 kHz, never a file fallback.
+    private func enqueueForTranscription(_ sample: CMSampleBuffer) throws {
+        guard let memoryConsumer else { return }
+        guard memoryConsumer.enqueue(sample) else {
+            throw memoryConsumer.rejectionReason.map(MeetingCapturePCMError.transcriptionRejected)
+                ?? .transcriptionStopped
+        }
     }
 
     private func observeSessionLifecycle() {

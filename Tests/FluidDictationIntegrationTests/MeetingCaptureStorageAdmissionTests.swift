@@ -6,6 +6,26 @@ import XCTest
 /// This deliberately passes a nonexistent session directory and a synthetic microphone identity.
 @MainActor
 final class MeetingCaptureStorageAdmissionTests: XCTestCase {
+    func testDesktopRefusesStreamingWithoutConsumerBeforeStorageOrPermissionWork() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configuration = MeetingCaptureConfiguration(mode: .inRoom, title: "Synthetic streaming admission",
+            languageCode: "ru", microphone: .init(captureDeviceID: "synthetic", displayName: "Synthetic microphone"),
+            audioStorageMode: .retainedFiles, speakerProcessingMode: .streaming)
+        let session = MeetingSession(configuration: configuration,
+            timebase: .init(startedHostTime: 0, machTimebaseNumerator: 1, machTimebaseDenominator: 1, firstPresentationTime: nil))
+        let engine = MeetingCaptureEngine()
+        do {
+            _ = try await engine.start(session: session, configuration: configuration,
+                sessionDirectory: root, eventHandler: { _ in }, liveAudioHandler: nil)
+            XCTFail("A missing bounded consumer must fail before an audio writer can be made")
+        } catch let error as MeetingCaptureError {
+            guard case .captureStartFailed = error else { return XCTFail("Unexpected admission error: \(error)") }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+        await engine.shutdownForTermination()
+    }
+
     func testDesktopRefusesMemoryOnlyBeforeAnyAudioFilesOrDirectoriesAreCreated() async throws {
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)

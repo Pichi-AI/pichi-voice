@@ -64,6 +64,7 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
             guard header.pin.schema == 1, header.pin.sessionID == session.id,
                   header.pin.configuration.languageCode == session.languageCode,
                   header.pin.configuration.speakerLabelsEnabled == (session.speakerLabelsEnabled ?? true),
+                  header.pin.configuration.effectiveSpeakerProcessingMode == session.effectiveSpeakerProcessingMode,
                   header.pin.piiRedactionEnabled == (session.piiRedactionEnabled == true),
                   header.pin.configuration.pipelineVersion == MeetingFinalProcessingConfiguration.defaultPipelineVersion
             else { throw Failure.changedConfiguration }
@@ -79,7 +80,9 @@ nonisolated struct MeetingRetainedProcessingCheckpoint: Sendable {
 
     func write(_ value: Value, session: MeetingSession) throws {
         guard session.audioStorageMode == .retainedFiles, session.retention.audioDeletedAt == nil,
-              value.pin.sessionID == session.id else { throw Failure.changedConfiguration }
+              value.pin.sessionID == session.id,
+              value.pin.configuration.effectiveSpeakerProcessingMode == session.effectiveSpeakerProcessingMode
+        else { throw Failure.changedConfiguration }
         try Task.checkCancellation()
         let root = self.sessionDirectory.standardizedFileURL.resolvingSymlinksInPath()
         let properties = try FileManager.default.attributesOfItem(atPath: root.path)

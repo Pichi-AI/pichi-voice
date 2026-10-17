@@ -355,6 +355,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             ?? PichiMeetingProviderFactory.defaultLanguageCode(for: self.settings.selectedSpeechModel.rawValue) ?? "ru"
         let storageMode: MeetingAudioStorageMode = self.settings.meetingSaveAudio ? .retainedFiles : .memoryOnly
         let speakerLabelsEnabled = self.settings.meetingSpeakerLabelsEnabled
+        let speakerProcessingMode = self.settings.meetingSpeakerProcessingMode
         let piiRedactionEnabled = self.settings.meetingPIIRedactionEnabled
         let microphone = try await MeetingCaptureSourceCatalog.defaultMicrophone(
             preferredCoreAudioUID: self.preferredMicrophoneUID()
@@ -384,11 +385,31 @@ final class MeetingSessionCoordinator: ObservableObject {
             timestampDefaultTitle: true,
             audioStorageMode: storageMode,
             speakerLabelsEnabled: speakerLabelsEnabled,
-            piiRedactionEnabled: piiRedactionEnabled
+            piiRedactionEnabled: piiRedactionEnabled,
+            speakerProcessingMode: speakerProcessingMode
         )
         #else
         throw MeetingProcessingError.modelUnavailable
         #endif
+    }
+
+    private nonisolated static func usesPCMProcessing(_ configuration: MeetingCaptureConfiguration) -> Bool {
+        configuration.audioStorageMode == .memoryOnly || configuration.effectiveSpeakerProcessingMode == .streaming
+    }
+
+    private nonisolated static func usesPCMProcessing(_ session: MeetingSession) -> Bool {
+        session.audioStorageMode == .memoryOnly || session.effectiveSpeakerProcessingMode == .streaming
+    }
+
+    private func prepareRecordingSpeakerResources(
+        for descriptor: MeetingBackendDescriptor, configuration: MeetingFinalProcessingConfiguration
+    ) async throws {
+        if configuration.effectiveSpeakerProcessingMode == .streaming,
+           PichiMeetingProviderFactory.registeredBackendDescriptor(for: configuration.asrModel)?.id == descriptor.id {
+            try await PichiMeetingProviderFactory.prepareSpeakerResources(for: configuration)
+        } else {
+            try await self.prepareRecordingDependencies(descriptor.diarizationDependencies)
+        }
     }
 
     @discardableResult
@@ -437,7 +458,9 @@ final class MeetingSessionCoordinator: ObservableObject {
            PichiMeetingProviderFactory.registeredLanguageCodes(for: selectedModelID) != nil {
             _ = try MeetingProviderOptions.resolve(MeetingFinalProcessingConfiguration(
                 asrModel: selectedModelID,
-                languageCode: configuration.languageCode
+                languageCode: configuration.languageCode,
+                speakerLabelsEnabled: configuration.speakerLabelsEnabled ?? true,
+                speakerProcessingMode: configuration.effectiveSpeakerProcessingMode
             ))
         }
         guard self.startReservation == reservation,
@@ -456,15 +479,22 @@ final class MeetingSessionCoordinator: ObservableObject {
         // changed while they were open; final preparation still binds the exact session request.
         let initialDescriptor = try self.processing.validateRecordingInput(
             configuration: configuration, backendID: requestedBackendID)
+        let validationSnapshot = PichiMeetingProviderFactory.validationConfiguration(
+            backendID: requestedBackendID, languageCode: configuration.languageCode,
+            diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
+            speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
+        try initialDescriptor?.validateSpeakerProcessingMode(configuration: validationSnapshot, mode: configuration.mode)
         // Explicit registered requests require a preinstalled artifact. Capture its identity
         // before any dependency work or permission prompt and retain this exact snapshot.
         let explicitRecordingConfiguration: MeetingFinalProcessingConfiguration?
         if configuration.transcriptionBackendID != nil {
             let snapshot = PichiMeetingProviderFactory.configuration(backendID: requestedBackendID,
-                languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true)
+                languageCode: configuration.languageCode, diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
+                speakerProcessingMode: configuration.effectiveSpeakerProcessingMode)
             let registeredOverride = PichiMeetingProviderFactory.registeredBackendDescriptor(for: snapshot.asrModel)?.id == requestedBackendID
             try PichiMeetingProviderFactory.validateRecordingConfiguration(snapshot,
-                isAppleSilicon: CPUArchitecture.isAppleSilicon, requiresInstalledArtifact: registeredOverride)
+                isAppleSilicon: CPUArchitecture.isAppleSilicon, requiresInstalledArtifact: registeredOverride,
+                captureMode: configuration.mode)
             try self.validateFrozenRecordingConfiguration(snapshot)
             explicitRecordingConfiguration = snapshot
         } else { explicitRecordingConfiguration = nil }
@@ -479,8 +509,9 @@ final class MeetingSessionCoordinator: ObservableObject {
         let dependencyDescriptor = initialDescriptor
             ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: self.settings.selectedSpeechModel.rawValue)
         if configuration.speakerLabelsEnabled != false, let dependencyDescriptor,
-           CPUArchitecture.isAppleSilicon || !dependencyDescriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
-            try await self.prepareRecordingDependencies(dependencyDescriptor.diarizationDependencies)
+           CPUArchitecture.isAppleSilicon || !dependencyDescriptor.allowsTranscriptOnlyOnUnsupportedHardware || Self.usesPCMProcessing(configuration) {
+            try await self.prepareRecordingSpeakerResources(for: dependencyDescriptor,
+                configuration: validationSnapshot)
         }
         try Task.checkCancellation()
         guard self.settings.selectedSpeechModel.rawValue == selectedModelID,
@@ -530,8 +561,9 @@ final class MeetingSessionCoordinator: ObservableObject {
                 configuration: configuration, backendID: recordingBackendID)
             if configuration.speakerLabelsEnabled != false,
                let descriptor = admittedPCMDescriptor ?? PichiMeetingProviderFactory.registeredBackendDescriptor(for: recordingModelID),
-               CPUArchitecture.isAppleSilicon || !descriptor.allowsTranscriptOnlyOnUnsupportedHardware || configuration.audioStorageMode == .memoryOnly {
-                try await self.prepareRecordingDependencies(descriptor.diarizationDependencies)
+               CPUArchitecture.isAppleSilicon || !descriptor.allowsTranscriptOnlyOnUnsupportedHardware || Self.usesPCMProcessing(configuration) {
+                try await self.prepareRecordingSpeakerResources(for: descriptor,
+                    configuration: validationSnapshot)
                 try Task.checkCancellation()
                 guard self.startReservation == reservation,
                       self.settings.selectedSpeechModel.rawValue == recordingModelID,
@@ -541,7 +573,8 @@ final class MeetingSessionCoordinator: ObservableObject {
             recordingASRConfiguration = explicitRecordingConfiguration ?? PichiMeetingProviderFactory.configuration(
                 backendID: recordingBackendID,
                 languageCode: configuration.languageCode,
-                diarizationEnabled: configuration.speakerLabelsEnabled ?? true
+                diarizationEnabled: configuration.speakerLabelsEnabled ?? true,
+                speakerProcessingMode: configuration.effectiveSpeakerProcessingMode
             )
             _ = try MeetingProviderOptions.resolve(recordingASRConfiguration)
             try self.validateFrozenRecordingConfiguration(recordingASRConfiguration)
@@ -620,7 +653,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.liveTranscriptionCoordinator = liveTranscriptionCoordinator
         self.liveTranscript = .empty
         self.lastLiveSpeechAt = nil
-        if configuration.audioStorageMode != .memoryOnly {
+        if !Self.usesPCMProcessing(configuration) {
         liveTranscriptionCoordinator.start(
             mode: configuration.mode,
             languageCode: configuration.languageCode,
@@ -638,7 +671,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                   self.terminationTask == nil,
                   !Task.isCancelled
             else { throw CancellationError() }
-            if configuration.audioStorageMode == .memoryOnly {
+            if Self.usesPCMProcessing(configuration) {
                 self.memoryCheckpointGeneration = generation
                 _ = try await self.processing.prepareMemoryAudio(
                     session: session, sessionDirectory: sessionDirectory, checkpoint: { [weak self] batch in
@@ -668,7 +701,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                     pendingSpeechCapture.offer(kind: kind, sampleBuffer: sampleBuffer)
                     // The strict consumer already owns inference. Its tee supplies only scalar
                     // presentation activity, never another live recognizer or PCM queue.
-                    if configuration.audioStorageMode != .memoryOnly {
+                    if !Self.usesPCMProcessing(configuration) {
                         liveTranscriptionCoordinator?.offer(kind: kind, sampleBuffer: sampleBuffer)
                     }
                 }
@@ -691,7 +724,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             // one-shot event and the settled writer health instead of replacing them with the
             // original preparing snapshot.
             session.events = self.activeSession?.events ?? session.events
-            if configuration.audioStorageMode == .memoryOnly, let latest = self.activeSession {
+            if Self.usesPCMProcessing(configuration), let latest = self.activeSession {
                 session.transcriptSegments = latest.transcriptSegments
                 session.speakers = latest.speakers
             }
@@ -1856,7 +1889,7 @@ final class MeetingSessionCoordinator: ObservableObject {
     }
 
     private func mergeLatestMemoryCheckpoint(into session: inout MeetingSession) {
-        guard session.audioStorageMode == .memoryOnly, let latest = self.activeSession, latest.id == session.id else { return }
+        guard Self.usesPCMProcessing(session), let latest = self.activeSession, latest.id == session.id else { return }
         // Checkpoint state is authoritative for the transcript and all session metadata.
         // Preserve only physical stop facts and terminal additions from this caller's copy.
         let capturedTracks = session.audioTracks
@@ -1914,6 +1947,14 @@ final class MeetingSessionCoordinator: ObservableObject {
                 session.transcriptSegments.append(segment)
             }
         }
+        // Resolve against the latest protected word after insertions. Acoustic revisions
+        // cannot replace its text, native times, redaction marker or user speaker aliases.
+        for revision in batch.speakerRevisions {
+            guard let index = indices[revision.segmentID] else {
+                throw MeetingPCMTranscriptBatch.SpeakerRevisionFailure.identityMismatch
+            }
+            try revision.apply(to: &session.transcriptSegments[index])
+        }
         session.speakers = batch.mergingSpeakers(into: session.speakers)
         session.transcriptTimeDomain = .meetingRelative
         session.transcriptIsComplete = (session.transcriptIsComplete ?? true) && batch.isComplete
@@ -1922,11 +1963,15 @@ final class MeetingSessionCoordinator: ObservableObject {
         await self.persistence.flush()
         guard self.memoryCheckpointGeneration == generation else { throw CancellationError() }
         try await self.store.save(session)
-        // Only durable, privacy-filtered text is published by the strict path.
+        guard self.memoryCheckpointGeneration == generation, self.activeSession?.id == sessionID else {
+            throw CancellationError()
+        }
+        // Only durable, privacy-filtered text is published by the bounded PCM path.
         var snapshot = MeetingLiveTranscriptSnapshot.empty
         snapshot.revision = self.liveTranscript.revision + 1
         snapshot.utterances = session.transcriptSegments.suffix(100).map {
-            MeetingLiveUtterance(id: $0.id, speaker: .you, text: $0.text, start: $0.start.seconds, end: $0.end.seconds)
+            MeetingLiveUtterance(id: $0.id, speaker: .you, text: $0.text, start: $0.start.seconds, end: $0.end.seconds,
+                participant: MeetingTranscriptExporter.speakerPresentation(for: $0, in: session))
         }
         // Approved held text is display-only. Only batch.segments above enter persistence,
         // Copy and Export; finish/cancellation clear the partial with the same generation.
@@ -2031,10 +2076,10 @@ final class MeetingSessionCoordinator: ObservableObject {
             // by the pipeline; legacy attempts leave this nil. The reference only becomes durable
             // with the session save below, and the checkpoint survives until that save succeeds.
             session.resultSidecarReference = result.resultSidecarReference
-            session.transcriptIsComplete = (result.resultSidecarReference != nil || session.audioStorageMode == .memoryOnly)
+            session.transcriptIsComplete = (result.resultSidecarReference != nil || Self.usesPCMProcessing(session))
                 ? result.isComplete
                 : nil
-            if result.resultSidecarReference != nil || session.audioStorageMode == .memoryOnly {
+            if result.resultSidecarReference != nil || Self.usesPCMProcessing(session) {
                 session.transcriptTimeDomain = .meetingRelative
             }
             session.processingAttempts.removeAll {

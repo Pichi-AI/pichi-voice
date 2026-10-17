@@ -174,6 +174,27 @@ struct MeetingSessionStoreCheckpointTests {
         let value = MeetingRetainedProcessingCheckpoint.Value(pin: pin, inputFingerprint: "synthetic-source-sha",
             ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText)
         try working.write(value, session: retained)
+        let modeCheckpoint = try Data(contentsOf: retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName))
+        var streamingSession = retained
+        streamingSession.speakerProcessingMode = .streaming
+        do { _ = try working.read(session: streamingSession); preconditionFailure("A post-recording checkpoint must not resume a streaming attempt") }
+        catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration { checks += 1 }
+        do { try working.write(value, session: streamingSession); preconditionFailure("A mismatched mode must be rejected before replacing the last checkpoint") }
+        catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration { checks += 1 }
+        check(try Data(contentsOf: retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)) == modeCheckpoint,
+            "Mismatched speaker scheduling preserves the last durable checkpoint")
+        let streamConfiguration = MeetingFinalProcessingConfiguration(languageCode: retained.languageCode,
+            speakerProcessingMode: .streaming)
+        let streamPin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: retained.id,
+            backendID: pin.backendID, backendVersion: pin.backendVersion, configuration: streamConfiguration,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        try working.write(.init(pin: streamPin, inputFingerprint: value.inputFingerprint,
+            ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText), session: streamingSession)
+        check(try working.read(session: streamingSession)?.payload == privateText,
+            "The captured streaming mode round-trips the authenticated checkpoint")
+        do { _ = try working.read(session: retained); preconditionFailure("A streaming checkpoint must not resume a post-recording attempt") }
+        catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration { checks += 1 }
+        try working.write(value, session: retained)
         let obsoleteConfig = MeetingFinalProcessingConfiguration(languageCode: retained.languageCode,
             pipelineVersion: 14, speakerAttributionPolicy: .standard)
         let obsoletePin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: retained.id,

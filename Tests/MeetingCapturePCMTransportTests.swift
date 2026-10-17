@@ -162,6 +162,40 @@ struct MeetingCapturePCMTransportTests {
             let mid = Int(copy.buffer.frameLength) / 2
             try require(abs(copy.buffer.floatChannelData![0][mid] - 0.2) < 0.01, "converter preserves downmixed signal at \(mid): \(copy.buffer.floatChannelData![0][mid]), frames \(copy.buffer.frameLength)")
         }
+        // The desktop tee preserves the writer's native PCM and converts only the bounded
+        // consumer copy. Exercise raw stereo input rather than the iOS-owned mono tap path.
+        for rate in [44_100, 48_000] {
+            for interleaved in [false, true] {
+                let nativeConverter = try MeetingCapturePCMConverter()
+                var count = 0
+                var expected = CMTime(seconds: 200, preferredTimescale: 16_000)
+                var offset = 0
+                func accept(_ output: CMSampleBuffer) throws {
+                    let contract = try MeetingPCMFormatContract(formatDescription: CMSampleBufferGetFormatDescription(output)!)
+                    try require(contract.sampleRate == 16_000 && contract.channelCount == 1,
+                        "native-rate stereo tee must satisfy the strict consumer contract")
+                    try require(abs(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(output) - expected)) < 1.0 / 16_000,
+                        "native-rate tee keeps one continuous physical clock")
+                    let frames = CMSampleBufferGetNumSamples(output)
+                    count += frames
+                    expected = expected + CMTime(value: Int64(frames), timescale: 16_000)
+                    let copied = MeetingLiveSampleCopy.copy(output)!
+                    try require((0..<Int(copied.buffer.frameLength)).allSatisfy { copied.buffer.floatChannelData![0][$0].isFinite },
+                        "native-rate tee output remains finite")
+                }
+                while offset < rate {
+                    let frames = min(1024, rate - offset)
+                    let native = pcm(frames: frames, sampleRate: Double(rate), channels: 2, interleaved: interleaved)
+                    if let output = try nativeConverter.convert(native,
+                        presentationTime: CMTime(value: Int64(200 * rate + offset), timescale: CMTimeScale(rate))) {
+                        try accept(output)
+                    }
+                    offset += frames
+                }
+                if let tail = try nativeConverter.finish() { try accept(tail) }
+                try require(abs(count - 16_000) <= 1, "native-rate tee joins the complete one-second converter tail")
+            }
+        }
         let discontinuous = try MeetingCapturePCMConverter()
         _ = try discontinuous.convert(pcm(frames: 100), presentationTime: CMTime(seconds: 1, preferredTimescale: 16_000))
         do {
