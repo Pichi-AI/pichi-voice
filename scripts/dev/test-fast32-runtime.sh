@@ -33,6 +33,7 @@ swiftc -swift-version 5 -parse-as-library -emit-module -emit-library -module-nam
 swiftc -swift-version 5 -parse-as-library -default-isolation MainActor \
     -I "$pichi_build" -L "$pichi_build" -lFluidAudio -Xlinker -rpath -Xlinker "$pichi_build" \
     -module-cache-path "$pichi_build/ModuleCache" "$pichi_build/Contracts.swift" \
+    Sources/Fluid/Services/Meeting/Backend/MeetingResumableNemotronDiarizerSession.swift \
     Sources/Fluid/Services/Meeting/Backend/Nemotron3/*.swift \
     Sources/Fluid/Services/Meeting/Backend/MeetingFast32NemotronDiarizer.swift \
     Tests/MeetingFast32RuntimeTests.swift -o "$pichi_build/tests"

@@ -670,9 +670,8 @@ private final class MeetingProviderLanguagePin {
 final class MeetingProcessingPipeline: MeetingProcessingControlling {
     /// Bump whenever classification rules change so a resumed run can't mix rules mid-session.
     /// Era-awareness did NOT bump this: the mic pass re-runs every time, and multi-era tracks cannot predate this build.
-    /// Version 13: short ambiguous words receive the opted-in turn-handoff second pass.
-    /// Version 14: preserve uncertainty evidence when applying short turn continuity inference.
-    static let pipelineVersion = 14
+    /// Version 14: frozen shared attribution policy, native word precision and non-cascading acoustic evidence.
+    static let pipelineVersion = 15
     /// Per-turn engines starve on short turns, and an all-empty chunk collapses to unlabeled.
     static let perTurnTurnMergeGapSeconds = 5.0
 
@@ -1485,6 +1484,16 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         guard session.audioTracks.contains(where: { !$0.chunks.isEmpty }) else {
             throw MeetingProcessingError.noRecoverableAudio
         }
+        // Only explicitly retained audio has a durable inference input. Load and authenticate
+        // its frozen pin off-main before consulting mutable settings or acquiring model scopes.
+        let pinTask = Task.detached(priority: .utility) {
+            try MeetingRetainedProcessingCheckpoint(sessionDirectory: sessionDirectory).read(session: session)?.pin
+        }
+        let retainedPin = try await withTaskCancellationHandler { try await pinTask.value } onCancel: { pinTask.cancel() }
+        try Task.checkCancellation()
+        if let retainedPin, retainedPin.privacyFingerprint != attemptRedactor?.checkpointIdentity {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
 
         // The selection is read exactly once, here, and every later decision in this attempt uses
         // the local copy. Re-reading the preference after an await could split one attempt across
@@ -1492,7 +1501,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         let backendID: MeetingBackendID
         let usesRecordingPin = self.usesRecordingBackendPin && session.processingAttempts.count <= 1
             && session.processingAttempts.allSatisfy({ $0.completedAt == nil })
-        if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
+        if let retainedPin {
+            backendID = retainedPin.backendID
+        } else if usesRecordingPin, let recordingBackendID = session.recordingBackendID {
             backendID = MeetingBackendID(rawValue: recordingBackendID)
         } else {
             backendID = self.backendIDProvider(session.languageCode)
@@ -1507,6 +1518,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
         )
 
         let declaredDescriptor = self.backendRegistry.descriptor(for: backendID)
+        if let retainedPin, let declaredDescriptor, retainedPin.backendVersion != declaredDescriptor.version {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
         if let descriptor = declaredDescriptor, !descriptor.supportedInputs.contains(.recordedChunks) {
             throw MeetingBackendError.unsupportedInput(backend: backendID, input: .recordedChunks)
         }
@@ -1524,12 +1538,13 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             attemptID: Self.resolvedAttemptID(session: session),
             session: session,
             sessionDirectory: sessionDirectory,
-            configuration: PichiMeetingProviderFactory.configuration(
+            configuration: retainedPin?.configuration ?? PichiMeetingProviderFactory.configuration(
                 backendID: backendID,
                 languageCode: session.languageCode,
                 artifactFingerprintOverride: usesRecordingPin ? session.recordingASRArtifactFingerprint : nil,
                 diarizationEnabled: session.speakerLabelsEnabled ?? true
-            )
+            ),
+            privacyFingerprint: attemptRedactor?.checkpointIdentity
         )
         let backend = try self.backendRegistry.makeBackend(
             id: backendID,
@@ -1560,6 +1575,9 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 }
             )
         )
+        if let retainedPin, retainedPin.backendVersion != backend.descriptor.version {
+            throw MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration
+        }
         guard backend.descriptor.supportedLanguageCodes.contains(session.languageCode) else {
             throw MeetingBackendError.unsupportedLanguage(backend: backendID, languageCode: session.languageCode)
         }
@@ -1704,7 +1722,8 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
             evidence: publishedEvidence,
             coverageReceipts: bundle.coverageReceipts,
             echoVerdicts: echoVerdicts,
-            confirmedLocalUserTokens: bundle.confirmedLocalUserTokens
+            confirmedLocalUserTokens: bundle.confirmedLocalUserTokens,
+            speakerAttributionPolicy: request.configuration.speakerAttributionPolicy
         )
         let assemblyTask = Task.detached(priority: .userInitiated) {
             try MeetingTranscriptAssembler(speakerNameFormat: speakerNameFormat).assemble(assemblyInput)
@@ -1848,7 +1867,12 @@ final class MeetingProcessingPipeline: MeetingProcessingControlling {
                 let nextKey = Self.canonicalSegmentMergeKey(next)
                 let gap = next.start.seconds - current.end.seconds
                 let combinedDuration = max(current.end.seconds, next.end.seconds) - current.start.seconds
-                if nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
+                if current.nativePrecision != .word, next.nativePrecision != .word,
+                   current.speakerAttribution == nil, next.speakerAttribution == nil,
+                   current.nativeTiming == nil, next.nativeTiming == nil,
+                   current.nativeUnitID == nil, next.nativeUnitID == nil,
+                   current.nativeSpeakerAssignment == nil, next.nativeSpeakerAssignment == nil,
+                   nextKey == currentKey, gap <= maximumGapSeconds, combinedDuration <= maximumDurationSeconds {
                     current.end = Self.mediaTime(max(current.end.seconds, next.end.seconds))
                     current.text = Self.joinTranscriptText(current.text, next.text)
                     memberIDs.append(next.id)

@@ -1,6 +1,6 @@
 // Adapted from FluidInference/FluidAudio 82eb4c1e0ab67e1c7d8de5092aa42a8f74cbd7b8.
 // Apache-2.0. See Resources/Notices/FluidAudio-Nemotron3.txt.
-// Changes: app isolation, existing FluidAudio helpers, local-only loading, joined cancellation.
+// Changes: app isolation, local-only loading, joined cancellation, bounded streaming snapshots.
 #if arch(arm64)
 import FluidAudio
 import Accelerate
@@ -59,6 +59,64 @@ public nonisolated final class Nemotron3Diarizer {
         frontend.reset()
         streamFinished = false
         streamedFrameCount = 0
+    }
+
+    /// Captured only between completed streaming steps. Model weights and scratch CoreML
+    /// tensors are excluded; the complete host state and frontend tail remain exact.
+    nonisolated struct StreamingSnapshot: Codable, Sendable {
+        let configuration: Data
+        let state: Nemotron3StreamingState
+        let frontend: Nemotron3StreamingFrontend.Snapshot
+        let streamedFrameCount: Int
+
+        init(config: Nemotron3Config, state: Nemotron3StreamingState,
+             frontend: Nemotron3StreamingFrontend, streamedFrameCount: Int) throws {
+            self.configuration = try Self.configurationSignature(config)
+            self.state = state
+            self.frontend = frontend.snapshot()
+            self.streamedFrameCount = streamedFrameCount
+        }
+
+        private static func configurationSignature(_ config: Nemotron3Config) throws -> Data {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return try encoder.encode(config)
+        }
+
+        func validate(config: Nemotron3Config, sampleCursor: Int) throws {
+            guard self.configuration == (try Self.configurationSignature(config)),
+                  self.state.spkcache.count == config.spkcacheLen * config.preEncoderDims,
+                  self.state.spkcachePreds.count == config.spkcacheLen * config.numSpeakers,
+                  self.state.fifo.count == config.fifoLen * config.preEncoderDims,
+                  self.state.fifoPreds.count == config.fifoLen * config.numSpeakers,
+                  (0...config.spkcacheLen).contains(self.state.spkcacheLength),
+                  (0...config.fifoLen).contains(self.state.fifoLength),
+                  self.state.spkcache.allSatisfy(\.isFinite),
+                  self.state.fifo.allSatisfy(\.isFinite),
+                  self.state.spkcachePreds.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+                  self.state.fifoPreds.allSatisfy({ $0.isFinite && (0...1).contains($0) }),
+                  self.streamedFrameCount >= 0,
+                  self.streamedFrameCount == self.frontend.nextCoreMel else {
+                throw Nemotron3Error.invalidState("Incompatible streaming checkpoint")
+            }
+            try self.frontend.validate(config: config, sampleCursor: sampleCursor)
+        }
+    }
+
+    func streamingSnapshot() throws -> StreamingSnapshot {
+        guard !self.streamFinished else { throw Nemotron3Error.invalidState("Checkpoint after stream finish") }
+        return try StreamingSnapshot(config: self.config, state: self.state, frontend: self.frontend,
+                                     streamedFrameCount: self.streamedFrameCount)
+    }
+
+    func restoreStreamingSnapshot(_ snapshot: StreamingSnapshot, sampleCursor: Int) throws {
+        try snapshot.validate(config: self.config, sampleCursor: sampleCursor)
+        let restoredFrontend = try Nemotron3StreamingFrontend(config: self.config, snapshot: snapshot.frontend,
+                                                              sampleCursor: sampleCursor)
+        self.state = snapshot.state
+        self.frontend = restoredFrontend
+        self.streamedFrameCount = snapshot.streamedFrameCount
+        self.streamFinished = false
     }
 
     /// Process a complete audio buffer (16 kHz mono) and return per-frame speaker
@@ -350,6 +408,91 @@ nonisolated struct Nemotron3StreamingFrontend {
 
     init(config: Nemotron3Config) {
         self.config = config
+    }
+
+    /// Audio and mel retain only the unfinished chunk's bounded context. The absolute
+    /// cursors are needed for pre-emphasis, STFT centering and the next model chunk.
+    nonisolated struct Snapshot: Codable, Sendable {
+        let audio: [Float]
+        let audioStart: Int
+        let samplesReceived: Int
+        let melCache: [Float]
+        let melCacheStart: Int
+        let melFramesComputed: Int
+        let nextCoreMel: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case audio, audioStart, samplesReceived, melCache, melCacheStart, melFramesComputed, nextCoreMel
+        }
+
+        init(frontend: Nemotron3StreamingFrontend) {
+            self.audio = frontend.audio
+            self.audioStart = frontend.audioStart
+            self.samplesReceived = frontend.samplesReceived
+            self.melCache = frontend.melCache
+            self.melCacheStart = frontend.melCacheStart
+            self.melFramesComputed = frontend.melFramesComputed
+            self.nextCoreMel = frontend.nextCoreMel
+        }
+
+        init(from decoder: Decoder) throws {
+            guard let config = decoder.userInfo[Nemotron3StreamingState.checkpointConfigurationKey] as? Nemotron3Config else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath,
+                                                        debugDescription: "Missing checkpoint configuration"))
+            }
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.audio = try MeetingDiarizerCheckpointDecoding.array(Float.self, from: container, forKey: .audio,
+                                                                    maximumCount: 16_000)
+            self.melCache = try MeetingDiarizerCheckpointDecoding.array(Float.self, from: container, forKey: .melCache,
+                                                                       maximumCount: (config.chunkMelFrames + 100) * config.melFeatures)
+            self.audioStart = try container.decode(Int.self, forKey: .audioStart)
+            self.samplesReceived = try container.decode(Int.self, forKey: .samplesReceived)
+            self.melCacheStart = try container.decode(Int.self, forKey: .melCacheStart)
+            self.melFramesComputed = try container.decode(Int.self, forKey: .melFramesComputed)
+            self.nextCoreMel = try container.decode(Int.self, forKey: .nextCoreMel)
+        }
+
+        func validate(config: Nemotron3Config, sampleCursor: Int) throws {
+            let half = AudioMelSpectrogram(preemph: 0).nFFT / 2
+            let expectedFrames = sampleCursor >= half ? (sampleCursor - half) / 160 + 1 : 0
+            let lcMel = config.chunkLeftContext * config.subsamplingFactor
+            let maximumPendingFrames = config.chunkMelFrames + 100
+            guard sampleCursor >= 0, self.samplesReceived == sampleCursor,
+                  (0...sampleCursor).contains(self.audioStart),
+                  self.audio.count == sampleCursor - self.audioStart, self.audio.count <= 16_000,
+                  self.melFramesComputed == expectedFrames,
+                  (0...expectedFrames).contains(self.nextCoreMel),
+                  self.nextCoreMel % (config.chunkLen * config.subsamplingFactor) == 0,
+                  self.melCacheStart == max(0, self.nextCoreMel - lcMel),
+                  self.melCacheStart <= self.melFramesComputed,
+                  self.melFramesComputed - self.melCacheStart <= maximumPendingFrames,
+                  self.melCache.count == (self.melFramesComputed - self.melCacheStart) * config.melFeatures,
+                  self.audio.allSatisfy(\.isFinite), self.melCache.allSatisfy(\.isFinite) else {
+                throw Nemotron3Error.invalidState("Invalid streaming frontend checkpoint")
+            }
+            // Require exactly the history retained by computeMel, rather than accepting
+            // a shorter finite tail that would silently alter the resumed STFT features.
+            let expectedAudioStart = min(max(0, expectedFrames * 160 - half - 1), sampleCursor)
+            guard self.audioStart == expectedAudioStart else {
+                throw Nemotron3Error.invalidState("Incomplete streaming frontend history")
+            }
+        }
+    }
+
+    func snapshot() -> Snapshot {
+        Snapshot(frontend: self)
+    }
+
+    init(config: Nemotron3Config, snapshot: Snapshot, sampleCursor: Int) throws {
+        try snapshot.validate(config: config, sampleCursor: sampleCursor)
+        self.config = config
+        self.audio = snapshot.audio
+        self.audioStart = snapshot.audioStart
+        self.samplesReceived = snapshot.samplesReceived
+        self.melCache = snapshot.melCache
+        self.melCacheStart = snapshot.melCacheStart
+        self.melFramesComputed = snapshot.melFramesComputed
+        self.nextCoreMel = snapshot.nextCoreMel
     }
 
     mutating func reset() {

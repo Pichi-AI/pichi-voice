@@ -368,6 +368,14 @@ struct MobileMeetingRoot: View {
                             playback.stop()
                             run { _ = try await coordinator.retryProcessing(sessionID: session.id); destination = .meetings }
                         }.disabled(isBusy || !coordinator.isQuiescent).accessibilityIdentifier("meeting.retry")
+                        if session.audioStorageMode == .retainedFiles {
+                            Button(PichiLocalization.text("Start processing again")) {
+                                playback.stop()
+                                run { _ = try await coordinator.restartProcessing(sessionID: session.id); destination = .meetings }
+                            }.disabled(isBusy || !coordinator.isQuiescent).accessibilityIdentifier("meeting.restartProcessing")
+                            Text(PichiLocalization.text("Retry continues from the last saved step. Starting again discards processing progress and keeps your audio."))
+                                .font(theme.typography.bodySmall).foregroundStyle(theme.palette.secondaryText)
+                        }
                     }
                     Button(PichiLocalization.text("New Meeting")) { newMeeting() }
                         .disabled(isBusy || !coordinator.isQuiescent)

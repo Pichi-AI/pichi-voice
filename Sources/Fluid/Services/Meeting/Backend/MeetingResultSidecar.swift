@@ -17,7 +17,7 @@ import Foundation
 // a span with no speech.
 
 nonisolated enum MeetingResultSidecarSchema {
-    static let currentVersion = 3
+    static let currentVersion = 4
 }
 
 /// The disposition set from plan §4. Raw values are stable contract tokens; decoding is
@@ -111,6 +111,9 @@ nonisolated struct MeetingResultSidecar: Equatable {
     let dispositions: [MeetingTextUnitDispositionRecord]
     let coverageReceipts: [MeetingSpanCoverageReceipt]
     let speakerIdentityLinks: [MeetingSpeakerIdentityLink]
+    let speakerActivity: [MeetingBackendSpeakerActivity]
+    let speakerAttributionPolicy: MeetingSpeakerAttributionPolicy?
+    let speakerAttributionDecisions: [MeetingSpeakerAttributionDecision]
 
     init(
         backendID: MeetingBackendID,
@@ -120,7 +123,10 @@ nonisolated struct MeetingResultSidecar: Equatable {
         units: [MeetingFinalTextUnit],
         dispositions: [MeetingTextUnitDispositionRecord],
         coverageReceipts: [MeetingSpanCoverageReceipt],
-        speakerIdentityLinks: [MeetingSpeakerIdentityLink] = []
+        speakerIdentityLinks: [MeetingSpeakerIdentityLink] = [],
+        speakerActivity: [MeetingBackendSpeakerActivity] = [],
+        speakerAttributionPolicy: MeetingSpeakerAttributionPolicy? = nil,
+        speakerAttributionDecisions: [MeetingSpeakerAttributionDecision] = []
     ) {
         self.schemaVersion = MeetingResultSidecarSchema.currentVersion
         self.backendID = backendID
@@ -131,6 +137,9 @@ nonisolated struct MeetingResultSidecar: Equatable {
         self.dispositions = dispositions
         self.coverageReceipts = coverageReceipts
         self.speakerIdentityLinks = speakerIdentityLinks
+        self.speakerActivity = speakerActivity
+        self.speakerAttributionPolicy = speakerAttributionPolicy
+        self.speakerAttributionDecisions = speakerAttributionDecisions
     }
 }
 
@@ -145,12 +154,15 @@ nonisolated extension MeetingResultSidecar: Codable {
         case dispositions
         case coverageReceipts
         case speakerIdentityLinks
+        case speakerActivity
+        case speakerAttributionPolicy
+        case speakerAttributionDecisions
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decode(Int.self, forKey: .schemaVersion)
-        guard version == MeetingResultSidecarSchema.currentVersion else {
+        guard [3, MeetingResultSidecarSchema.currentVersion].contains(version) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .schemaVersion,
                 in: container,
@@ -165,7 +177,10 @@ nonisolated extension MeetingResultSidecar: Codable {
             units: container.decode([MeetingFinalTextUnit].self, forKey: .units),
             dispositions: container.decode([MeetingTextUnitDispositionRecord].self, forKey: .dispositions),
             coverageReceipts: container.decode([MeetingSpanCoverageReceipt].self, forKey: .coverageReceipts),
-            speakerIdentityLinks: container.decodeIfPresent([MeetingSpeakerIdentityLink].self, forKey: .speakerIdentityLinks) ?? []
+            speakerIdentityLinks: container.decodeIfPresent([MeetingSpeakerIdentityLink].self, forKey: .speakerIdentityLinks) ?? [],
+            speakerActivity: container.decodeIfPresent([MeetingBackendSpeakerActivity].self, forKey: .speakerActivity) ?? [],
+            speakerAttributionPolicy: container.decodeIfPresent(MeetingSpeakerAttributionPolicy.self, forKey: .speakerAttributionPolicy),
+            speakerAttributionDecisions: container.decodeIfPresent([MeetingSpeakerAttributionDecision].self, forKey: .speakerAttributionDecisions) ?? []
         )
     }
 
@@ -180,11 +195,15 @@ nonisolated extension MeetingResultSidecar: Codable {
         try container.encode(self.dispositions, forKey: .dispositions)
         try container.encode(self.coverageReceipts, forKey: .coverageReceipts)
         if !self.speakerIdentityLinks.isEmpty { try container.encode(self.speakerIdentityLinks, forKey: .speakerIdentityLinks) }
+        if !self.speakerActivity.isEmpty { try container.encode(self.speakerActivity, forKey: .speakerActivity) }
+        try container.encodeIfPresent(self.speakerAttributionPolicy, forKey: .speakerAttributionPolicy)
+        if !self.speakerAttributionDecisions.isEmpty { try container.encode(self.speakerAttributionDecisions, forKey: .speakerAttributionDecisions) }
     }
 }
 
 nonisolated enum MeetingResultSidecarError: LocalizedError, Equatable {
     case invalidSpeakerIdentityLinks
+    case invalidSpeakerAttribution
     case emptyBackendID
     case emptyBackendVersion
     case emptyUnitID
@@ -219,6 +238,8 @@ nonisolated enum MeetingResultSidecarError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .invalidSpeakerAttribution:
+            return "Speaker attribution decisions must replay from the frozen policy, native units and admitted acoustic evidence."
         case .invalidSpeakerIdentityLinks:
             return "Speaker identity links must join visible speakers across epochs of the same track without collisions."
         case .emptyBackendID:
@@ -291,6 +312,7 @@ nonisolated extension MeetingResultSidecar {
     /// of units and receipts against the manifest's spans is the assembler's job.
     @discardableResult
     func validated() throws -> Self {
+        try Task.checkCancellation()
         let visibleIDs = Set(self.dispositions.filter { $0.disposition == .emitted }.map(\.unitID))
         let visibleTokens = Set(self.units.compactMap { unit -> MeetingBackendSpeakerToken? in
             guard visibleIDs.contains(unit.id), case let .assigned(token) = unit.speaker else { return nil }
@@ -472,11 +494,37 @@ nonisolated extension MeetingResultSidecar {
                     receiptID: receipt.id
                 )
             }
-            guard MeetingEvidenceInterval.isValid(start: receipt.analysisStart, end: receipt.analysisEnd) else {
+            guard MeetingEvidenceInterval.isValid(start: receipt.analysisStart, end: receipt.analysisEnd),
+                  let span = manifestSpansByID[receipt.spanID],
+                  receipt.analysisStart >= span.analysisInterval.start - MeetingAnalysisManifestSchema.mappingToleranceSeconds,
+                  receipt.analysisEnd <= span.analysisInterval.end + MeetingAnalysisManifestSchema.mappingToleranceSeconds else {
                 throw MeetingResultSidecarError.invalidCoverageInterval(receiptID: receipt.id)
             }
         }
 
+        let epochs = Dictionary(self.analysisManifest.tracks.flatMap(\.epochs).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for entry in self.speakerActivity {
+            guard let epoch = epochs[entry.token.analysisEpochID],
+                  !entry.token.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  MeetingEvidenceInterval.isValid(start: entry.start, end: entry.end),
+                  entry.start >= epoch.analysisInterval.start - MeetingAnalysisManifestSchema.mappingToleranceSeconds,
+                  entry.end <= epoch.analysisInterval.end + MeetingAnalysisManifestSchema.mappingToleranceSeconds
+            else { throw MeetingResultSidecarError.invalidSpeakerAttribution }
+        }
+        // Decisions are derived data. Recompute with identical admission barriers to reject
+        // stale rules, changed native assignments and forged foreground/candidate metadata.
+        let expected: [MeetingSpeakerAttributionDecision]
+        do {
+            expected = try MeetingTranscriptAssembler.attributionDecisions(
+                units: self.units, activity: self.speakerActivity, policy: self.speakerAttributionPolicy,
+                dispositions: self.dispositions, coverageReceipts: self.coverageReceipts,
+                manifest: self.analysisManifest)
+        } catch is CancellationError { throw CancellationError() }
+        catch { throw MeetingResultSidecarError.invalidSpeakerAttribution }
+        guard expected == self.speakerAttributionDecisions else {
+            throw MeetingResultSidecarError.invalidSpeakerAttribution
+        }
+        try Task.checkCancellation()
         return self
     }
 }

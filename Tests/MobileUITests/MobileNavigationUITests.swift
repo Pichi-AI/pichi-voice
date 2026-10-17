@@ -303,6 +303,77 @@ final class MobileNavigationUITests: XCTestCase {
     }
 
 
+    func testGeneralizedSpeakerAttributionLabelsInBothLanguagesAndThemes() throws {
+        let fixtureID = "1AD3258B-41DC-426A-A9CA-0FB6531A9016"
+        for (language, appearance, historyTitle, interruptionLabel, estimatedLabel) in [
+            ("en", "light", "History", "Борис (interrupting; background: Анна)", "Estimated speaker: Борис"),
+            ("ru", "dark", "История", "Борис (перебивает; фон: Анна)", "Предположительно: Борис")
+        ] {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            waitForOrientation(portrait: true)
+            capture("attribution-\(language)-ready")
+            openNavigation("history", title: historyTitle)
+            capture("attribution-\(language)-history")
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            guard meeting.waitForExistence(timeout: 5) else {
+                throw XCTSkip("Stage the synthetic GeneralizedAttributionMeeting.json in the simulator meeting store")
+            }
+            meeting.tap()
+            XCTAssertTrue(app.descendants(matching: .any)["meeting.transcript"].firstMatch.waitForExistence(timeout: 5))
+            capture("attribution-\(language)-opened")
+            let label = app.staticTexts[interruptionLabel].firstMatch
+            XCTAssertTrue(label.waitForExistence(timeout: 5), "The foreground label must retain the background speaker")
+            let mixedText = app.staticTexts["Да, уточню."].firstMatch
+            XCTAssertTrue(mixedText.waitForExistence(timeout: 5))
+            try revealParagraphAboveNavigation(mixedText, step: "attribution-\(language)-portrait")
+            capture("attribution-\(language)-portrait-foreground")
+            let inferred = app.staticTexts[estimatedLabel].firstMatch
+            XCTAssertTrue(inferred.exists, "A neighbor inference must not appear as an unqualified identity")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            XCTAssertTrue(label.exists && mixedText.exists)
+            try revealParagraphAboveNavigation(mixedText, step: "attribution-\(language)-landscape")
+            capture("attribution-\(language)-landscape-foreground")
+        }
+    }
+
+    func testRetainedProcessingRecoveryActionsInBothLanguagesAndThemes() throws {
+        let fixtureID = "2C920909-152B-4050-9ACB-454E82411015"
+        for (language, appearance, historyTitle, restartTitle) in [
+            ("en", "light", "History", "Start processing again"),
+            ("ru", "dark", "История", "Начать обработку заново")
+        ] {
+            app.terminate()
+            XCUIDevice.shared.orientation = .portrait
+            app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance]
+            app.launch()
+            waitForOrientation(portrait: true)
+            openNavigation("history", title: historyTitle)
+            let meeting = app.buttons["history.session.\(fixtureID)"]
+            guard meeting.waitForExistence(timeout: 5) else {
+                throw XCTSkip("Stage the synthetic RetainedRecoveryMeeting.json and silent audio in the simulator store")
+            }
+            meeting.tap()
+            capture("retained-recovery-\(language)-opened")
+            let retry = app.buttons["meeting.retry"]
+            let restart = app.buttons["meeting.restartProcessing"]
+            XCTAssertTrue(retry.waitForExistence(timeout: 5))
+            XCTAssertTrue(restart.waitForExistence(timeout: 5))
+            XCTAssertEqual(restart.label, restartTitle)
+            XCTAssertTrue(retry.isHittable && restart.isHittable,
+                          "Continue and restart must both be reachable without covering each other")
+            XCTAssertTrue(retry.frame.intersection(restart.frame).isEmpty)
+            capture("retained-recovery-\(language)-portrait-actions")
+            XCUIDevice.shared.orientation = .landscapeLeft
+            waitForOrientation(portrait: false)
+            XCTAssertTrue(retry.isHittable && restart.isHittable)
+            capture("retained-recovery-\(language)-landscape-actions")
+        }
+    }
+
     func testNativeRussianGlyphCoverage() throws {
         let letters = Array("АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя".utf16)
         let designs: [UIFontDescriptor.SystemDesign] = [.default, .serif, .rounded, .monospaced]

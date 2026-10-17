@@ -9,6 +9,109 @@ import XCTest
 /// materializer and pipeline integration tests use real WAV files on disk.
 @MainActor
 final class MeetingParakeetNemotronBackendTests: XCTestCase {
+    func testRetainedNewAttemptRestoresCompletedASRCoresAndContinuousSpeakerEvidence() async throws {
+        for fingerprint: String? in ["synthetic-sha256", nil] {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 145)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        var session = self.makeSession(mode: .inRoom, tracks: [track])
+        let directory = try self.makeTempSessionDirectory()
+        let pinnedASR = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: fingerprint, languageCode: "en")
+        let first = FakeRuntime(), materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: first, materializer: materializer)
+        let request = self.makeRequest(session: session, directory: directory, configuration: pinnedASR)
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 45)
+        ]
+        let plan = try backend.plan(request)
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = 45 * 16_000
+        first.diarizerFactory.segmentsByEpoch[epoch.id] = [.init(slotIndex: 2, start: 0, end: 45)]
+        first.asrSession.responses = [.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1)])]
+        first.asrSession.cancellationCallIndices = [1]
+        do {
+            _ = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+            XCTFail("Expected interrupted second core")
+        } catch is CancellationError {}
+        XCTAssertEqual(first.asrSession.callSampleCounts.count, 2)
+        let oldAttempt = request.attemptID
+        session.processingAttempts = [] // A new process/retry has a fresh attempt identity.
+        let resumedRuntime = FakeRuntime()
+        resumedRuntime.asrSession.responses = [
+            .init(text: "second", words: [.init(text: "second", start: 2.5, end: 3)]),
+            .init(text: "third", words: [.init(text: "third", start: 2.5, end: 3)]),
+        ]
+        if fingerprint == nil {
+            resumedRuntime.asrSession.responses.insert(.init(text: "first", words: [.init(text: "first", start: 0.5, end: 1)]), at: 0)
+        }
+        let resumedBackend = self.makeBackend(runtime: resumedRuntime, materializer: materializer)
+        let resumedRequest = self.makeRequest(session: session, directory: directory, configuration: pinnedASR)
+        let resumedPlan = try resumedBackend.plan(resumedRequest)
+        let resumedManifest = try self.makeManifest(plan: resumedPlan, observations: observations)
+        let result = try await resumedBackend.execute(plan: resumedPlan, manifest: resumedManifest, progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else { return XCTFail("Expected canonical result") }
+        XCTAssertNotEqual(bundle.evidence.attemptID, oldAttempt)
+        XCTAssertEqual(bundle.evidence.attemptID, resumedRequest.attemptID)
+        XCTAssertEqual(bundle.evidence.units.map(\.text), ["first", "second", "third"])
+        XCTAssertEqual(bundle.evidence.units.map(\.analysisStart), [0.5, 20.5, 40.5])
+        XCTAssertEqual(Set(bundle.evidence.units.map(\.id)).count, 3, "Completed cores cannot be duplicated")
+        XCTAssertEqual(resumedRuntime.asrSession.callSampleCounts, (fingerprint == nil ? [22, 24, 7] : [24, 7]).map { $0 * 16_000 },
+                       "Only a verified artifact identity authorizes reuse of completed ASR cores")
+        XCTAssertTrue(resumedRuntime.diarizerFactory.createdEpochs.isEmpty, "Completed diarization is restored, never repeated")
+        XCTAssertEqual(bundle.evidence.speakerActivity.map(\.token.label), ["slot-2"])
+        }
+    }
+
+    func testRetainedCheckpointRejectsASRModelDriftBeforeInference() async throws {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 145)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        let session = self.makeSession(mode: .inRoom, tracks: [track])
+        let directory = try self.makeTempSessionDirectory()
+        let runtime = FakeRuntime(), materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: runtime, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory,
+            configuration: .init(asrArtifactFingerprint: "original-model-sha256", languageCode: "en")))
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 45)
+        ]
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = 45 * 16_000
+        runtime.asrSession.cancellationCallIndices = [0]
+        do { _ = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in }); XCTFail("Expected interruption") }
+        catch is CancellationError {}
+        let replacement = FakeRuntime()
+        let changed = self.makeBackend(runtime: replacement, materializer: materializer)
+        let changedPlan = try changed.plan(self.makeRequest(session: session, directory: directory,
+            configuration: .init(asrArtifactFingerprint: "replacement-model-sha256", languageCode: "en")))
+        do {
+            _ = try await changed.execute(plan: changedPlan,
+                manifest: self.makeManifest(plan: changedPlan, observations: observations), progress: { _ in })
+            XCTFail("Model drift must not mix completed state")
+        } catch is MeetingRetainedProcessingCheckpoint.Failure {}
+        XCTAssertEqual(replacement.diarizationScopeCount, 0)
+        XCTAssertTrue(replacement.asrAttemptIDs.isEmpty)
+    }
+
+    func testStrictModeNeverCreatesRetainedWorkingState() async throws {
+        let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 105)
+        let track = self.makeMicTrack(chunks: [chunk], eraStart: 100)
+        var session = self.makeSession(mode: .inRoom, tracks: [track]); session.audioStorageMode = .memoryOnly
+        let directory = try self.makeTempSessionDirectory()
+        let runtime = FakeRuntime(), materializer = FakeMaterializer()
+        let backend = self.makeBackend(runtime: runtime, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory))
+        let manifest = try self.makeManifest(plan: plan, observations: [
+            .init(trackID: track.id, chunkID: chunk.id): self.makeObserved(chunk, duration: 5)
+        ])
+        let epoch = try XCTUnwrap(manifest.track(track.id)?.epochs.first)
+        materializer.replaySampleCounts[epoch.id] = 5 * 16_000
+        _ = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        XCTAssertFalse(names.contains(MeetingRetainedProcessingCheckpoint.fileName))
+        XCTAssertFalse(names.contains(MeetingRetainedProcessingCheckpoint.keyFileName))
+    }
+
     func testEightHourTrackUsesBoundedReplayAndASRWindows() async throws {
         let seconds = 8.0 * 60 * 60
         let chunk = self.makePCMChunk(sequence: 0, start: 100, end: 100 + seconds)
@@ -1449,6 +1552,97 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
 
     // MARK: - Epoch isolation and unit assignment
 
+    func testShortenedTrackCannotInheritCachedOwnerConfirmationFromReassignedSlot() async throws {
+        let firstChunk = self.makePCMChunk(sequence: 0, start: 100, end: 108)
+        let secondChunk = self.makePCMChunk(sequence: 1, start: 111, end: 119)
+        let track = self.makeMicTrack(chunks: [firstChunk, secondChunk], eraStart: 100)
+        var session = self.makeSession(mode: .inRoom, tracks: [track])
+        let directory = try self.makeTempSessionDirectory()
+        let configuration = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: "synthetic-sha256", languageCode: "en")
+        let observations: [MeetingAnalysisChunkKey: MeetingChunkObservationResult] = [
+            .init(trackID: track.id, chunkID: firstChunk.id): self.makeObserved(firstChunk, duration: 8),
+            .init(trackID: track.id, chunkID: secondChunk.id): self.makeObserved(secondChunk, duration: 8),
+        ]
+        var embedding = [Float](repeating: 0, count: 256); embedding[0] = 1
+        let owner = MeetingOwnerVoiceProfileSnapshot(metadata: .init(generation: UUID(), enrolledAt: Date()),
+            encoderFingerprint: MeetingOwnerVoiceProfileStore.encoderFingerprint, embeddings: [embedding, embedding])
+        let original = FakeRuntime(), materializer = FakeMaterializer()
+        materializer.sampleAmplitude = 0.1
+        original.ownerVoiceProfileSnapshot = owner
+        let backend = self.makeBackend(runtime: original, materializer: materializer)
+        let plan = try backend.plan(self.makeRequest(session: session, directory: directory, configuration: configuration))
+        let manifest = try self.makeManifest(plan: plan, observations: observations)
+        let epochs = try XCTUnwrap(manifest.track(track.id)?.epochs)
+        XCTAssertEqual(epochs.count, 2)
+        original.diarizerFactory.segmentsByEpoch[epochs[0].id] = [
+            .init(slotIndex: 0, start: 0, end: 8),
+            .init(slotIndex: 0, start: 8.5, end: 12.5), .init(slotIndex: 1, start: 12.5, end: 16.5),
+        ]
+        original.voiceProfiles = [.init(token: .init(analysisEpochID: epochs[0].id, label: "slot-0"),
+                                        embeddings: [embedding, embedding])]
+        original.asrSession.responses = [
+            .init(text: "owner", words: [.init(text: "owner", start: 0.5, end: 1)]),
+            .init(text: "other", words: [.init(text: "other", start: 6, end: 6.5)]),
+        ]
+        let initial = try await backend.execute(plan: plan, manifest: manifest, progress: { _ in })
+        guard case let .canonicalEvidence(initialBundle) = initial else { return XCTFail("Expected canonical result") }
+        let formerlyOwnedSlot = MeetingBackendSpeakerToken(analysisEpochID: epochs[1].id, label: "slot-0")
+        XCTAssertTrue(initialBundle.confirmedLocalUserTokens.contains(formerlyOwnedSlot), "The full original stream confirmed this slot as the owner")
+
+        // Simulate termination before the coordinator's completed-session save, then a
+        // transient read failure for the first epoch. The shortened stream swaps the slots.
+        session.processingAttempts = []
+        materializer.failingEpochs = [epochs[0].id]
+        let resumed = FakeRuntime(); resumed.ownerVoiceProfileSnapshot = owner
+        resumed.diarizerFactory.segmentsByEpoch[epochs[1].id] = [
+            .init(slotIndex: 1, start: 0, end: 4), .init(slotIndex: 0, start: 4, end: 8),
+        ]
+        let retry = self.makeBackend(runtime: resumed, materializer: materializer)
+        let retryPlan = try retry.plan(self.makeRequest(session: session, directory: directory, configuration: configuration))
+        let result = try await retry.execute(plan: retryPlan,
+            manifest: self.makeManifest(plan: retryPlan, observations: observations), progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else { return XCTFail("Expected canonical result") }
+        let other = try XCTUnwrap(bundle.evidence.units.first { $0.text == "other" })
+        XCTAssertEqual(other.speaker, .assigned(formerlyOwnedSlot), "The raw slot label can be reused for a different voice")
+        XCTAssertFalse(bundle.confirmedLocalUserTokens.contains(formerlyOwnedSlot), "A freshly assigned slot cannot inherit cached owner identity")
+        XCTAssertTrue(bundle.confirmedLocalUserTokens.isEmpty)
+        XCTAssertEqual(resumed.diarizerFactory.createdEpochs, [epochs[1].id])
+        XCTAssertTrue(resumed.asrSession.callSampleCounts.isEmpty, "Verified native ASR cores remain reusable independently of speaker identity")
+    }
+
+    func testTransientMissingEpochCannotCacheShortenedContinuousTrack() async throws {
+        let fixture = self.makeTwoEpochFixture()
+        let directory = try self.makeTempSessionDirectory()
+        let pinnedASR = MeetingFinalProcessingConfiguration(asrArtifactFingerprint: "synthetic-sha256", languageCode: "en")
+        let initial = FakeRuntime(), materializer = FakeMaterializer()
+        let firstBackend = self.makeBackend(runtime: initial, materializer: materializer)
+        let firstPlan = try firstBackend.plan(self.makeRequest(session: fixture.session, directory: directory, configuration: pinnedASR))
+        let firstManifest = try self.makeManifest(plan: firstPlan, observations: fixture.observations)
+        let epochs = try XCTUnwrap(firstManifest.track(fixture.micTrack.id)?.epochs)
+        materializer.failingEpochs = [epochs[1].id]
+        initial.diarizerFactory.segmentsByEpoch[epochs[0].id] = [.init(slotIndex: 0, start: 0, end: 2)]
+        initial.asrSession.responses = [
+            .init(text: "first", words: [.init(text: "first", start: 0.2, end: 0.4)]),
+            .init(text: "remote", words: [.init(text: "remote", start: 0.2, end: 0.4)]),
+        ]
+        _ = try await firstBackend.execute(plan: firstPlan, manifest: firstManifest, progress: { _ in })
+        materializer.failingEpochs = []
+        let resumed = FakeRuntime()
+        resumed.diarizerFactory.segmentsByEpoch[epochs[0].id] = [
+            .init(slotIndex: 0, start: 0, end: 2), .init(slotIndex: 1, start: 2.5, end: 4.5),
+        ]
+        resumed.asrSession.responses = [.init(text: "second", words: [.init(text: "second", start: 0.2, end: 0.4)])]
+        let secondBackend = self.makeBackend(runtime: resumed, materializer: materializer)
+        let secondPlan = try secondBackend.plan(self.makeRequest(session: fixture.session, directory: directory, configuration: pinnedASR))
+        let result = try await secondBackend.execute(plan: secondPlan,
+            manifest: self.makeManifest(plan: secondPlan, observations: fixture.observations), progress: { _ in })
+        guard case let .canonicalEvidence(bundle) = result else { return XCTFail("Expected canonical result") }
+        XCTAssertEqual(resumed.diarizerFactory.createdEpochs, [epochs[0].id], "The shortened first track was not a valid complete-track checkpoint")
+        XCTAssertEqual(resumed.asrSession.callSampleCounts.count, 1, "Already completed epoch ASR still resumes without repetition")
+        let second = try XCTUnwrap(bundle.evidence.units.first { $0.text == "second" })
+        XCTAssertEqual(second.speaker, .assigned(.init(analysisEpochID: epochs[1].id, label: "slot-1")))
+    }
+
     private func plannedManifest(
         fixture: TwoEpochFixture,
         runtime: FakeRuntime,
@@ -1661,16 +1855,16 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         }
         XCTAssertEqual(tokenA.label, "slot-0")
 
-        guard case let .assigned(tokenB) = try XCTUnwrap(unitsByText["b"]).speaker else {
-            return XCTFail("word b should inherit the continuing incumbent in the handoff pass")
+        guard case let .ambiguous(tokensB) = try XCTUnwrap(unitsByText["b"]).speaker else {
+            return XCTFail("Raw backend evidence must preserve two voices without a context guess")
         }
-        XCTAssertEqual(tokenB.label, "slot-0")
+        XCTAssertEqual(tokensB.map(\.label), ["slot-0", "slot-1"])
 
         guard case .unassigned = try XCTUnwrap(unitsByText["c"]).speaker else {
             return XCTFail("word c overlaps no activity")
         }
 
-        // Assembly keeps the resolved handoff on the existing product speaker.
+        // Presentation may resolve only through the shared audited policy; native ambiguity remains.
         let assembly = try MeetingTranscriptAssembler().assemble(MeetingAssemblyInput(
             plan: plan,
             manifest: manifest,
@@ -1680,7 +1874,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(assembly.segments.map(\.text), ["a", "b"])
         XCTAssertEqual(assembly.speakers.count, 1, "only the unambiguous assigned slot mints a speaker")
         let resolved = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["b"]?.id })
-        XCTAssertEqual(resolved.disposition, .emitted)
+        XCTAssertEqual(resolved.disposition, .ambiguousUnassigned)
         let outside = try XCTUnwrap(assembly.sidecar.dispositions.first { $0.unitID == unitsByText["c"]?.id })
         XCTAssertEqual(outside.disposition, .outsideActivity)
     }
@@ -1699,7 +1893,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(tokens.map(\.label), ["slot-0", "slot-1"])
     }
 
-    func testAllCandidatesAtOrBelowScaledFloorAreUnassigned() {
+    func testShortMaterialCandidatesSurviveSilentEnvelopePadding() {
         let (slot0, slot1) = self.attributionTokens()
         let decision = MeetingParakeetNemotronBackend.assignment(
             start: 0,
@@ -1710,7 +1904,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             ],
             allowDominance: true
         )
-        guard case .unassigned = decision else { return XCTFail("sub-frame evidence must not assign a speaker") }
+        guard case .ambiguous = decision else { return XCTFail("Silence must not raise the candidate support threshold") }
     }
 
     func testSoleAboveFloorCandidateAssigns() {
@@ -1720,7 +1914,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
             end: 1,
             activity: [
                 MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 0.2),
-                MeetingBackendSpeakerActivity(token: slot1, start: 0.95, end: 1),
+                MeetingBackendSpeakerActivity(token: slot1, start: 0.96, end: 1),
             ],
             allowDominance: true
         )
@@ -1767,7 +1961,7 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
     func testClearLeaderAndExactDominanceBoundaryAssign() {
         let (slot0, slot1) = self.attributionTokens()
         for leaderEnd in [0.8, 0.5] {
-            let runnerEnd = leaderEnd == 0.5 ? 0.2 : 0.15
+            let runnerEnd = leaderEnd == 0.5 ? 0.1 : 0.15
             let decision = MeetingParakeetNemotronBackend.assignment(
                 start: 0,
                 end: 1,
@@ -1818,62 +2012,61 @@ final class MeetingParakeetNemotronBackendTests: XCTestCase {
         XCTAssertEqual(tokens.map(\.label), ["slot-0", "slot-1"])
     }
 
-    func testHandoffAssignsNewEntrantWhoseActivityStartsWithShortWord() {
+    func testPCMRawAssignmentsNeverCascadeInferredHandoffAnchors() throws {
         let (slot0, slot1) = self.attributionTokens()
-        let decision = MeetingParakeetNemotronBackend.handoffAssignment(
-            .ambiguous([slot0, slot1]),
-            start: 1,
-            end: 1.4,
-            activity: [
-                MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 1.4),
-                MeetingBackendSpeakerActivity(token: slot1, start: 1, end: 1.4),
-            ],
-            previousAssignedWord: (slot0, 0.95)
-        )
-        guard case let .assigned(token) = decision else { return XCTFail("new onset should win the handoff") }
-        XCTAssertEqual(token, slot1)
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(
+            result: .init(text: "first mixed another"),
+            words: [.init(text: "first", start: 0, end: 0.5),
+                    .init(text: "mixed", start: 1, end: 1.4),
+                    .init(text: "another", start: 1.4, end: 1.8)],
+            epoch: slot0.analysisEpochID, duration: 2,
+            activity: [.init(token: slot0, start: 0, end: 2), .init(token: slot1, start: 1, end: 2)],
+            identityTokens: [slot0, slot1])
+        XCTAssertEqual(units[0].speaker, .assigned(slot0))
+        XCTAssertEqual(units[1].speaker, .ambiguous([slot0, slot1]))
+        XCTAssertEqual(units[2].speaker, .ambiguous([slot0, slot1]))
     }
 
-    func testHandoffKeepsIncumbentWhenOtherSpeakerDidNotStartAtBoundary() {
+    func testAcousticDecisionIsInvariantWhenOnlySilenceExtendsWordEnvelope() {
         let (slot0, slot1) = self.attributionTokens()
-        let decision = MeetingParakeetNemotronBackend.handoffAssignment(
-            .ambiguous([slot0, slot1]),
-            start: 1,
-            end: 1.4,
-            activity: [
-                MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 1.4),
-                MeetingBackendSpeakerActivity(token: slot1, start: 0.2, end: 1.4),
-            ],
-            previousAssignedWord: (slot0, 0.95)
-        )
-        guard case let .assigned(token) = decision else { return XCTFail("continuing incumbent should own the word") }
-        XCTAssertEqual(token, slot0)
-    }
-
-    func testHandoffVetoesMissingContextLongWordsLargeGapsAndMoreThanTwoCandidates() {
-        let (slot0, slot1) = self.attributionTokens()
-        let epoch = slot0.analysisEpochID
-        let slot2 = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "slot-2")
-        let activity = [
-            MeetingBackendSpeakerActivity(token: slot0, start: 0, end: 2),
-            MeetingBackendSpeakerActivity(token: slot1, start: 1, end: 2),
-            MeetingBackendSpeakerActivity(token: slot2, start: 1, end: 2),
-        ]
-
-        for (assignment, start, end, previous) in [
-            (MeetingBackendSpeakerAssignment.ambiguous([slot0, slot1]), 1.0, 1.4, nil),
-            (.ambiguous([slot0, slot1]), 1.0, 2.0, (token: slot0, end: 0.95)),
-            (.ambiguous([slot0, slot1]), 1.0, 1.4, (token: slot0, end: 0.0)),
-            (.ambiguous([slot0, slot1, slot2]), 1.0, 1.4, (token: slot0, end: 0.95)),
-        ] {
-            guard case .ambiguous = MeetingParakeetNemotronBackend.handoffAssignment(
-                assignment,
-                start: start,
-                end: end,
-                activity: activity,
-                previousAssignedWord: previous
-            ) else { return XCTFail("handoff veto must preserve ambiguity") }
+        let activity: [MeetingBackendSpeakerActivity] = [
+            .init(token: slot0, start: 0, end: 0.3), .init(token: slot1, start: 0.2, end: 0.3)]
+        let decisions = [0.4, 0.6, 0.8].map {
+            MeetingParakeetNemotronBackend.assignment(start: 0, end: $0, activity: activity, allowDominance: true)
         }
+        XCTAssertTrue(decisions.allSatisfy { $0 == decisions[0] })
+        XCTAssertEqual(decisions[0], .ambiguous([slot0, slot1]))
+    }
+
+    func testPCMIndexedBatchPreserves8192NativeWordsAndHonorsFrozenPolicy() throws {
+        let (first, second) = self.attributionTokens()
+        let count = 8_192
+        let words = (0..<count).map { index in
+            ASRWordTiming(text: "native-\(index)", start: Double(index * 2), end: Double(index * 2 + 1))
+        }
+        let activity = (0..<count).flatMap { index in [
+            MeetingBackendSpeakerActivity(token: first, start: Double(index * 2), end: Double(index * 2 + 1)),
+            MeetingBackendSpeakerActivity(token: second, start: Double(index * 2 + 1), end: Double(index * 2 + 2))]
+        }
+        let units = try MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "Native words"),
+            words: words, epoch: first.analysisEpochID, duration: Double(count * 2),
+            activity: activity, identityTokens: [first, second])
+        XCTAssertEqual(units.count, count)
+        XCTAssertEqual(units.map(\.text), words.map(\.text))
+        XCTAssertEqual(units.map(\.analysisStart), words.map(\.start))
+        XCTAssertEqual(units.map(\.analysisEnd), words.map(\.end))
+        XCTAssertEqual(Set(units.map(\.id)).count, count)
+        XCTAssertTrue(units.allSatisfy { $0.precision == .word && $0.speaker == .assigned(first) })
+        let mixedActivity: [MeetingBackendSpeakerActivity] = [
+            .init(token: first, start: 0, end: 1), .init(token: second, start: 0.2, end: 0.3)]
+        func classify(_ policy: MeetingSpeakerAttributionPolicy) throws -> MeetingBackendSpeakerAssignment {
+            try XCTUnwrap(MeetingParakeetNemotronBackend.pcmUnits(result: .init(text: "word"),
+                words: [.init(text: "word", start: 0, end: 1)], epoch: first.analysisEpochID,
+                duration: 1, activity: mixedActivity, identityTokens: [first, second],
+                speakerAttributionPolicy: policy).first?.speaker)
+        }
+        XCTAssertEqual(try classify(.standard), .assigned(first))
+        XCTAssertEqual(try classify(.init(enableDominance: false)), .ambiguous([first, second]))
     }
 
     private func attributionTokens() -> (MeetingBackendSpeakerToken, MeetingBackendSpeakerToken) {
@@ -2203,6 +2396,7 @@ private final nonisolated class FakeRuntime: MeetingParakeetNemotronRunning, @un
     let asrSession = FakeASRSession()
     var voiceProfiles: [MeetingSpeakerVoiceProfile] = []
     var voiceError: Error?
+    var ownerVoiceProfileSnapshot: MeetingOwnerVoiceProfileSnapshot?
     private(set) var diarizationScopeCount = 0
     private(set) var asrAttemptIDs: [UUID] = []
     private(set) var asrConfigurations: [MeetingFinalProcessingConfiguration] = []
@@ -2235,6 +2429,7 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
     var failingEpochs: Set<MeetingAnalysisEpochID> = []
     var customSpanSampleCounts: [MeetingAnalysisEpochID: [Int]] = [:]
     var replaySampleCounts: [MeetingAnalysisEpochID: Int] = [:]
+    var sampleAmplitude: Float = 0
     private(set) var maximumReplayRead = 0
 
     struct GeneratedSource: MeetingPCMReplaySource {
@@ -2292,7 +2487,7 @@ private final nonisolated class FakeMaterializer: MeetingEpochAudioMaterializing
         }
         return MeetingMaterializedEpoch(
             epochID: epoch.id,
-            samples: [Float](repeating: 0, count: cursor),
+            samples: [Float](repeating: self.sampleAmplitude, count: cursor),
             sampleRate: 16_000,
             spanSamples: ranges
         )

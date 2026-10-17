@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "id": "2C920909-152B-4050-9ACB-454E82411015",
+  "title": "Synthetic retained processing recovery",
+  "languageCode": "ru",
+  "mode": "inRoom",
+  "selectedMicrophone": {
+    "captureDeviceID": "synthetic-navigation-microphone",
+    "displayName": "Synthetic microphone",
+    "role": "unknown"
+  },
+  "startedAt": "2026-10-16T20:00:00Z",
+  "endedAt": "2026-10-16T20:00:01Z",
+  "updatedAt": "2026-10-16T20:00:01Z",
+  "timebase": {
+    "startedHostTime": 0,
+    "machTimebaseNumerator": 1,
+    "machTimebaseDenominator": 1
+  },
+  "state": "interrupted",
+  "events": [],
+  "failures": [],
+  "audioStorageMode": "retainedFiles",
+  "audioTracks": [
+    {
+      "id": "B0DC76F8-3EED-47A5-829C-11F92C78DE09",
+      "kind": "microphone",
+      "sourceIdentifier": "synthetic-navigation-microphone",
+      "sourceDisplayName": "Synthetic microphone",
+      "timebase": {
+        "startedHostTime": 0,
+        "machTimebaseNumerator": 1,
+        "machTimebaseDenominator": 1
+      },
+      "health": {
+        "status": "stopped",
+        "level": 0,
+        "droppedSampleCount": 0
+      },
+      "chunks": [
+        {
+          "id": "81EC2440-9131-4674-A2A8-4233D2E93329",
+          "sequence": 0,
+          "relativeFilePath": "tracks/synthetic-recovery.wav",
+          "presentationStart": {
+            "value": 0,
+            "timescale": 16000
+          },
+          "presentationEnd": {
+            "value": 16000,
+            "timescale": 16000
+          },
+          "discontinuities": [],
+          "sha256": "643f8a8dc8bd9c19225afffad2becfec5426180b3749cb208abdf1a6c8354efc",
+          "byteCount": 32044,
+          "finalizationState": "finalized"
+        }
+      ]
+    }
+  ],
+  "speakers": [],
+  "transcriptSegments": [],
+  "retention": {},
+  "processingAttempts": [],
+  "speakerLabelsEnabled": false,
+  "piiRedactionEnabled": false
+}

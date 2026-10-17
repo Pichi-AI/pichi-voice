@@ -46,6 +46,78 @@ struct MeetingSessionStoreCheckpointTests {
         let start = ProcessInfo.processInfo.systemUptime
         try await store.create(session)
         let createSeconds = ProcessInfo.processInfo.systemUptime - start
+        // Working-state recovery is opt-in through the captured storage mode, never today's
+        // settings. Use the actual encryption/private-write implementation in this harness.
+        let strictWorking = MeetingRetainedProcessingCheckpoint(sessionDirectory: root.appendingPathComponent("must-not-exist"))
+        check(try strictWorking.read(session: session) == nil, "Strict mode does not read working-state files")
+        check(!manager.fileExists(atPath: root.appendingPathComponent("must-not-exist").path), "Strict mode creates no directory")
+        var retained = MeetingSession(configuration: .init(mode: .inRoom, title: "Synthetic retained recovery",
+            microphone: .init(captureDeviceID: "fixture", displayName: "Fixture microphone")),
+            startedAt: session.startedAt, timebase: timebase)
+        retained.audioStorageMode = .retainedFiles
+        retained.piiRedactionEnabled = false
+        retained.transcriptSegments = []
+        try await store.create(retained)
+        let retainedDirectory = try await store.sessionDirectory(for: retained.id)
+        let working = MeetingRetainedProcessingCheckpoint(sessionDirectory: retainedDirectory)
+        let configuration = MeetingFinalProcessingConfiguration(languageCode: retained.languageCode)
+        let pin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: retained.id,
+            backendID: .init(rawValue: "synthetic-retained"), backendVersion: "1", configuration: configuration,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        let privateText = Data("synthetic working text never exported".utf8)
+        let value = MeetingRetainedProcessingCheckpoint.Value(pin: pin, inputFingerprint: "synthetic-source-sha",
+            ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText)
+        try working.write(value, session: retained)
+        let obsoleteConfig = MeetingFinalProcessingConfiguration(languageCode: retained.languageCode,
+            pipelineVersion: 13, speakerAttributionPolicy: nil)
+        let obsoletePin = MeetingRetainedProcessingCheckpoint.Pin(schema: 1, sessionID: retained.id,
+            backendID: pin.backendID, backendVersion: pin.backendVersion, configuration: obsoleteConfig,
+            piiRedactionEnabled: false, privacyFingerprint: nil)
+        do {
+            try working.write(.init(pin: obsoletePin, inputFingerprint: value.inputFingerprint,
+                ownerVoiceIdentity: nil, runtimeFingerprint: nil, payload: privateText), session: retained)
+            preconditionFailure("The writer's read-back must reject obsolete processing semantics")
+        } catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration { checks += 1 }
+        do { _ = try working.read(session: retained); preconditionFailure("Old attribution semantics must not resume under a new pipeline") }
+        catch MeetingRetainedProcessingCheckpoint.Failure.changedConfiguration { checks += 1 }
+        try working.write(value, session: retained)
+        let checkpointURL = retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)
+        let keyURL = retainedDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.keyFileName)
+        let ciphertext = try Data(contentsOf: checkpointURL)
+        check(ciphertext.range(of: privateText) == nil, "Working ASR text is not plaintext in the checkpoint")
+        check(try MeetingRetainedProcessingCheckpoint(sessionDirectory: retainedDirectory).read(session: retained)?.payload == privateText,
+              "A fresh store authenticates and restores exact working-state bytes")
+        check(try manager.attributesOfItem(atPath: checkpointURL.path)[.posixPermissions] as? NSNumber == 0o600,
+              "Checkpoint permissions are private")
+        check(try manager.attributesOfItem(atPath: keyURL.path)[.posixPermissions] as? NSNumber == 0o600,
+              "Checkpoint key permissions are private")
+        var damaged = ciphertext; damaged[damaged.count / 2] ^= 1
+        try damaged.write(to: checkpointURL)
+        do { _ = try working.read(session: retained); preconditionFailure("Corruption must not resume") }
+        catch { checks += 1 }
+        try ciphertext.write(to: checkpointURL)
+        var drifted = retained; drifted.piiRedactionEnabled = true
+        do { _ = try working.read(session: drifted); preconditionFailure("Privacy policy drift must not resume") }
+        catch { checks += 1 }
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            try working.write(value, session: retained)
+        }
+        do { try await cancelled.value; preconditionFailure("Cancelled work must not publish") }
+        catch is CancellationError { checks += 1 }
+        check(try Data(contentsOf: checkpointURL) == ciphertext, "Cancelled checkpoint preserves the last complete generation")
+        let abandoned = retainedDirectory.appendingPathComponent(".processing-resume-\(UUID().uuidString).tmp")
+        let unrelated = retainedDirectory.appendingPathComponent(".processing-resume-user-note.tmp")
+        try Data(repeating: 7, count: 32).write(to: abandoned)
+        try Data("unrelated file".utf8).write(to: unrelated)
+        try await store.deleteAudioFiles(for: retained.id)
+        check(!manager.fileExists(atPath: checkpointURL.path) && !manager.fileExists(atPath: keyURL.path),
+              "Deleting retained audio removes ciphertext and key")
+        check(!manager.fileExists(atPath: abandoned.path), "Deleting audio removes interrupted atomic checkpoint writes")
+        check(manager.fileExists(atPath: unrelated.path), "Cleanup only removes owned temporary names")
+        check(try !MeetingRetainedProcessingCheckpoint.hasWorkingState(in: retainedDirectory), "No retained working-state residue survives deletion")
+        check(try await store.load(id: retained.id) != nil, "Audio cleanup preserves the meeting manifest")
+        try await store.delete(id: retained.id)
         let compact = try Data(contentsOf: manifestURL)
         check(!compact.contains(10), "Canonical JSON has no formatting newlines, while escaped user newlines remain data")
         let legacyEncoder = JSONEncoder()
@@ -132,6 +204,69 @@ struct MeetingSessionStoreCheckpointTests {
         check(try self.indexIDs(at: indexURL) == [sibling.id.uuidString], "Deletion preserves sibling membership")
         let all = try await MeetingSessionStore(rootDirectory: root).loadAll()
         check(all == [sibling], "Fresh discovery and index loading retain every surviving complete record")
+        // Measure serialized transcript storage using actual production models and core.
+        // This is a Mac serializer measurement, not a physical iPad memory benchmark.
+        let footprintCount = 10_000
+        let epoch = MeetingAnalysisEpochID(trackID: track.id, ordinal: 0)
+        let token = MeetingBackendSpeakerToken(analysisEpochID: epoch, label: "synthetic-voice")
+        let units = (0..<footprintCount).map { index in
+            MeetingFinalTextUnit(id: "synthetic-native-\(index)", trackID: track.id, analysisEpochID: epoch,
+                precision: .word, text: "Synthetic", analysisStart: Double(index * 2),
+                analysisEnd: Double(index * 2 + 1), speaker: .assigned(token), analysisSpanIDs: [])
+        }
+        let decisions = try MeetingSpeakerAttribution.resolve(units: units,
+            activity: [.init(token: token, start: 0, end: Double(footprintCount * 2))])
+        let baseline = Array(session.transcriptSegments.prefix(footprintCount))
+        let compactNative = baseline.enumerated().map { index, original in
+            var copy = original
+            copy.nativePrecision = .word
+            copy.nativeUnitID = units[index].id
+            copy.nativeSpeakerAssignment = units[index].speaker
+            copy.nativeTiming = .init(start: units[index].analysisStart, end: units[index].analysisEnd)
+            copy.speakerAttribution = MeetingTranscriptSpeakerAttribution.readingSummary(
+                decision: decisions[index], speakerIDs: [token: speaker.id])
+            return copy
+        }
+        let verboseNative = compactNative.enumerated().map { index, original in
+            var copy = original
+            copy.speakerAttribution = .init(decision: decisions[index], speakerIDs: [token: speaker.id])
+            return copy
+        }
+        var manual = session
+        manual.transcriptSegments[0] = verboseNative[0]
+        let originalRevision = manual.transcriptSegments[0].revision
+        try manual.reassignSegment(id: manual.transcriptSegments[0].id, to: speaker.id)
+        check(manual.transcriptSegments[0].speakerAttribution == nil,
+            "Explicit confirmation of the displayed person clears inferred attribution metadata")
+        check(manual.transcriptSegments[0].revision == originalRevision + 1,
+            "Manual confirmation records a revision even when the displayed person stays the same")
+        check(manual.transcriptSegments[0].nativeSpeakerAssignment == units[0].speaker,
+            "Manual confirmation preserves the raw native speaker annotation")
+        let targetSpeaker = MeetingSessionSpeaker(id: UUID(), displayName: "Manual target", diarizationClusterID: nil,
+            trackKind: .microphone, isLocalUser: false, identityCandidates: [])
+        manual.speakers.append(targetSpeaker)
+        try manual.mergeSpeakers(speaker.id, into: targetSpeaker.id)
+        check(manual.transcriptSegments[0].nativeSpeakerAssignment == units[0].speaker,
+            "Manual identity merge never rewrites native token evidence")
+        let legacyWord = try JSONDecoder().decode(MeetingTranscriptSegment.self, from: JSONEncoder().encode(baseline[0]))
+        check(legacyWord.nativeSpeakerAssignment == nil, "Legacy source annotations remain optional")
+        let persistedNative = try JSONDecoder().decode(MeetingTranscriptSegment.self,
+            from: JSONEncoder().encode(compactNative[0]))
+        check(persistedNative.nativeSpeakerAssignment == units[0].speaker,
+            "Compact direct-word source assignments survive the production segment codec")
+        var invalidNative = manual
+        invalidNative.transcriptSegments[0].nativeSpeakerAssignment = .assigned(.init(
+            analysisEpochID: .init(trackID: UUID(), ordinal: 0), label: "foreign-voice"))
+        do { try invalidNative.validateTranscriptStructure(); preconditionFailure("Foreign native source scope must fail") }
+        catch MeetingModelValidationError.invalidSpeakerAttribution { checks += 1 }
+        let footprintEncoder = JSONEncoder()
+        let baselineBytes = try footprintEncoder.encode(baseline).count
+        let compactNativeBytes = try footprintEncoder.encode(compactNative).count
+        let verboseNativeBytes = try footprintEncoder.encode(verboseNative).count
+        check(compactNative.allSatisfy { $0.speakerAttribution == nil }, "Routine direct words use compact metadata")
+        check(compactNativeBytes < verboseNativeBytes, "Routine summaries avoid repeated evidence and policy fingerprints")
+        print("Attribution serializer footprint: words=\(footprintCount) baselineBytes=\(baselineBytes) "
+            + "nativeCompactBytes=\(compactNativeBytes) repeatedSummaryBytes=\(verboseNativeBytes)")
         print("Meeting session checkpoint tests passed: \(checks) checks; \(segmentCount) segments; "
             + "compactBytes=\(compact.count) legacyBytes=\(legacy.count) "
             + "createSeconds=\(createSeconds) saveSeconds=\(saveSeconds) legacyEncodeSeconds=\(legacyEncodeSeconds)")

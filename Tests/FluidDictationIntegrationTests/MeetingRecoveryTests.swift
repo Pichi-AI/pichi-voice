@@ -1204,6 +1204,92 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(MeetingUIPreferences(), preferences, "Rendering must not change saved meeting or audio-device preferences")
     }
 
+    func testMacRecoveryRestartDispatchesExistingActionOnlyForRetainedAudio() {
+        var retained = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        retained.audioStorageMode = .retainedFiles
+        var restartedIDs: [MeetingSessionID] = []
+        func canvas(_ session: MeetingSession, busy: Bool = false) -> MeetingFailureCanvas {
+            MeetingFailureCanvas(session: session, message: "Synthetic failed checkpoint", isRetrying: busy,
+                onRetrySession: { _ in XCTFail("Restart must not dispatch the resume callback") },
+                onRestartSession: { restartedIDs.append($0.id) },
+                onRevealAudio: { _ in XCTFail("Restart must not reveal or rewrite audio") },
+                onRecordAgain: { _ in XCTFail("Restart must not start a new recording") }, onClose: nil)
+        }
+        let recovery = canvas(retained)
+        XCTAssertTrue(recovery.canRestartProcessing)
+        recovery.restartProcessing()
+        XCTAssertEqual(restartedIDs, [retained.id])
+        canvas(retained, busy: true).restartProcessing()
+        XCTAssertEqual(restartedIDs, [retained.id], "An active operation disables restart dispatch")
+        var strict = retained; strict.audioStorageMode = .memoryOnly
+        XCTAssertFalse(canvas(strict).canRestartProcessing)
+        canvas(strict).restartProcessing()
+        var deleted = retained; deleted.retention.audioDeletedAt = Date()
+        XCTAssertFalse(canvas(deleted).canRestartProcessing)
+        canvas(deleted).restartProcessing()
+        XCTAssertEqual(restartedIDs, [retained.id], "Missing or strict input never reaches the durable restart service")
+    }
+
+    func testRetainedRecoveryCanvasNativeVisuals() throws {
+        guard let path = ProcessInfo.processInfo.environment["PICHI_RETAINED_RECOVERY_VISUAL_DIR"] else {
+            throw XCTSkip("Opt-in native retained recovery visual check")
+        }
+        XCTAssertTrue(path.hasPrefix("/"), "The caller supplies an absolute ignored artifact directory")
+        let output = URL(fileURLWithPath: path, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let previousLanguage = ProcessInfo.processInfo.environment["PICHI_INTERFACE_LANGUAGE"]
+        defer {
+            if let previousLanguage { setenv("PICHI_INTERFACE_LANGUAGE", previousLanguage, 1) }
+            else { unsetenv("PICHI_INTERFACE_LANGUAGE") }
+        }
+        let preferences = MeetingUIPreferences()
+        var session = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        session.audioStorageMode = .retainedFiles
+        session.title = "Retained meeting Ёё"
+        session.failures = [.init(id: UUID(), occurredAt: Date(), domain: .processing,
+            code: "syntheticCheckpointFailure", message: "Synthetic interrupted processing", recoverable: true)]
+        try session.validateForPersistence()
+        var actions = 0
+        let cases: [(PichiInterfaceLanguage, ColorScheme)] = [(.english, .light), (.russian, .dark)]
+        for (language, scheme) in cases {
+            setenv("PICHI_INTERFACE_LANGUAGE", language.rawValue, 1)
+            XCTAssertEqual(PichiLocalization.language, language)
+            let view = MeetingFailureCanvas(session: session,
+                message: "The saved processing checkpoint is damaged. Keep the recording and restart processing.",
+                isRetrying: false, onRetrySession: { _ in actions += 1 }, onRestartSession: { _ in actions += 1 },
+                onRevealAudio: { _ in actions += 1 }, onRecordAgain: { _ in actions += 1 }, onClose: { actions += 1 })
+                .padding(32)
+                .frame(width: 760, height: 640, alignment: .topLeading)
+                .appTheme(.adaptive(accent: FluidBrandColors.blue, colorScheme: scheme))
+                .environment(\.colorScheme, scheme)
+                .environment(\.locale, language.locale)
+            let host = NSHostingView(rootView: view)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 640),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+            host.appearance = window.appearance
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            defer { window.orderOut(nil); window.close() }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            XCTAssertGreaterThanOrEqual(bitmap.pixelsWide, 760)
+            XCTAssertGreaterThanOrEqual(bitmap.pixelsHigh, 640)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            XCTAssertGreaterThan(png.count, 10_000, "The actual native canvas must produce a populated image")
+            try png.write(to: output.appendingPathComponent("retained-recovery-\(language.rawValue)-\(scheme).png"))
+        }
+        XCTAssertEqual(actions, 0, "Rendering cannot retry, reset progress, reveal audio or begin recording")
+        XCTAssertEqual(MeetingUIPreferences(), preferences, "Visual verification preserves meeting and audio preferences")
+    }
+
     func testFluidMeetSetupReadinessStatesRenderWithoutSideEffects() throws {
         let preferences = MeetingUIPreferences()
         let actions = MeetingUIActionRecorder()
@@ -3071,6 +3157,10 @@ final class MeetingRecoveryTests: XCTestCase {
         let sessionDirectory = try await store.sessionDirectory(for: session.id)
         let checkpointURL = sessionDirectory.appendingPathComponent("checkpoint.json", isDirectory: false)
         try Data("{}".utf8).write(to: checkpointURL)
+        let retainedCheckpoint = sessionDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)
+        let retainedKey = sessionDirectory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.keyFileName)
+        try Data("synthetic working state".utf8).write(to: retainedCheckpoint)
+        try Data(repeating: 1, count: 32).write(to: retainedKey)
         XCTAssertTrue(FileManager.default.fileExists(atPath: checkpointURL.path))
 
         var lines: [String] = []
@@ -3090,6 +3180,85 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertFalse(lines.first?.contains("errorCode=") == true)
         XCTAssertEqual(result.state, .completed)
         XCTAssertFalse(FileManager.default.fileExists(atPath: checkpointURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: retainedCheckpoint.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: retainedKey.path))
+    }
+
+    func testExplicitRestartDiscardsCorruptWorkingStateAndPreservesRetainedAudio() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let session = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        try await store.create(session)
+        let directory = try await store.sessionDirectory(for: session.id)
+        let checkpoint = directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName)
+        let key = directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.keyFileName)
+        try Data("damaged checkpoint".utf8).write(to: checkpoint)
+        try Data(repeating: 1, count: 32).write(to: key)
+        let legacyCheckpoint = directory.appendingPathComponent("checkpoint.json")
+        try Data("legacy progress".utf8).write(to: legacyCheckpoint)
+        let audio = directory.appendingPathComponent("tracks/microphone/chunk_0.caf")
+        try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let sourceBytes = Data(repeating: 7, count: 128); try sourceBytes.write(to: audio)
+        let processing = RestartCheckingProcessingController()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: processing, audioArbiter: StubArbiter())
+        await coordinator.ensureRestored()
+        let completed = try await coordinator.restartProcessing(sessionID: session.id)
+        XCTAssertEqual(completed.id, session.id)
+        XCTAssertTrue(processing.sawCleanWorkingState)
+        XCTAssertEqual(try Data(contentsOf: audio), sourceBytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: checkpoint.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: key.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyCheckpoint.path))
+    }
+
+    func testStrictRecordingCannotRestartWithDurableWorkingState() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        var session = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [])])
+        session.audioStorageMode = .memoryOnly
+        try await store.create(session)
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: StubProcessingController(), audioArbiter: StubArbiter())
+        do { _ = try await coordinator.restartProcessing(sessionID: session.id); XCTFail("Strict mode has no retained input") }
+        catch MeetingCoordinatorError.noRecoverableAudio {}
+        let directory = try await store.sessionDirectory(for: session.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.fileName).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(MeetingRetainedProcessingCheckpoint.keyFileName).path))
+    }
+
+    func testTerminationJoinsCancelledRetainedInferenceBeforeRecoveryIsIdle() async throws {
+        let dir = self.makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MeetingSessionStore(rootDirectory: dir)
+        let session = self.makeSession(state: .interrupted, endedAt: Date(),
+            audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+        try await store.create(session)
+        let processing = GatedProcessingController()
+        let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+            processing: processing, audioArbiter: StubArbiter())
+        await coordinator.ensureRestored()
+        let retry = Task { try await coordinator.retryProcessing(sessionID: session.id) }
+        for _ in 0..<40 {
+            if case .processing = coordinator.state { break }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        guard case .processing = coordinator.state else { return XCTFail("Processing did not start") }
+        do { _ = try await coordinator.restartProcessing(sessionID: session.id); XCTFail("In-flight work owns its checkpoint") }
+        catch {}
+        var finishedShutdown = false
+        let shutdown = Task { await coordinator.shutdownForTermination(); finishedShutdown = true }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertFalse(finishedShutdown, "Cancellation cannot declare a non-drained model scope idle")
+        processing.openGate()
+        await shutdown.value
+        _ = try? await retry.value
+        XCTAssertTrue(finishedShutdown)
+        XCTAssertEqual(coordinator.activeSession?.state, .interrupted)
     }
 
     func testProcessingDiagnosticsPreserveFailureAndTranscriptAcrossRetries() async throws {
@@ -4300,6 +4469,63 @@ final class MeetingRecoveryTests: XCTestCase {
         await coordinator.sweepExpiredAudio()
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: tracksURL.path))
+    }
+
+    func testSweepHealsDeletedAudioWorkingStateWithoutTrackContent() async throws {
+        for missingTracks in [false, true] {
+            for residue in [MeetingRetainedProcessingCheckpoint.fileName,
+                            MeetingRetainedProcessingCheckpoint.keyFileName,
+                            ".processing-resume-\(UUID().uuidString).tmp"] {
+                let dir = self.makeTempDirectory()
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let store = MeetingSessionStore(rootDirectory: dir)
+                var session = self.makeSession(state: .interrupted, endedAt: Date(),
+                    audioTracks: [self.makeMicrophoneTrack(chunks: [])])
+                session.retention.audioDeletedAt = Date()
+                try await store.create(session)
+                let directory = try await store.sessionDirectory(for: session.id)
+                let tracks = directory.appendingPathComponent("tracks", isDirectory: true)
+                if missingTracks { try FileManager.default.removeItem(at: tracks) }
+                try Data("synthetic interrupted cleanup".utf8).write(to: directory.appendingPathComponent(residue))
+                let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                    processing: StubProcessingController(), audioArbiter: StubArbiter())
+                await coordinator.sweepExpiredAudio()
+                XCTAssertFalse(try MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory))
+                let preserved = try await store.load(id: session.id)
+                XCTAssertNotNil(preserved?.retention.audioDeletedAt)
+            }
+        }
+    }
+
+    func testSweepHealsCompletedWorkingStateWithoutDeletingRetainedAudio() async throws {
+        try await self.withRetentionPolicy(.never) {
+            for complete in [false, true] {
+                let dir = self.makeTempDirectory()
+                defer { try? FileManager.default.removeItem(at: dir) }
+                let store = MeetingSessionStore(rootDirectory: dir)
+                var session = self.makeSession(state: .completed, endedAt: Date(),
+                    audioTracks: [self.makeMicrophoneTrack(chunks: [self.makeFinalizedChunk()])])
+                session.transcriptIsComplete = complete
+                try await store.create(session)
+                let directory = try await store.sessionDirectory(for: session.id)
+                let audio = directory.appendingPathComponent("tracks/preserved.caf")
+                let audioBytes = Data("synthetic retained audio".utf8)
+                try audioBytes.write(to: audio)
+                for name in [MeetingRetainedProcessingCheckpoint.fileName,
+                             MeetingRetainedProcessingCheckpoint.keyFileName,
+                             ".processing-resume-\(UUID().uuidString).tmp"] {
+                    try Data("synthetic working state".utf8).write(to: directory.appendingPathComponent(name))
+                }
+                let coordinator = MeetingSessionCoordinator(store: store, capture: StubCaptureController(),
+                    processing: StubProcessingController(), audioArbiter: StubArbiter())
+                await coordinator.sweepExpiredAudio()
+                XCTAssertEqual(try MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory), !complete,
+                    "An incomplete result must retain progress; a durable complete result must discard it")
+                XCTAssertEqual(try Data(contentsOf: audio), audioBytes)
+                let preserved = try await store.load(id: session.id)
+                XCTAssertNil(preserved?.retention.audioDeletedAt)
+            }
+        }
     }
 
     /// O9: a `tracks/` directory recreated empty by `store.save`/`sessionDirectory` is not a
@@ -5684,6 +5910,17 @@ private final class StubProcessingController: MeetingProcessingControlling {
                 errorCode: nil
             )
         )
+    }
+}
+
+@MainActor
+private final class RestartCheckingProcessingController: MeetingProcessingControlling {
+    var sawCleanWorkingState = false
+    func process(session: MeetingSession, sessionDirectory: URL,
+                 progress: @escaping @MainActor (MeetingProcessingStage) -> Void) async throws -> MeetingProcessingResult {
+        self.sawCleanWorkingState = [MeetingRetainedProcessingCheckpoint.fileName, MeetingRetainedProcessingCheckpoint.keyFileName, "checkpoint.json"]
+            .allSatisfy { !FileManager.default.fileExists(atPath: sessionDirectory.appendingPathComponent($0).path) }
+        return try await StubProcessingController().process(session: session, sessionDirectory: sessionDirectory, progress: progress)
     }
 }
 

@@ -5,6 +5,9 @@ import Foundation
 /// display, checkpoints, canonical persistence, search or export. An error must
 /// never cause fallback publication of the original text.
 protocol TranscriptTextRedacting: Sendable {
+    /// Stable model/rules identity for retained working-state restoration. An adapter without
+    /// this identity remains usable, but cannot advertise resumable sensitive-text processing.
+    nonisolated var checkpointIdentity: String? { get }
     func redactWithSpans(_ text: String) async throws -> TranscriptTextRedaction
 }
 
@@ -27,6 +30,7 @@ struct TranscriptTextRedaction: Sendable, Equatable {
 }
 
 extension TranscriptTextRedacting {
+    nonisolated var checkpointIdentity: String? { nil }
     func redact(_ text: String) async throws -> String {
         try await redactWithSpans(text).text
     }

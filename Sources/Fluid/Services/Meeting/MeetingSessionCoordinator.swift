@@ -196,6 +196,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousSpeakerID: SessionSpeakerID?,
             previousOverlap: MeetingTranscriptOverlap,
             previousAttributionState: MeetingTranscriptAttributionState?,
+            previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
             previousRevision: Int
         )
         case nameUnknown(
@@ -203,12 +204,13 @@ final class MeetingSessionCoordinator: ObservableObject {
             createdSpeakerID: SessionSpeakerID,
             previousOverlap: MeetingTranscriptOverlap,
             previousAttributionState: MeetingTranscriptAttributionState?,
+            previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?,
             previousRevision: Int
         )
         case merge(
             sourceID: SessionSpeakerID,
             targetID: SessionSpeakerID,
-            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int)]
+            movedSegments: [(id: MeetingTranscriptSegmentID, previousRevision: Int, previousSpeakerAttribution: MeetingTranscriptSpeakerAttribution?)]
         )
         case renameBatch([(speakerID: SessionSpeakerID, previousName: String)])
     }
@@ -845,10 +847,21 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     @discardableResult
     func retryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+        try await self.retryProcessing(sessionID: sessionID, restarting: false)
+    }
+
+    /// Explicitly discards only retained inference working state. The existing retry task owns
+    /// the whole transition, so recording, deletion and another retry cannot race this reset.
+    @discardableResult
+    func restartProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+        try await self.retryProcessing(sessionID: sessionID, restarting: true)
+    }
+
+    private func retryProcessing(sessionID: MeetingSessionID, restarting: Bool) async throws -> MeetingSession {
         guard self.retryTask == nil else { throw MeetingCoordinatorError.activityInProgress }
         let task = Task { @MainActor [weak self] () throws -> MeetingSession in
             guard let self else { throw MeetingCoordinatorError.noActiveMeeting }
-            return try await self.performRetryProcessing(sessionID: sessionID)
+            return try await self.performRetryProcessing(sessionID: sessionID, restarting: restarting)
         }
         self.retryTask = task
         do {
@@ -861,7 +874,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         }
     }
 
-    private func performRetryProcessing(sessionID: MeetingSessionID) async throws -> MeetingSession {
+    private func performRetryProcessing(sessionID: MeetingSessionID, restarting: Bool) async throws -> MeetingSession {
         await self.ensureRestored()
         guard self.stopTask == nil,
               self.interruptionTask == nil,
@@ -877,6 +890,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             guard let session = self.activeSession, session.hasRetryableAudio else {
                 throw MeetingCoordinatorError.noRecoverableAudio
             }
+            try await self.resetRetainedCheckpointIfRequested(session: session, restarting: restarting)
             return try await self.beginProcessingRetry(session)
         }
 
@@ -900,6 +914,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         else { throw MeetingCoordinatorError.activityInProgress }
         guard !self.isMutatingSession else { throw MeetingCoordinatorError.maintenanceInProgress }
         guard session.hasRetryableAudio else { throw MeetingCoordinatorError.noRecoverableAudio }
+        try await self.resetRetainedCheckpointIfRequested(session: session, restarting: restarting)
 
         // Acquire before displacing/adopting so a throw here never strands activeSession mid-transition.
         if self.activityLease == nil {
@@ -924,6 +939,29 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.activeSession = session
         self.trackHealth = Dictionary(uniqueKeysWithValues: session.audioTracks.map { ($0.kind, $0.health) })
         return try await self.beginProcessingRetry(session)
+    }
+
+    private func resetRetainedCheckpointIfRequested(session: MeetingSession, restarting: Bool) async throws {
+        guard restarting else { return }
+        guard session.audioStorageMode == .retainedFiles, session.retention.audioDeletedAt == nil,
+              let directory = try await self.store.existingSessionDirectory(for: session.id) else {
+            throw MeetingCoordinatorError.noRecoverableAudio
+        }
+        try Task.checkCancellation()
+        guard self.terminationTask == nil, !self.isDeleting, !self.isRecording, !self.isProcessing else {
+            throw MeetingCoordinatorError.activityInProgress
+        }
+        let reset = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            try MeetingRetainedProcessingCheckpoint.remove(in: directory)
+            let legacyCheckpoint = directory.appendingPathComponent("checkpoint.json")
+            if FileManager.default.fileExists(atPath: legacyCheckpoint.path) {
+                try FileManager.default.removeItem(at: legacyCheckpoint)
+            }
+        }
+        try await withTaskCancellationHandler { try await reset.value } onCancel: { reset.cancel() }
+        try Task.checkCancellation()
+        guard self.terminationTask == nil else { throw CancellationError() }
     }
 
     private func beginProcessingRetry(_ inputSession: MeetingSession) async throws -> MeetingSession {
@@ -1148,6 +1186,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 previousSpeakerID: previousSpeakerID,
                 previousOverlap: previousOverlap,
                 previousAttributionState: previousAttributionState,
+                previousSpeakerAttribution: segment.speakerAttribution,
                 previousRevision: previousRevision
             )
         }
@@ -1169,6 +1208,7 @@ final class MeetingSessionCoordinator: ObservableObject {
                 createdSpeakerID: speakerID,
                 previousOverlap: segment.overlap,
                 previousAttributionState: segment.attributionState,
+                previousSpeakerAttribution: segment.speakerAttribution,
                 previousRevision: segment.revision
             )
         }
@@ -1179,7 +1219,7 @@ final class MeetingSessionCoordinator: ObservableObject {
         try await self.performCorrection(sessionID: sessionID) { session in
             let movedSegments = session.transcriptSegments
                 .filter { $0.speakerID == source }
-                .map { (id: $0.id, previousRevision: $0.revision) }
+                .map { (id: $0.id, previousRevision: $0.revision, previousSpeakerAttribution: $0.speakerAttribution) }
             try session.mergeSpeakers(source, into: targetID)
             return .merge(sourceID: source, targetID: targetID, movedSegments: movedSegments)
         }
@@ -1377,14 +1417,26 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.scheduleRetentionTimer(nextDeadline: nextDeadline)
     }
 
-    /// An empty recreated `tracks/` is not crash-window residue — heal only real content.
+    /// An empty recreated tracks directory alone is not crash residue. Working-state files
+    /// can outlive tracks after interruption and must also trigger the existing cleanup.
     private func healLeftoverAudio(for session: MeetingSession) async {
-        guard session.retention.audioDeletedAt != nil,
+        let fullyCompleted = session.state == .completed && session.transcriptIsComplete == true
+        guard session.retention.audioDeletedAt != nil || fullyCompleted,
+              self.isSafeToSweep(sessionID: session.id),
               let directory = try? await self.store.existingSessionDirectory(for: session.id)
         else { return }
+        guard self.isSafeToSweep(sessionID: session.id) else { return }
+        if session.retention.audioDeletedAt == nil {
+            // Completion is already durable. A crash before cache removal must not retain
+            // sensitive working text indefinitely under a never-delete-audio policy.
+            try? MeetingRetainedProcessingCheckpoint.remove(in: directory)
+            return
+        }
         let tracksPath = directory.appendingPathComponent("tracks", isDirectory: true).path
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: tracksPath), !contents.isEmpty
-        else { return }
+        let hasAudio = (try? FileManager.default.contentsOfDirectory(atPath: tracksPath).isEmpty == false) ?? false
+        let hasWorkingState = (try? MeetingRetainedProcessingCheckpoint.hasWorkingState(in: directory)) ?? false
+        let hasLegacyCheckpoint = FileManager.default.fileExists(atPath: directory.appendingPathComponent("checkpoint.json").path)
+        guard hasAudio || hasWorkingState || hasLegacyCheckpoint else { return }
         try? await self.store.deleteAudioFiles(for: session.id)
     }
 
@@ -1444,10 +1496,12 @@ final class MeetingSessionCoordinator: ObservableObject {
             previousSpeakerID,
             previousOverlap,
             previousAttributionState,
+            previousSpeakerAttribution,
             previousRevision
         ):
             guard let index = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }) else { return false }
             session.transcriptSegments[index].speakerID = previousSpeakerID
+            session.transcriptSegments[index].speakerAttribution = previousSpeakerAttribution
             session.transcriptSegments[index].overlap = previousOverlap
             session.transcriptSegments[index].attributionState = previousAttributionState
             session.transcriptSegments[index].revision = previousRevision
@@ -1457,6 +1511,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             createdSpeakerID,
             previousOverlap,
             previousAttributionState,
+            previousSpeakerAttribution,
             previousRevision
         ):
             guard let segmentIndex = session.transcriptSegments.firstIndex(where: { $0.id == segmentID }),
@@ -1465,6 +1520,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             else { return false }
             session.speakers.remove(at: speakerIndex)
             session.transcriptSegments[segmentIndex].speakerID = nil
+            session.transcriptSegments[segmentIndex].speakerAttribution = previousSpeakerAttribution
             session.transcriptSegments[segmentIndex].overlap = previousOverlap
             session.transcriptSegments[segmentIndex].attributionState = previousAttributionState
             session.transcriptSegments[segmentIndex].revision = previousRevision
@@ -1472,11 +1528,12 @@ final class MeetingSessionCoordinator: ObservableObject {
         case let .merge(sourceID, _, movedSegments):
             guard let index = session.speakers.firstIndex(where: { $0.id == sourceID }) else { return false }
             session.speakers[index].mergedIntoSpeakerID = nil
-            let previousRevisionByID = Dictionary(uniqueKeysWithValues: movedSegments.map { ($0.id, $0.previousRevision) })
+            let previousByID = Dictionary(uniqueKeysWithValues: movedSegments.map { ($0.id, $0) })
             for segmentIndex in session.transcriptSegments.indices {
-                guard let previousRevision = previousRevisionByID[session.transcriptSegments[segmentIndex].id] else { continue }
+                guard let previous = previousByID[session.transcriptSegments[segmentIndex].id] else { continue }
                 session.transcriptSegments[segmentIndex].speakerID = sourceID
-                session.transcriptSegments[segmentIndex].revision = previousRevision
+                session.transcriptSegments[segmentIndex].speakerAttribution = previous.previousSpeakerAttribution
+                session.transcriptSegments[segmentIndex].revision = previous.previousRevision
             }
             return true
         case let .renameBatch(entries):
@@ -1640,9 +1697,13 @@ final class MeetingSessionCoordinator: ObservableObject {
         self.captureGeneration = nil
         self.degradeReason = nil
         self.operationGeneration = nil
-        self.stopTask?.cancel()
-        self.interruptionTask?.cancel()
-        self.retryTask?.cancel()
+        let stop = self.stopTask, interruption = self.interruptionTask, retry = self.retryTask
+        stop?.cancel(); interruption?.cancel(); retry?.cancel()
+        // Join the actual inference owners before a termination manifest or later cleanup can
+        // claim the recording is idle. Cancellation never leaves a checkpoint writer detached.
+        _ = try? await stop?.value
+        await interruption?.value
+        _ = try? await retry?.value
 
         guard var session = self.activeSession else {
             await self.flushQueuedPersistence()
@@ -2024,7 +2085,7 @@ final class MeetingSessionCoordinator: ObservableObject {
             session.updatedAt = Date()
             await self.flushQueuedPersistence()
             try await self.store.save(session)
-            self.removeCheckpoint(sessionDirectory: sessionDirectory)
+            self.removeCheckpoint(sessionDirectory: sessionDirectory, removeRetainedState: result.isComplete)
             self.activeSession = nil
             self.latestCompletedSession = session
             self.state = .completed(session.id)
@@ -2398,7 +2459,12 @@ final class MeetingSessionCoordinator: ObservableObject {
 
     /// Only called after the completed session save succeeds; on failure the checkpoint stays so a
     /// retry can resume from it.
-    private func removeCheckpoint(sessionDirectory: URL) {
+    private func removeCheckpoint(sessionDirectory: URL, removeRetainedState: Bool) {
+        do { if removeRetainedState { try MeetingRetainedProcessingCheckpoint.remove(in: sessionDirectory) } }
+        catch {
+            DebugLogger.shared.warning("Failed to remove retained meeting processing state after completion.",
+                                       source: "MeetingSessionCoordinator")
+        }
         let url = sessionDirectory.appendingPathComponent("checkpoint.json", isDirectory: false)
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         do {

@@ -3,6 +3,22 @@
 
 This tool reads RTTM timelines and optional speaker-attributed transcript JSON. It never uploads,
 rewrites, or copies source recordings. Reports contain aggregate metrics and file fingerprints only.
+
+Report schema 2 corrects schema 1 scoring: same-speaker intervals are unioned before collar
+construction, collars are cut at their exact edges, and Jaccard/coverage denominators use the same
+scored domain as their intersections. Re-score old inputs; do not compare schema 1 and 2 values as
+if the metric implementation were unchanged. Input manifest schema 1 remains supported.
+
+The metrics are DER-style speaker-time error and reference-macro Jaccard error under a global
+maximum-overlap one-to-one assignment. They are not a claim of compatibility with an external
+benchmark scorer. Undefined scores (no scored reference speech) are null. Collars and excluded
+reference overlap affect all temporal metrics, while speaker counts describe the full inventory.
+Duration buckets use full unioned reference duration, restricted to speakers with scored support.
+Assignment ties use scored geometry, then full reference duration for otherwise identical reference
+trajectories, so renaming anonymous labels cannot move recovery between duration buckets.
+Each RTTM file must contain one recording/channel scope; a blank timeline means no speech.
+An annotated held-out entry establishes input availability, not annotation quality, independence,
+or model generalization. Inventory-only entries cannot satisfy the annotated evaluation gate.
 """
 
 from __future__ import annotations
@@ -19,6 +35,9 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
+METRIC_VERSION = "union-exact-collar-v2"
+MAX_SPEAKERS = 12
 DEPENDENCY_REVISION = "3fd63887eef1dc25edea8263ce4b44aa854d898b"
 DIARIZATION_FINGERPRINT = (
     "FluidAudio-offline-v1@3fd63887eef1dc25edea8263ce4b44aa854d898b;"
@@ -48,6 +67,7 @@ def sha256(path: Path) -> str:
 
 def read_rttm(path: Path) -> list[Segment]:
     segments: list[Segment] = []
+    scope: tuple[str, str] | None = None
     for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -55,12 +75,14 @@ def read_rttm(path: Path) -> list[Segment]:
         fields = line.split()
         if len(fields) < 8 or fields[0] != "SPEAKER":
             raise ValueError(f"{path}:{line_number}: expected an RTTM SPEAKER row")
+        row_scope = (fields[1], fields[2])
+        if scope is not None and scope != row_scope:
+            raise ValueError(f"{path}:{line_number}: multiple recording/channel scopes need separate fixtures")
+        scope = row_scope
         start, duration = float(fields[3]), float(fields[4])
         if start < 0 or duration <= 0 or not math.isfinite(start + duration):
             raise ValueError(f"{path}:{line_number}: invalid start/duration")
         segments.append(Segment(fields[7], start, start + duration))
-    if not segments:
-        raise ValueError(f"{path}: contains no speaker segments")
     return sorted(segments, key=lambda item: (item.start, item.end, item.speaker))
 
 
@@ -68,23 +90,91 @@ def active(segments: list[Segment], midpoint: float) -> set[str]:
     return {segment.speaker for segment in segments if segment.start <= midpoint < segment.end}
 
 
+def union_segments(segments: list[Segment]) -> list[Segment]:
+    """Canonical half-open activity sets, independent of row order, duplicates and fragmentation."""
+    by_speaker: dict[str, list[Segment]] = {}
+    for segment in segments:
+        if not isinstance(segment.speaker, str) or not segment.speaker.strip():
+            raise ValueError("speaker labels must be nonempty strings")
+        if (isinstance(segment.start, bool) or isinstance(segment.end, bool)
+                or not isinstance(segment.start, (int, float)) or not isinstance(segment.end, (int, float))
+                or not math.isfinite(segment.start) or not math.isfinite(segment.end)
+                or segment.start < 0 or segment.end <= segment.start):
+            raise ValueError("speaker intervals must have finite nonnegative start and later end")
+        by_speaker.setdefault(segment.speaker, []).append(segment)
+    merged: list[Segment] = []
+    for speaker, items in by_speaker.items():
+        speaker_union: list[Segment] = []
+        for item in sorted(items, key=lambda value: (value.start, value.end)):
+            if speaker_union and item.start <= speaker_union[-1].end:
+                previous = speaker_union[-1]
+                speaker_union[-1] = Segment(speaker, previous.start, max(previous.end, item.end))
+            else:
+                speaker_union.append(item)
+        merged.extend(speaker_union)
+    return sorted(merged, key=lambda item: (item.start, item.end, item.speaker))
+
+
+def trajectory_order(
+    segments: list[Segment], speakers: set[str], reference_durations: dict[str, float] | None = None
+) -> list[str]:
+    """Break assignment ties by activity geometry, never by an arbitrary slot name."""
+    trajectories: dict[str, list[tuple[float, float]]] = {speaker: [] for speaker in speakers}
+    for segment in segments:
+        trajectories.setdefault(segment.speaker, []).append((segment.start, segment.end))
+    return sorted(trajectories, key=lambda speaker: (not bool(trajectories[speaker]),
+                                                   tuple(sorted(trajectories[speaker])),
+                                                   (reference_durations or {}).get(speaker, 0), speaker))
+
+
+def scored_spans(
+    reference: list[Segment], hypothesis: list[Segment], collar: float, score_overlap: bool
+) -> list[tuple[float, float, set[str], set[str]]]:
+    if isinstance(collar, bool) or not isinstance(collar, (int, float)) or not math.isfinite(collar) or collar < 0:
+        raise ValueError("collar must be finite and nonnegative")
+    reference, hypothesis = union_segments(reference), union_segments(hypothesis)
+    points = {point for segment in reference + hypothesis for point in (segment.start, segment.end)}
+    if not points:
+        return []
+    lower, upper = min(points), max(points)
+    # Event sweep avoids scanning every segment at every boundary. Collar edges must be events:
+    # a midpoint test on only RTTM boundaries can retain or remove an entire long interval.
+    events: dict[float, list[tuple[str, str, int]]] = {point: [] for point in points}
+    for name, segments in (("reference", reference), ("hypothesis", hypothesis)):
+        for segment in segments:
+            events[segment.start].append((name, segment.speaker, 1))
+            events[segment.end].append((name, segment.speaker, -1))
+    if collar:
+        for segment in reference:
+            for point in (segment.start, segment.end):
+                left, right = max(lower, point - collar), min(upper, point + collar)
+                if left < right:
+                    events.setdefault(left, []).append(("collar", "", 1))
+                    events.setdefault(right, []).append(("collar", "", -1))
+    boundaries = sorted(events)
+    state: dict[str, dict[str, int]] = {"reference": {}, "hypothesis": {}, "collar": {}}
+    intervals: list[tuple[float, float, set[str], set[str]]] = []
+    for left, right in zip(boundaries, boundaries[1:]):
+        for name, speaker, delta in events[left]:
+            state[name][speaker] = state[name].get(speaker, 0) + delta
+            if state[name][speaker] == 0:
+                del state[name][speaker]
+        if right <= left:
+            continue
+        if state["collar"]:
+            continue
+        ref_active, hyp_active = set(state["reference"]), set(state["hypothesis"])
+        if not score_overlap and len(ref_active) > 1:
+            continue
+        intervals.append((left, right, ref_active, hyp_active))
+    return intervals
+
+
 def scored_intervals(
     reference: list[Segment], hypothesis: list[Segment], collar: float, score_overlap: bool
 ) -> list[tuple[float, set[str], set[str]]]:
-    boundaries = sorted({point for segment in reference + hypothesis for point in (segment.start, segment.end)})
-    reference_boundaries = [point for segment in reference for point in (segment.start, segment.end)]
-    intervals: list[tuple[float, set[str], set[str]]] = []
-    for left, right in zip(boundaries, boundaries[1:]):
-        if right <= left:
-            continue
-        midpoint = (left + right) / 2
-        if collar and any(abs(midpoint - point) < collar for point in reference_boundaries):
-            continue
-        ref_active, hyp_active = active(reference, midpoint), active(hypothesis, midpoint)
-        if not score_overlap and len(ref_active) > 1:
-            continue
-        intervals.append((right - left, ref_active, hyp_active))
-    return intervals
+    return [(right - left, refs, hyps)
+            for left, right, refs, hyps in scored_spans(reference, hypothesis, collar, score_overlap)]
 
 
 def best_assignment(weights: list[list[float]]) -> list[tuple[int, int]]:
@@ -92,7 +182,7 @@ def best_assignment(weights: list[list[float]]) -> list[tuple[int, int]]:
     rows = len(weights)
     columns = max((len(row) for row in weights), default=0)
     size = max(rows, columns)
-    if size > 12:
+    if size > MAX_SPEAKERS:
         raise ValueError("more than 12 speakers is unsupported by the deterministic evaluator")
     padded = [row + [0.0] * (size - len(row)) for row in weights]
     padded += [[0.0] * size for _ in range(size - rows)]
@@ -118,16 +208,12 @@ def best_assignment(weights: list[list[float]]) -> list[tuple[int, int]]:
 def overlap_matrix(
     intervals: list[tuple[float, set[str], set[str]]], references: list[str], hypotheses: list[str]
 ) -> list[list[float]]:
-    matrix = [[0.0 for _ in hypotheses] for _ in references]
-    ref_index, hyp_index = {v: i for i, v in enumerate(references)}, {v: i for i, v in enumerate(hypotheses)}
-    for duration, ref_active, hyp_active in intervals:
-        for ref in ref_active:
-            for hyp in hyp_active:
-                matrix[ref_index[ref]][hyp_index[hyp]] += duration
-    return matrix
+    return [[math.fsum(duration for duration, refs, hyps in intervals if ref in refs and hyp in hyps)
+             for hyp in hypotheses] for ref in references]
 
 
 def duration_by_speaker(segments: list[Segment]) -> dict[str, float]:
+    segments = union_segments(segments)
     return {
         speaker: sum(segment.end - segment.start for segment in segments if segment.speaker == speaker)
         for speaker in sorted({segment.speaker for segment in segments})
@@ -135,9 +221,19 @@ def duration_by_speaker(segments: list[Segment]) -> dict[str, float]:
 
 
 def score_timeline(reference: list[Segment], hypothesis: list[Segment], collar: float, score_overlap: bool) -> dict[str, Any]:
-    intervals = scored_intervals(reference, hypothesis, collar, score_overlap)
-    references = sorted({segment.speaker for segment in reference})
-    hypotheses = sorted({segment.speaker for segment in hypothesis})
+    reference, hypothesis = union_segments(reference), union_segments(hypothesis)
+    reference_labels = {segment.speaker for segment in reference}
+    hypothesis_labels = {segment.speaker for segment in hypothesis}
+    if max(len(reference_labels), len(hypothesis_labels)) > MAX_SPEAKERS:
+        raise ValueError("more than 12 speakers is unsupported by the deterministic evaluator")
+    spans = scored_spans(reference, hypothesis, collar, score_overlap)
+    intervals = [(right - left, refs, hyps) for left, right, refs, hyps in spans]
+    # Excluded activity cannot resolve a tied assignment or change scored quality metrics.
+    scored_reference = union_segments([Segment(speaker, left, right) for left, right, refs, _ in spans for speaker in refs])
+    scored_hypothesis = union_segments([Segment(speaker, left, right) for left, right, _, hyps in spans for speaker in hyps])
+    full_ref_durations = duration_by_speaker(reference)
+    references = trajectory_order(scored_reference, reference_labels, full_ref_durations)
+    hypotheses = trajectory_order(scored_hypothesis, hypothesis_labels)
     matrix = overlap_matrix(intervals, references, hypotheses)
     assignment = best_assignment(matrix)
     hyp_to_ref = {hypotheses[column]: references[row] for row, column in assignment}
@@ -150,8 +246,10 @@ def score_timeline(reference: list[Segment], hypothesis: list[Segment], collar: 
         correct = sum(1 for hyp in hyp_active if hyp_to_ref.get(hyp) in ref_active)
         confusion += duration * max(0, min(len(ref_active), len(hyp_active)) - correct)
 
-    ref_durations = duration_by_speaker(reference)
-    hyp_durations = duration_by_speaker(hypothesis)
+    ref_durations = {speaker: math.fsum(duration for duration, refs, _ in intervals if speaker in refs)
+                     for speaker in references}
+    hyp_durations = {speaker: math.fsum(duration for duration, _, hyps in intervals if speaker in hyps)
+                     for speaker in hypotheses}
     mapped_column = {row: column for row, column in assignment}
     jaccard_errors, recovered, coverage_and_purity = [], {}, {}
     for row, speaker in enumerate(references):
@@ -159,14 +257,17 @@ def score_timeline(reference: list[Segment], hypothesis: list[Segment], collar: 
         intersection = matrix[row][column] if column is not None else 0.0
         hyp_duration = hyp_durations.get(hypotheses[column], 0.0) if column is not None else 0.0
         union = ref_durations[speaker] + hyp_duration - intersection
-        jaccard_errors.append(1.0 - intersection / union if union else 0.0)
-        coverage = intersection / ref_durations[speaker] if ref_durations[speaker] else 0.0
-        purity = intersection / hyp_duration if hyp_duration else 0.0
+        if ref_durations[speaker]:
+            jaccard_errors.append(1.0 - intersection / union)
+        coverage = intersection / ref_durations[speaker] if ref_durations[speaker] else None
+        purity = intersection / hyp_duration if hyp_duration else None
         coverage_and_purity[speaker] = {"coverage": coverage, "purity": purity}
-        recovered[speaker] = coverage >= 0.5 and purity >= 0.5
+        recovered[speaker] = coverage is not None and purity is not None and coverage >= 0.5 and purity >= 0.5
 
     buckets = {"<1s": [0, 0], "1-3s": [0, 0], "3-10s": [0, 0], ">10s": [0, 0]}
-    for speaker, duration in ref_durations.items():
+    for speaker, duration in full_ref_durations.items():
+        if not ref_durations[speaker]:
+            continue
         bucket = "<1s" if duration < 1 else "1-3s" if duration < 3 else "3-10s" if duration < 10 else ">10s"
         buckets[bucket][1] += 1
         buckets[bucket][0] += int(recovered[speaker])
@@ -181,26 +282,29 @@ def score_timeline(reference: list[Segment], hypothesis: list[Segment], collar: 
     merge_count = sum(1 for column in range(len(hypotheses)) if len({r for r, c in links if c == column}) > 1)
     split_count = sum(1 for row in range(len(references)) if len({c for r, c in links if r == row}) > 1)
 
-    denominator = reference_time or 1.0
     return {
+        "metricVersion": METRIC_VERSION,
         "collarSeconds": collar,
         "overlapScored": score_overlap,
         "referenceSpeakers": len(references),
         "hypothesisSpeakers": len(hypotheses),
         "speakerCountError": len(hypotheses) - len(references),
+        "scoredReferenceSpeakers": sum(duration > 0 for duration in ref_durations.values()),
+        "referenceSpeakerSeconds": reference_time,
+        "errorSpeakerSeconds": {"miss": miss, "falseAlarm": false_alarm, "confusion": confusion},
         "mergeCount": merge_count,
         "splitCount": split_count,
         "recoveryByDuration": {
             name: {"recovered": values[0], "total": values[1], "recall": values[0] / values[1] if values[1] else None}
             for name, values in buckets.items()
         },
-        "der": (miss + false_alarm + confusion) / denominator,
+        "der": (miss + false_alarm + confusion) / reference_time if reference_time else None,
         "derComponents": {
-            "miss": miss / denominator,
-            "falseAlarm": false_alarm / denominator,
-            "confusion": confusion / denominator,
+            "miss": miss / reference_time if reference_time else None,
+            "falseAlarm": false_alarm / reference_time if reference_time else None,
+            "confusion": confusion / reference_time if reference_time else None,
         },
-        "jer": sum(jaccard_errors) / len(jaccard_errors) if jaccard_errors else 0.0,
+        "jer": math.fsum(jaccard_errors) / len(jaccard_errors) if jaccard_errors else None,
         "speakerCoverageAndPurity": coverage_and_purity,
     }
 
@@ -223,6 +327,8 @@ def edit_distance(left: list[str], right: list[str]) -> int:
 def cpwer(reference_path: Path, hypothesis_path: Path) -> dict[str, Any]:
     reference = json.loads(reference_path.read_text(encoding="utf-8"))
     hypothesis = json.loads(hypothesis_path.read_text(encoding="utf-8"))
+    if max(len(reference), len(hypothesis)) > MAX_SPEAKERS:
+        raise ValueError("more than 12 speakers is unsupported by the deterministic evaluator")
     ref_texts = [words(value) for _, value in sorted(reference.items())]
     hyp_texts = [words(value) for _, value in sorted(hypothesis.items())]
     size = max(len(ref_texts), len(hyp_texts))
@@ -241,7 +347,23 @@ def cpwer(reference_path: Path, hypothesis_path: Path) -> dict[str, Any]:
     return {"errors": errors, "referenceWords": count, "cpWER": errors / count if count else 0.0}
 
 
-def validate_manifest(manifest_path: Path, require_files: bool = True) -> dict[str, Any]:
+def evaluation_readiness(fixtures: list[dict[str, Any]]) -> dict[str, Any]:
+    annotated = sum(fixture.get("split") == "heldOut" and fixture.get("status", "annotated") == "annotated"
+                    for fixture in fixtures)
+    inventory = sum(fixture.get("split") == "heldOut" and fixture.get("status", "annotated") == "inventory"
+                    for fixture in fixtures)
+    return {
+        "annotatedHeldOutFixtures": annotated,
+        "inventoryHeldOutFixtures": inventory,
+        "annotatedHeldOutAvailable": annotated > 0,
+        "annotationQualityAndIndependenceVerified": False,
+        "generalizationEstablished": False,
+    }
+
+
+def validate_manifest(
+    manifest_path: Path, require_files: bool = True, require_annotated_held_out: bool = True
+) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schemaVersion") != SCHEMA_VERSION:
         raise ValueError(f"schemaVersion must be {SCHEMA_VERSION}")
@@ -262,17 +384,21 @@ def validate_manifest(manifest_path: Path, require_files: bool = True) -> dict[s
     for fixture in fixtures:
         if fixture.get("split") not in ("development", "heldOut"):
             raise ValueError(f"{fixture['id']}: split must be development or heldOut")
+        if fixture.get("status", "annotated") not in ("annotated", "inventory"):
+            raise ValueError(f"{fixture['id']}: status must be annotated or inventory")
         if fixture.get("status", "annotated") == "annotated":
             for key in ("referenceRTTM", "hypothesisRTTM"):
                 if key not in fixture:
                     raise ValueError(f"{fixture['id']}: annotated fixture is missing {key}")
                 if require_files and not resolve(base, fixture[key]).is_file():
                     raise ValueError(f"{fixture['id']}: missing {key} file")
+    if require_annotated_held_out and not evaluation_readiness(fixtures)["annotatedHeldOutAvailable"]:
+        raise ValueError("annotated heldOut fixture required; inventory alone is not evaluation evidence")
     return manifest
 
 
-def score_manifest(manifest_path: Path) -> dict[str, Any]:
-    manifest = validate_manifest(manifest_path)
+def score_manifest(manifest_path: Path, require_annotated_held_out: bool = False) -> dict[str, Any]:
+    manifest = validate_manifest(manifest_path, require_annotated_held_out=require_annotated_held_out)
     base, reports = manifest_path.parent, []
     for fixture in manifest["fixtures"]:
         if fixture.get("status", "annotated") != "annotated":
@@ -314,7 +440,11 @@ def score_manifest(manifest_path: Path) -> dict[str, Any]:
             report["cpWER"] = cpwer(resolve(base, fixture["referenceSpeakerText"]), resolve(base, fixture["hypothesisSpeakerText"]))
         reports.append(report)
     return {
-        "schemaVersion": SCHEMA_VERSION,
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "inputManifestSchemaVersion": SCHEMA_VERSION,
+        "metricVersion": METRIC_VERSION,
+        "metricScope": "maximum-overlap assignment; exact collars; unioned speaker activity; shared scored domain",
+        "evaluationReadiness": evaluation_readiness(manifest["fixtures"]),
         "dependency": manifest["dependency"],
         "normalization": manifest.get("normalization", {}),
         "fixtures": reports,
@@ -338,19 +468,26 @@ def main() -> int:
     subparsers.add_parser("self-test")
     validate = subparsers.add_parser("validate")
     validate.add_argument("manifest", type=Path)
+    validate.add_argument("--inventory-only", action="store_true",
+                          help="validate inventory structure without satisfying the annotated held-out gate")
     score = subparsers.add_parser("score")
     score.add_argument("manifest", type=Path)
     score.add_argument("--output", type=Path)
+    score.add_argument("--require-annotated-held-out", action="store_true",
+                       help="reject inventory-only held-out inputs instead of reporting incomplete readiness")
     arguments = parser.parse_args()
     if arguments.command == "self-test":
         self_test()
         return 0
     manifest_path = arguments.manifest.resolve()
     if arguments.command == "validate":
-        manifest = validate_manifest(manifest_path)
-        print(f"valid manifest: {len(manifest['fixtures'])} fixtures")
+        manifest = validate_manifest(manifest_path, require_annotated_held_out=not arguments.inventory_only)
+        readiness = evaluation_readiness(manifest["fixtures"])
+        print(f"valid manifest: {len(manifest['fixtures'])} fixtures; "
+              f"annotated held-out fixtures: {readiness['annotatedHeldOutFixtures']}; "
+              "annotation quality and independence not verified")
         return 0
-    report = score_manifest(manifest_path)
+    report = score_manifest(manifest_path, require_annotated_held_out=arguments.require_annotated_held_out)
     encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if arguments.output:
         arguments.output.parent.mkdir(parents=True, exist_ok=True)

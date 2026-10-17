@@ -168,14 +168,7 @@ nonisolated enum FluidServeCommand {
             if let from, let to, from > to { throw UsageError(message: "--from must be earlier than --to.") }
             if options.flags.contains("--json") {
                 var object = try self.summaryObject(entry, customPrompt: customPrompt, fileManager: fileManager)
-                object["turns"] = entry.meeting.turns
-                    .filter { $0.start.seconds >= (from ?? 0) && $0.start.seconds <= (to ?? .infinity) }
-                    .map { [
-                        "startSeconds": $0.start.seconds,
-                        "endSeconds": $0.end.seconds,
-                        "speaker": FluidServeMeetings.speakerLabel(for: $0, in: entry.meeting),
-                        "text": $0.text,
-                    ] as [String: Any] }
+                object["turns"] = try FluidServeMeetings.jsonTurns(for: entry.meeting, from: from, to: to)
                 return try Result(output: self.json(object), exitCode: 0)
             }
             let transcript = FluidServeMeetings.transcript(for: entry.meeting, from: from, to: to)

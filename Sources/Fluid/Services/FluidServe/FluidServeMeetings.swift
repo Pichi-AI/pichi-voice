@@ -25,30 +25,53 @@ nonisolated enum FluidServeMeetings {
         }
     }
 
-    struct Segment: Decodable, Equatable {
-        var start: MediaTime
-        var end: MediaTime
-        var speakerID: UUID?
-        var text: String
-        var isLikelyEcho: Bool?
-        var attributionState: String?
+    /// Keeps the canonical segment beside the compatibility fields. The reader never reconstructs
+    /// a speaker decision from a reduced DTO or substitutes a presentation choice for evidence.
+    struct Segment: Equatable {
+        fileprivate let source: MeetingTranscriptSegment
+
+        var start: MediaTime { .init(value: self.source.start.value, timescale: self.source.start.timescale) }
+        var end: MediaTime { .init(value: self.source.end.value, timescale: self.source.end.timescale) }
+        var speakerID: UUID? { self.source.speakerID }
+        var text: String { self.source.text }
+        var isLikelyEcho: Bool? { self.source.isLikelyEcho }
+        var attributionState: String? { self.source.attributionState?.rawValue }
     }
 
     struct Meeting: Decodable, Equatable {
-        var id: UUID
-        var title: String
-        var languageCode: String
-        var startedAt: Date
-        var endedAt: Date?
-        var state: String
-        var speakers: [Speaker]
-        var transcriptSegments: [Segment]
+        fileprivate let source: MeetingSession
+        fileprivate let speakerNames: [SessionSpeakerID: String]
 
-        /// Turns the reader prints: echoes of the other side dropped, oldest first.
+        init(source: MeetingSession) {
+            self.source = source
+            self.speakerNames = Dictionary(source.activeSpeakers.map { ($0.id, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        }
+
+        init(from decoder: Decoder) throws {
+            self.init(source: try MeetingSession(from: decoder))
+        }
+
+        var id: UUID { self.source.id }
+        var title: String { self.source.title }
+        var languageCode: String { self.source.languageCode }
+        var startedAt: Date { self.source.startedAt }
+        var endedAt: Date? { self.source.endedAt }
+        var state: String { self.source.state.rawValue }
+        var speakers: [Speaker] {
+            self.source.speakers.map {
+                .init(id: $0.id, displayName: $0.displayName, isLocalUser: $0.isLocalUser,
+                      mergedIntoSpeakerID: $0.mergedIntoSpeakerID)
+            }
+        }
+        var transcriptSegments: [Segment] { self.source.transcriptSegments.map { .init(source: $0) } }
+
+        /// Turns the reader prints: echoes of the other side dropped, oldest first. Equal native
+        /// bounds keep source order, matching the shared exporter's chronological projection.
         var turns: [Segment] {
-            self.transcriptSegments
-                .filter { $0.isLikelyEcho != true }
-                .sorted { $0.start.seconds < $1.start.seconds }
+            self.source.transcriptSegments
+                .enumerated().filter { !$0.element.isEcho }
+                .sorted { ($0.element.start, $0.element.end, $0.offset) < ($1.element.start, $1.element.end, $1.offset) }
+                .map { .init(source: $0.element) }
         }
 
         var activeSpeakers: [Speaker] {
@@ -74,7 +97,10 @@ nonisolated enum FluidServeMeetings {
         var generatedAt: Date?
     }
 
-    static let maximumManifestBytes = 4 * 1024 * 1024
+    // Word-level provenance can exceed 4 MiB in an ordinary long meeting. A single manifest
+    // may use the whole existing command-wide 64 MiB read budget; that aggregate cap, the
+    // session/entry limits and the no-follow descriptor checks remain unchanged.
+    static let maximumManifestBytes = 64 * 1024 * 1024
     static let maximumSummaryBytes = 2 * 1024 * 1024
     static let maximumDirectoryEntries = 1024
     static let maximumSessions = 256
@@ -181,9 +207,9 @@ nonisolated enum FluidServeMeetings {
             guard let file = try directory.read("session.json", maximumBytes: self.maximumManifestBytes, budget: budget),
                   let session = try? decoder.decode(MeetingSession.self, from: file.data),
                   session.id == id,
-                  (try? session.validateTranscriptStructure()) != nil,
-                  let meeting = try? decoder.decode(Meeting.self, from: file.data),
-                  meeting.isFinished, !meeting.turns.isEmpty else { continue }
+                  (try? session.validateTranscriptStructure()) != nil else { continue }
+            let meeting = Meeting(source: session)
+            guard meeting.isFinished, !session.transcriptSegments.allSatisfy(\.isEcho) else { continue }
             if let since, meeting.startedAt < since { continue }
             entries.append(Entry(meeting: meeting, directory: root.appendingPathComponent(name), source: session,
                 ownedRoot: root, rootIdentity: owned.identity, directoryIdentity: directory.identity, budget: budget))
@@ -261,16 +287,33 @@ nonisolated enum FluidServeMeetings {
 
     // MARK: - Rendering
 
-    /// Same label rule as the app's transcript: a turn the app could not pin on one person stays unknown.
+    /// Uses the same persisted decision, identity resolver and localized qualification as the app.
     static func speakerLabel(for segment: Segment, in meeting: Meeting) -> String {
-        if let state = segment.attributionState, state != "assigned" { return "Unknown speaker" }
-        guard var id = segment.speakerID else { return "Unknown speaker" }
-        var hops = 0
-        while let target = meeting.speakers.first(where: { $0.id == id })?.mergedIntoSpeakerID, hops < meeting.speakers.count {
-            id = target
-            hops += 1
+        MeetingTranscriptExporter.speakerLabel(for: segment.source, in: meeting.source,
+                                               speakerNames: meeting.speakerNames)
+    }
+
+    /// Additive CLI JSON projection. The canonical exporter resolves speaker aliases and preserves
+    /// native precision and attribution provenance. One ID index avoids a source scan per word.
+    static func jsonTurns(for meeting: Meeting, from: TimeInterval? = nil, to: TimeInterval? = nil) throws -> [[String: Any]] {
+        let data = try MeetingTranscriptExporter.json(for: meeting.source)
+        guard let document = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let segments = document["segments"] as? [[String: Any]] else {
+            throw CocoaError(.coderReadCorrupt)
         }
-        return meeting.activeSpeakers.first(where: { $0.id == id })?.displayName ?? "Unknown speaker"
+        var exportedByID: [String: [String: Any]] = [:]
+        exportedByID.reserveCapacity(segments.count)
+        for segment in segments {
+            guard let id = segment["id"] as? String else { throw CocoaError(.coderReadCorrupt) }
+            exportedByID[id] = segment
+        }
+        return try meeting.turns.filter { segment in
+            segment.start.seconds >= (from ?? 0) && segment.start.seconds <= (to ?? .infinity)
+        }.map { segment in
+            guard var object = exportedByID[segment.source.id.uuidString] else { throw CocoaError(.coderReadCorrupt) }
+            object["speaker"] = Self.speakerLabel(for: segment, in: meeting)
+            return object
+        }
     }
 
     static func timestampText(_ seconds: TimeInterval) -> String {
@@ -288,16 +331,16 @@ nonisolated enum FluidServeMeetings {
         "[\(self.timestampText(segment.start.seconds))] \(self.speakerLabel(for: segment, in: meeting)): \(segment.text)"
     }
 
-    /// The transcript as the app exports it, optionally limited to turns that start inside a time range.
+    /// The shared readable projection groups timed fragments without discarding their evidence.
+    /// A range still includes turns by their native start, matching the existing CLI options.
     static func transcript(for meeting: Meeting, from: TimeInterval? = nil, to: TimeInterval? = nil) -> String {
-        meeting.turns
-            .filter { segment in
-                if let from, segment.start.seconds < from { return false }
-                if let to, segment.start.seconds > to { return false }
-                return true
-            }
-            .map { self.line(for: $0, in: meeting) }
-            .joined(separator: "\n\n")
+        var source = meeting.source
+        source.transcriptSegments = meeting.turns.filter { segment in
+            if let from, segment.start.seconds < from { return false }
+            if let to, segment.start.seconds > to { return false }
+            return true
+        }.map(\.source)
+        return MeetingTranscriptExporter.text(for: source)
     }
 
     static func header(for entry: Entry, timeZone: TimeZone = .current) -> String {

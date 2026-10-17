@@ -240,6 +240,13 @@ nonisolated struct MeetingBackendRequest: Equatable, Sendable {
     let session: MeetingSession
     let sessionDirectory: URL
     let configuration: MeetingFinalProcessingConfiguration
+    let privacyFingerprint: String?
+
+    init(attemptID: UUID, session: MeetingSession, sessionDirectory: URL,
+         configuration: MeetingFinalProcessingConfiguration, privacyFingerprint: String? = nil) {
+        self.attemptID = attemptID; self.session = session; self.sessionDirectory = sessionDirectory
+        self.configuration = configuration; self.privacyFingerprint = privacyFingerprint
+    }
 }
 
 /// Immutable result of `plan(_:)`, produced before any model work. It also carries the scope that

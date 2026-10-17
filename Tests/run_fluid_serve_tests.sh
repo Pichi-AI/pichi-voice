@@ -4,11 +4,14 @@ cd "$(dirname "$0")/.."
 task_test_dir=$(mktemp -d /tmp/pichi-fluid-serve.XXXXXX)
 trap 'rm -rf "$task_test_dir"' EXIT
 # Compile the production persisted codecs and command, without launching the app.
+python3 Tests/Support/write_attribution_standalone_types.py "$task_test_dir/AttributionTypes.swift" --fingerprint
 set -- Sources/Fluid/Services/ModelTemperatureSupport.swift \
     Sources/Fluid/Localization/PichiLocalization.swift \
     Sources/Fluid/Services/Meeting/MeetingAudioAsset.swift \
     Sources/Fluid/Services/Meeting/MeetingPersistedMetadata.swift \
     Sources/Fluid/Services/Meeting/MeetingModels.swift \
+    Sources/Fluid/Services/Meeting/Backend/MeetingSpeakerAttribution.swift \
+    "$task_test_dir/AttributionTypes.swift" \
     Sources/Fluid/Services/Meeting/MeetingTranscriptExporter.swift \
     Sources/Fluid/Services/Meeting/MeetingSummaryInput.swift \
     Sources/Fluid/Services/Meeting/PichiMeetingSummaryDocument.swift \

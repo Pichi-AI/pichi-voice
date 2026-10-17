@@ -139,7 +139,7 @@ nonisolated struct ASRTranscriptionResult: Sendable {
     }
 }
 
-nonisolated struct ASRWordTiming: Sendable {
+nonisolated struct ASRWordTiming: Codable, Sendable {
     let text: String
     let start: TimeInterval
     let end: TimeInterval
@@ -147,7 +147,7 @@ nonisolated struct ASRWordTiming: Sendable {
 
 /// A provider's actual segment boundary, in seconds from its input PCM start.
 /// Unlike word alignment, one interval may contain multiple words or a sentence.
-nonisolated struct ASRSegmentTiming: Sendable, Equatable {
+nonisolated struct ASRSegmentTiming: Codable, Sendable, Equatable {
     let text: String
     let start: TimeInterval
     let end: TimeInterval

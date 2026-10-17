@@ -116,6 +116,9 @@ enum TextPrivacyResourceError: Error { case operationInProgress }
 /// must complete before the user starts; model errors propagate, never degrade
 /// silently to regex-only or raw publication. Public results have no recovery map.
 actor PichiTranscriptPrivacyService: TranscriptTextRedacting {
+    nonisolated var checkpointIdentity: String? {
+        PIIModelDescriptor.russianA1.fingerprint + "/contact-credentials-rules-v2"
+    }
     let modelStore: PichiTranscriptPrivacyModelStore
     private let runtime: PIINERRuntime
     private var preparing = false
