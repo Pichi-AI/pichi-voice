@@ -135,6 +135,7 @@ final class MobileNavigationUITests: XCTestCase {
             app.launchArguments = ["-PichiInterfaceLanguage", language, "-ThemePreference", appearance,
                 "-SelectedSpeechModel", "gigaam-v3-eou", "-MeetingSpeakerLabelsEnabled", "YES",
                 "-MeetingSpeakerProcessingMode", "afterRecording"]
+            XCUIDevice.shared.orientation = .portrait
             app.launch()
             waitForOrientation(portrait: true)
             capture("streaming-settings-\(language)-ready")
